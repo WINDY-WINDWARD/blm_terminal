@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme {
+  --color-terminal-bg: #000000;
+  --color-terminal-amber: #ffb900;
+  --color-terminal-green: #00ff00;
+  --color-terminal-red: #ff0000;
+  --color-terminal-gray: #333333;
+  --font-sans: "Inter", var(--font-geist-sans), sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", var(--font-geist-mono), monospace;
+}
+
+:root {
+  --background: var(--color-terminal-bg);
+  --foreground: var(--color-terminal-amber);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  overflow: hidden; /* Prevent scrolling for terminal feel */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Base resets for inputs and buttons to feel terminal-like */
+input, button {
+  font-family: inherit;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
