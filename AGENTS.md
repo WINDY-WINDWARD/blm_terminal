@@ -62,6 +62,17 @@ npx jest src/components/CommandBar.test.tsx
 ```
 src/
 ├── app/              # Next.js routing layer
+│   ├── api/          # API routes (backend)
+│   │   ├── openalgo/ # OpenAlgo proxy routes (added)
+│   │   │   ├── positions/route.ts   # GET /api/openalgo/positions
+│   │   │   ├── orders/route.ts      # GET /api/openalgo/orders
+│   │   │   ├── trades/route.ts      # GET /api/openalgo/trades
+│   │   │   ├── funds/route.ts       # GET /api/openalgo/funds
+│   │   │   ├── quotes/route.ts      # POST /api/openalgo/quotes
+│   │   │   ├── history/route.ts     # POST /api/openalgo/history
+│   │   │   └── placeorder/route.ts  # POST /api/openalgo/placeorder
+│   │   ├── top-symbols/route.ts     # Existing
+│   │   └── watchlist/route.ts       # Existing
 │   ├── globals.css   # Tailwind v4 @theme tokens + global resets
 │   ├── layout.tsx    # Root layout (fonts, <body>)
 │   └── page.tsx      # Entry page — renders <TerminalContainer>
@@ -78,8 +89,13 @@ src/
 │   ├── Panel.tsx
 │   └── TerminalContainer.tsx
 ├── lib/              # Pure utility/service singletons
-│   ├── openalgo.ts   # REST API client (OpenAlgoClient class)
-│   └── socket.ts     # Socket.IO singleton (WebSocketService + wsService export)
+│   ├── openalgo.ts              # Client REST API client (calls Next.js proxy)
+│   ├── openalgo-server.ts       # Server-side REST client (calls OpenAlgo directly)
+│   ├── socket.ts                # Socket.IO singleton
+│   ├── logger.ts                # Structured logging utility (added)
+│   ├── cache.ts                 # In-memory cache with TTL support (added)
+│   ├── rate-limiter.ts          # Rate limiting utility (added)
+│   └── api-config.ts            # Centralized API configuration (added)
 └── store/
     └── terminalStore.ts  # All Jotai atoms (global state)
 ```
@@ -162,10 +178,11 @@ src/
 
 ### Error Handling
 
-- API errors: `OpenAlgoClient` throws `new Error(errorMessage)` on non-OK HTTP responses. Catch at the call site and display user-facing messages.
-- Socket errors: Register an `'error'` handler on the Socket.IO client when adding new socket logic.
-- Guard against null refs before DOM operations: `if (!ref.current) return;`
-- No global React `ErrorBoundary` exists yet — add one at the `<TerminalContainer>` level if widgets start making real API calls.
+- **API errors**: The proxy routes catch errors from `OpenAlgoServerClient` and return formatted error responses. Catch at the call site in components and display user-facing messages.
+- **Network errors**: The `OpenAlgoServerClient` distinguishes between connection failures, timeouts, and API errors. Check server logs for details.
+- **Socket errors**: Register an `'error'` handler on the Socket.IO client when adding new socket logic.
+- **Guard against null refs**: Before DOM operations, check: `if (!ref.current) return;`
+- **No global ErrorBoundary yet**: Add one at the `<TerminalContainer>` level if widgets start making real API calls.
 
 ### Async / Data Fetching
 
@@ -176,9 +193,71 @@ src/
 
 ## Environment Variables
 
-The OpenAlgo API base URL is currently hardcoded in `src/lib/openalgo.ts`. When externalizing configuration, use Next.js environment variable conventions:
-- `NEXT_PUBLIC_*` for client-accessible variables
-- Server-only secrets without the prefix (never exposed to the browser)
+### Server-Only Variables (Never exposed to browser)
+
+These variables are only used on the backend and are **never** sent to the client:
+
+```
+OPENALGO_URL=http://localhost:8800           # OpenAlgo API base URL
+OPENALGO_API_KEY=<your_api_key>              # OpenAlgo API key
+OPENALGO_TIMEOUT_MS=10000                    # API request timeout (milliseconds)
+RATE_LIMIT_PER_MINUTE=60                     # Global rate limit (requests/minute)
+```
+
+### Client-Side Variables (Exposed to browser)
+
+These variables are prefixed with `NEXT_PUBLIC_` and are safe to expose to the browser:
+
+```
+NEXT_PUBLIC_OPENALGO_WS_URL=ws://localhost:8765     # WebSocket URL for real-time data
+NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE=NSE           # Default exchange (NSE, BSE, etc.)
+```
+
+### API Proxy Architecture
+
+The application uses a **Next.js API proxy layer** to communicate with the OpenAlgo API:
+
+```
+Browser (localhost:3000)
+  ↓
+Next.js API Routes (/api/openalgo/*)  ← Same-origin, no CORS issues
+  ↓ (Server-side)
+OpenAlgo API (localhost:8800)          ← API key stays on server
+```
+
+**Benefits:**
+- ✅ **Zero CORS errors** - all browser requests are same-origin
+- ✅ **Improved security** - API key never exposed to browser
+- ✅ **Caching** - reduces redundant API calls (configurable per endpoint)
+- ✅ **Rate limiting** - protects against API abuse and prevents rate limit hits
+- ✅ **Request logging** - structured logging for debugging
+- ✅ **Timeout configuration** - prevents hanging requests
+- ✅ **Type safety** - TypeScript interfaces maintained throughout the stack
+
+### Cache Configuration
+
+Each endpoint has a configurable Time-To-Live (TTL) in `src/lib/api-config.ts`:
+
+| Endpoint | TTL | Reason |
+|---|---|---|
+| positions | 2s | Near real-time position updates |
+| orders | 2s | Near real-time order status |
+| trades | 2s | Near real-time trade data |
+| funds | 5s | Account balance updates |
+| quotes | 1s | Real-time market data (shortest TTL) |
+| history | 5min | Historical data (longest TTL) |
+| placeorder | 0s | No caching (mutating endpoint) |
+
+### Rate Limiting
+
+Rate limits are enforced per endpoint to prevent API abuse:
+
+| Endpoint | Limit |
+|---|---|
+| All read endpoints | 60 req/min |
+| placeorder | 30 req/min (stricter for safety) |
+
+Exceeding rate limits returns HTTP 429 (Too Many Requests).
 
 ---
 

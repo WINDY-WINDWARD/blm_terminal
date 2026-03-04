@@ -18,8 +18,8 @@ export function PosWidget() {
   } = useQuery({
     queryKey: ['positionbook'],
     queryFn: () => OpenAlgoClient.getPositionBook(),
-    refetchInterval: 5_000,
-    staleTime: 4_000,
+    refetchInterval: 10_000,
+    staleTime: 9_000,
     retry: 1,
   });
 

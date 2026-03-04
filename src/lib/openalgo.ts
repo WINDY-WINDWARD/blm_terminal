@@ -101,31 +101,28 @@ export interface PlaceOrderResponse {
 
 export class OpenAlgoClient {
   private static get baseURL(): string {
-    return process.env.NEXT_PUBLIC_OPENALGO_URL || 'http://localhost:5000';
-  }
-
-  private static get apiKey(): string {
-    return process.env.NEXT_PUBLIC_OPENALGO_API_KEY || '';
+    // Call Next.js proxy routes instead of OpenAlgo directly
+    return '/api/openalgo';
   }
 
   private static async request<T>(endpoint: string, body: Record<string, unknown> = {}): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const payload = { apikey: this.apiKey, ...body };
 
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(body), // No apikey needed - it's added server-side
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAlgo API Error [${response.status}]: ${response.statusText}`);
+      const errorData = (await response.json()) as { error?: string };
+      throw new Error(errorData.error || `API Error [${response.status}]: ${response.statusText}`);
     }
 
     const json = (await response.json()) as { status: string; data?: unknown; message?: string };
 
     if (json.status !== 'success') {
-      throw new Error(`OpenAlgo API Error: ${json.message ?? 'Unknown error'}`);
+      throw new Error(`API Error: ${json.message ?? 'Unknown error'}`);
     }
 
     return json as T;
@@ -134,8 +131,7 @@ export class OpenAlgoClient {
   // ─── Order Management ───────────────────────────────────────────────────────
 
   static async placeOrder(params: PlaceOrderParams): Promise<PlaceOrderResponse> {
-    return this.request<PlaceOrderResponse>('/api/v1/placeorder', {
-      strategy: params.strategy ?? 'BLM Terminal',
+    return this.request<PlaceOrderResponse>('/placeorder', {
       symbol: params.symbol,
       exchange: params.exchange,
       action: params.action,
@@ -144,31 +140,32 @@ export class OpenAlgoClient {
       order_type: params.order_type,
       product: params.product,
       ...(params.trigger_price ? { trigger_price: params.trigger_price } : {}),
+      ...(params.strategy ? { strategy: params.strategy } : {}),
     });
   }
 
   // ─── Account Data ───────────────────────────────────────────────────────────
 
   static async getPositionBook(): Promise<{ status: string; data: PositionData[] }> {
-    return this.request('/api/v1/positionbook');
+    return this.request('/positions');
   }
 
   static async getOrderBook(): Promise<{ status: string; data: { orders: OrderData[]; statistics: OrderBookStatistics } }> {
-    return this.request('/api/v1/orderbook');
+    return this.request('/orders');
   }
 
   static async getTradeBook(): Promise<{ status: string; data: TradeData[] }> {
-    return this.request('/api/v1/tradebook');
+    return this.request('/trades');
   }
 
   static async getFunds(): Promise<{ status: string; data: FundsData }> {
-    return this.request('/api/v1/funds');
+    return this.request('/funds');
   }
 
   // ─── Market Data ────────────────────────────────────────────────────────────
 
   static async getQuote(symbol: string, exchange: string): Promise<{ status: string; data: QuoteData }> {
-    return this.request('/api/v1/quotes', { symbol, exchange });
+    return this.request('/quotes', { symbol, exchange });
   }
 
   static async getHistory(
@@ -178,6 +175,6 @@ export class OpenAlgoClient {
     start_date: string,
     end_date: string
   ): Promise<{ status: string; data: HistoricalBar[] }> {
-    return this.request('/api/v1/history', { symbol, exchange, interval, start_date, end_date });
+    return this.request('/history', { symbol, exchange, interval, start_date, end_date });
   }
 }

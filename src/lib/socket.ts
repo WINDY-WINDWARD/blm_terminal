@@ -45,11 +45,36 @@ class WebSocketService {
     return process.env.NEXT_PUBLIC_OPENALGO_WS_URL || 'ws://localhost:8765';
   }
 
-  private get apiKey(): string {
-    return process.env.NEXT_PUBLIC_OPENALGO_API_KEY || '';
+  private apiKey: string = '';
+  private apiKeyFetchInitiated = false;
+
+  private constructor() {
+    // Fetch API key from proxy endpoint when needed (deferred to connect time)
   }
 
-  private constructor() {}
+  private async fetchApiKey(): Promise<void> {
+    if (this.apiKeyFetchInitiated) return;
+    this.apiKeyFetchInitiated = true;
+
+    try {
+      console.log('[wsService] Fetching API key from /api/openalgo/ws-token...');
+      const res = await fetch('/api/openalgo/ws-token');
+      if (!res.ok) {
+        console.error('[wsService] Failed to fetch WebSocket API key, status:', res.status);
+        return;
+      }
+      const data = (await res.json()) as { api_key?: string };
+      if (data.api_key) {
+        this.apiKey = data.api_key;
+        console.log('[wsService] API key fetched successfully');
+      } else {
+        console.error('[wsService] No api_key in response');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[wsService] Error fetching API key:', msg);
+    }
+  }
 
   public static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -61,12 +86,40 @@ class WebSocketService {
   // ─── Connection ─────────────────────────────────────────────────────────────
 
   public connect(): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      console.log('[wsService] Already connected');
+      return;
+    }
 
+    // Fetch API key first (only once)
+    if (!this.apiKey && !this.apiKeyFetchInitiated) {
+      console.log('[wsService] API key not yet fetched, fetching now...');
+      this.fetchApiKey().then(() => {
+        // Retry connect after fetching API key
+        if (!this.apiKey) {
+          console.warn('[wsService] API key fetch failed, retrying in 1s...');
+          setTimeout(() => this.connect(), 1000);
+        } else {
+          console.log('[wsService] API key fetched, attempting connection...');
+          this.connect();
+        }
+      });
+      return;
+    }
+
+    // Don't connect if we don't have the API key yet
+    if (!this.apiKey) {
+      console.warn('[wsService] API key not yet available, scheduling retry...');
+      setTimeout(() => this.connect(), 1000);
+      return;
+    }
+
+    console.log('[wsService] Connecting to', this.wsURL);
     try {
       this.socket = new WebSocket(this.wsURL);
 
       this.socket.onopen = () => {
+        console.log('[wsService] WebSocket connected, authenticating...');
         this.reconnectAttempts = 0;
         // Authenticate immediately
         this.send({ action: 'authenticate', api_key: this.apiKey });
@@ -81,6 +134,7 @@ class WebSocketService {
       };
 
       this.socket.onclose = () => {
+        console.log('[wsService] WebSocket disconnected');
         this.authenticated = false;
         this.notifyConnection(false);
         this.scheduleReconnect();
@@ -158,6 +212,7 @@ class WebSocketService {
 
     // Authentication response
     if (msg.type === 'auth' || (msg.action === 'authenticate' && msg.status === 'success')) {
+      console.log('[wsService] Authenticated successfully');
       this.authenticated = true;
       this.notifyConnection(true);
       this.resubscribeAll();
@@ -166,6 +221,7 @@ class WebSocketService {
 
     // Authentication confirmation (some versions send status:success directly)
     if (msg.status === 'success' && !this.authenticated) {
+      console.log('[wsService] Authentication confirmed');
       this.authenticated = true;
       this.notifyConnection(true);
       this.resubscribeAll();
