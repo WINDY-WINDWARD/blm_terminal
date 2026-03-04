@@ -152,7 +152,11 @@ export function WatchWidget() {
                 const key = `${item.symbol}.${item.exchange}`;
                 const tick = tickData[key];
                 const ltp = tick?.ltp;
-                const chgPct = tick?.change_percent;
+                // Prefer change_percent from tick; if not available, compute from ltp vs day open
+                let chgPct = tick?.change_percent;
+                if (chgPct == null && tick && tick.ltp != null && tick.open != null) {
+                  chgPct = ((tick.ltp - tick.open) / tick.open) * 100;
+                }
                 const isUp = (chgPct ?? 0) >= 0;
                 const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
                 const isActive =

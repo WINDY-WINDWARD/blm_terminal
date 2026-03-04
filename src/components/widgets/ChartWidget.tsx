@@ -398,7 +398,13 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
 
         <button
           type="button"
-          onClick={() => chartRef.current?.timeScale().fitContent()}
+          onClick={() => {
+            if (chartRef.current && seriesRef.current) {
+              chartRef.current.timeScale().fitContent();
+              // Reset price scale to fit all data
+              seriesRef.current.priceScale().applyOptions({ autoScale: true });
+            }
+          }}
           className="px-1.5 py-0.5 text-[10px] border border-terminal-gray text-terminal-gray hover:text-terminal-amber hover:border-terminal-amber bg-black ml-0.5"
           title="Recenter chart"
         >
