@@ -17,18 +17,19 @@ interface ChartWidgetProps {
 }
 
 function formatDate(date: Date): string {
-  return date.toISOString().split('T')[0];
+  // Format date as YYYY-MM-DD in IST (Asia/Kolkata, UTC+5:30)
+  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
 function getDateRange(interval: Interval): { start: string; end: string } {
   const end = new Date();
   const start = new Date();
   switch (interval) {
-    case '1m':  start.setDate(end.getDate() - 5);           break;
-    case '5m':  start.setDate(end.getDate() - 14);          break;
-    case '15m': start.setDate(end.getDate() - 30);          break;
-    case '1h':  start.setDate(end.getDate() - 90);          break;
-    case 'D':   start.setFullYear(end.getFullYear() - 1);   break;
+    case '1m': start.setDate(end.getDate() - 5); break;
+    case '5m': start.setDate(end.getDate() - 14); break;
+    case '15m': start.setDate(end.getDate() - 30); break;
+    case '1h': start.setDate(end.getDate() - 90); break;
+    case 'D': start.setFullYear(end.getFullYear() - 1); break;
   }
   return { start: formatDate(start), end: formatDate(end) };
 }
@@ -39,11 +40,11 @@ function getDateRange(interval: Interval): { start: string; end: string } {
  */
 function getCandlePeriodSeconds(interval: Interval): number {
   switch (interval) {
-    case '1m':  return 60;
-    case '5m':  return 300;
+    case '1m': return 60;
+    case '5m': return 300;
     case '15m': return 900;
-    case '1h':  return 3600;
-    case 'D':   return 86400; // 24 hours
+    case '1h': return 3600;
+    case 'D': return 86400; // 24 hours
   }
 }
 
@@ -141,6 +142,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       },
       crosshair: { mode: 1 },
       timeScale: { timeVisible: true, secondsVisible: false },
+      localization: {
+        locale: 'en-IN', timeFormatter: (t: number) =>
+          new Date(t * 1000).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false })
+      },
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     });
@@ -368,11 +373,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
               key={iv}
               type="button"
               onClick={() => handleIntervalChange(iv)}
-              className={`px-1.5 py-0.5 text-[10px] border ${
-                interval === iv
+              className={`px-1.5 py-0.5 text-[10px] border ${interval === iv
                   ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
                   : 'bg-black text-terminal-gray border-terminal-gray hover:text-terminal-amber'
-              }`}
+                }`}
             >
               {iv}
             </button>
