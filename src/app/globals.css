@@ -31,3 +31,13 @@ input, button {
   color: inherit;
   outline: none;
 }
+
+/* LiveTicker scrolling animation */
+@keyframes ticker {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@utility animate-ticker {
+  animation: ticker 30s linear infinite;
+}
