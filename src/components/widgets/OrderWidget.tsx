@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
-import { symbolPerPanelAtom, exchangePerPanelAtom, focusedPanelAtom } from '@/store/terminalStore';
+import { useAtomValue } from 'jotai';
+import { activeSymbolAtom, activeExchangeAtom } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 import type { PlaceOrderParams, OrderData } from '@/lib/openalgo';
 
@@ -15,15 +15,10 @@ interface OrderWidgetProps {
   panelId: string;
 }
 
-export function OrderWidget({ panelId }: OrderWidgetProps) {
+export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
   const qc = useQueryClient();
-  const [symbolPerPanel] = useAtom(symbolPerPanelAtom);
-  const [exchangePerPanel] = useAtom(exchangePerPanelAtom);
-  const [focusedPanel] = useAtom(focusedPanelAtom);
-
-  // Pre-fill from focused panel's symbol
-  const activeSymbol = symbolPerPanel[panelId] ?? symbolPerPanel[focusedPanel] ?? 'RELIANCE';
-  const activeExchange = exchangePerPanel[panelId] ?? exchangePerPanel[focusedPanel] ?? 'NSE';
+  const activeSymbol = useAtomValue(activeSymbolAtom);
+  const activeExchange = useAtomValue(activeExchangeAtom);
 
   const [symbol, setSymbol] = useState(activeSymbol);
   const [exchange, setExchange] = useState<Exchange>(activeExchange as Exchange);

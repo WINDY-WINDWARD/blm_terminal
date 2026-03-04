@@ -4,8 +4,8 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
-import { symbolPerPanelAtom, exchangePerPanelAtom, focusedPanelAtom } from '@/store/terminalStore';
+import { useAtom, useSetAtom } from 'jotai';
+import { activeSymbolAtom, activeExchangeAtom, focusedPanelAtom } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 import { wsService } from '@/lib/socket';
 import type { TickData } from '@/lib/socket';
@@ -36,7 +36,6 @@ function getDateRange(interval: Interval): { start: string; end: string } {
 
 /**
  * Get the candle period in seconds for a given interval.
- * This determines how ticks are grouped into candles.
  */
 function getCandlePeriodSeconds(interval: Interval): number {
   switch (interval) {
@@ -44,13 +43,12 @@ function getCandlePeriodSeconds(interval: Interval): number {
     case '5m': return 300;
     case '15m': return 900;
     case '1h': return 3600;
-    case 'D': return 86400; // 24 hours
+    case 'D': return 86400;
   }
 }
 
 /**
  * Calculate the candle timestamp for a given Unix timestamp and interval.
- * This aligns ticks to the correct candle period (e.g., 15:05:00 for a 5m candle).
  */
 function alignToCandle(timestampSeconds: number, periodSeconds: number): number {
   return Math.floor(timestampSeconds / periodSeconds) * periodSeconds;
@@ -58,17 +56,13 @@ function alignToCandle(timestampSeconds: number, periodSeconds: number): number 
 
 export function ChartWidget({ panelId }: ChartWidgetProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chartRef = useRef<IChartApi | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
 
-  const [symbolPerPanel, setSymbolPerPanel] = useAtom(symbolPerPanelAtom);
-  const [exchangePerPanel, setExchangePerPanel] = useAtom(exchangePerPanelAtom);
+  // Global active symbol — single source of truth across all widgets
+  const [symbol, setSymbol] = useAtom(activeSymbolAtom);
+  const [exchange, setExchange] = useAtom(activeExchangeAtom);
   const [focusedPanel] = useAtom(focusedPanelAtom);
-
-  const symbol = symbolPerPanel[panelId] ?? 'RELIANCE';
-  const exchange = exchangePerPanel[panelId] ?? 'NSE';
 
   const [inputSymbol, setInputSymbol] = useState(symbol);
   const [inputExchange, setInputExchange] = useState(exchange);
@@ -77,7 +71,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
 
   // Candle state for aggregating ticks based on selected timeframe
   interface PartialCandle {
-    time: number; // aligned candle timestamp (seconds)
+    time: number;
     open: number;
     high: number;
     low: number;
@@ -85,14 +79,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     volume: number;
   }
   const partialCandleRef = useRef<PartialCandle | null>(null);
-  // Tracks the last seen cumulative day volume for computing per-candle volume delta
   const lastCumulativeVolumeRef = useRef<number | null>(null);
-  // Timestamp (epoch seconds) of the last bar in the historical dataset.
-  // Used for the daily interval so the live candle time matches exactly what
-  // lightweight-charts already has, avoiding timezone-alignment mismatches.
   const lastHistBarTimeRef = useRef<number | null>(null);
 
-  // Sync input when atom changes externally (e.g. WatchWidget row click)
+  // Sync input fields when global symbol changes (e.g. WatchWidget / TopWidget click)
   useEffect(() => {
     setInputSymbol(symbol);
     setInputExchange(exchange);
@@ -107,6 +97,9 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     queryFn: () => OpenAlgoClient.getHistory(symbol, exchange, interval, start, end),
     staleTime: 60_000,
     retry: 1,
+    // Tag result with symbol+exchange so the object reference always changes
+    // when the query key changes, even when data is served from cache.
+    select: (data) => ({ ...data, _symbol: symbol, _exchange: exchange }),
   });
 
   const handleRefresh = () => {
@@ -116,14 +109,14 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   // When data loads successfully, confirm the pending interval change
   useEffect(() => {
     if (!isLoading && !isError && pendingInterval !== null) {
-      setPendingInterval(null); // Clear pending state
+      setPendingInterval(null);
     }
   }, [isLoading, isError, pendingInterval]);
 
   // If there's an error, revert the pending interval
   useEffect(() => {
     if (isError && pendingInterval !== null) {
-      setPendingInterval(null); // User will see old interval highlighted
+      setPendingInterval(null);
     }
   }, [isError, pendingInterval]);
 
@@ -178,9 +171,32 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     };
   }, []); // intentionally empty — chart created once
 
-  // Populate chart with historical data
+  // Clear chart and reset refs immediately when symbol or exchange changes
   useEffect(() => {
-    if (!seriesRef.current || !histData?.data?.length) return;
+    if (seriesRef.current) {
+      seriesRef.current.setData([]);
+    }
+    partialCandleRef.current = null;
+    lastCumulativeVolumeRef.current = null;
+    lastHistBarTimeRef.current = null;
+  }, [symbol, exchange]);
+
+  // Populate chart with historical data
+  // Depends on histData AND symbol/exchange — the select() tag ensures histData
+  // is always a new object reference when the symbol changes, so this effect
+  // reliably fires even when new data is served from React Query cache.
+  useEffect(() => {
+    if (!seriesRef.current) return;
+
+    if (!histData?.data?.length) {
+      seriesRef.current.setData([]);
+      return;
+    }
+
+    // Guard: skip if the tagged symbol/exchange don't match current values
+    // (protects against a stale cached result arriving after a rapid switch)
+    if (histData._symbol !== symbol || histData._exchange !== exchange) return;
+
     const bars = histData.data
       .map((bar) => ({
         time: bar.timestamp as Time,
@@ -194,16 +210,12 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     seriesRef.current.setData(bars);
     chartRef.current?.timeScale().fitContent();
 
-    // Record the last bar's timestamp so the daily live candle can reuse it
     lastHistBarTimeRef.current = bars[bars.length - 1].time as number;
-
-    // Reset partial candle and cumulative volume tracking when historical data changes
     partialCandleRef.current = null;
     lastCumulativeVolumeRef.current = null;
-    // Note: lastHistBarTimeRef is intentionally NOT reset here — it was just set above
-  }, [histData]);
+  }, [histData, symbol, exchange]);
 
-  // Also reset when interval changes (histData may be served from cache and not change)
+  // Reset candle refs when interval changes (histData may come from cache unchanged)
   useEffect(() => {
     partialCandleRef.current = null;
     lastCumulativeVolumeRef.current = null;
@@ -211,7 +223,6 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   }, [interval]);
 
   // WebSocket: subscribe to live ticks for last-candle update (mode 2)
-  // Aggregates ticks into candles based on the selected interval.
   //
   // OpenAlgo Mode-2 tick fields:
   //   data.ltp    = last traded price (the actual current price)
@@ -226,24 +237,12 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       if (!seriesRef.current) return;
 
       const periodSeconds = getCandlePeriodSeconds(interval);
-      // Use the server-side tick timestamp when available so candle boundaries
-      // are computed from market time, not browser wall-clock (avoids period
-      // mismatches caused by network latency or minor clock drift).
       const tickSeconds = data.timestamp
         ? Math.floor(new Date(data.timestamp).getTime() / 1000)
         : Math.floor(Date.now() / 1000);
       const candleTime = alignToCandle(tickSeconds, periodSeconds);
 
       if (interval === 'D') {
-        // ── Daily candle ────────────────────────────────────────────────────
-        // data.open/high/low are day-level values — correct to use directly.
-        // data.volume is the cumulative day volume — correct for a daily bar.
-        //
-        // IMPORTANT: do NOT use candleTime (computed from tick timestamp) for
-        // the daily bar. The historical bars use whatever epoch the OpenAlgo
-        // server produces (often IST midnight = UTC 18:30 previous day), which
-        // will never equal a UTC-midnight-aligned candleTime. Reuse the last
-        // historical bar's timestamp so the update() call hits the correct bar.
         const dailyCandleTime = lastHistBarTimeRef.current ?? candleTime;
         const dailyBar = {
           time: dailyCandleTime,
@@ -262,17 +261,12 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           close: dailyBar.close,
         });
       } else {
-        // ── Intraday candles (1m, 5m, 15m, 1h) ─────────────────────────────
-        // data.open/high/low are day-level values — DO NOT use them here.
-        // We build O/H/L exclusively from data.ltp.
-        // data.volume is cumulative day volume — compute delta to get per-candle volume.
         const cumVol = data.volume ?? 0;
         const prevCumVol = lastCumulativeVolumeRef.current ?? cumVol;
         const volDelta = Math.max(0, cumVol - prevCumVol);
         lastCumulativeVolumeRef.current = cumVol;
 
         if (!partialCandleRef.current || partialCandleRef.current.time !== candleTime) {
-          // Candle period has rolled over — finalise previous candle, start new one
           if (partialCandleRef.current) {
             seriesRef.current.update({
               time: partialCandleRef.current.time as Time,
@@ -282,7 +276,6 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
               close: partialCandleRef.current.close,
             });
           }
-          // New candle: open = first ltp seen in this period
           partialCandleRef.current = {
             time: candleTime,
             open: data.ltp,
@@ -292,14 +285,12 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
             volume: volDelta,
           };
         } else {
-          // Same candle period — update H/L/C and accumulate volume delta
           partialCandleRef.current.high = Math.max(partialCandleRef.current.high, data.ltp);
           partialCandleRef.current.low = Math.min(partialCandleRef.current.low, data.ltp);
           partialCandleRef.current.close = data.ltp;
           partialCandleRef.current.volume += volDelta;
         }
 
-        // Push the live candle update to the chart
         seriesRef.current.update({
           time: partialCandleRef.current.time as Time,
           open: partialCandleRef.current.open,
@@ -326,8 +317,8 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     const s = inputSymbol.trim().toUpperCase();
     const ex = inputExchange.trim().toUpperCase();
     if (!s || !ex) return;
-    setSymbolPerPanel((prev) => ({ ...prev, [panelId]: s }));
-    setExchangePerPanel((prev) => ({ ...prev, [panelId]: ex }));
+    setSymbol(s);
+    setExchange(ex);
   };
 
   const handleIntervalChange = (newInterval: Interval) => {
@@ -401,7 +392,6 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           onClick={() => {
             if (chartRef.current && seriesRef.current) {
               chartRef.current.timeScale().fitContent();
-              // Reset price scale to fit all data
               seriesRef.current.priceScale().applyOptions({ autoScale: true });
             }
           }}

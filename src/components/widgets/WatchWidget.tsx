@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
-import { symbolPerPanelAtom, exchangePerPanelAtom, focusedPanelAtom, tickDataAtom } from '@/store/terminalStore';
+import { useAtom, useSetAtom } from 'jotai';
+import { activeSymbolAtom, activeExchangeAtom, tickDataAtom } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 import type { TickData } from '@/lib/socket';
 
@@ -36,9 +36,8 @@ async function removeSymbol(id: number): Promise<void> {
 
 export function WatchWidget() {
   const qc = useQueryClient();
-  const [symbolPerPanel, setSymbolPerPanel] = useAtom(symbolPerPanelAtom);
-  const [exchangePerPanel, setExchangePerPanel] = useAtom(exchangePerPanelAtom);
-  const [focusedPanel] = useAtom(focusedPanelAtom);
+  const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const [activeExchange, setActiveExchange] = useAtom(activeExchangeAtom);
   const [tickData, setTickData] = useAtom(tickDataAtom);
 
   const [newSymbol, setNewSymbol] = useState('');
@@ -87,8 +86,8 @@ export function WatchWidget() {
   }, [setTickData]);
 
   const handleRowClick = (item: WatchlistItem) => {
-    setSymbolPerPanel((prev) => ({ ...prev, [focusedPanel]: item.symbol }));
-    setExchangePerPanel((prev) => ({ ...prev, [focusedPanel]: item.exchange }));
+    setActiveSymbol(item.symbol);
+    setActiveExchange(item.exchange);
   };
 
   const handleAdd = (e: React.FormEvent) => {
@@ -152,7 +151,6 @@ export function WatchWidget() {
                 const key = `${item.symbol}.${item.exchange}`;
                 const tick = tickData[key];
                 const ltp = tick?.ltp;
-                // Prefer change_percent from tick; if not available, compute from ltp vs day open
                 let chgPct = tick?.change_percent;
                 if (chgPct == null && tick && tick.ltp != null && tick.open != null) {
                   chgPct = ((tick.ltp - tick.open) / tick.open) * 100;
@@ -160,8 +158,7 @@ export function WatchWidget() {
                 const isUp = (chgPct ?? 0) >= 0;
                 const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
                 const isActive =
-                  symbolPerPanel[focusedPanel] === item.symbol &&
-                  exchangePerPanel[focusedPanel] === item.exchange;
+                  activeSymbol === item.symbol && activeExchange === item.exchange;
 
                 return (
                   <tr

@@ -15,23 +15,15 @@ export const activePanelsAtom = atom<{ [id: string]: string }>({
 
 export const focusedPanelAtom = atom<string>('panel-1');
 
-// ─── New Atoms ────────────────────────────────────────────────────────────────
+// ─── Global Active Symbol ─────────────────────────────────────────────────────
 
-/** Active trading symbol per panel (e.g. 'RELIANCE') */
-export const symbolPerPanelAtom = atom<Record<string, string>>({
-  'panel-1': 'RELIANCE',
-  'panel-2': 'RELIANCE',
-  'panel-3': 'RELIANCE',
-  'panel-4': 'RELIANCE',
-});
+/** The currently active trading symbol — shared across all widgets */
+export const activeSymbolAtom = atom<string>('RELIANCE');
 
-/** Active exchange per panel (e.g. 'NSE') */
-export const exchangePerPanelAtom = atom<Record<string, string>>({
-  'panel-1': 'NSE',
-  'panel-2': 'NSE',
-  'panel-3': 'NSE',
-  'panel-4': 'NSE',
-});
+/** The currently active exchange — shared across all widgets */
+export const activeExchangeAtom = atom<string>('NSE');
+
+// ─── Other Atoms ──────────────────────────────────────────────────────────────
 
 /** Live tick data keyed by "SYMBOL.EXCHANGE" — updated by wsService */
 export const tickDataAtom = atom<Record<string, TickData>>({});

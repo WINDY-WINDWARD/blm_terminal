@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
-import { symbolPerPanelAtom, exchangePerPanelAtom, focusedPanelAtom, tickDataAtom, topSymbolsAtom } from '@/store/terminalStore';
+import { useAtom, useSetAtom } from 'jotai';
+import { activeSymbolAtom, activeExchangeAtom, tickDataAtom, topSymbolsAtom } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 
 interface TopSymbolRow {
@@ -58,9 +58,8 @@ function pctChange(bars: { open: number; close: number }[]): number | null {
 }
 
 export function TopWidget() {
-  const [, setSymbolPerPanel] = useAtom(symbolPerPanelAtom);
-  const [, setExchangePerPanel] = useAtom(exchangePerPanelAtom);
-  const [focusedPanel] = useAtom(focusedPanelAtom);
+  const setActiveSymbol = useSetAtom(activeSymbolAtom);
+  const setActiveExchange = useSetAtom(activeExchangeAtom);
   const [tickData] = useAtom(tickDataAtom);
   const [topSymbols, setTopSymbols] = useAtom(topSymbolsAtom);
 
@@ -201,8 +200,8 @@ export function TopWidget() {
   });
 
   const handleRowClick = (row: TopSymbolRow) => {
-    setSymbolPerPanel((prev) => ({ ...prev, [focusedPanel]: row.symbol }));
-    setExchangePerPanel((prev) => ({ ...prev, [focusedPanel]: row.exchange }));
+    setActiveSymbol(row.symbol);
+    setActiveExchange(row.exchange);
   };
 
   if (topSymbols.length === 0) {
