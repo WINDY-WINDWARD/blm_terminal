@@ -3,7 +3,7 @@
 import React from 'react';
 import { useAtom } from 'jotai';
 import { focusedPanelAtom } from '@/store/terminalStore';
-import { TopWidget } from './widgets/TopWidget';
+import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
 import { OrderWidget } from './widgets/OrderWidget';
 import { ChartWidget } from './widgets/ChartWidget';
@@ -22,7 +22,7 @@ export function Panel({ id, title }: PanelProps) {
 
   const renderWidget = () => {
     switch (title) {
-      case 'TOP':      return <TopWidget />;
+      case 'TOP':      return <MoversWidget />;
       case 'POS':      return <PosWidget />;
       case 'ORDER':    return <OrderWidget panelId={id} />;
       case 'CHART':    return <ChartWidget panelId={id} />;

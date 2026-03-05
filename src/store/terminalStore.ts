@@ -33,6 +33,3 @@ export const wsConnectedAtom = atom<boolean>(false);
 
 /** Account funds data — updated periodically */
 export const fundsAtom = atom<FundsData | null>(null);
-
-/** Top mover symbols list — loaded from SQLite via /api/top-symbols */
-export const topSymbolsAtom = atom<Array<{ symbol: string; exchange: string }>>([]);
