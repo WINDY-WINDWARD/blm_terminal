@@ -13,6 +13,7 @@ from app.schemas.stockuniverse import StockUniverse
 
 from app.config import settings
 from app.services.helpers.json_to_csv import dict_to_csv_text
+import pandas
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,32 @@ class NSEClient:
         except Exception:
             logger.exception("Failed to convert past results for %s to CSV", symbol)
             raise
+
+    def get_top_gainers(self) -> pandas.DataFrame:
+        """Fetch the list of top gainers from NSE India."""
+        return nsepython.nse_get_top_gainers()
+
+    def get_top_losers(self) -> pandas.DataFrame:
+        """Fetch the list of top losers from NSE India."""
+        return nsepython.nse_get_top_losers()
+    
+    def check_bulk_deals(self, symbol: str) -> pandas.DataFrame:
+        """Fetch the list of bulk deals from NSE India for a specific symbol."""
+        df = nsepython.nse_largedeals("bulk_deals")
+        # search df for rows matching the symbol (case-insensitive)
+        filtered_df = df[df["symbol"].str.upper() == symbol.upper()]
+        return filtered_df
+    
+    def check_block_deals(self, symbol: str) -> pandas.DataFrame:
+        """Fetch the list of block deals from NSE India for a specific symbol."""
+        df = nsepython.nse_largedeals("block_deals")
+        # search df for rows matching the symbol (case-insensitive)
+        filtered_df = df[df["symbol"].str.upper() == symbol.upper()]
+        return filtered_df
+    
+    def get_high_short_interest(self) -> pandas.DataFrame:
+        """Fetch the list of high short interest stocks from NSE India."""
+        return nsepython.nse_largedeals("short_deals")
 
     async def close(self) -> None:
         """No-op teardown hook (kept for lifespan compatibility)."""

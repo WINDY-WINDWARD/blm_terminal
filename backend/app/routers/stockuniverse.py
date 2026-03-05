@@ -60,7 +60,6 @@ async def search_stock_universe(prefix: str, db: AsyncSession = Depends(get_db))
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
 
-# add corporate filings endpoints here in the future, e.g. /stockuniverse/{symbol}/filings
 
 
 

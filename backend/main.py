@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import create_all_tables
-from app.routers import filings_router, stockuniverse_router
+from app.routers import filings_router, market_router, stockuniverse_router
+from app.routers.nonpersistence import start_cache_cleanup
 from app.services.nse_client import nse_client
 
 # ---------------------------------------------------------------------------
@@ -34,8 +35,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up BLM Analytics backend...")
     await create_all_tables()
     logger.info("Database tables ready")
+    cleanup_task = await start_cache_cleanup()
     yield
     logger.info("Shutting down — closing NSE client...")
+    cleanup_task.cancel()
     await nse_client.close()
 
 
@@ -71,6 +74,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 app.include_router(filings_router, prefix="/api")
+app.include_router(market_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 
 
