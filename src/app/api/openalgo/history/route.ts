@@ -64,9 +64,10 @@ export async function POST(req: NextRequest) {
       endDate
     );
 
-    // Cache the result
+    // Cache the result — skip caching empty data arrays to prevent poisoning
+    // the cache with results from bad date ranges or transient upstream issues
     const cacheTtl = getCacheTtl('history');
-    if (cacheTtl > 0) {
+    if (cacheTtl > 0 && Array.isArray(result.data) && result.data.length > 0) {
       cache.set(cacheKey, result, cacheTtl);
     }
 

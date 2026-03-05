@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom, useSetAtom } from 'jotai';
 import { activeSymbolAtom, activeExchangeAtom, tickDataAtom, topSymbolsAtom } from '@/store/terminalStore';
@@ -11,12 +11,12 @@ interface TopSymbolRow {
   exchange: string;
   ltp: number;
   chg1d: number;
-  chg1w: number | null;
-  chg1m: number | null;
-  chg3m: number | null;
-  chg1y: number | null;
-  chg3y: number | null;
-  chg5y: number | null;
+  chg1w: number | null | 'err';
+  chg1m: number | null | 'err';
+  chg3m: number | null | 'err';
+  chg1y: number | null | 'err';
+  chg3y: number | null | 'err';
+  chg5y: number | null | 'err';
   volume: number;
 }
 
@@ -30,7 +30,8 @@ function formatVolume(v: number): string {
   return String(v);
 }
 
-function formatChg(val: number | null): React.ReactNode {
+function formatChg(val: number | null | 'err'): React.ReactNode {
+  if (val === 'err') return <span className="text-terminal-red text-[9px]">ERR</span>;
   if (val === null) return <span className="text-zinc-600">—</span>;
   if (val === 0) return <span className="text-zinc-400">0.00%</span>;
   const isUp = val > 0;
@@ -41,21 +42,48 @@ function formatChg(val: number | null): React.ReactNode {
   );
 }
 
-/** Return a date string "YYYY-MM-DD" offset by `days` from today */
+/** Return a date string "YYYY-MM-DD" in IST. */
+function formatDateIST(date: Date): string {
+  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
 function daysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
+  return formatDateIST(d);
 }
 
-/** Compute % change from first bar open to last bar close */
-function pctChange(bars: { open: number; close: number }[]): number | null {
-  if (!bars.length) return null;
-  const start = bars[0].open;
-  const end = bars[bars.length - 1].close;
-  if (!start) return null;
-  return ((end - start) / start) * 100;
+/**
+ * Fetch the closing price of the bar closest to `periodDays` ago for a symbol.
+ * Tries a ±15-day window first; widens to ±30 days if no bars are returned.
+ * Returns null if no bars found after widening, or 'err' if all attempts fail
+ * with an unexpected error.
+ */
+async function fetchAnchorClose(
+  symbol: string,
+  exchange: string,
+  periodDays: number
+): Promise<number | null | 'err'> {
+  for (const halfWindow of [15, 30]) {
+    const start = daysAgo(periodDays + halfWindow);
+    const end   = daysAgo(Math.max(0, periodDays - halfWindow));
+    try {
+      const res = await OpenAlgoClient.getHistory(symbol, exchange, 'D', start, end);
+      if (res.data && res.data.length > 0) {
+        // Return the close of the last bar in the window (closest to anchor date)
+        return res.data[res.data.length - 1].close;
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[TopWidget] anchor fetch failed for ${symbol}/${exchange} period=${periodDays}d window=±${halfWindow}d: ${msg}`);
+      return 'err';
+    }
+  }
+  // Both windows returned empty data
+  console.warn(`[TopWidget] no anchor bars for ${symbol}/${exchange} period=${periodDays}d after widening to ±30d`);
+  return 'err';
 }
+
 
 export function TopWidget() {
   const setActiveSymbol = useSetAtom(activeSymbolAtom);
@@ -83,8 +111,13 @@ export function TopWidget() {
   }, [dbSymbols, setTopSymbols]);
 
   // Fetch live quotes for all top symbols (poll every 5s)
+  const symbolsKey = useMemo(
+    () => topSymbols.map((s) => `${s.symbol}.${s.exchange}`).join(','),
+    [topSymbols]
+  );
+
   const { data: quotesMap = {} } = useQuery({
-    queryKey: ['top-quotes', topSymbols.map((s) => `${s.symbol}.${s.exchange}`).join(',')],
+    queryKey: ['top-quotes', symbolsKey],
     queryFn: async () => {
       if (!topSymbols.length) return {};
       const results = await Promise.allSettled(
@@ -108,48 +141,83 @@ export function TopWidget() {
     staleTime: 4_000,
   });
 
-  // Date boundaries
-  const today = new Date().toISOString().slice(0, 10);
-  const d5y = daysAgo(365 * 5);
+  // ─── Per-period anchor queries ────────────────────────────────────────────────
+  // One query per period — 6 total regardless of symbol count.
+  // Each fires N parallel sub-requests (one per symbol via Promise.allSettled).
+  // Staggered refetchInterval so they don't all hit the API at the same moment.
 
-  // Fetch 5y of daily bars per symbol once — covers all sub-periods (refresh every 15 min)
-  const symbolsKey = topSymbols.map((s) => `${s.symbol}.${s.exchange}`).join(',');
+  const makeAnchorQueryFn = (periodDays: number) => async () => {
+    if (!topSymbols.length) return {} as Record<string, number | null | 'err'>;
+    const results = await Promise.allSettled(
+      topSymbols.map((s) => fetchAnchorClose(s.symbol, s.exchange, periodDays))
+    );
+    const map: Record<string, number | null | 'err'> = {};
+    results.forEach((r, i) => {
+      const key = `${topSymbols[i].symbol}.${topSymbols[i].exchange}`;
+      map[key] = r.status === 'fulfilled' ? r.value : 'err';
+    });
+    return map;
+  };
 
-  const { data: histMap = {} } = useQuery({
-    queryKey: ['top-hist', symbolsKey, today],
-    queryFn: async () => {
-      if (!topSymbols.length) return {};
-      const results = await Promise.allSettled(
-        topSymbols.map((s) =>
-          OpenAlgoClient.getHistory(s.symbol, s.exchange, 'D', d5y, today)
-        )
-      );
-      const map: Record<string, { open: number; close: number; timestamp: number }[]> = {};
-      results.forEach((r, i) => {
-        if (r.status === 'fulfilled' && r.value.data) {
-          const key = `${topSymbols[i].symbol}.${topSymbols[i].exchange}`;
-          map[key] = r.value.data.map((b) => ({
-            open: b.open,
-            close: b.close,
-            timestamp: b.timestamp,
-          }));
-        }
-      });
-      return map;
-    },
-    enabled: topSymbols.length > 0,
+  const enabled = topSymbols.length > 0;
+
+  const { data: anchor1w = {} } = useQuery({
+    queryKey: ['top-anchor', '1w', symbolsKey],
+    queryFn: makeAnchorQueryFn(7),
+    enabled,
     refetchInterval: 15 * 60_000,
     staleTime: 14 * 60_000,
   });
+  const { data: anchor1m = {} } = useQuery({
+    queryKey: ['top-anchor', '1m', symbolsKey],
+    queryFn: makeAnchorQueryFn(30),
+    enabled,
+    refetchInterval: 20 * 60_000,
+    staleTime: 19 * 60_000,
+  });
+  const { data: anchor3m = {} } = useQuery({
+    queryKey: ['top-anchor', '3m', symbolsKey],
+    queryFn: makeAnchorQueryFn(90),
+    enabled,
+    refetchInterval: 25 * 60_000,
+    staleTime: 24 * 60_000,
+  });
+  const { data: anchor1y = {} } = useQuery({
+    queryKey: ['top-anchor', '1y', symbolsKey],
+    queryFn: makeAnchorQueryFn(365),
+    enabled,
+    refetchInterval: 30 * 60_000,
+    staleTime: 29 * 60_000,
+  });
+  const { data: anchor3y = {} } = useQuery({
+    queryKey: ['top-anchor', '3y', symbolsKey],
+    queryFn: makeAnchorQueryFn(365 * 3),
+    enabled,
+    refetchInterval: 35 * 60_000,
+    staleTime: 34 * 60_000,
+  });
+  const { data: anchor5y = {} } = useQuery({
+    queryKey: ['top-anchor', '5y', symbolsKey],
+    queryFn: makeAnchorQueryFn(365 * 5),
+    enabled,
+    refetchInterval: 40 * 60_000,
+    staleTime: 39 * 60_000,
+  });
 
-  /** Filter bars to those on-or-after `fromDateStr` (YYYY-MM-DD) */
-  const barsFrom = useCallback(
-    (bars: { open: number; close: number; timestamp: number }[], fromDateStr: string) => {
-      const fromEpoch = new Date(fromDateStr).getTime() / 1000;
-      return bars.filter((b) => b.timestamp >= fromEpoch);
-    },
-    []
-  );
+  // ─── Compute % change from anchor close to current LTP ───────────────────────
+
+  function anchorPct(
+    anchorMap: Record<string, number | null | 'err'>,
+    key: string,
+    ltp: number
+  ): number | null | 'err' {
+    const anchor = anchorMap[key];
+    if (anchor === undefined) return null;   // not yet loaded
+    if (anchor === 'err') return 'err';
+    if (anchor === null) return null;
+    if (anchor === 0 || ltp === 0) return null;
+    return ((ltp - anchor) / anchor) * 100;
+  }
 
   // Build rows — merge live WS tick over REST quote + historical pct changes
   const rows: TopSymbolRow[] = topSymbols.map((s) => {
@@ -160,15 +228,19 @@ export function TopWidget() {
     const chg1d = tick?.change_percent ?? quote?.chg1d ?? 0;
     const volume = tick?.volume ?? quote?.volume ?? 0;
 
-    const bars = histMap[key] ?? [];
-    const chg1w = pctChange(barsFrom(bars, daysAgo(7)));
-    const chg1m = pctChange(barsFrom(bars, daysAgo(30)));
-    const chg3m = pctChange(barsFrom(bars, daysAgo(90)));
-    const chg1y = pctChange(barsFrom(bars, daysAgo(365)));
-    const chg3y = pctChange(barsFrom(bars, daysAgo(365 * 3)));
-    const chg5y = pctChange(barsFrom(bars, daysAgo(365 * 5)));
-
-    return { symbol: s.symbol, exchange: s.exchange, ltp, chg1d, chg1w, chg1m, chg3m, chg1y, chg3y, chg5y, volume };
+    return {
+      symbol: s.symbol,
+      exchange: s.exchange,
+      ltp,
+      chg1d,
+      volume,
+      chg1w: anchorPct(anchor1w, key, ltp),
+      chg1m: anchorPct(anchor1m, key, ltp),
+      chg3m: anchorPct(anchor3m, key, ltp),
+      chg1y: anchorPct(anchor1y, key, ltp),
+      chg3y: anchorPct(anchor3y, key, ltp),
+      chg5y: anchorPct(anchor5y, key, ltp),
+    };
   });
 
   // ─── Sorting ──────────────────────────────────────────────────────────────────
@@ -183,10 +255,13 @@ export function TopWidget() {
   };
 
   const sortedRows = [...rows].sort((a, b) => {
-    const aVal = a[sortKey as keyof TopSymbolRow];
-    const bVal = b[sortKey as keyof TopSymbolRow];
+    const aRaw = a[sortKey as keyof TopSymbolRow];
+    const bRaw = b[sortKey as keyof TopSymbolRow];
 
-    // Nulls always sink to the bottom
+    // 'err' and null sink to the bottom (treat as -Infinity for desc sort)
+    const aVal = (aRaw === null || aRaw === 'err') ? null : aRaw;
+    const bVal = (bRaw === null || bRaw === 'err') ? null : bRaw;
+
     if (aVal === null && bVal === null) return 0;
     if (aVal === null) return 1;
     if (bVal === null) return -1;
@@ -288,3 +363,5 @@ export function TopWidget() {
     </div>
   );
 }
+
+

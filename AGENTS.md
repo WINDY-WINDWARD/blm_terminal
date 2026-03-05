@@ -187,6 +187,9 @@ RATE_LIMIT_PER_MINUTE=60
 # Client-safe
 NEXT_PUBLIC_OPENALGO_WS_URL=ws://localhost:8765
 NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE=NSE
+
+# Python analytics backend — used server-side by /api/py/[...path] proxy route
+PYTHON_BACKEND_URL=http://localhost:8000
 ```
 
 Never commit `.env.local`. The `.gitignore` already excludes `.env*` files.
