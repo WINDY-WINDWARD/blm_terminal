@@ -28,7 +28,8 @@ class Base(DeclarativeBase):
 async def create_all_tables() -> None:
     """Create all tables on startup (idempotent)."""
     # Import models so their metadata is registered on Base
-    from app.models import circulars, earnings, filings  # noqa: F401
+    from app.models import stockuniverse  # noqa: F401
+    from app.models import corporatefilings  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

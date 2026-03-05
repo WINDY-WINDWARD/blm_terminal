@@ -1,5 +1,6 @@
-from app.routers.earnings import router as earnings_router
-from app.routers.filings import router as filings_router
-from app.routers.circulars import router as circulars_router
+"""FastAPI router registry."""
 
-__all__ = ["earnings_router", "filings_router", "circulars_router"]
+from app.routers.corporatefilings import router as filings_router
+from app.routers.stockuniverse import router as stockuniverse_router
+
+__all__ = ["filings_router", "stockuniverse_router"]

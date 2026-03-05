@@ -8,10 +8,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
-
-    nse_base_url: str = "https://www.nseindia.com"
     db_path: str = "./data.db"
-    port: int = 8000
+    port: int = 4455
 
     # Courtesy delay between consecutive NSE API requests (ms)
     nse_request_delay_ms: int = 500

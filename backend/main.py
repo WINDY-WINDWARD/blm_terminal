@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import create_all_tables
-from app.routers import circulars_router, earnings_router, filings_router
+from app.routers import filings_router, stockuniverse_router
 from app.services.nse_client import nse_client
 
 # ---------------------------------------------------------------------------
@@ -70,9 +70,8 @@ app.add_middleware(
 # Routes
 # ---------------------------------------------------------------------------
 
-app.include_router(earnings_router, prefix="/api")
 app.include_router(filings_router, prefix="/api")
-app.include_router(circulars_router, prefix="/api")
+app.include_router(stockuniverse_router, prefix="/api")
 
 
 @app.get("/health", tags=["meta"])

@@ -4,6 +4,22 @@ Guidelines for AI coding agents working in this repository.
 
 ---
 
+## Copilot / Agent Guidelines (Concise)
+
+- Purpose: Help agents be productive immediately while respecting the project's conventions.
+- When to edit: Prefer updating `AGENTS.md` for repository-wide agent guidance. For package- or folder-scoped rules, prefer a local `AGENTS.md` in that folder.
+- Always use the project's existing conventions: TypeScript strict mode, `@/` alias for `src/`, one React component per file, and `use client` in interactive components.
+- Use the repository's key files as examples: [src/lib/utils.ts](src/lib/utils.ts#L1), [src/store/terminalStore.ts](src/store/terminalStore.ts#L1), and [src/app/layout.tsx](src/app/layout.tsx#L1).
+- Tooling: Run primary commands from the root. Common commands:
+  - `npm run dev` — start Next.js dev server
+  - `npm run build` — production build
+  - `npm run lint` — ESLint checks
+- Python backend (when relevant): located in `backend/` (FastAPI). See `backend/main.py` and `backend/pyproject.toml` for virtualenv/poetry info.
+- Use `manage_todo_list` for multi-step tasks and mark progress.
+- Before editing files, produce a short preamble (1–2 sentences) explaining the change.
+
+---
+
 ## Project Overview
 
 A financial terminal UI built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, **Jotai** for state, and a native **WebSocket** client for real-time data. Panels host widgets (chart, order entry, positions, watchlist, top movers, settings) backed by a **Next.js API proxy** layer over the OpenAlgo trading API, with **Prisma + SQLite** for local persistence.
