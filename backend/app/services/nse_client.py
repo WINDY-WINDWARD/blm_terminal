@@ -29,14 +29,14 @@ class NSEClient:
         """Fetch metadata for a given stock symbol."""
         temp = nsepython.nse_eq(symbol)
         tempdict = {
-            symbol: temp["symbol"],
-            "companyName": temp["companyName"],
-            "segment": temp["segment"],
+            "symbol": temp["info"]["symbol"],
+            "companyName": temp["info"]["companyName"],
+            "segment": temp["info"]["segment"],
             "industry": temp["metadata"]["industry"],
             "sectorPE": temp["metadata"]["pdSectorPe"],
             "symbolPE": temp["metadata"]["pdSymbolPe"],
             "industryInfo": temp["industryInfo"],
-            "lastUpdateTime": temp["lastUpdateTime"]
+            "lastUpdateTime": temp["metadata"]["lastUpdateTime"],
         }
 
         return StockUniverse(**tempdict)

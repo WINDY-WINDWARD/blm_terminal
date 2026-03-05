@@ -1,4 +1,5 @@
 """BLM Analytics — FastAPI application entry point."""
+import asyncio
 import logging
 import logging.config
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from app.database import create_all_tables
 from app.routers import filings_router, market_router, stockuniverse_router
 from app.routers.nonpersistence import start_cache_cleanup
 from app.services.nse_client import nse_client
+from app.backgroundtasks import stock_universe_scheduler
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -36,9 +38,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await create_all_tables()
     logger.info("Database tables ready")
     cleanup_task = await start_cache_cleanup()
+    universe_task = asyncio.create_task(stock_universe_scheduler())
     yield
     logger.info("Shutting down — closing NSE client...")
     cleanup_task.cancel()
+    universe_task.cancel()
     await nse_client.close()
 
 
