@@ -17,6 +17,7 @@ from app.config import settings
 from app.routers import filings_router, market_router, stockuniverse_router
 from app.routers.nonpersistence import start_cache_cleanup
 from app.services.nse_client import nse_client
+from app.services.helpers.nse_history_cache import nse_history_cache
 from app.backgroundtasks import stock_universe_scheduler
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
     logger.info("Database schema up to date")
+    await asyncio.to_thread(nse_history_cache.evict_expired)
     cleanup_task = await start_cache_cleanup()
     universe_task = asyncio.create_task(stock_universe_scheduler())
     yield
