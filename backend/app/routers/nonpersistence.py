@@ -40,10 +40,10 @@ CACHE_TTL_SECONDS: float = 600.0  # 10 minutes — override per-call if needed
 _cache: dict[str, tuple[float, object]] = {}
 
 
-def _cache_get(key: str) -> object | None:
+def _cache_get(key: str, ttl: float = CACHE_TTL_SECONDS) -> object | None:
     """Return cached data for *key* if it exists and has not expired."""
     entry = _cache.get(key)
-    if entry and (time.monotonic() - entry[0]) < CACHE_TTL_SECONDS:
+    if entry and (time.monotonic() - entry[0]) < ttl:
         return entry[1]
     return None
 
@@ -68,6 +68,7 @@ async def start_cache_cleanup(interval: float = CACHE_TTL_SECONDS) -> asyncio.Ta
 
     Returns the Task so the caller can cancel it on shutdown.
     """
+
     async def _loop() -> None:
         while True:
             await asyncio.sleep(interval)
@@ -105,6 +106,7 @@ async def _throttled_call(fn, *args):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.get(
     "/top-gainers",
     summary="Top gainers on NSE",
@@ -132,6 +134,7 @@ async def top_losers() -> JSONResponse:
     df = await _throttled_call(nse_client.get_top_losers)
     return JSONResponse(content=df.to_dict(orient="records"))
 
+
 @router.get(
     "/bulk-deals/{symbol}",
     summary="Bulk deals for a specific stock symbol on NSE",
@@ -152,6 +155,7 @@ async def bulk_deals(symbol: str) -> JSONResponse:
     data = df.to_dict(orient="records")
     _cache_set(cache_key, data)
     return JSONResponse(content=data)
+
 
 # block deals
 @router.get(
@@ -174,6 +178,7 @@ async def block_deals(symbol: str) -> JSONResponse:
     data = df.to_dict(orient="records")
     _cache_set(cache_key, data)
     return JSONResponse(content=data)
+
 
 # check high short volume stocks
 @router.get(
@@ -198,3 +203,28 @@ async def high_short_interest() -> JSONResponse:
     return JSONResponse(content=data)
 
 
+_CHANGE_RANGES_TTL: float = 300.0  # 5 minutes
+
+
+@router.get(
+    "/change-ranges/{symbol}",
+    summary="Percentage changes over multiple timeframes for a symbol",
+    response_class=JSONResponse,
+)
+async def change_ranges(symbol: str) -> JSONResponse:
+    """Return pre-computed percentage changes for *symbol* from NSE's getYearwiseData.
+
+    Keys: oneDayPercent, oneWeekPercent, oneMonthPercent, threeMonthPercent,
+    sixMonthPercent, oneYearPercent, twoYearPercent, threeYearPercent, fiveYearPercent.
+
+    Results are cached for 5 minutes.
+    """
+    cache_key = f"change_ranges:{symbol.upper()}"
+    cached = _cache_get(cache_key, ttl=_CHANGE_RANGES_TTL)
+    if cached is not None:
+        logger.debug("Cache hit for %s", cache_key)
+        return JSONResponse(content=cached)
+
+    data = await _throttled_call(nse_client.get_change_ranges, symbol)
+    _cache_set(cache_key, data)
+    return JSONResponse(content=data)

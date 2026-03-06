@@ -23,6 +23,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "httpx>=0.28.0",
+    "requests>=2.32.0",
 ]
 
 [build-system]
@@ -35,3 +36,6 @@ packages = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: tests that hit NSE upstream servers (deselect with -m 'not slow')",
+]
