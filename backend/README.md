@@ -20,6 +20,9 @@ This README explains how to run the backend locally and lists all available endp
 - `app/models/` — ORM models (`corporatefilings.py`, `stockuniverse.py`)
 - `app/routers/` — API routers (`corporatefilings.py`, `nonpersistence.py`, `stockuniverse.py`)
 - `app/services/nse_client.py` — NSE HTTP client and helpers
+- `app/backgroundtasks.py` — nightly stock universe sync scheduler
+- `alembic/` — Alembic migration environment (`env.py`, `versions/`)
+- `alembic.ini` — Alembic configuration
 - `.env.example` — example environment variables
 
 ---
@@ -59,7 +62,7 @@ uvicorn main:app --reload --port ${PORT:-4455}
 ```
 
 Notes:
-- The app will create the SQLite database file indicated by `DB_PATH` and create tables on startup via `create_all_tables()`.
+- On every startup the app runs `alembic upgrade head` automatically — all pending migrations are applied before the server accepts requests.
 - No production process manager is included here; for production consider using Gunicorn/UVLoop or containerization.
 
 ---
@@ -148,12 +151,156 @@ curl http://localhost:3000/api/py/market/top-gainers
 
 - NSE requires careful HTTP headers and cookies. The `nse_client` module bootstraps a session by first visiting the NSE homepage and reuses cookies. Avoid heavy parallel scraping.
 - The backend uses an async SQLAlchemy engine with `aiosqlite`; the DB file must be writable by the process.
-- Alembic migrations are not included in this README — if you rely on migrations, wire `alembic/env.py` to import `app.database.Base.metadata`.
 - For production, run behind a reverse proxy, persist the DB or use a managed DB, and secure the server with proper access controls.
 
 ---
 
-If you want, I can also:
+## Database migrations
+
+This project uses **Alembic** for schema migrations. All DDL is version-controlled; `create_all` is no longer used.
+
+### How it works at startup
+
+When the server starts, `main.py` calls `alembic upgrade head` via a sync thread before accepting any requests. This means:
+
+- **Fresh install** — Alembic creates all tables from scratch and stamps the DB at `head`.
+- **Existing DB without migration history** (legacy) — the startup helper detects the absence of `alembic_version`, stamps the DB at the `initial_schema` revision, then applies only the revisions that followed.
+- **Already up-to-date DB** — `upgrade head` is a no-op (completes in milliseconds).
+
+No manual migration step is needed in any of these cases.
+
+### Migration history
+
+```
+<base>  →  aaf83c15d9f1  initial_schema
+           ↓
+        b7c94d23e8a2  last_update_time_nullable   ← head
+```
+
+View the full history at any time:
+
+```bash
+alembic history
+alembic current   # shows which revision the live DB is on
+```
+
+---
+
+### Adding a new column to an existing table
+
+1. Edit the ORM model in `app/models/`:
+
+   ```python
+   # example: add isin to StockUniverse
+   isin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+   ```
+
+2. Autogenerate a migration:
+
+   ```bash
+   alembic revision --autogenerate -m "add_isin_to_stock_universe"
+   ```
+
+3. Review the generated file in `alembic/versions/`. For SQLite, column additions use `batch_alter_table` automatically (already configured via `render_as_batch=True`).
+
+4. Apply immediately (optional — the server will also apply it on next start):
+
+   ```bash
+   alembic upgrade head
+   ```
+
+5. Commit the new revision file alongside the model change.
+
+---
+
+### Adding a new table
+
+1. Create a new ORM model in `app/models/`, inheriting from `Base`:
+
+   ```python
+   from app.database import Base
+
+   class MyNewTable(Base):
+       __tablename__ = "my_new_table"
+       id: Mapped[int] = mapped_column(primary_key=True)
+       ...
+   ```
+
+2. Import the model in `alembic/env.py` so Alembic can see it:
+
+   ```python
+   from app.models import my_new_module  # noqa: F401
+   ```
+
+3. Autogenerate and review:
+
+   ```bash
+   alembic revision --autogenerate -m "add_my_new_table"
+   # review alembic/versions/<rev>_add_my_new_table.py
+   alembic upgrade head
+   ```
+
+---
+
+### Modifying a column (type, nullability, rename)
+
+SQLite does not support `ALTER COLUMN` natively. Alembic handles this transparently via **batch mode** (configured globally with `render_as_batch=True`): it recreates the table under a temporary name, copies data, drops the original, and renames.
+
+```bash
+alembic revision --autogenerate -m "make_sector_pe_not_null"
+# Alembic emits a batch_alter_table block automatically
+alembic upgrade head
+```
+
+For renames, autogenerate cannot infer intent — edit the generated file manually:
+
+```python
+with op.batch_alter_table("stock_universe") as batch_op:
+    batch_op.alter_column("old_name", new_column_name="new_name", ...)
+```
+
+---
+
+### Dropping a column or table
+
+Autogenerate detects removals, but Alembic suppresses them by default to prevent accidental data loss. To enable:
+
+```python
+# in alembic/env.py _CONTEXT_OPTS, add:
+"include_object": lambda obj, name, type_, reflected, compare_to: True,
+```
+
+Or write the `drop_column` / `drop_table` call manually in the revision file.
+
+Always write a safe `downgrade()` function that restores the column/table if the migration needs to be rolled back:
+
+```bash
+alembic downgrade -1   # roll back one revision
+alembic downgrade base  # roll back everything (destructive!)
+```
+
+---
+
+### Rolling back a migration
+
+```bash
+alembic downgrade -1          # one step back
+alembic downgrade aaf83c15d9f1  # back to a specific revision
+alembic history               # list all revisions for reference
+```
+
+---
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `alembic.ini` | Alembic config — sets `sqlalchemy.url` from `settings.db_path` |
+| `alembic/env.py` | Migration runtime — imports `Base`, both models, configures batch mode and type comparison |
+| `alembic/versions/` | One `.py` file per revision; commit all of these |
+| `main.py` `_run_migrations_sync()` | Calls `upgrade head` at every server startup |
+
+
 
 - add a `requirements.txt` or `constraints.txt` for pip installs,
 - add a small `docker-compose.yml` for running Next.js + the Python backend together,

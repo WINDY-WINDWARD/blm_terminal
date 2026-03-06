@@ -4,59 +4,45 @@ Guidelines for AI coding agents working in this repository.
 
 ---
 
-## Copilot / Agent Guidelines (Concise)
-
-- Purpose: Help agents be productive immediately while respecting the project's conventions.
-- When to edit: Prefer updating `AGENTS.md` for repository-wide agent guidance. For package- or folder-scoped rules, prefer a local `AGENTS.md` in that folder.
-- Always use the project's existing conventions: TypeScript strict mode, `@/` alias for `src/`, one React component per file, and `use client` in interactive components.
-- Use the repository's key files as examples: [src/lib/utils.ts](src/lib/utils.ts#L1), [src/store/terminalStore.ts](src/store/terminalStore.ts#L1), and [src/app/layout.tsx](src/app/layout.tsx#L1).
-- Tooling: Run primary commands from the root. Common commands:
-  - `npm run dev` — start Next.js dev server
-  - `npm run build` — production build
-  - `npm run lint` — ESLint checks
-- Python backend (when relevant): located in `backend/` (FastAPI). See `backend/main.py` and `backend/pyproject.toml` for virtualenv/poetry info.
-- Use `manage_todo_list` for multi-step tasks and mark progress.
-- Before editing files, produce a short preamble (1–2 sentences) explaining the change.
-
----
-
 ## Project Overview
 
-A financial terminal UI built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, **Jotai** for state, and a native **WebSocket** client for real-time data. Panels host widgets (chart, order entry, positions, watchlist, top movers, settings) backed by a **Next.js API proxy** layer over the OpenAlgo trading API, with **Prisma + SQLite** for local persistence.
-
----
-
-## Tech Stack
-
-| Layer | Library/Tool |
-|---|---|
-| Framework | Next.js 16.1.6 (App Router) |
-| UI | React 19, Tailwind CSS v4 |
-| State | Jotai v2 (atomic) |
-| Data fetching | @tanstack/react-query v5 (active — `QueryClientProvider` in `Providers.tsx`) |
-| Charts | lightweight-charts v5 (TradingView) |
-| Icons | lucide-react (installed, not yet used in components) |
-| WebSocket | Native browser `WebSocket` API via `WebSocketService` in `src/lib/socket.ts` |
-| REST client | `OpenAlgoClient` (`src/lib/openalgo.ts`) + `OpenAlgoServerClient` (`src/lib/openalgo-server.ts`) |
-| Class utilities | `cn()` helper in `src/lib/utils.ts` (clsx + tailwind-merge — defined but not yet imported by components) |
-| Persistence | Prisma 7 + better-sqlite3 (local SQLite at `prisma/dev.db`) |
-| Package manager | npm |
+A financial terminal UI built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**,
+**Tailwind CSS v4**, **Jotai** for state, and a native **WebSocket** client for real-time data.
+Panels host widgets (chart, order entry, positions, watchlist, top movers, settings) backed by a
+**Next.js API proxy** over the OpenAlgo trading API, with **Prisma + SQLite** for local
+persistence. A separate **FastAPI** analytics backend (`backend/`) serves NSE filings/market data.
 
 ---
 
 ## Commands
 
+### Next.js frontend (run from repo root)
+
 ```bash
-npm run dev       # Start Next.js dev server with Turbopack
-npm run build     # Production build
+npm run dev       # Start Next.js dev server
+npm run build     # Production build (also type-checks via next build)
 npm start         # Serve the production build
-npm run lint      # ESLint v9 flat config
+npm run lint      # ESLint v9 flat config (eslint-config-next/core-web-vitals + typescript)
 ```
 
-### Tests
+### Python backend (run from `backend/`)
 
-No test framework is configured. When added, place tests in `src/__tests__/` or
-co-locate as `*.test.tsx` / `*.spec.tsx`. Vitest is recommended:
+```bash
+# One-time setup
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Run the FastAPI server
+uvicorn main:app --reload --port 8000
+
+# Tests (pytest-asyncio, asyncio_mode = "auto")
+pytest                               # all tests in backend/tests/
+pytest tests/test_market.py          # single file
+pytest tests/test_market.py::test_fn # single test function
+```
+
+No test framework is configured for the frontend yet. When added, place tests in
+`src/__tests__/` or co-locate as `*.test.tsx` / `*.spec.tsx`. Vitest is recommended:
 
 ```bash
 npx vitest run src/components/CommandBar.test.tsx   # single file
@@ -71,32 +57,24 @@ npx vitest run                                       # all tests
 src/
 ├── app/
 │   ├── api/
-│   │   ├── openalgo/
-│   │   │   ├── positions/route.ts    # GET  /api/openalgo/positions
-│   │   │   ├── orders/route.ts       # GET  /api/openalgo/orders
-│   │   │   ├── trades/route.ts       # GET  /api/openalgo/trades
-│   │   │   ├── funds/route.ts        # GET  /api/openalgo/funds
-│   │   │   ├── quotes/route.ts       # POST /api/openalgo/quotes
-│   │   │   ├── history/route.ts      # POST /api/openalgo/history
-│   │   │   ├── placeorder/route.ts   # POST /api/openalgo/placeorder
-│   │   │   └── ws-token/route.ts     # GET  /api/openalgo/ws-token
+│   │   ├── openalgo/         # Proxy routes (rate-limit → cache → OpenAlgoServerClient)
+│   │   │   ├── positions/route.ts   # POST /api/openalgo/positions
+│   │   │   ├── orders/route.ts      # POST /api/openalgo/orders
+│   │   │   ├── trades/route.ts      # POST /api/openalgo/trades
+│   │   │   ├── funds/route.ts       # POST /api/openalgo/funds
+│   │   │   ├── quotes/route.ts      # POST /api/openalgo/quotes
+│   │   │   ├── history/route.ts     # POST /api/openalgo/history
+│   │   │   ├── placeorder/route.ts  # POST /api/openalgo/placeorder
+│   │   │   └── ws-token/route.ts    # GET  /api/openalgo/ws-token
 │   │   ├── top-symbols/route.ts
-│   │   └── watchlist/route.ts        # GET/POST/DELETE — Prisma-backed
-│   ├── globals.css     # Tailwind v4 @theme tokens
+│   │   └── watchlist/route.ts       # GET/POST/DELETE — Prisma-backed
+│   ├── globals.css     # Tailwind v4 @theme design tokens
 │   ├── layout.tsx      # Server component — wraps app in <Providers>
 │   └── page.tsx        # Server component — renders <TerminalContainer>
 ├── components/
-│   ├── widgets/
-│   │   ├── ChartWidget.tsx
-│   │   ├── OrderWidget.tsx
-│   │   ├── PosWidget.tsx
-│   │   ├── SettingsWidget.tsx
-│   │   ├── TopWidget.tsx
-│   │   └── WatchWidget.tsx
+│   ├── widgets/        # ChartWidget, OrderWidget, PosWidget, SettingsWidget, TopWidget, WatchWidget
 │   ├── CommandBar.tsx
-│   ├── ErrorBoundary.tsx   # Class component — wraps each widget in Panel.tsx
-│   ├── GridSystem.tsx
-│   ├── LiveTicker.tsx
+│   ├── ErrorBoundary.tsx   # Class component wrapping each widget in Panel.tsx
 │   ├── Panel.tsx           # switch-based widget router + ErrorBoundary
 │   ├── Providers.tsx       # QueryClientProvider (client component)
 │   └── TerminalContainer.tsx
@@ -104,14 +82,15 @@ src/
 │   ├── api-config.ts         # TTLs and rate limits per endpoint
 │   ├── cache.ts              # In-memory TTL cache singleton
 │   ├── logger.ts             # Structured logger singleton
-│   ├── openalgo-server.ts    # Server-side REST client (timeout, retry, error types)
+│   ├── openalgo-server.ts    # Server-side REST client (timeout, retry, typed errors)
 │   ├── openalgo.ts           # Client-side REST client (calls proxy routes)
 │   ├── prisma.ts             # Prisma client singleton (globalThis pattern)
 │   ├── rate-limiter.ts       # Sliding-window rate limiter singleton
 │   ├── socket.ts             # Native WebSocket singleton (WebSocketService + wsService)
 │   └── utils.ts              # cn() — clsx + tailwind-merge
 └── store/
-    └── terminalStore.ts      # All Jotai atoms
+    └── terminalStore.ts      # All Jotai atoms (single source of truth)
+backend/                      # FastAPI analytics service (Python ≥ 3.11, Poetry/Hatch)
 ```
 
 ---
@@ -121,40 +100,39 @@ src/
 ### TypeScript
 
 - **Strict mode on** (`"strict": true`). Target `ES2017`, `moduleResolution: "bundler"`, `noEmit: true`.
-- Use `unknown` in `catch` blocks — `err: any` is not acceptable in new code:
+- Use `unknown` in `catch` blocks — `err: any` is forbidden in new code:
   ```ts
   catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
   }
   ```
 - Use `import type` for type-only imports: `import type { NextRequest } from 'next/server'`
-- Generic helpers over overloads: see `OpenAlgoClient.request<T>()`.
+- Generic helpers over overloads: see `OpenAlgoServerClient.request<T>()`.
 
 ### Imports
 
 - `@/` alias (→ `src/`) for all cross-directory imports; relative `./` only within the same directory.
-- Manual import order (no plugin enforces this):
+- Import order (manual — no plugin enforces this):
   1. `react`, `next/*`
   2. Third-party libraries
   3. `@/` internal imports
   4. `./` relative imports
-- Named exports everywhere except `app/page.tsx` and `app/layout.tsx` (Next.js requires default exports there).
+- Named exports everywhere except `app/page.tsx` and `app/layout.tsx` (Next.js requires defaults).
 
 ### React Components
 
-- `'use client'` must be the first line of every interactive component. Server components (`page.tsx`, `layout.tsx`, all API routes) have no directive.
+- `'use client'` must be the **first line** of every interactive component. Server components (`page.tsx`, `layout.tsx`, API routes) have no directive.
 - One component per file; filename matches the exported component name (PascalCase).
 - Props typed as an inline interface directly above the component: `interface WidgetProps { ... }`.
-- Use `cn()` from `@/lib/utils` for any conditional or merged Tailwind class strings.
+- Use `cn()` from `@/lib/utils` for conditional or merged Tailwind class strings.
 
 ### Naming Conventions
 
 | Entity | Convention | Example |
 |---|---|---|
-| React components | PascalCase | `TerminalContainer`, `ChartWidget` |
-| Component files | PascalCase | `Panel.tsx`, `PosWidget.tsx` |
+| React components / files | PascalCase | `ChartWidget`, `Panel.tsx` |
 | Non-component functions | camelCase | `handleKeyDown`, `handleOrder` |
-| Variables / state | camelCase | `inputVal`, `focusedPanel` |
+| Variables / local state | camelCase | `inputVal`, `focusedPanel` |
 | Jotai atoms | camelCase + `Atom` suffix | `activeCommandAtom`, `fundsAtom` |
 | TypeScript interfaces | PascalCase | `PanelProps`, `OrderParams` |
 | Classes | PascalCase | `OpenAlgoClient`, `WebSocketService` |
@@ -165,29 +143,29 @@ src/
 
 ### CSS and Tailwind
 
-- Tailwind v4 utilities only. Inline `style={{}}` only for values computed at runtime (e.g., panel pixel widths).
-- All design tokens defined in `src/app/globals.css` under `@theme` — never hardcode hex values in components.
-- Terminal palette: `terminal-amber` (primary), `terminal-green` (profit/buy), `terminal-red` (loss/sell), `terminal-bg` (background). Preserve it.
+- Tailwind v4 utilities only. Inline `style={{}}` only for runtime-computed values (e.g. panel pixel widths).
+- All design tokens defined in `src/app/globals.css` under `@theme` — never hardcode hex values.
+- Terminal palette: `terminal-amber` (primary), `terminal-green` (profit/buy), `terminal-red` (loss/sell), `terminal-bg` (background), `terminal-gray` (borders/muted).
 
 ### State Management (Jotai)
 
-- All atoms defined in `src/store/terminalStore.ts`. Do not create atoms in component files.
-- Atoms are generically typed: `atom<string>('')`, `atom<Record<string, string>>({})`.
+- All atoms live in `src/store/terminalStore.ts`. Do **not** create atoms in component files.
+- Atoms are generically typed: `atom<string>('')`, `atom<Record<string, TickData>>({})`.
 - Read-only consumers use `useAtomValue`; read-write consumers use `useAtom`.
 - Prefer primitive atoms + derived `atom(get => ...)` over large compound atoms.
 
 ### Data Fetching
 
-- Use `useQuery` / `useMutation` from `@tanstack/react-query` for all server-state in components. Raw `useEffect` + `useState` for async data is not acceptable in new widgets.
-- Every proxy route follows the same pipeline: **rate-limit → cache check → call `OpenAlgoServerClient` → write cache → return JSON**.
+- Use `useQuery` / `useMutation` from `@tanstack/react-query` for all server state in components. Raw `useEffect + useState` for async data is **not acceptable** in new widgets.
+- Every proxy route follows this pipeline: **rate-limit → cache check → `OpenAlgoServerClient` → write cache → return JSON**.
 - WebSocket subscriptions use the `wsService` singleton (`src/lib/socket.ts`).
 
 ### Error Handling
 
-- Proxy routes catch `OpenAlgoServerClient` errors and return `{ error: string }` with an appropriate HTTP status. Components read `data.error` and surface it in the UI.
-- `ErrorBoundary` (`src/components/ErrorBoundary.tsx`) is already mounted around every widget in `Panel.tsx` — do not add redundant try/catch for render errors.
+- Proxy routes catch errors and return `{ error: string }` with the appropriate HTTP status. Components read `data.error` and surface it in the UI.
+- `ErrorBoundary` is already mounted around every widget in `Panel.tsx` — do not add redundant render-level try/catch.
 - Guard DOM refs before use: `if (!ref.current) return;`
-- Register a `'error'` listener whenever adding new `WebSocket` / `wsService` subscriptions.
+- Register an `'error'` listener whenever adding `WebSocket` / `wsService` subscriptions.
 
 ---
 
@@ -214,4 +192,4 @@ Never commit `.env.local`. The `.gitignore` already excludes `.env*` files.
 
 ## No Cursor or Copilot Rules
 
-No `.cursorrules`, `.cursor/rules/`, or `.github/copilot-instructions.md` files exist.
+No `.cursorrules`, `.cursor/rules/`, or `.github/copilot-instructions.md` files exist in this repo.

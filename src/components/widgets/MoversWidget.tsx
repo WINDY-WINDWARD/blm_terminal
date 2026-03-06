@@ -102,10 +102,10 @@ export function MoversWidget() {
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-auto">
       {/* Top Gainers */}
-      <div className="flex-1 bg-terminal-green p-2 border-b border-terminal-gray">
-        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">Top Gainers</div>
+      <div className="flex-1 bg-terminal-bg p-2 border-b border-terminal-green">
+        <div className="text-terminal-green font-bold uppercase text-[10px] tracking-widest mb-1">Top Gainers</div>
         <table className="w-full text-left border-collapse">
-          <thead className="text-terminal-amber text-[9px] font-bold uppercase">
+          <thead className="text-terminal-green text-[9px] font-bold uppercase">
             <tr>
               <th className="w-12">SYMBOL</th>
               <th className="text-right">OPEN</th>
@@ -122,7 +122,7 @@ export function MoversWidget() {
                 onClick={() => handleRowClick(row)}
                 className="border-b border-terminal-gray hover:bg-zinc-900 cursor-pointer"
               >
-                <td className="font-bold">{row.symbol}</td>
+                <td className="font-bold text-terminal-green">{row.symbol}</td>
                 <td className="text-right">{row.open}</td>
                 <td className="text-right">{row.high}</td>
                 <td className="text-right">{row.low}</td>
@@ -135,10 +135,10 @@ export function MoversWidget() {
       </div>
 
       {/* Top Losers */}
-      <div className="flex-1 bg-terminal-red p-2">
-        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">Top Losers</div>
+      <div className="flex-1 bg-terminal-bg p-2 border-b border-terminal-red">
+        <div className="text-terminal-red font-bold uppercase text-[10px] tracking-widest mb-1">Top Losers</div>
         <table className="w-full text-left border-collapse">
-          <thead className="text-terminal-amber text-[9px] font-bold uppercase">
+          <thead className="text-terminal-red text-[9px] font-bold uppercase">
             <tr>
               <th className="w-12">SYMBOL</th>
               <th className="text-right">OPEN</th>
@@ -155,7 +155,7 @@ export function MoversWidget() {
                 onClick={() => handleRowClick(row)}
                 className="border-b border-terminal-gray hover:bg-zinc-900 cursor-pointer"
               >
-                <td className="font-bold">{row.symbol}</td>
+                <td className="font-bold text-terminal-red">{row.symbol}</td>
                 <td className="text-right">{row.open}</td>
                 <td className="text-right">{row.high}</td>
                 <td className="text-right">{row.low}</td>

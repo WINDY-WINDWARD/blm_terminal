@@ -22,7 +22,7 @@ class StockUniverse(Base):
     sector_pe: Mapped[float | None] = mapped_column(Float, nullable=True)
     symbol_pe: Mapped[float | None] = mapped_column(Float, nullable=True)
     industry_info: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    last_update_time: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    last_update_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

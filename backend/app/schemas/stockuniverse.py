@@ -11,7 +11,7 @@ class StockUniverse(BaseModel):
     sectorPE: float | None
     symbolPE: float | None
     industryInfo: dict[str, str]
-    lastUpdateTime: datetime
+    lastUpdateTime: datetime | None
 
     @field_validator('sectorPE', 'symbolPE', mode='before')
     @classmethod
@@ -25,10 +25,15 @@ class StockUniverse(BaseModel):
 
     @field_validator('lastUpdateTime', mode='before')
     @classmethod
-    def parse_datetime(cls, v):
+    def parse_datetime(cls, v: object) -> datetime | None:
+        if v is None:
+            return None
         if isinstance(v, datetime):
             return v
-        return datetime.strptime(v, '%d-%b-%Y %H:%M:%S')
+        try:
+            return datetime.strptime(str(v), '%d-%b-%Y %H:%M:%S')
+        except (ValueError, TypeError):
+            return None
     
     @field_validator('industryInfo', mode='before')
     @classmethod
