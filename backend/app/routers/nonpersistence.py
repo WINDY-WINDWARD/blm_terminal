@@ -205,6 +205,8 @@ async def high_short_interest() -> JSONResponse:
 
 _CHANGE_RANGES_TTL: float = 300.0  # 5 minutes
 
+_SYMBOL_DATA_TTL: float = 60.0  # 1 minute
+
 
 @router.get(
     "/change-ranges/{symbol}",
@@ -226,5 +228,26 @@ async def change_ranges(symbol: str) -> JSONResponse:
         return JSONResponse(content=cached)
 
     data = await _throttled_call(nse_client.get_change_ranges, symbol)
+    _cache_set(cache_key, data)
+    return JSONResponse(content=data)
+
+
+@router.get(
+    "/symbol-data/{symbol}",
+    summary="Live symbol data from NSE (getSymbolData)",
+    response_class=JSONResponse,
+)
+async def symbol_data(symbol: str) -> JSONResponse:
+    """Return live symbol data from NSE's `getSymbolData` endpoint.
+
+    Results are cached for a short period to limit repeated hits.
+    """
+    cache_key = f"symbol_data:{symbol.upper()}"
+    cached = _cache_get(cache_key, ttl=_SYMBOL_DATA_TTL)
+    if cached is not None:
+        logger.debug("Cache hit for %s", cache_key)
+        return JSONResponse(content=cached)
+
+    data = await _throttled_call(nse_client.get_symbol_data, symbol.upper())
     _cache_set(cache_key, data)
     return JSONResponse(content=data)

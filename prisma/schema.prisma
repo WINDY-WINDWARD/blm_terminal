@@ -26,3 +26,10 @@ model TopMoverSymbol {
 
   @@unique([symbol, exchange])
 }
+
+model UserSettings {
+  id               Int      @id @default(1)
+  watchlistColumns String   @default("[\"ltp\",\"chg\",\"1w\",\"1m\",\"3m\",\"6m\",\"1y\"]")
+  moversColumns    String   @default("[\"close\",\"chg\",\"1w\",\"1m\",\"3m\",\"6m\",\"1y\"]")
+  updatedAt        DateTime @updatedAt
+}

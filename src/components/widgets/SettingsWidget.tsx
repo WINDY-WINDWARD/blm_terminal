@@ -1,14 +1,111 @@
 'use client';
 
-import React from 'react';
-import { useAtom } from 'jotai';
-import { wsConnectedAtom, fundsAtom } from '@/store/terminalStore';
+import React, { useState, useEffect } from 'react';
+import { useAtom, useAtomValue } from 'jotai';
+import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom } from '@/store/terminalStore';
+
+const WATCHLIST_COLUMNS = [
+  { key: 'ltp', label: 'LTP' },
+  { key: 'chg', label: 'CHG%' },
+  { key: '1w', label: '1W%' },
+  { key: '1m', label: '1M%' },
+  { key: '3m', label: '3M%' },
+  { key: '6m', label: '6M%' },
+  { key: '1y', label: '1Y%' },
+  { key: '2y', label: '2Y%' },
+  { key: '3y', label: '3Y%' },
+  { key: '5y', label: '5Y%' },
+  { key: '52wh', label: '52W HIGH' },
+  { key: '52wl', label: '52W LOW' },
+];
+
+const MOVERS_COLUMNS = [
+  { key: 'close', label: 'CLOSE' },
+  { key: 'chg', label: 'CHG%' },
+  { key: '1w', label: '1W%' },
+  { key: '1m', label: '1M%' },
+  { key: '3m', label: '3M%' },
+  { key: '6m', label: '6M%' },
+  { key: '1y', label: '1Y%' },
+  { key: '2y', label: '2Y%' },
+  { key: '3y', label: '3Y%' },
+  { key: '5y', label: '5Y%' },
+  { key: '52wh', label: '52W HIGH' },
+  { key: '52wl', label: '52W LOW' },
+];
+
+function ColumnCheckboxes({
+  columns,
+  selected,
+  onChange,
+}: {
+  columns: { key: string; label: string }[];
+  selected: string[];
+  onChange: (key: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-x-2 gap-y-1">
+      {columns.map((col) => (
+        <label key={col.key} className="flex items-center gap-1 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={selected.includes(col.key)}
+            onChange={(e) => onChange(col.key, e.target.checked)}
+            className="accent-terminal-amber"
+          />
+          <span className="text-terminal-amber text-[10px]">{col.label}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
 
 export function SettingsWidget() {
   const [wsConnected] = useAtom(wsConnectedAtom);
   const [funds] = useAtom(fundsAtom);
+  const [watchlistCols, setWatchlistCols] = useAtom(watchlistColumnsAtom);
+  const [moversCols, setMoversCols] = useAtom(moversColumnsAtom);
 
-  const EXCHANGES = ['NSE', 'BSE', 'NFO', 'MCX', 'BFO', 'CDS'];
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.watchlistColumns) {
+          setWatchlistCols(data.watchlistColumns);
+        }
+        if (data.moversColumns) {
+          setMoversCols(data.moversColumns);
+        }
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [setWatchlistCols, setMoversCols]);
+
+  const handleWatchlistChange = (key: string, checked: boolean) => {
+    const newCols = checked
+      ? [...watchlistCols, key]
+      : watchlistCols.filter((c) => c !== key);
+    setWatchlistCols(newCols);
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchlistColumns: newCols, moversColumns: moversCols }),
+    }).catch(console.error);
+  };
+
+  const handleMoversChange = (key: string, checked: boolean) => {
+    const newCols = checked
+      ? [...moversCols, key]
+      : moversCols.filter((c) => c !== key);
+    setMoversCols(newCols);
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ watchlistColumns: watchlistCols, moversColumns: newCols }),
+    }).catch(console.error);
+  };
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-auto p-3 gap-4">
@@ -61,6 +158,38 @@ export function SettingsWidget() {
           </div>
         </div>
       )}
+
+      {/* Watchlist Columns */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Watchlist Columns
+        </div>
+        {loading ? (
+          <div className="text-terminal-gray">Loading...</div>
+        ) : (
+          <ColumnCheckboxes
+            columns={WATCHLIST_COLUMNS}
+            selected={watchlistCols}
+            onChange={handleWatchlistChange}
+          />
+        )}
+      </div>
+
+      {/* Movers Columns */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Movers Columns
+        </div>
+        {loading ? (
+          <div className="text-terminal-gray">Loading...</div>
+        ) : (
+          <ColumnCheckboxes
+            columns={MOVERS_COLUMNS}
+            selected={moversCols}
+            onChange={handleMoversChange}
+          />
+        )}
+      </div>
 
       {/* Tips */}
       <div className="flex flex-col gap-0.5 mt-auto">

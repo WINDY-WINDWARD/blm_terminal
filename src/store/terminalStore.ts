@@ -23,7 +23,7 @@ export const activeSymbolAtom = atom<string>('RELIANCE');
 /** The currently active exchange — shared across all widgets */
 export const activeExchangeAtom = atom<string>('NSE');
 
-// ─── Other Atoms ──────────────────────────────────────────────────────────────
+// ─── Other Atoms ─────────────────────────────────────────────────────────────
 
 /** Live tick data keyed by "SYMBOL.EXCHANGE" — updated by wsService */
 export const tickDataAtom = atom<Record<string, TickData>>({});
@@ -33,3 +33,11 @@ export const wsConnectedAtom = atom<boolean>(false);
 
 /** Account funds data — updated periodically */
 export const fundsAtom = atom<FundsData | null>(null);
+
+// ─── Column Configuration ───────────────────────────────────────────────────
+
+export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', '1w', '1m', '3m', '6m', '1y'];
+export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '1y'];
+
+export const watchlistColumnsAtom = atom<string[]>(DEFAULT_WATCHLIST_COLUMNS);
+export const moversColumnsAtom = atom<string[]>(DEFAULT_MOVERS_COLUMNS);

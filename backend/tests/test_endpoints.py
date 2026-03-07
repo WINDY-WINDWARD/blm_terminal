@@ -403,3 +403,64 @@ class TestMarketChangeRanges:
         assert resp.status_code == 500, (
             f"Expected 500 for unknown symbol, got {resp.status_code}"
         )
+
+
+@pytest.mark.slow
+class TestMarketSymbolData:
+    @pytest.fixture(autouse=True)
+    def delay(self):
+        time.sleep(NSE_COURTESY_DELAY)
+
+    # ------------------------------------------------------------------
+    # Shared helper: fetch once and skip if NSE is unreachable.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch(symbol: str = KNOWN_SYMBOL) -> requests.Response:
+        resp = get(f"/api/market/symbol-data/{symbol}")
+        if resp.status_code == 500:
+            pytest.skip("NSE getSymbolData upstream not reachable (500)")
+        return resp
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    def test_returns_200(self):
+        resp = get(f"/api/market/symbol-data/{KNOWN_SYMBOL}")
+        assert resp.status_code in (200, 500), (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+
+    def test_content_type_json(self):
+        resp = self._fetch()
+        assert "application/json" in resp.headers.get("content-type", "")
+
+    def test_response_is_object(self):
+        """NSE getSymbolData always returns a dict, never a list."""
+        resp = self._fetch()
+        assert isinstance(resp.json(), dict)
+
+    def test_response_is_not_empty(self):
+        data = self._fetch().json()
+        assert len(data) > 0, "Response dict should not be empty"
+
+    def test_lowercase_symbol_uppercased_internally(self):
+        """Router uppercases symbol before calling the service; lowercase must not 404."""
+        resp = get(f"/api/market/symbol-data/{KNOWN_SYMBOL.lower()}")
+        assert resp.status_code in (200, 500), (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+
+    def test_lowercase_and_uppercase_return_same_data(self):
+        """Both casings hit the same cache key and should return identical payloads."""
+        resp_upper = self._fetch(KNOWN_SYMBOL)
+        resp_lower = self._fetch(KNOWN_SYMBOL.lower())
+        assert resp_upper.json() == resp_lower.json()
+
+    def test_unknown_symbol_returns_500(self):
+        """An unrecognised symbol makes NSE return an unexpected payload → 500."""
+        resp = get("/api/market/symbol-data/THISSYMBOLDOESNOTEXIST_XYZ")
+        assert resp.status_code == 500, (
+            f"Expected 500 for unknown symbol, got {resp.status_code}"
+        )

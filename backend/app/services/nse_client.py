@@ -146,6 +146,45 @@ class NSEClient:
 
         return result
 
+    def get_symbol_data(self, symbol: str, market_type: str = "N", series: str = "EQ") -> dict:
+        """Fetch symbol data from NSE's GetQuoteApi getSymbolData endpoint.
+
+        Example URL:
+        https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType=N&series=EQ&symbol=HDFCBANK
+
+        Returns the parsed JSON payload as a Python dict. Raises on non-200 responses
+        or unexpected payload types.
+        """
+
+        url = (
+            "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
+            f"?functionName=getSymbolData&marketType={market_type}&series={series}&symbol={symbol}"
+        )
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
+            "Referer": "https://www.nseindia.com/",
+        }
+
+        sess = requests.Session()
+        sess.headers.update(headers)
+        try:
+            sess.get("https://www.nseindia.com/", timeout=10)
+        except Exception:
+            pass
+
+        resp = sess.get(url, timeout=20)
+        resp.raise_for_status()
+
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            # Some NSE endpoints return lists; ensure we return a dict for callers.
+            raise ValueError(f"Unexpected response format from getSymbolData for {symbol}: {payload!r}")
+
+        return payload
     async def close(self) -> None:
         """No-op teardown hook (kept for lifespan compatibility)."""
 
