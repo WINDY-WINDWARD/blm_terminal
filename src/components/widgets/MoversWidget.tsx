@@ -79,7 +79,7 @@ function useChangeRanges(symbol: string) {
   });
 }
 
-function useMoverQuote(symbol: string) {
+function useMoverQuote(symbol: string, enabled: boolean) {
   return useQuery<MoverQuote | null>({
     queryKey: ['market/mover-quote', symbol],
     queryFn: async () => {
@@ -93,7 +93,7 @@ function useMoverQuote(symbol: string) {
       };
     },
     staleTime: 60_000,
-    enabled: !!symbol,
+    enabled: !!symbol && enabled,
   });
 }
 
@@ -106,7 +106,8 @@ interface MoverRowProps {
 
 function MoverRowComponent({ row, columns, onClick, colorClass }: MoverRowProps) {
   const { data: ranges, isLoading: rangesLoading } = useChangeRanges(row.symbol);
-  const { data: quote, isLoading: quoteLoading } = useMoverQuote(row.symbol);
+  const needs52w = columns.includes('52wh') || columns.includes('52wl');
+  const { data: quote, isLoading: quoteLoading } = useMoverQuote(row.symbol, needs52w);
 
   const yearHigh = quote?.yearHigh;
   const yearLow = quote?.yearLow;

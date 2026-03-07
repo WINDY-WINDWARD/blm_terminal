@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useAtom } from 'jotai';
 import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom } from '@/store/terminalStore';
 
 const WATCHLIST_COLUMNS = [
@@ -68,6 +68,26 @@ export function SettingsWidget() {
 
   const [loading, setLoading] = useState(true);
 
+  // Keep a ref with the latest columns so the debounced save never reads a stale closure
+  const latestCols = useRef({ watchlist: watchlistCols, movers: moversCols });
+  useEffect(() => {
+    latestCols.current = { watchlist: watchlistCols, movers: moversCols };
+  }, [watchlistCols, moversCols]);
+
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const scheduleSave = useCallback(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const { watchlist, movers } = latestCols.current;
+      fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ watchlistColumns: watchlist, moversColumns: movers }),
+      }).catch(console.error);
+    }, 300);
+  }, []);
+
   useEffect(() => {
     fetch('/api/settings')
       .then((res) => res.json())
@@ -83,16 +103,19 @@ export function SettingsWidget() {
       .finally(() => setLoading(false));
   }, [setWatchlistCols, setMoversCols]);
 
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
   const handleWatchlistChange = (key: string, checked: boolean) => {
     const newCols = checked
       ? [...watchlistCols, key]
       : watchlistCols.filter((c) => c !== key);
     setWatchlistCols(newCols);
-    fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watchlistColumns: newCols, moversColumns: moversCols }),
-    }).catch(console.error);
+    scheduleSave();
   };
 
   const handleMoversChange = (key: string, checked: boolean) => {
@@ -100,11 +123,7 @@ export function SettingsWidget() {
       ? [...moversCols, key]
       : moversCols.filter((c) => c !== key);
     setMoversCols(newCols);
-    fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ watchlistColumns: watchlistCols, moversColumns: newCols }),
-    }).catch(console.error);
+    scheduleSave();
   };
 
   return (
