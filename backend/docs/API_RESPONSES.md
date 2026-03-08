@@ -1,5 +1,5 @@
 BLM Analytics API Documentation
-Base URL: http://localhost:8005
+Base URL: http://127.0.0.1:4455
 Generated: /mnt/drive3/500GB/p1/Projects/blm_terminal/backend/docs/api_responses.py
 
 ============================================================
@@ -407,8 +407,8 @@ Status: 200
         "secStatus": "Listed",
         "listingDate": "29-Nov-1995 00:00:00",
         "pdSectorInd": "NIFTY 500                                         ",
-        "pdSectorPe": "19.3",
-        "pdSymbolPe": "19.3",
+        "pdSectorPe": "19.51",
+        "pdSymbolPe": "19.51",
         "isSuspended": "Active",
         "basicIndustry": "Refineries & Marketing",
         "index": "Nifty 50",
@@ -511,7 +511,10 @@ Status: 200
     "low_52w": "1,115",
     "eps_growth_5years": "9.92%",
     "eps": "61.5",
-    "dividend_payout": "10.7%"
+    "dividend_payout": "10.7%",
+    "piotroski_score": "4.00",
+    "promoter_holding": "50.0%",
+    "roic": "10.6%"
   },
   "quarters": [
     {
