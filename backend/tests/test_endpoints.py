@@ -464,3 +464,82 @@ class TestMarketSymbolData:
         assert resp.status_code == 500, (
             f"Expected 500 for unknown symbol, got {resp.status_code}"
         )
+
+
+# ---------------------------------------------------------------------------
+# /api/screener/...
+# ---------------------------------------------------------------------------
+
+
+class TestScreenerSearch:
+    """Tests for the screener.in search endpoint (public, no auth required)."""
+
+    def test_search_returns_200(self):
+        resp = get("/api/screener/search?q=reliance")
+        assert resp.status_code == 200, (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+
+    def test_search_returns_list(self):
+        resp = get("/api/screener/search?q=reliance")
+        data = resp.json()
+        assert isinstance(data, list), "Response should be a list"
+
+    def test_search_results_contain_expected_fields(self):
+        resp = get("/api/screener/search?q=reliance")
+        data = resp.json()
+        if data:
+            assert "id" in data[0]
+            assert "name" in data[0]
+            assert "url" in data[0]
+
+    def test_search_empty_query_returns_422(self):
+        resp = get("/api/screener/search?q=")
+        assert resp.status_code == 422, (
+            f"Expected 422 for empty query, got {resp.status_code}"
+        )
+
+    def test_search_results_contain_query_term(self):
+        resp = get("/api/screener/search?q=reliance")
+        data = resp.json()
+        assert len(data) > 0, "Expected at least one result for 'reliance'"
+        names = [item.get("name", "").lower() for item in data]
+        assert any("reliance" in n for n in names), "Results should contain 'reliance'"
+
+
+class TestScreenerCompany:
+    """Tests for the screener.in company fundamentals endpoint (requires auth)."""
+
+    def test_company_returns_200_or_503(self):
+        """Endpoint returns 200 if authenticated via browser cookies, else 503."""
+        resp = get("/api/screener/company/RELIANCE")
+        assert resp.status_code in (200, 503), (
+            f"Expected 200 (authenticated) or 503 (no auth), got {resp.status_code}"
+        )
+
+    def test_company_success_response_schema(self):
+        """When authenticated, response should have expected schema."""
+        resp = get("/api/screener/company/RELIANCE")
+        if resp.status_code == 200:
+            data = resp.json()
+            assert "symbol" in data
+            assert "name" in data
+            assert "screener_warehouse_id" in data
+            assert "ratios" in data
+            assert "quarters" in data
+            assert "pe" in data["ratios"]
+            assert "eps" in data["ratios"]
+
+    def test_company_invalid_symbol_returns_422(self):
+        """Invalid symbol format should return 422."""
+        resp = get("/api/screener/company/INVALID@@@")
+        assert resp.status_code == 422, (
+            f"Expected 422 for invalid symbol, got {resp.status_code}"
+        )
+
+    def test_company_unknown_symbol_returns_404(self):
+        """Unknown symbol should return 404 when authenticated. Without auth, returns 503."""
+        resp = get("/api/screener/company/THISSYMBOLDOESNOTEXIST_XYZ")
+        assert resp.status_code in (404, 503), (
+            f"Expected 404 (auth + not found) or 503 (no auth), got {resp.status_code}"
+        )

@@ -11,6 +11,31 @@ HTTP requests.
 The existing `/api/py/[...path]` catch-all proxy in Next.js (`src/app/api/py/[...path]/route.ts`)
 already forwards all requests to the FastAPI backend, so **no Next.js changes are required**.
 
+## Plan Review: Missing Items Fixed
+
+The original plan is mostly correct, but these gaps were identified and fixed in this doc:
+
+1. **Router registry wiring was incomplete**
+   - `backend/main.py` imports routers from `app.routers` (`__init__.py`), so adding only
+     `main.py` is not enough.
+   - Fix: add `screener_router` export in `backend/app/routers/__init__.py`.
+
+2. **Invalid session handling was missing**
+   - A stale cookie can return a login HTML page with HTTP 200, which would parse as empty data.
+   - Fix: add an auth-page detection check in `get_company()` and raise `RuntimeError` (503 in API).
+
+3. **Input validation and limits were underspecified**
+   - Symbol/query constraints should be explicit to prevent malformed upstream requests.
+   - Fix: enforce symbol regex and query length caps at the FastAPI layer.
+
+4. **Endpoint test coverage was missing**
+   - Existing backend tests are endpoint-level integration tests in `backend/tests/test_endpoints.py`.
+   - Fix: add test cases for `/api/screener/search` and `/api/screener/company/{symbol}`.
+
+5. **Operational/legal caveat was missing**
+   - This relies on authenticated page scraping and may be subject to screener.in Terms.
+   - Fix: add compliance note and guidance for respectful request rates.
+
 ---
 
 ## Auth: How It Works
@@ -376,6 +401,7 @@ Prefix: /api  →  effective routes: /api/screener/search, /api/screener/company
 
 from __future__ import annotations
 
+import re
 import logging
 from typing import Any
 
@@ -386,6 +412,7 @@ from app.services.screener_client import screener_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["screener"])
+_SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{1,30}$")
 
 # In-process cache reusing the same pattern as nonpersistence.py
 import time
@@ -407,7 +434,7 @@ def _cache_set(key: str, value: object, ttl: float) -> None:
 
 @router.get("/screener/search")
 async def screener_search(
-    q: str = Query(..., min_length=1, description="Company name or symbol fragment"),
+    q: str = Query(..., min_length=1, max_length=80, description="Company name or symbol fragment"),
 ) -> list[dict[str, Any]]:
     """
     Search screener.in for matching companies.
@@ -442,6 +469,10 @@ async def screener_company(
 
     Returns: symbol, name, ratios (P/E, ROCE, ROE, etc.), quarters (last 4).
     """
+    symbol = symbol.upper().strip()
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol format")
+
     if not screener_client.is_authenticated:
         raise HTTPException(
             status_code=503,
@@ -451,7 +482,7 @@ async def screener_company(
             ),
         )
 
-    cache_key = f"screener:company:{symbol.upper()}:{'c' if consolidated else 's'}"
+    cache_key = f"screener:company:{symbol}:{'c' if consolidated else 's'}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached  # type: ignore[return-value]
@@ -482,6 +513,21 @@ from app.routers.screener import router as screener_router
 
 # existing registrations ...
 app.include_router(screener_router, prefix="/api")
+```
+
+### 5. `backend/app/routers/__init__.py` — export the new router
+
+`backend/main.py` imports routers from `app.routers`, so update the registry:
+
+```python
+from app.routers.screener import router as screener_router
+
+__all__ = [
+    "filings_router",
+    "market_router",
+    "stockuniverse_router",
+    "screener_router",
+]
 ```
 
 In the lifespan startup block, add initialisation and shutdown for the client:
@@ -582,7 +628,7 @@ const res = await fetch(`/api/py/screener/company/${symbol}?consolidated=true`)
    ```
 
 2. **Log in to screener.in in Chrome** (Google or email — either works).
-   Chrome must be closed or at least the profile must be accessible when the backend starts.
+   Chrome may remain open, but the backend must run as the same Windows user profile.
    On Windows, DPAPI decryption is done in the context of the logged-in Windows user,
    so run the backend as the same Windows user who owns the Chrome profile.
 
@@ -608,8 +654,14 @@ const res = await fetch(`/api/py/screener/company/${symbol}?consolidated=true`)
   When requests start returning HTML login pages instead of data, restart the FastAPI server
   to re-read fresh cookies from Chrome.
 
+- **Auth redirect detection**: if `get_company()` receives a login page (HTTP 200 with
+  `/login/` page markers), treat it as unauthenticated and return 503 instead of parsing empty data.
+
 - **Rate limiting**: All requests share a single `asyncio.Lock` with a 1-second courtesy delay
   between calls, matching the pattern used in `nonpersistence.py` for NSE requests.
+
+- **Compliance**: this integration scrapes authenticated web pages rather than using an official API.
+  Review screener.in Terms before production usage.
 
 - **BeautifulSoup selectors**: Screener.in occasionally redesigns its HTML. The selectors in
   `_parse_ratios` and `_parse_quarters` target stable IDs (`#top`, `#quarters`) and class names
@@ -621,3 +673,15 @@ const res = await fetch(`/api/py/screener/company/${symbol}?consolidated=true`)
 
 - **`screener_client.py` was an empty placeholder** (`0 bytes`) committed as
   `backend/app/services/screener_client.py`. The implementation above fills it.
+
+---
+
+## Suggested Test Additions (`backend/tests/test_endpoints.py`)
+
+Add integration tests following existing patterns:
+
+1. `GET /api/screener/search?q=reliance` returns 200 and list payload.
+2. `GET /api/screener/search?q=` invalid/empty query returns 422.
+3. `GET /api/screener/company/RELIANCE` returns either 200 (authenticated) or 503 (no session).
+4. `GET /api/screener/company/INVALID@@@` returns 422 due to symbol validation.
+5. If unauthenticated, response message instructs: login in Chrome and restart backend.

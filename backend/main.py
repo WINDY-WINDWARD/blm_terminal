@@ -15,9 +15,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, inspect as sa_inspect
 
 from app.config import settings
-from app.routers import filings_router, market_router, stockuniverse_router
+from app.routers import (
+    filings_router,
+    market_router,
+    screener_router,
+    stockuniverse_router,
+)
 from app.routers.nonpersistence import start_cache_cleanup
 from app.services.nse_client import nse_client
+from app.services.screener_client import screener_client
 from app.backgroundtasks import stock_universe_scheduler
 
 logger = logging.getLogger(__name__)
@@ -82,11 +88,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
     universe_task = asyncio.create_task(stock_universe_scheduler())
+    await screener_client.init()
     yield
-    logger.info("Shutting down — closing NSE client...")
+    logger.info("Shutting down — closing clients...")
     cleanup_task.cancel()
     universe_task.cancel()
     await nse_client.close()
+    await screener_client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +130,7 @@ app.add_middleware(
 
 app.include_router(filings_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
+app.include_router(screener_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 
 

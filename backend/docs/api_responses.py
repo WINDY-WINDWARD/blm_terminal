@@ -8,7 +8,7 @@ Usage:
     python docs/api_responses.py
 
 Environment:
-    BLM_BASE_URL    Base URL (default: http://127.0.0.1:8000)
+    BLM_BASE_URL    Base URL (default: http://127.0.0.1:4455)
 
 Output:
     Writes to docs/API_RESPONSES.md
@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-BASE_URL = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+BASE_URL = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:4455").rstrip("/")
 OUTPUT_FILE = Path(__file__).parent / "API_RESPONSES.md"
 
 
@@ -203,6 +203,24 @@ def main():
     # Market - Symbol Data
     out.print_section("GET /api/market/symbol-data/{symbol}")
     status, body = get("/api/market/symbol-data/RELIANCE")
+    out.write(f"Status: {status}")
+    out.print_json(body)
+
+    # Screener - Search
+    out.print_section("GET /api/screener/search")
+    status, body = get("/api/screener/search?q=reliance")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    # Screener - Company
+    out.print_section("GET /api/screener/company/{symbol}")
+    status, body = get("/api/screener/company/RELIANCE")
     out.write(f"Status: {status}")
     out.print_json(body)
 

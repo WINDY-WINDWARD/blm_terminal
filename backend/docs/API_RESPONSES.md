@@ -1,5 +1,5 @@
 BLM Analytics API Documentation
-Base URL: http://127.0.0.1:4455
+Base URL: http://localhost:8005
 Generated: /mnt/drive3/500GB/p1/Projects/blm_terminal/backend/docs/api_responses.py
 
 ============================================================
@@ -168,10 +168,10 @@ Sample item (first):
   "yearLow": "1030.35",
   "nearWKH": 35.37155394448153,
   "nearWKL": -31.50871063230942,
-  "perChange365d": 27.31,
-  "perChange30d": 4.04,
-  "date365dAgo": "06-Mar-2025",
-  "date30dAgo": "04-Feb-2026",
+  "perChange365d": 19.51,
+  "perChange30d": 6.55,
+  "date365dAgo": "07-Mar-2025",
+  "date30dAgo": "05-Feb-2026",
   "chartTodayPath": "https://nsearchives.nseindia.com/today/BDLEQN.svg",
   "chart30dPath": "https://nsearchives.nseindia.com/30d/BDL-EQ.svg",
   "chart365dPath": "https://nsearchives.nseindia.com/365d/BDL-EQ.svg",
@@ -229,10 +229,10 @@ Sample item (first):
   "yearLow": "95.93",
   "nearWKH": 9.553430507845132,
   "nearWKL": -103.10643177316793,
-  "perChange365d": -7.56,
-  "perChange30d": -3.11,
-  "date365dAgo": "06-Mar-2025",
-  "date30dAgo": "04-Feb-2026",
+  "perChange365d": -7.2,
+  "perChange30d": -3.39,
+  "date365dAgo": "07-Mar-2025",
+  "date30dAgo": "05-Feb-2026",
   "chartTodayPath": "https://nsearchives.nseindia.com/today/ASHOKLEYEQN.svg",
   "chart30dPath": "https://nsearchives.nseindia.com/30d/ASHOKLEY-EQ.svg",
   "chart365dPath": "https://nsearchives.nseindia.com/365d/ASHOKLEY-EQ.svg",
@@ -474,6 +474,69 @@ Status: 200
         "sddcompliance": null
       },
       "lastUpdateTime": "06-Mar-2026 16:00:00"
+    }
+  ]
+}
+
+============================================================
+  GET /api/screener/search
+============================================================
+Status: 200
+Response: List of 9 items
+Sample item (first):
+{
+  "id": 2726,
+  "name": "Reliance Industries Ltd",
+  "url": "/company/RELIANCE/consolidated/"
+}
+
+============================================================
+  GET /api/screener/company/{symbol}
+============================================================
+Status: 200
+{
+  "symbol": "RELIANCE",
+  "name": "Reliance Industries Ltd",
+  "screener_warehouse_id": "6598251",
+  "ratios": {
+    "market_cap": "19,01,041 Cr.",
+    "price": "1,405",
+    "pe": "24.8",
+    "book_value": "648",
+    "dividend_yield": "0.39 %",
+    "roce": "9.69 %",
+    "roe": "8.40 %",
+    "face_value": "10.0",
+    "high_52w": "1,612",
+    "low_52w": "1,115",
+    "eps_growth_5years": "9.92%",
+    "eps": "61.5",
+    "dividend_payout": "10.7%"
+  },
+  "quarters": [
+    {
+      "period": "Dec 2025",
+      "sales": "264,905",
+      "net_profit": "22,290",
+      "eps": "13.78"
+    },
+    {
+      "period": "Sep 2025",
+      "sales": "254,623",
+      "net_profit": "22,092",
+      "eps": "13.42"
+    },
+    {
+      "period": "Jun 2025",
+      "sales": "243,632",
+      "net_profit": "30,783",
+      "eps": "19.95"
+    },
+    {
+      "period": "Mar 2025",
+      "sales": "261,388",
+      "net_profit": "22,611",
+      "eps": "14.34"
     }
   ]
 }
