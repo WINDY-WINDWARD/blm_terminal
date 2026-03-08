@@ -52,7 +52,11 @@ const CORE_RATIO_KEYS: { key: keyof ScreenerRatios; label: string }[] = [
   { key: 'face_value',     label: 'Face Value'    },
 ];
 
-const CORE_KEYS_SET = new Set(CORE_RATIO_KEYS.map((r) => r.key));
+const CORE_KEYS_SET = new Set([
+  ...CORE_RATIO_KEYS.map((r) => r.key),
+  // Shown in Calculated Ratios section — exclude from "More"
+  'piotroski_score',
+]);
 
 // ─── Peter Lynch Fair Value ───────────────────────────────────────────────────
 
@@ -384,6 +388,31 @@ export function FundamentalsWidget() {
           </div>
           <table className="w-full border-collapse">
             <tbody>
+              {/* Row 0: Piotroski Score */}
+              {(() => {
+                const raw = ratios.piotroski_score;
+                const score = parseNum(raw);
+                const color =
+                  score === null ? 'text-white/40' :
+                  score >= 7    ? 'text-terminal-green' :
+                  score >= 4    ? 'text-terminal-amber' :
+                                  'text-terminal-red';
+                return (
+                  <tr className="border-b border-terminal-gray/40">
+                    <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                      Piotroski Score
+                    </td>
+                    <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                      {score !== null ? (
+                        <span className={color}>{score.toFixed(0)} / 9</span>
+                      ) : (
+                        <span className="text-white/40 font-normal text-[9px]">N/A</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })()}
+
               {/* Row 1: Peter Lynch FV Ratio */}
               <tr className="border-b border-terminal-gray/40">
                 <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">

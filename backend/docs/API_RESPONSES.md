@@ -29,7 +29,8 @@ Sample item (first):
     "industry": "Minerals & Mining",
     "basicIndustry": "Industrial Minerals"
   },
-  "lastUpdateTime": "2026-03-05T16:00:00"
+  "lastUpdateTime": "2026-03-05T16:00:00",
+  "screenerTradesId": null
 }
 
 ============================================================
@@ -49,7 +50,8 @@ Status: 200
     "industry": "Petroleum Products",
     "basicIndustry": "Refineries & Marketing"
   },
-  "lastUpdateTime": "2026-03-05T16:00:00"
+  "lastUpdateTime": "2026-03-05T16:00:00",
+  "screenerTradesId": null
 }
 
 ============================================================
@@ -71,7 +73,8 @@ Sample item (first):
     "industry": "Telecom - Services",
     "basicIndustry": "Telecom - Cellular & Fixed line services"
   },
-  "lastUpdateTime": "2026-03-05T16:00:00"
+  "lastUpdateTime": "2026-03-05T16:00:00",
+  "screenerTradesId": null
 }
 
 ============================================================
@@ -169,9 +172,9 @@ Sample item (first):
   "nearWKH": 35.37155394448153,
   "nearWKL": -31.50871063230942,
   "perChange365d": 19.51,
-  "perChange30d": 6.55,
+  "perChange30d": 6.96,
   "date365dAgo": "07-Mar-2025",
-  "date30dAgo": "05-Feb-2026",
+  "date30dAgo": "06-Feb-2026",
   "chartTodayPath": "https://nsearchives.nseindia.com/today/BDLEQN.svg",
   "chart30dPath": "https://nsearchives.nseindia.com/30d/BDL-EQ.svg",
   "chart365dPath": "https://nsearchives.nseindia.com/365d/BDL-EQ.svg",
@@ -230,9 +233,9 @@ Sample item (first):
   "nearWKH": 9.553430507845132,
   "nearWKL": -103.10643177316793,
   "perChange365d": -7.2,
-  "perChange30d": -3.39,
+  "perChange30d": -3.55,
   "date365dAgo": "07-Mar-2025",
-  "date30dAgo": "05-Feb-2026",
+  "date30dAgo": "06-Feb-2026",
   "chartTodayPath": "https://nsearchives.nseindia.com/today/ASHOKLEYEQN.svg",
   "chart30dPath": "https://nsearchives.nseindia.com/30d/ASHOKLEY-EQ.svg",
   "chart365dPath": "https://nsearchives.nseindia.com/365d/ASHOKLEY-EQ.svg",
@@ -514,7 +517,11 @@ Status: 200
     "dividend_payout": "10.7%",
     "piotroski_score": "4.00",
     "promoter_holding": "50.0%",
-    "roic": "10.6%"
+    "roic": "10.6%",
+    "total_assets": "20,38,946Cr.",
+    "ebit": "1,42,777Cr.",
+    "working_capital": "46,670Cr.",
+    "sales": "10,24,548Cr."
   },
   "quarters": [
     {
@@ -542,6 +549,60 @@ Status: 200
       "eps": "14.34"
     }
   ]
+}
+
+============================================================
+  GET /api/screener/trades/{symbol}
+============================================================
+Status: 200
+warehouse_id: 2726
+insider_trades: 308 records
+Sample record (first):
+{
+  "period": "Sep 2025",
+  "person": "Shobha Agarwal",
+  "category": "Immediate Relative",
+  "quantity_raw": "-1,25,000",
+  "quantity": -125000,
+  "direction": "down",
+  "avg_price_raw": "1,385",
+  "avg_price": 1385,
+  "value_raw": "1,731",
+  "value": 1731,
+  "value_in": "lacs",
+  "small_quantity": true
+}
+bulk_deals: 25 records
+Sample record (first):
+{
+  "period": "27 Mar 2020",
+  "person": "Tattvam Enterprises Llp",
+  "category": "",
+  "quantity_raw": "B",
+  "quantity": null,
+  "direction": null,
+  "avg_price_raw": "7,67,35,388",
+  "avg_price": 76735388,
+  "value_raw": "1,056",
+  "value": 1056,
+  "value_in": "price",
+  "small_quantity": false
+}
+block_deals: 297 records
+Sample record (first):
+{
+  "period": "27 Jan 2026",
+  "person": "Morgan Stanley Asia (Singapore) Pte.",
+  "category": "",
+  "quantity_raw": "Sale",
+  "quantity": null,
+  "direction": null,
+  "avg_price_raw": "11,51,736",
+  "avg_price": 1151736,
+  "value_raw": "1,384",
+  "value": 1384,
+  "value_in": "price",
+  "small_quantity": false
 }
 
 ============================================================

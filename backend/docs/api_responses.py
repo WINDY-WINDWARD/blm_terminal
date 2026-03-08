@@ -224,6 +224,24 @@ def main():
     out.write(f"Status: {status}")
     out.print_json(body)
 
+    # Screener - Trades
+    out.print_section("GET /api/screener/trades/{symbol}")
+    status, body = get("/api/screener/trades/RELIANCE")
+    out.write(f"Status: {status}")
+    if isinstance(body, dict):
+        out.write(f"warehouse_id: {body.get('warehouse_id')}")
+        for tab_key in ("insider_trades", "bulk_deals", "block_deals"):
+            tab = body.get(tab_key, [])
+            if isinstance(tab, list):
+                out.write(f"{tab_key}: {len(tab)} records")
+                if tab:
+                    out.write("Sample record (first):")
+                    out.print_json(tab[0])
+            else:
+                out.write(f"{tab_key}: {tab}")
+    else:
+        out.print_json(body)
+
     out.print_section("END OF DOCUMENTATION")
 
     out.save()

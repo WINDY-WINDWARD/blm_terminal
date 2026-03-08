@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Union
 
 import httpx
 import rookiepy
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,15 @@ BASE_URL = "https://www.screener.in"
 SEARCH_URL = f"{BASE_URL}/api/company/search/"
 COMPANY_URL = f"{BASE_URL}/company/{{symbol}}/{{mode}}/"
 QUICK_RATIOS_URL = f"{BASE_URL}/api/company/{{warehouse_id}}/quick_ratios/"
+TRADES_URL = f"{BASE_URL}/trades/company-{{warehouse_id}}/"
 
 _COURTESY_DELAY = 1.0
 _screener_lock = asyncio.Lock()
+
+# Stable mapping of symbol → trades company ID.
+# These IDs don't change, so no TTL is needed — the dict lives for the
+# lifetime of the process and is populated on first access per symbol.
+_trades_id_cache: dict[str, str] = {}
 
 
 def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
@@ -77,12 +83,61 @@ def _clean_value(value: str | None) -> str | None:
     return value.replace("₹", "").replace("\u20b9", "").strip()
 
 
+def _parse_number(raw: str | None) -> int | float | None:
+    """
+    Parse a number string that may contain commas and a leading minus sign.
+    Examples: "-3,400" → -3400, "1,04,725" → 104725, "746" → 746, "1,182" → 1182.
+    Returns int if the value has no decimal point, float otherwise. None on failure.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.replace(",", "").strip()
+    if not cleaned:
+        return None
+    try:
+        return int(cleaned) if "." not in cleaned else float(cleaned)
+    except ValueError:
+        return None
+
+
 def _parse_warehouse_id(soup: BeautifulSoup) -> str | None:
-    """Extract data-warehouse-id from the page."""
+    """Extract data-warehouse-id from the page (used for quick_ratios API)."""
     tag = soup.select_one("[data-warehouse-id]")
     if tag:
         wid = tag.get("data-warehouse-id")
         return str(wid) if wid else None
+    return None
+
+
+def _parse_trades_company_id(soup: BeautifulSoup) -> str | None:
+    """
+    Extract the trades company ID from the Trades button on the company page.
+
+    Screener renders a button like:
+        <button data-url="/trades/company-2726/" ...>Trades</button>
+
+    This ID is distinct from data-warehouse-id and is required to build the
+    trades URL: https://www.screener.in/trades/company-{id}/
+
+    Falls back to a regex search over the full page HTML if the button
+    selector does not match (e.g. future markup changes).
+    """
+    import re as _re
+
+    _TRADES_RE = _re.compile(r"/trades/company-(\d+)/")
+
+    # Primary: look for the button with a matching data-url attribute
+    tag = soup.find(attrs={"data-url": _TRADES_RE})
+    if tag:
+        m = _TRADES_RE.search(str(tag.get("data-url", "")))
+        if m:
+            return m.group(1)
+
+    # Fallback: search the raw HTML for the pattern
+    m = _TRADES_RE.search(str(soup))
+    if m:
+        return m.group(1)
+
     return None
 
 
@@ -210,6 +265,159 @@ def _parse_quarters(soup: BeautifulSoup) -> list[dict[str, str | None]]:
         )
 
     return list(reversed(quarters))
+
+
+def _parse_trades_table(
+    section: Union[BeautifulSoup, Tag],
+    value_column_header: str,
+) -> list[dict[str, object]]:
+    """
+    Parse a single trades table (insider / bulk / block deals).
+
+    Rows are grouped by period header rows (<tr class="stripe sticky-2">).
+    For each data row the function extracts:
+      - period        : most-recent period label (e.g. "Mar 2025")
+      - person        : name of the person / entity
+      - category      : role label below the name (e.g. "Designated Person")
+      - quantity_raw  : raw text from the quantity cell (e.g. "-3,400")
+      - quantity      : parsed integer (negative = sell, positive = buy)
+      - direction     : "up" (buy) or "down" (sell) from the td CSS class
+      - avg_price_raw : raw text of the average price cell
+      - avg_price     : parsed number
+      - value_raw     : raw text of the value cell
+      - value         : parsed number
+      - value_in      : unit extracted from the column header (e.g. "lacs")
+      - small_quantity: True when data-small-insider-quantity attr is present
+
+    ``value_column_header`` is the text of the 4th <th> column
+    (e.g. "Value in Rs. Lacs") used to derive ``value_in``.
+    """
+    # Derive value_in from header text, e.g. "Value in Rs. Lacs" → "lacs"
+    header_lower = value_column_header.lower()
+    if "cr" in header_lower or "crore" in header_lower:
+        value_in = "crores"
+    elif "lac" in header_lower or "lakh" in header_lower:
+        value_in = "lacs"
+    else:
+        # Fallback: take the last word
+        parts = header_lower.split()
+        value_in = parts[-1] if parts else header_lower
+
+    table = section.select_one("table.data-table")
+    if not table:
+        return []
+
+    rows: list[dict[str, object]] = []
+    current_period: str = ""
+
+    for tr in table.select("tbody tr"):
+        # Period header row
+        tr_classes: list[str] = tr.get("class") or []  # type: ignore[assignment]
+        if "stripe" in tr_classes and "sticky-2" in tr_classes:
+            period_td = tr.select_one("td")
+            if period_td:
+                current_period = period_td.get_text(strip=True)
+            continue
+
+        cells = tr.select("td")
+        if len(cells) < 4:
+            continue
+
+        # Person name + category
+        person_td = cells[0]
+        person = person_td.get_text(" ", strip=True)
+        # Category is in a <span> within the person cell
+        category_tag = person_td.select_one("span")
+        category: str = ""
+        if category_tag:
+            category = category_tag.get_text(strip=True)
+            # Remove category from person text
+            person = person.replace(category, "").strip()
+
+        # Quantity cell: direction from CSS class, raw text from content
+        qty_td = cells[1]
+        _raw_cls = qty_td.get("class")
+        qty_classes: list[str] = (
+            list(_raw_cls)
+            if isinstance(_raw_cls, list)
+            else ([_raw_cls] if isinstance(_raw_cls, str) else [])
+        )
+        direction = (
+            "up" if "up" in qty_classes else "down" if "down" in qty_classes else None
+        )
+        quantity_raw = qty_td.get_text(strip=True)
+        quantity = _parse_number(quantity_raw)
+
+        avg_price_raw = cells[2].get_text(strip=True)
+        avg_price = _parse_number(avg_price_raw)
+
+        value_raw = cells[3].get_text(strip=True)
+        value = _parse_number(value_raw)
+
+        small_quantity = tr.get("data-small-insider-quantity") is not None
+
+        rows.append(
+            {
+                "period": current_period,
+                "person": person,
+                "category": category,
+                "quantity_raw": quantity_raw,
+                "quantity": quantity,
+                "direction": direction,
+                "avg_price_raw": avg_price_raw,
+                "avg_price": avg_price,
+                "value_raw": value_raw,
+                "value": value,
+                "value_in": value_in,
+                "small_quantity": small_quantity,
+            }
+        )
+
+    return rows
+
+
+def _parse_trades_page(warehouse_id: str, html: str) -> dict[str, object]:
+    """
+    Parse the screener.in /trades/company-{warehouse_id}/ HTML page.
+
+    Returns a dict with keys:
+      - warehouse_id   : the requested warehouse ID
+      - insider_trades : list of trade records from the Insider Trades tab
+      - bulk_deals     : list of trade records from the Bulk Deals tab
+      - block_deals    : list of trade records from the Block Deals tab
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    result: dict[str, object] = {
+        "warehouse_id": warehouse_id,
+        "insider_trades": [],
+        "bulk_deals": [],
+        "block_deals": [],
+    }
+
+    tab_map = {
+        "trades-insider-trades": "insider_trades",
+        "trades-bulk-deals": "bulk_deals",
+        "trades-block-deals": "block_deals",
+    }
+
+    for tab_id, key in tab_map.items():
+        section = soup.find(id=tab_id)
+        if section is None:
+            continue
+
+        # Derive value_in from the table's 4th column header
+        table = section.select_one("table.data-table")
+        headers = (
+            [th.get_text(strip=True) for th in table.select("thead th")]
+            if table
+            else []
+        )
+        value_header = headers[3] if len(headers) > 3 else ""
+
+        result[key] = _parse_trades_table(section, value_header)
+
+    return result
 
 
 class ScreenerClient:
@@ -374,6 +582,104 @@ class ScreenerClient:
                 parsed["ratios"] = merged_ratios
 
         return parsed
+
+    async def get_trades(self, warehouse_id: str) -> dict[str, Any]:
+        """
+        Fetch and parse the trades page for a company identified by its
+        screener warehouse ID.
+
+        URL: https://www.screener.in/trades/company-{warehouse_id}/
+
+        Returns a dict with:
+          - warehouse_id   : the requested warehouse ID
+          - insider_trades : list of insider trade records
+          - bulk_deals     : list of bulk deal records
+          - block_deals    : list of block deal records
+
+        Each record contains:
+          person, category, period, quantity_raw, quantity, direction,
+          avg_price_raw, avg_price, value_raw, value, value_in, small_quantity
+
+        Raises:
+          - RuntimeError           if client not initialised
+          - httpx.HTTPStatusError  on non-2xx from screener.in
+          - ValueError             if warehouse_id not found (404)
+        """
+        if self._http is None:
+            raise RuntimeError(
+                "ScreenerClient not initialised. Call await client.init() first."
+            )
+
+        url = TRADES_URL.format(warehouse_id=warehouse_id)
+
+        async with _screener_lock:
+            resp = await self._http.get(url)
+            await asyncio.sleep(_COURTESY_DELAY)
+
+        if resp.status_code == 404:
+            raise ValueError(f"Warehouse ID '{warehouse_id}' not found on screener.in")
+
+        resp.raise_for_status()
+
+        return _parse_trades_page(warehouse_id, resp.text)
+
+    async def get_trades_by_symbol(
+        self,
+        symbol: str,
+        consolidated: bool = True,
+    ) -> tuple[dict[str, Any], str]:
+        """
+        Resolve `symbol` to a screener trades company ID via the company page,
+        then fetch and return the trades page along with the resolved ID.
+
+        This is a two-request operation (company page + trades page) but the
+        company result is not returned — callers who need both should call
+        get_company() and get_trades() separately and combine them.
+
+        Returns:
+          A tuple of (trades_data, trades_company_id) so the caller can
+          persist the resolved ID to avoid future company-page lookups.
+
+        Raises:
+          - RuntimeError           if not authenticated or client not initialised
+          - ValueError             if symbol or trades ID not found
+          - httpx.HTTPStatusError  on non-2xx from screener.in
+        """
+        if not self.is_authenticated:
+            raise RuntimeError(
+                "screener.in session not available. "
+                "Please log in at https://www.screener.in in Chrome and restart the backend."
+            )
+
+        # Fetch company page to extract trades company ID
+        mode = "consolidated" if consolidated else "standalone"
+        url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
+
+        async with _screener_lock:
+            resp = await self._http.get(url)  # type: ignore[union-attr]
+            await asyncio.sleep(_COURTESY_DELAY)
+
+        if resp.status_code == 404:
+            raise ValueError(f"Symbol '{symbol}' not found on screener.in")
+
+        if resp.status_code == 200 and _is_login_page(resp.text):
+            raise RuntimeError(
+                "screener.in session appears invalid (got login page). "
+                "Please log in at https://www.screener.in in Chrome and restart the backend."
+            )
+
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        trades_company_id = _parse_trades_company_id(soup)
+        if not trades_company_id:
+            raise ValueError(
+                f"Could not determine screener trades ID for symbol '{symbol}'. "
+                "The company page was fetched but contained no trades button with a company ID."
+            )
+
+        trades_data = await self.get_trades(trades_company_id)
+        return trades_data, trades_company_id
 
 
 def _is_login_page(html: str) -> bool:

@@ -10,6 +10,7 @@ import { ChartWidget } from './widgets/ChartWidget';
 import { WatchWidget } from './widgets/WatchWidget';
 import { SettingsWidget } from './widgets/SettingsWidget';
 import { FundamentalsWidget } from './widgets/FundamentalsWidget';
+import { DealsWidget } from './widgets/DealsWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -30,6 +31,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'WATCH':    return <WatchWidget />;
       case 'SETTINGS': return <SettingsWidget />;
       case 'FDM':      return <FundamentalsWidget />;
+      case 'DEALS':    return <DealsWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">

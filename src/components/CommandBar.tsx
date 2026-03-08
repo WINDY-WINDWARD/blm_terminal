@@ -58,7 +58,7 @@ export function CommandBar() {
           type="text"
           value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
-          placeholder="CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM"
+          placeholder="CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS"
           className="bg-transparent text-white placeholder-blue-300/60 w-full outline-none uppercase font-mono text-xs tracking-wider"
           autoComplete="off"
         />

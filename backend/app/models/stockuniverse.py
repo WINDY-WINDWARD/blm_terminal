@@ -21,8 +21,13 @@ class StockUniverse(Base):
     industry: Mapped[str] = mapped_column(String(255), nullable=False)
     sector_pe: Mapped[float | None] = mapped_column(Float, nullable=True)
     symbol_pe: Mapped[float | None] = mapped_column(Float, nullable=True)
-    industry_info: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    last_update_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    industry_info: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    last_update_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    screener_trades_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
