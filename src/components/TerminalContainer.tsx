@@ -10,7 +10,7 @@ import {
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 
-const VALID_WIDGETS = ['TOP', 'POS', 'ORDER', 'CHART', 'WATCH', 'SETTINGS'];
+const VALID_WIDGETS = ['TOP', 'POS', 'ORDER', 'CHART', 'WATCH', 'SETTINGS', 'FDM'];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);
@@ -44,7 +44,8 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   // Command processor: apply widget command to focused panel
   useEffect(() => {
     if (!activeCommand) return;
-    if (VALID_WIDGETS.includes(activeCommand)) {
+    const isValid = VALID_WIDGETS.includes(activeCommand);
+    if (isValid) {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: activeCommand }));
     }
     setActiveCommand('');

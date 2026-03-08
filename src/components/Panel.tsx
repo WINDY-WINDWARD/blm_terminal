@@ -9,6 +9,7 @@ import { OrderWidget } from './widgets/OrderWidget';
 import { ChartWidget } from './widgets/ChartWidget';
 import { WatchWidget } from './widgets/WatchWidget';
 import { SettingsWidget } from './widgets/SettingsWidget';
+import { FundamentalsWidget } from './widgets/FundamentalsWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -28,6 +29,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'CHART':    return <ChartWidget panelId={id} />;
       case 'WATCH':    return <WatchWidget />;
       case 'SETTINGS': return <SettingsWidget />;
+      case 'FDM':      return <FundamentalsWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">

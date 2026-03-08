@@ -147,10 +147,10 @@ export function SettingsWidget() {
             WebSocket: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
           </span>
         </div>
-        <div className="text-terminal-gray text-[10px]">
+        <div className="text-white text-[10px]">
           OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
         </div>
-        <div className="text-terminal-gray text-[10px]">
+        <div className="text-white text-[10px]">
           WebSocket: {process.env.NEXT_PUBLIC_OPENALGO_WS_URL ?? 'ws://localhost:8765'}
         </div>
       </div>
@@ -170,7 +170,7 @@ export function SettingsWidget() {
               ['Utilised Debits', funds.utiliseddebits],
             ].map(([label, val]) => (
               <React.Fragment key={label}>
-                <span className="text-terminal-gray">{label}:</span>
+                <span className="text-white">{label}:</span>
                 <span className="text-terminal-amber text-right">{val}</span>
               </React.Fragment>
             ))}
@@ -212,13 +212,13 @@ export function SettingsWidget() {
 
       {/* Tips */}
       <div className="flex flex-col gap-0.5 mt-auto">
-        <div className="text-terminal-gray text-[10px] border-t border-terminal-gray pt-2">
-          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS
+        <div className="text-white text-[10px] border-t border-terminal-gray pt-2">
+          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM
         </div>
-        <div className="text-terminal-gray text-[10px]">
+        <div className="text-white text-[10px]">
           Press / or Escape to focus command bar
         </div>
-        <div className="text-terminal-gray text-[10px]">
+        <div className="text-white text-[10px]">
           F1 = BUY · F2 = SELL (in ORDER widget)
         </div>
       </div>
