@@ -72,46 +72,53 @@ def _run_migrations_sync() -> None:
 # Logging
 # ---------------------------------------------------------------------------
 
-import logging.handlers
+def _configure_logging() -> None:
+    """Configure logging handlers. Call this at module load AND in lifespan."""
+    import logging.handlers
+    
+    log_dir = Path(__file__).parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / "backend.log"
 
-log_dir = Path(__file__).parent / "logs"
-log_dir.mkdir(exist_ok=True)
-log_file = log_dir / "backend.log"
+    # Create handlers
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
 
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(
-    logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-)
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+    )
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
 
-file_handler = logging.handlers.RotatingFileHandler(
-    log_file,
-    maxBytes=10 * 1024 * 1024,  # 10 MB
-    backupCount=5,
-)
-file_handler.setFormatter(
-    logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-)
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.handlers = []  # Clear existing handlers
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
 
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(console_handler)
-root_logger.addHandler(file_handler)
+    # Also configure uvicorn loggers
+    for uv_name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
+        uv_logger = logging.getLogger(uv_name)
+        uv_logger.setLevel(logging.INFO)
+        uv_logger.handlers = []
+        uv_logger.addHandler(console_handler)
+        uv_logger.addHandler(file_handler)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[console_handler, file_handler],
-)
+    # Set levels for specific loggers
+    logging.getLogger("app").setLevel(logging.DEBUG)
+    logging.getLogger("app.services").setLevel(logging.DEBUG)
+    logging.getLogger("app.routers").setLevel(logging.DEBUG)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
-uvicorn_logger = logging.getLogger("uvicorn")
-uvicorn_logger.setLevel(logging.INFO)
-uvicorn_logger.addHandler(console_handler)
-uvicorn_logger.addHandler(file_handler)
-app_logger = logging.getLogger("app")
-app_logger.setLevel(logging.INFO)
-app_logger.addHandler(console_handler)
-app_logger.addHandler(file_handler)
+# Configure logging at module load (for initial startup)
+_configure_logging()
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +128,9 @@ app_logger.addHandler(file_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Re-configure logging for uvicorn reload child process
+    _configure_logging()
+    
     print("=== LIFESPAN START ===")
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
@@ -219,4 +229,17 @@ app.include_router(stockuniverse_router, prefix="/api")
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
     """Service health check."""
+    test_logger = logging.getLogger("app.routers.test")
+    test_logger.info("Test log from /health endpoint")
     return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=4455,
+        reload=True,
+        log_config=None,  # Use Python logging (configured above)
+    )

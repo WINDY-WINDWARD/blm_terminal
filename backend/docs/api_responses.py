@@ -52,6 +52,7 @@ out = OutputWriter(OUTPUT_FILE)
 def get(path: str) -> tuple[int, Union[str, object]]:
     import requests
 
+    print(f">>> GET {path}")
     try:
         resp = requests.get(f"{BASE_URL}{path}", timeout=60)
         status = resp.status_code
@@ -85,6 +86,7 @@ def get(path: str) -> tuple[int, Union[str, object]]:
 def post(path: str, payload: Union[object, None] = None) -> tuple[int, Union[str, object]]:
     import requests
 
+    print(f">>> POST {path}")
     try:
         resp = requests.post(f"{BASE_URL}{path}", json=payload, timeout=300)
         status = resp.status_code
@@ -154,12 +156,15 @@ def main():
         corporate_filings_data = body
         out.write(f"Response: CSV text ({len(body)} chars)")
         out.write("")
-        out.write("Full CSV content:")
+        out.write("Full CSV content (first 5000 chars):")
         out.write("```")
         out.write(body[:5000] if len(body) > 5000 else body)
         if len(body) > 5000:
             out.write(f"... (truncated, total {len(body)} chars)")
         out.write("```")
+    elif status >= 500:
+        out.write(f"ERROR: Server returned {status}")
+        out.print_json(body)
     else:
         out.print_json(body)
 
@@ -179,7 +184,10 @@ def main():
     out.print_section("GET /api/market/top-losers")
     status, body = get("/api/market/top-losers")
     out.write(f"Status: {status}")
-    if isinstance(body, list):
+    if status >= 500:
+        out.write(f"ERROR: Server returned {status}")
+        out.print_json(body)
+    elif isinstance(body, list):
         out.write(f"Response: List of {len(body)} items")
         if body:
             out.write("Sample item (first):")
