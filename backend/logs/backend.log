@@ -1,0 +1,6 @@
+2026-03-09 20:21:46  INFO      uvicorn.error  Started server process [66210]
+2026-03-09 20:21:46  INFO      uvicorn.error  Waiting for application startup.
+2026-03-09 20:21:46  INFO      main  Starting up BLM Analytics backend...
+2026-03-09 20:22:11  INFO      uvicorn.error  Started server process [66314]
+2026-03-09 20:22:11  INFO      uvicorn.error  Waiting for application startup.
+2026-03-09 20:22:11  INFO      main  Starting up BLM Analytics backend...

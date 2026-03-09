@@ -15,5 +15,9 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    ai_model_path: str | None = None
+    ai_max_tokens: int = 512
+    ai_n_ctx: int = 8192
+
 
 settings = Settings()

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import logging.config
+import logging.handlers
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
@@ -16,12 +17,14 @@ from sqlalchemy import create_engine, inspect as sa_inspect
 
 from app.config import settings
 from app.routers import (
+    ai_summarizer_router,
     filings_router,
     market_router,
     screener_router,
     stockuniverse_router,
 )
 from app.routers.nonpersistence import start_cache_cleanup
+from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
 from app.backgroundtasks import stock_universe_scheduler
@@ -69,11 +72,46 @@ def _run_migrations_sync() -> None:
 # Logging
 # ---------------------------------------------------------------------------
 
+import logging.handlers
+
+log_dir = Path(__file__).parent / "logs"
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / "backend.log"
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(
+    logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
+
+file_handler = logging.handlers.RotatingFileHandler(
+    log_file,
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+)
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(console_handler)
+root_logger.addHandler(file_handler)
+
 logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[console_handler, file_handler],
 )
+
+uvicorn_logger = logging.getLogger("uvicorn")
+uvicorn_logger.setLevel(logging.INFO)
+uvicorn_logger.addHandler(console_handler)
+uvicorn_logger.addHandler(file_handler)
+app_logger = logging.getLogger("app")
+app_logger.setLevel(logging.INFO)
+app_logger.addHandler(console_handler)
+app_logger.addHandler(file_handler)
 
 
 # ---------------------------------------------------------------------------
@@ -83,16 +121,59 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    print("=== LIFESPAN START ===")
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
     universe_task = asyncio.create_task(stock_universe_scheduler())
     await screener_client.init()
+
+    logger.info("Starting AI summarizer model loading in background...")
+    print(">>> Starting AI model load...")
+    
+    async def load_model():
+        try:
+            await asyncio.to_thread(ai_summarizer.initialize)
+            return True
+        except Exception as e:
+            print(f">>> Model load failed: {e}")
+            return False
+    
+    load_task = asyncio.create_task(load_model())
+    
+    try:
+        await asyncio.wait_for(load_task, timeout=300.0)
+    except asyncio.TimeoutError:
+        logger.warning("AI model loading timed out after 5 minutes")
+        print(">>> AI model loading timed out")
+    except Exception as e:
+        logger.error(f"AI model loading failed: {e}")
+        print(f">>> AI model loading failed: {e}")
+
+    if ai_summarizer.is_ready:
+        logger.info("AI summarizer loaded successfully")
+        print(">>> AI summarizer loaded!")
+    else:
+        logger.warning("AI summarizer not ready - will load on first request")
+        print(">>> AI summarizer NOT ready")
+
+    print("=== LIFESPAN YIELD ===")
     yield
+
+    print("=== LIFESPAN SHUTDOWN ===")
     logger.info("Shutting down — closing clients...")
     cleanup_task.cancel()
     universe_task.cancel()
+
+    if not load_task.done():
+        load_task.cancel()
+        try:
+            await load_task
+        except asyncio.CancelledError:
+            pass
+
+    ai_summarizer.close()
     await nse_client.close()
     await screener_client.close()
 
@@ -128,6 +209,7 @@ app.add_middleware(
 # Routes
 # ---------------------------------------------------------------------------
 
+app.include_router(ai_summarizer_router, prefix="/api")
 app.include_router(filings_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")

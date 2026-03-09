@@ -18,6 +18,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Union
 
 BASE_URL = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:4455").rstrip("/")
 OUTPUT_FILE = Path(__file__).parent / "API_RESPONSES.md"
@@ -48,7 +49,7 @@ class OutputWriter:
 out = OutputWriter(OUTPUT_FILE)
 
 
-def get(path: str) -> tuple[int, str | object]:
+def get(path: str) -> tuple[int, Union[str, object]]:
     import requests
 
     try:
@@ -64,6 +65,30 @@ def get(path: str) -> tuple[int, str | object]:
             else:
                 body = resp.text
         elif status == 404:
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    body = resp.json()
+                except json.JSONDecodeError:
+                    body = resp.text
+            else:
+                body = resp.text
+        elif status >= 500:
+            body = {"_error": "Upstream error", "_status": status}
+        else:
+            body = resp.text
+        return status, body
+    except Exception as e:
+        return 0, {"_error": str(e)}
+
+
+def post(path: str, payload: Union[object, None] = None) -> tuple[int, Union[str, object]]:
+    import requests
+
+    try:
+        resp = requests.post(f"{BASE_URL}{path}", json=payload, timeout=300)
+        status = resp.status_code
+        if status == 200 or status == 201:
             content_type = resp.headers.get("content-type", "")
             if "application/json" in content_type:
                 try:
@@ -124,12 +149,16 @@ def main():
     out.print_section("GET /api/corporatefilings/{symbol}")
     status, body = get("/api/corporatefilings/RELIANCE")
     out.write(f"Status: {status}")
+    corporate_filings_data = None
     if status == 200 and isinstance(body, str):
+        corporate_filings_data = body
         out.write(f"Response: CSV text ({len(body)} chars)")
         out.write("")
         out.write("Full CSV content:")
         out.write("```")
-        out.write(body)
+        out.write(body[:5000] if len(body) > 5000 else body)
+        if len(body) > 5000:
+            out.write(f"... (truncated, total {len(body)} chars)")
         out.write("```")
     else:
         out.print_json(body)
@@ -241,6 +270,29 @@ def main():
                 out.write(f"{tab_key}: {tab}")
     else:
         out.print_json(body)
+
+    # AI Summarizer - Health
+    out.print_section("GET /api/ai/health")
+    status, body = get("/api/ai/health")
+    out.write(f"Status: {status}")
+    out.print_json(body)
+
+    # AI Summarizer - Summarize (using actual corporate filings data)
+    out.print_section("POST /api/ai/summarize")
+    if corporate_filings_data:
+        out.write("Using data from: GET /api/corporatefilings/RELIANCE")
+        status, body = post("/api/ai/summarize", {"text": corporate_filings_data, "max_tokens": 1024})
+        out.write(f"Status: {status}")
+        if status == 200 and isinstance(body, dict):
+            out.write(f"Response: JSON with summary")
+            out.print_json(body)
+        elif status == 503:
+            out.write("Response: Model still loading (503 Service Unavailable)")
+            out.print_json(body)
+        else:
+            out.print_json(body)
+    else:
+        out.write("Skipped: No corporate filings data available")
 
     out.print_section("END OF DOCUMENTATION")
 
