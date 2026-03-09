@@ -26,6 +26,12 @@ npm start         # Serve the production build
 npm run lint      # ESLint v9 flat config (core-web-vitals + typescript)
 ```
 
+One-time: generate Prisma client after cloning the repo or when the schema changes:
+
+```bash
+npx prisma generate
+```
+
 ### Python backend (run from `backend/`)
 
 ```bash
