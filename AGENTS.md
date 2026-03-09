@@ -8,9 +8,10 @@ Guidelines for AI coding agents working in this repository.
 
 A financial terminal UI built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**,
 **Tailwind CSS v4**, **Jotai** for state, and a native **WebSocket** client for real-time data.
-Panels host widgets (chart, order entry, positions, watchlist, top movers, settings) backed by a
-**Next.js API proxy** over the OpenAlgo trading API, with **Prisma + SQLite** for local
-persistence. A separate **FastAPI** analytics backend (`backend/`) serves NSE filings/market data.
+Panels host widgets (chart, order entry, positions, watchlist, movers, deals, fundamentals,
+settings) backed by a **Next.js API proxy** over the OpenAlgo trading API, with **Prisma +
+SQLite** (`better-sqlite3`) for local persistence. A separate **FastAPI** analytics backend
+(`backend/`) serves NSE filings/market data via a catch-all `/api/py/[...path]` Next.js proxy.
 
 ---
 
@@ -20,9 +21,9 @@ persistence. A separate **FastAPI** analytics backend (`backend/`) serves NSE fi
 
 ```bash
 npm run dev       # Start Next.js dev server
-npm run build     # Production build (also type-checks via next build)
+npm run build     # Production build — also runs TypeScript type-check via next build
 npm start         # Serve the production build
-npm run lint      # ESLint v9 flat config (eslint-config-next/core-web-vitals + typescript)
+npm run lint      # ESLint v9 flat config (core-web-vitals + typescript)
 ```
 
 ### Python backend (run from `backend/`)
@@ -35,11 +36,16 @@ pip install -e ".[dev]"
 # Run the FastAPI server
 uvicorn main:app --reload --port 8000
 
-# Tests (pytest-asyncio, asyncio_mode = "auto")
-pytest                               # all tests in backend/tests/
-pytest tests/test_market.py          # single file
-pytest tests/test_market.py::test_fn # single test function
+# Tests — integration suite; requires server running at http://127.0.0.1:8000
+pytest                                    # all tests
+pytest tests/test_endpoints.py            # single file
+pytest tests/test_endpoints.py::TestMarketTopGainers::test_structure  # single test
+pytest -m "not slow"                      # skip NSE-hitting tests (3 s delay each)
+BLM_BASE_URL=http://host:port pytest      # override base URL
 ```
+
+`asyncio_mode = "auto"` is set in `pyproject.toml` — no `@pytest.mark.asyncio` needed.
+NSE-hitting tests carry `@pytest.mark.slow`; omit with `-m "not slow"` in CI.
 
 No test framework is configured for the frontend yet. When added, place tests in
 `src/__tests__/` or co-locate as `*.test.tsx` / `*.spec.tsx`. Vitest is recommended:
@@ -57,7 +63,7 @@ npx vitest run                                       # all tests
 src/
 ├── app/
 │   ├── api/
-│   │   ├── openalgo/         # Proxy routes (rate-limit → cache → OpenAlgoServerClient)
+│   │   ├── openalgo/              # Proxy routes: rate-limit → cache → OpenAlgoServerClient
 │   │   │   ├── positions/route.ts   # POST /api/openalgo/positions
 │   │   │   ├── orders/route.ts      # POST /api/openalgo/orders
 │   │   │   ├── trades/route.ts      # POST /api/openalgo/trades
@@ -66,18 +72,31 @@ src/
 │   │   │   ├── history/route.ts     # POST /api/openalgo/history
 │   │   │   ├── placeorder/route.ts  # POST /api/openalgo/placeorder
 │   │   │   └── ws-token/route.ts    # GET  /api/openalgo/ws-token
-│   │   ├── top-symbols/route.ts
-│   │   └── watchlist/route.ts       # GET/POST/DELETE — Prisma-backed
-│   ├── globals.css     # Tailwind v4 @theme design tokens
+│   │   ├── py/[...path]/route.ts    # Catch-all proxy → PYTHON_BACKEND_URL
+│   │   ├── settings/route.ts        # GET/PUT — Prisma UserSettings
+│   │   └── watchlist/route.ts       # GET/POST/DELETE — Prisma WatchlistItem
+│   ├── globals.css     # Tailwind v4 @theme tokens + @utility animate-ticker
 │   ├── layout.tsx      # Server component — wraps app in <Providers>
 │   └── page.tsx        # Server component — renders <TerminalContainer>
 ├── components/
-│   ├── widgets/        # ChartWidget, OrderWidget, PosWidget, SettingsWidget, TopWidget, WatchWidget
+│   ├── widgets/
+│   │   ├── ChartWidget.tsx         # Candlestick chart (lightweight-charts)
+│   │   ├── DealsWidget.tsx         # Bulk/block deals from Python backend
+│   │   ├── FundamentalsWidget.tsx  # Company fundamentals from Python backend
+│   │   ├── MoversWidget.tsx        # Top gainers/losers
+│   │   ├── OrderWidget.tsx         # Order entry + order book
+│   │   ├── PosWidget.tsx           # Positions + P&L
+│   │   ├── SettingsWidget.tsx      # App settings (API key, exchange, etc.)
+│   │   └── WatchWidget.tsx         # Watchlist with live ticks
 │   ├── CommandBar.tsx
-│   ├── ErrorBoundary.tsx   # Class component wrapping each widget in Panel.tsx
-│   ├── Panel.tsx           # switch-based widget router + ErrorBoundary
-│   ├── Providers.tsx       # QueryClientProvider (client component)
+│   ├── ErrorBoundary.tsx    # Class component wrapping each widget in Panel.tsx
+│   ├── GridSystem.tsx       # Resizable panel grid
+│   ├── LiveTicker.tsx       # Scrolling price ticker strip
+│   ├── Panel.tsx            # switch-based widget router + ErrorBoundary
+│   ├── Providers.tsx        # QueryClientProvider (client component)
 │   └── TerminalContainer.tsx
+├── generated/
+│   └── prisma/              # Generated Prisma client (do not edit manually)
 ├── lib/
 │   ├── api-config.ts         # TTLs and rate limits per endpoint
 │   ├── cache.ts              # In-memory TTL cache singleton
@@ -90,7 +109,8 @@ src/
 │   └── utils.ts              # cn() — clsx + tailwind-merge
 └── store/
     └── terminalStore.ts      # All Jotai atoms (single source of truth)
-backend/                      # FastAPI analytics service (Python ≥ 3.11, Poetry/Hatch)
+backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatch build)
+prisma/schema.prisma          # Models: WatchlistItem, TopMoverSymbol, UserSettings
 ```
 
 ---
@@ -108,6 +128,8 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Poet
   ```
 - Use `import type` for type-only imports: `import type { NextRequest } from 'next/server'`
 - Generic helpers over overloads: see `OpenAlgoServerClient.request<T>()`.
+- `socket.io-client` is listed in `package.json` but **not used** — the actual socket layer is
+  the native `WebSocket` singleton in `src/lib/socket.ts`. Do not import from `socket.io-client`.
 
 ### Imports
 
@@ -121,7 +143,8 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Poet
 
 ### React Components
 
-- `'use client'` must be the **first line** of every interactive component. Server components (`page.tsx`, `layout.tsx`, API routes) have no directive.
+- `'use client'` must be the **first line** of every interactive component. Server components
+  (`page.tsx`, `layout.tsx`, API routes) have no directive.
 - One component per file; filename matches the exported component name (PascalCase).
 - Props typed as an inline interface directly above the component: `interface WidgetProps { ... }`.
 - Use `cn()` from `@/lib/utils` for conditional or merged Tailwind class strings.
@@ -144,8 +167,9 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Poet
 ### CSS and Tailwind
 
 - Tailwind v4 utilities only. Inline `style={{}}` only for runtime-computed values (e.g. panel pixel widths).
-- All design tokens defined in `src/app/globals.css` under `@theme` — never hardcode hex values.
+- All design tokens are defined in `src/app/globals.css` under `@theme` — never hardcode hex values.
 - Terminal palette: `terminal-amber` (primary), `terminal-green` (profit/buy), `terminal-red` (loss/sell), `terminal-bg` (background), `terminal-gray` (borders/muted).
+- The `animate-ticker` utility is defined via `@utility` in `globals.css`; use it for scrolling strips.
 
 ### State Management (Jotai)
 
@@ -156,14 +180,20 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Poet
 
 ### Data Fetching
 
-- Use `useQuery` / `useMutation` from `@tanstack/react-query` for all server state in components. Raw `useEffect + useState` for async data is **not acceptable** in new widgets.
-- Every proxy route follows this pipeline: **rate-limit → cache check → `OpenAlgoServerClient` → write cache → return JSON**.
+- Use `useQuery` / `useMutation` from `@tanstack/react-query` for all server state in components.
+  Raw `useEffect + useState` for async data is **not acceptable** in new widgets.
+- Every OpenAlgo proxy route follows this pipeline:
+  **rate-limit → cache check → `OpenAlgoServerClient` → write cache → return JSON**.
+- Python backend data is fetched through `/api/py/[...path]`, which forwards the full path and
+  query string to `PYTHON_BACKEND_URL`.
 - WebSocket subscriptions use the `wsService` singleton (`src/lib/socket.ts`).
 
 ### Error Handling
 
-- Proxy routes catch errors and return `{ error: string }` with the appropriate HTTP status. Components read `data.error` and surface it in the UI.
-- `ErrorBoundary` is already mounted around every widget in `Panel.tsx` — do not add redundant render-level try/catch.
+- Proxy routes catch errors and return `{ error: string }` with the appropriate HTTP status.
+  Components read `data.error` and surface it in the UI.
+- `ErrorBoundary` is already mounted around every widget in `Panel.tsx` — do not add redundant
+  render-level try/catch.
 - Guard DOM refs before use: `if (!ref.current) return;`
 - Register an `'error'` listener whenever adding `WebSocket` / `wsService` subscriptions.
 
@@ -177,13 +207,11 @@ OPENALGO_URL=http://localhost:8800
 OPENALGO_API_KEY=<your_api_key>
 OPENALGO_TIMEOUT_MS=10000
 RATE_LIMIT_PER_MINUTE=60
+PYTHON_BACKEND_URL=http://localhost:8000   # used by /api/py/[...path] proxy
 
 # Client-safe
 NEXT_PUBLIC_OPENALGO_WS_URL=ws://localhost:8765
 NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE=NSE
-
-# Python analytics backend — used server-side by /api/py/[...path] proxy route
-PYTHON_BACKEND_URL=http://localhost:8000
 ```
 
 Never commit `.env.local`. The `.gitignore` already excludes `.env*` files.
