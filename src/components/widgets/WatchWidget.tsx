@@ -206,7 +206,7 @@ function WatchRow({ item, isActive, columns, onRowClick, onRemove, removing }: W
             onRemove(item.id);
           }}
           disabled={removing}
-          className="text-terminal-gray hover:text-terminal-red text-[10px] disabled:opacity-50"
+          className="text-terminal-red hover:text-red-400 text-xs font-bold disabled:opacity-40"
           title="Remove"
         >
           ✕
@@ -440,7 +440,7 @@ export function WatchWidget() {
                     isActive={activeSymbol === item.symbol && activeExchange === item.exchange}
                     onRowClick={handleRowClick}
                     onRemove={(id) => removeMutation.mutate(id)}
-                    removing={removeMutation.isPending}
+                    removing={removeMutation.isPending && removeMutation.variables === item.id}
                   />
                 ))}
                 {watchlist.length === 0 && (
