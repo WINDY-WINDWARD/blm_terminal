@@ -1,42 +1,240 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BLM Terminal
 
-## Getting Started
+![Build](https://img.shields.io/badge/build-passing-brightgreen)
+![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-First, run the development server:
+**A self-hosted financial terminal for the OpenAlgo ecosystem** — real-time quotes, candlestick charts, order entry, positions, NSE analytics, and a persistent data warehouse, all in a single browser tab.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Docker Deployment](#docker-deployment)
+- [Development](#development)
+- [Project Structure](#project-structure)
+
+---
+
+## Overview
+
+BLM Terminal is a full-stack trading dashboard that sits in front of an [OpenAlgo](https://github.com/marketcalls/openalgo) broker-agnostic API gateway. The frontend is a Next.js 16 App Router application that proxies all broker calls server-side, keeping API credentials out of the browser. A companion FastAPI service (`backend/`) independently archives NSE India market data and corporate filings into a local SQLite database, acting as a standalone analytics data warehouse.
+
+---
+
+## Key Features
+
+| Area | Detail |
+|---|---|
+| **Real-time data** | Native WebSocket client for live tick streaming via OpenAlgo |
+| **Charts** | Lightweight candlestick charts (`lightweight-charts`) with OHLCV history |
+| **Order management** | Place, view, and track orders and positions in a single panel |
+| **Watchlist** | Persistent, editable watchlist backed by SQLite via Prisma |
+| **Market movers** | Top gainers / losers fetched from the Python analytics backend |
+| **Fundamentals & Deals** | NSE corporate filings, bulk/block deal data via the FastAPI service |
+| **Data warehouse** | Standalone FastAPI + SQLite backend — runs independently; archives OHLCV and filing data with configurable TTL caching |
+| **Security** | All broker credentials stay server-side; compatible with SELinux contexts and Cloudflare tunnels |
+| **Home-lab friendly** | Docker Compose support with Portainer-ready configuration |
+
+---
+
+## Architecture
+
+```
+Browser
+  └── Next.js 16 Frontend (port 3000)
+        ├── /api/openalgo/*   → rate-limit → cache → OpenAlgo API (port 8800)
+        ├── /api/py/*         → Python FastAPI backend (port 4455)
+        ├── /api/settings     → Prisma → SQLite (frontend DB)
+        └── /api/watchlist    → Prisma → SQLite (frontend DB)
+
+Python FastAPI Backend (port 4455)          ← standalone, no Next.js dependency
+  ├── NSE HTTP client (cached, polite delay)
+  ├── Alembic migrations (auto-applied on startup)
+  └── SQLite data warehouse (data.db)
 ```
 
-One-time: generate Prisma client (run after cloning or when schema changes):
+**The Python backend is fully independent.** It can be started, stopped, or replaced without affecting the Next.js process. The frontend degrades gracefully (502 → empty state) if the backend is unreachable.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js 20+
+- Python 3.11+
+- A running [OpenAlgo](https://github.com/marketcalls/openalgo) instance
+
+### 1 — Clone and install frontend dependencies
 
 ```bash
+git clone <repo-url> blm_terminal
+cd blm_terminal
+npm install
 npx prisma generate
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2 — Configure environment variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cp .env.example .env.local   # create from template (see Configuration below)
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 3 — Start the Python analytics backend
 
-## Learn More
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env          # edit DB_PATH, PORT, etc.
+uvicorn main:app --reload --port 4455
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 4 — Start the Next.js frontend
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+# from repo root
+npm run dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Open [http://localhost:3000](http://localhost:3000).
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Configuration
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Next.js frontend — `.env.local`
+
+```env
+# Server-only (never exposed to the browser)
+OPENALGO_URL=http://localhost:8800
+OPENALGO_API_KEY=<your_openalgo_api_key>
+OPENALGO_TIMEOUT_MS=10000
+RATE_LIMIT_PER_MINUTE=60
+PYTHON_BACKEND_URL=http://localhost:4455
+
+# Client-safe
+NEXT_PUBLIC_OPENALGO_WS_URL=ws://localhost:8765
+NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE=NSE
+```
+
+> **Never commit `.env.local`.** The `.gitignore` already excludes all `.env*` files.
+
+### Python backend — `backend/.env`
+
+```env
+NSE_BASE_URL=https://www.nseindia.com
+DB_PATH=./data.db
+PORT=4455
+NSE_REQUEST_DELAY_MS=500
+NSE_CACHE_TTL_SECONDS=3600
+LOG_LEVEL=INFO
+```
+
+---
+
+## Docker Deployment
+
+A minimal Docker Compose setup for running both services together, suitable for Portainer or any home-lab environment. Create `docker-compose.yml` in the repo root:
+
+```yaml
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile          # Next.js standalone build
+    ports:
+      - "3000:3000"
+    env_file: .env.local
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile          # Python FastAPI image
+    ports:
+      - "4455:4455"
+    env_file: ./backend/.env
+    volumes:
+      - backend_data:/app/data        # persist SQLite warehouse
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+```
+
+### SELinux & Cloudflare Tunnels
+
+- Mount volumes with the `:z` flag (shared) or `:Z` flag (private) to satisfy SELinux relabelling:
+  `- backend_data:/app/data:Z`
+- Expose the frontend through a Cloudflare tunnel instead of opening ports publicly. Point the tunnel to `http://localhost:3000`; the backend never needs to be directly reachable from the internet.
+
+---
+
+## Development
+
+### Frontend
+
+```bash
+npm run dev       # dev server with Turbopack
+npm run build     # production build + TypeScript check
+npm run lint      # ESLint v9 flat config
+npx prisma generate   # regenerate client after schema changes
+```
+
+### Python backend
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn main:app --reload --port 4455
+
+# Tests (requires running server)
+pytest                          # all tests
+pytest -m "not slow"            # skip NSE-hitting tests
+```
+
+---
+
+## Project Structure
+
+```
+src/
+├── app/
+│   ├── api/                  # Next.js API routes (proxy layer)
+│   │   ├── openalgo/         # Broker proxy: rate-limit → cache → OpenAlgo
+│   │   ├── py/[...path]/     # Catch-all proxy → Python backend
+│   │   ├── settings/         # User settings (Prisma/SQLite)
+│   │   └── watchlist/        # Watchlist CRUD (Prisma/SQLite)
+│   ├── globals.css           # Tailwind v4 design tokens
+│   ├── layout.tsx
+│   └── page.tsx
+├── components/
+│   ├── widgets/              # ChartWidget, OrderWidget, PosWidget, …
+│   └── …                     # CommandBar, GridSystem, LiveTicker, Panel
+├── lib/                      # Shared utilities and singletons
+└── store/
+    └── terminalStore.ts      # All Jotai atoms
+backend/                      # FastAPI analytics service (Python ≥ 3.11)
+├── app/
+│   ├── routers/              # corporatefilings, nonpersistence, screener, …
+│   ├── services/             # nse_client, screener_client, ai_summarizer
+│   └── models/               # SQLAlchemy ORM models
+├── alembic/                  # DB migrations (auto-applied on startup)
+└── main.py                   # FastAPI entrypoint
+prisma/
+└── schema.prisma             # WatchlistItem, TopMoverSymbol, UserSettings
+```
