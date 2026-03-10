@@ -10,7 +10,17 @@ import {
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 
-const VALID_WIDGETS = ['TOP', 'POS', 'ORDER', 'CHART', 'WATCH', 'SETTINGS', 'FDM', 'DEALS'];
+const VALID_WIDGETS = [
+  'TOP',
+  'POS',
+  'ORDER',
+  'CHART',
+  'WATCH',
+  'SETTINGS',
+  'FDM',
+  'DEALS',
+  'LARGEDEALS',
+];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);

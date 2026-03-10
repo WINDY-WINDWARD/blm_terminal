@@ -222,6 +222,30 @@ async def high_short_interest() -> JSONResponse:
     return JSONResponse(content=data)
 
 
+@router.get(
+    "/largedeal-snapshot",
+    summary="Full largedeal snapshot (bulk/short/block) from NSE",
+    response_class=JSONResponse,
+)
+async def largedeal_snapshot() -> JSONResponse:
+    """Return the full largedeal snapshot from NSE India.
+
+    This surfaces the BULK_DEALS_DATA, SHORT_DEALS_DATA, and BLOCK_DEALS_DATA
+    arrays (plus as_on_date and counters) in a single JSON payload. Results are
+    cached for a short period to avoid hammering NSE.
+    """
+    cache_key = "largedeal_snapshot"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.debug("Cache hit for %s", cache_key)
+        return JSONResponse(content=cached)
+
+    data = await _throttled_call(nse_client.get_largedeal_snapshot)
+    data = _clean_nan(data)
+    _cache_set(cache_key, data)
+    return JSONResponse(content=data)
+
+
 _CHANGE_RANGES_TTL: float = 300.0  # 5 minutes
 
 _SYMBOL_DATA_TTL: float = 60.0  # 1 minute

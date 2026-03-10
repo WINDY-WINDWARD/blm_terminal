@@ -143,6 +143,52 @@ class NSEClient:
             logger.exception("NSE: high short interest fetch failed")
             raise
 
+    def get_largedeal_snapshot(self) -> dict:
+        """Fetch the full largedeal snapshot (bulk/short/block) from NSE India.
+
+        This wraps the documented `snapshot-capital-market-largedeal` endpoint and
+        returns the parsed JSON payload as a Python dict. The payload typically
+        contains keys:
+          - as_on_date
+          - BULK_DEALS_DATA
+          - SHORT_DEALS_DATA
+          - BLOCK_DEALS_DATA
+        """
+
+        url = "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
+
+        logger.debug("NSE GET %s", url)
+        t0 = time.perf_counter()
+        try:
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s \u2192 %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE request failed: GET %s", url)
+            raise
+
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"Unexpected response format from snapshot-capital-market-largedeal: {payload!r}"
+            )
+
+        # Basic shape validation — keep it lenient to tolerate upstream changes.
+        expected_keys = {
+            "as_on_date",
+            "BULK_DEALS_DATA",
+            "SHORT_DEALS_DATA",
+            "BLOCK_DEALS_DATA",
+        }
+        missing = [k for k in expected_keys if k not in payload]
+        if missing:
+            logger.warning(
+                "NSE largedeal snapshot missing expected keys: %s", ", ".join(missing)
+            )
+
+        return payload
+
     def get_change_ranges(self, symbol: str) -> dict[str, float]:
         """Fetch percentage-change data for a symbol from NSE's getYearwiseData endpoint.
 
