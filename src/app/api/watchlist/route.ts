@@ -39,20 +39,17 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE /api/watchlist — remove a symbol { symbol, exchange }
+// DELETE /api/watchlist?id=<id> — remove a watchlist item by id
 export async function DELETE(req: NextRequest) {
   try {
-    const body = await req.json() as { symbol?: string; exchange?: string };
-    const symbol = body.symbol?.trim().toUpperCase();
-    const exchange = body.exchange?.trim().toUpperCase();
+    const idParam = req.nextUrl.searchParams.get('id');
+    const id = idParam ? parseInt(idParam, 10) : NaN;
 
-    if (!symbol || !exchange) {
-      return NextResponse.json({ error: 'symbol and exchange are required' }, { status: 400 });
+    if (isNaN(id)) {
+      return NextResponse.json({ error: 'id query param is required' }, { status: 400 });
     }
 
-    await prisma.watchlistItem.delete({
-      where: { symbol_exchange: { symbol, exchange } },
-    });
+    await prisma.watchlistItem.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';

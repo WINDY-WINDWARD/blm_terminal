@@ -190,16 +190,7 @@ function WatchRow({ item, isActive, columns, onRowClick, onRemove, removing }: W
         isActive ? 'bg-zinc-800' : ''
       }`}
     >
-      <td className="p-1 border-r border-terminal-gray text-terminal-amber font-bold">
-        <span>{item.symbol}</span>
-        <span className="text-terminal-gray text-[9px] ml-1">{item.exchange}</span>
-      </td>
-      {columns.map((col) => (
-        <td key={col} className="p-1 text-right border-r border-terminal-gray">
-          {renderCell(col)}
-        </td>
-      ))}
-      <td className="p-1 text-center">
+      <td className="p-1 text-center border-r border-terminal-gray">
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -212,6 +203,15 @@ function WatchRow({ item, isActive, columns, onRowClick, onRemove, removing }: W
           ✕
         </button>
       </td>
+      <td className="p-1 border-r border-terminal-gray text-terminal-amber font-bold">
+        <span>{item.symbol}</span>
+        <span className="text-terminal-gray text-[9px] ml-1">{item.exchange}</span>
+      </td>
+      {columns.map((col) => (
+        <td key={col} className="p-1 text-right border-r border-terminal-gray">
+          {renderCell(col)}
+        </td>
+      ))}
     </tr>
   );
 }
@@ -422,13 +422,13 @@ export function WatchWidget() {
             <table className="w-full text-left border-collapse min-w-[700px]">
               <thead className="bg-blue-900 text-white sticky top-0">
                 <tr>
+                  <th className="p-1 border border-terminal-gray w-6"></th>
                   <th className="p-1 border border-terminal-gray">SYMBOL</th>
                   {watchlistColumns.map((col) => (
                     <th key={col} className="p-1 border border-terminal-gray text-right">
                       {COLUMN_LABELS[col] || col}
                     </th>
                   ))}
-                  <th className="p-1 border border-terminal-gray w-6"></th>
                 </tr>
               </thead>
               <tbody>
