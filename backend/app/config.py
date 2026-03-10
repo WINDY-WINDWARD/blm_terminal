@@ -15,9 +15,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    ai_model_path: str | None = None
+    # OpenAI-compatible LLM API settings
+    ai_api_base_url: str = "https://api.openai.com/v1"
+    ai_api_key: str = "none"
+    ai_model: str = "gpt-4o-mini"
     ai_max_tokens: int = 512
-    ai_n_ctx: int = 8192
+    ai_temperature: float = 0.3
 
 
 settings = Settings()

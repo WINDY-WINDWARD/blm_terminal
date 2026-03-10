@@ -4,6 +4,7 @@ NSE India Client using nsepython library for fetching and caching data from NSE 
 
 import asyncio
 import logging
+import time
 import requests
 import nsepython
 from app.schemas.stockuniverse import StockUniverse
@@ -37,11 +38,19 @@ class NSEClient:
 
     def get_stock_list(self) -> list[str]:
         """Fetch the list of stocks from NSE India."""
-        return nsepython.nse_eq_symbols()
+        logger.debug("NSE: fetching equity symbols list")
+        result = nsepython.nse_eq_symbols()
+        logger.info("NSE: fetched %d equity symbols", len(result))
+        return result
 
     def get_stock_metadata(self, symbol: str) -> StockUniverse:
         """Fetch metadata for a given stock symbol."""
-        temp = nsepython.nse_eq(symbol)
+        logger.debug("NSE: fetching metadata for %s", symbol)
+        try:
+            temp = nsepython.nse_eq(symbol)
+        except Exception:
+            logger.exception("NSE: metadata fetch failed for %s", symbol)
+            raise
         tempdict = {
             "symbol": temp["info"]["symbol"],
             "companyName": temp["info"]["companyName"],
@@ -52,16 +61,12 @@ class NSEClient:
             "industryInfo": temp["industryInfo"],
             "lastUpdateTime": temp["metadata"]["lastUpdateTime"],
         }
-
+        logger.debug("NSE: metadata fetched for %s", symbol)
         return StockUniverse(**tempdict)
 
     def get_corporate_filing_comparison(self, symbol: str) -> str:
-        """Fetch corporate filing comparison for `symbol`, convert to CSV, and return CSV text.
-
-        Uses the `json_to_csv.convert` helper which expects an input JSON file path
-        and an output CSV file path. The function writes temporary files and returns
-        the CSV contents as a string.
-        """
+        """Fetch corporate filing comparison for `symbol`, convert to CSV, and return CSV text."""
+        logger.debug("NSE: fetching corporate filings for %s", symbol)
         try:
             data = nsepython.nse_past_results(symbol)
         except Exception:
@@ -71,6 +76,7 @@ class NSEClient:
         # Convert JSON -> CSV using the in-memory helper and return CSV text
         try:
             csv_text = dict_to_csv_text(data)
+            logger.debug("NSE: corporate filings for %s converted to CSV", symbol)
             return csv_text
         except Exception:
             logger.exception("Failed to convert past results for %s to CSV", symbol)
@@ -78,29 +84,64 @@ class NSEClient:
 
     def get_top_gainers(self) -> pandas.DataFrame:
         """Fetch the list of top gainers from NSE India."""
-        return nsepython.nse_get_top_gainers()
+        logger.debug("NSE: fetching top gainers")
+        try:
+            df = nsepython.nse_get_top_gainers()
+            logger.info("NSE: top gainers fetched (%d rows)", len(df))
+            return df
+        except Exception:
+            logger.exception("NSE: top gainers fetch failed")
+            raise
 
     def get_top_losers(self) -> pandas.DataFrame:
         """Fetch the list of top losers from NSE India."""
-        return nsepython.nse_get_top_losers()
+        logger.debug("NSE: fetching top losers")
+        try:
+            df = nsepython.nse_get_top_losers()
+            logger.info("NSE: top losers fetched (%d rows)", len(df))
+            return df
+        except Exception:
+            logger.exception("NSE: top losers fetch failed")
+            raise
 
     def check_bulk_deals(self, symbol: str) -> pandas.DataFrame:
         """Fetch the list of bulk deals from NSE India for a specific symbol."""
-        df = nsepython.nse_largedeals("bulk_deals")
-        # search df for rows matching the symbol (case-insensitive)
+        logger.debug("NSE: fetching bulk deals for %s", symbol)
+        try:
+            df = nsepython.nse_largedeals("bulk_deals")
+        except Exception:
+            logger.exception("NSE: bulk deals fetch failed for %s", symbol)
+            raise
         filtered_df = df[df["symbol"].str.upper() == symbol.upper()]
+        logger.debug(
+            "NSE: bulk deals for %s — %d matching rows", symbol, len(filtered_df)
+        )
         return filtered_df
 
     def check_block_deals(self, symbol: str) -> pandas.DataFrame:
         """Fetch the list of block deals from NSE India for a specific symbol."""
-        df = nsepython.nse_largedeals("block_deals")
-        # search df for rows matching the symbol (case-insensitive)
+        logger.debug("NSE: fetching block deals for %s", symbol)
+        try:
+            df = nsepython.nse_largedeals("block_deals")
+        except Exception:
+            logger.exception("NSE: block deals fetch failed for %s", symbol)
+            raise
         filtered_df = df[df["symbol"].str.upper() == symbol.upper()]
+        logger.debug(
+            "NSE: block deals for %s — %d matching rows", symbol, len(filtered_df)
+        )
         return filtered_df
 
     def get_high_short_interest(self) -> pandas.DataFrame:
         """Fetch the list of high short interest stocks from NSE India."""
-        return nsepython.nse_largedeals("short_deals")
+        logger.debug("NSE: fetching high short interest stocks")
+        try:
+            df = nsepython.nse_largedeals("short_deals")
+            logger.info("NSE: high short interest fetched (%d rows)", len(df))
+            return df
+        except Exception:
+            logger.exception("NSE: high short interest fetch failed")
+            raise
 
     def get_change_ranges(self, symbol: str) -> dict[str, float]:
         """Fetch percentage-change data for a symbol from NSE's getYearwiseData endpoint.
@@ -126,8 +167,16 @@ class NSEClient:
             f"?functionName=getYearwiseData&symbol={symbol}EQN"
         )
 
-        resp = self._session.get(url, timeout=20)
-        resp.raise_for_status()
+        logger.debug("NSE GET %s", url)
+        t0 = time.perf_counter()
+        try:
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE request failed: GET %s", url)
+            raise
 
         payload = resp.json()
         if not isinstance(payload, list) or len(payload) == 0:
@@ -166,8 +215,16 @@ class NSEClient:
             f"?functionName=getSymbolData&marketType={market_type}&series={series}&symbol={symbol}"
         )
 
-        resp = self._session.get(url, timeout=20)
-        resp.raise_for_status()
+        logger.debug("NSE GET %s", url)
+        t0 = time.perf_counter()
+        try:
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE request failed: GET %s", url)
+            raise
 
         payload = resp.json()
         if not isinstance(payload, dict):

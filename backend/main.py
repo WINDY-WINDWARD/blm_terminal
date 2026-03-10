@@ -4,6 +4,7 @@ import asyncio
 import logging
 import logging.config
 import logging.handlers
+import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, inspect as sa_inspect
 
@@ -72,52 +73,70 @@ def _run_migrations_sync() -> None:
 # Logging
 # ---------------------------------------------------------------------------
 
+
+_LOG_FORMAT = "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+
 def _configure_logging() -> None:
-    """Configure logging handlers. Call this at module load AND in lifespan."""
-    import logging.handlers
-    
+    """Configure root logger with console + rotating file handlers.
+
+    Safe to call multiple times — replaces any handlers set by Alembic's
+    fileConfig() (called during migrations, which wipes our file handler).
+    Uses settings.log_level so the LOG_LEVEL env-var is respected.
+    """
     log_dir = Path(__file__).parent / "logs"
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "backend.log"
 
-    # Create handlers
+    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(
-        logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    )
+    console_handler.setFormatter(formatter)
 
     file_handler = logging.handlers.RotatingFileHandler(
         log_file,
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=5,
+        encoding="utf-8",
     )
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    )
+    file_handler.setFormatter(formatter)
 
-    # Configure root logger
+    # Resolve level from settings so LOG_LEVEL env-var is respected.
+    root_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+
+    # Configure root logger — replace any handlers set by Alembic's fileConfig().
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.handlers = []  # Clear existing handlers
+    root_logger.setLevel(root_level)
+    root_logger.handlers = []
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
 
-    # Also configure uvicorn loggers
-    for uv_name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
+    # Uvicorn loggers default to propagate=False; wire them directly into our
+    # handlers so their output also reaches the rotating file.
+    for uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
         uv_logger = logging.getLogger(uv_name)
         uv_logger.setLevel(logging.INFO)
         uv_logger.handlers = []
+        uv_logger.propagate = False
         uv_logger.addHandler(console_handler)
         uv_logger.addHandler(file_handler)
 
-    # Set levels for specific loggers
-    logging.getLogger("app").setLevel(logging.DEBUG)
-    logging.getLogger("app.services").setLevel(logging.DEBUG)
-    logging.getLogger("app.routers").setLevel(logging.DEBUG)
+    # Application namespaces — always DEBUG so detailed app logs are never
+    # silenced by a higher root level set via LOG_LEVEL.
+    for ns in ("app", "app.services", "app.routers"):
+        logging.getLogger(ns).setLevel(logging.DEBUG)
+
+    # Suppress chatty third-party loggers.
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-# Configure logging at module load (for initial startup)
+
+# Configure logging at module load so the very first import-time messages are
+# captured.  The lifespan re-calls this after Alembic migrations run because
+# alembic/env.py calls fileConfig() which wipes our handlers.
 _configure_logging()
 
 
@@ -128,62 +147,41 @@ _configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Re-configure logging for uvicorn reload child process
+    # Re-configure logging: restores our handlers after uvicorn's own startup
+    # logging setup (which runs after module import in reload mode).
     _configure_logging()
-    
-    print("=== LIFESPAN START ===")
+
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
+
+    # alembic/env.py calls fileConfig(alembic.ini) during migrations which
+    # resets the root logger to WARNING/stderr-only.  Restore our handlers now.
+    _configure_logging()
+
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
     universe_task = asyncio.create_task(stock_universe_scheduler())
     await screener_client.init()
 
-    logger.info("Starting AI summarizer model loading in background...")
-    print(">>> Starting AI model load...")
-    
-    async def load_model():
-        try:
-            await asyncio.to_thread(ai_summarizer.initialize)
-            return True
-        except Exception as e:
-            print(f">>> Model load failed: {e}")
-            return False
-    
-    load_task = asyncio.create_task(load_model())
-    
-    try:
-        await asyncio.wait_for(load_task, timeout=300.0)
-    except asyncio.TimeoutError:
-        logger.warning("AI model loading timed out after 5 minutes")
-        print(">>> AI model loading timed out")
-    except Exception as e:
-        logger.error(f"AI model loading failed: {e}")
-        print(f">>> AI model loading failed: {e}")
-
-    if ai_summarizer.is_ready:
-        logger.info("AI summarizer loaded successfully")
-        print(">>> AI summarizer loaded!")
+    if ai_summarizer.is_configured:
+        logger.info(
+            "AI summarizer configured — provider=%s model=%s",
+            settings.ai_api_base_url,
+            settings.ai_model,
+        )
     else:
-        logger.warning("AI summarizer not ready - will load on first request")
-        print(">>> AI summarizer NOT ready")
+        logger.warning(
+            "AI_API_KEY not set — AI summarizer endpoints will return 503. "
+            "Set AI_API_KEY (and optionally AI_API_BASE_URL, AI_MODEL) in .env."
+        )
 
-    print("=== LIFESPAN YIELD ===")
     yield
 
-    print("=== LIFESPAN SHUTDOWN ===")
     logger.info("Shutting down — closing clients...")
     cleanup_task.cancel()
     universe_task.cancel()
 
-    if not load_task.done():
-        load_task.cancel()
-        try:
-            await load_task
-        except asyncio.CancelledError:
-            pass
-
-    ai_summarizer.close()
+    await ai_summarizer.close()
     await nse_client.close()
     await screener_client.close()
 
@@ -203,7 +201,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow the Next.js dev server and any local variants
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
+
+# CORS — allow the Next.js dev server and any local variants.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -214,6 +216,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Request / response logging — logs every HTTP call with method, path, status,
+# and latency so that all network activity appears in backend.log.
+# Registered after CORS so the CORS middleware is outermost in the stack.
+_access_logger = logging.getLogger("app.access")
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next) -> Response:  # type: ignore[type-arg]
+    """Log every HTTP request with method, path, status, and elapsed time."""
+    start = time.perf_counter()
+    response: Response = await call_next(request)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    _access_logger.info(
+        "%s %s %d  %.1fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -229,17 +253,18 @@ app.include_router(stockuniverse_router, prefix="/api")
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
     """Service health check."""
-    test_logger = logging.getLogger("app.routers.test")
-    test_logger.info("Test log from /health endpoint")
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=4455,
+        port=settings.port,
         reload=True,
-        log_config=None,  # Use Python logging (configured above)
+        # Disable uvicorn's own logging dictConfig so our _configure_logging()
+        # remains the sole logging authority (file handler stays in place).
+        log_config=None,
     )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from logging.config import fileConfig
 from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool, inspect
@@ -29,16 +28,17 @@ config = context.config
 # Uses the plain sqlite:// (sync) driver — Alembic doesn't need aiosqlite.
 config.set_main_option("sqlalchemy.url", f"sqlite:///{settings.db_path}")
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Do NOT call fileConfig() here — it would overwrite the app's logging
+# configuration (file handler, formatters) with alembic.ini's WARNING-only
+# stderr-only setup every time migrations run on startup.
 
 target_metadata = Base.metadata
 
 # Shared context options applied to both offline and online modes.
 _CONTEXT_OPTS: dict = {
     "target_metadata": target_metadata,
-    "render_as_batch": True,   # required for SQLite column alterations
-    "compare_type": True,      # detect column type/nullability changes
+    "render_as_batch": True,  # required for SQLite column alterations
+    "compare_type": True,  # detect column type/nullability changes
 }
 
 

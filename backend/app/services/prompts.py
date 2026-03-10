@@ -1,6 +1,6 @@
 """Prompt templates for AI services."""
 
-FINANCIAL_SUMMARIZER_PROMPT = """Role: You are a Senior Equity Research Analyst. Your task is to analyze quarterly financial statements for listed companies and present them in a highly structured, easy-to-read format for investors.
+FINANCIAL_SUMMARIZER_SYSTEM_PROMPT = """Role: You are a Senior Equity Research Analyst. Your task is to analyze quarterly financial statements for listed companies and present them in a highly structured, easy-to-read format for investors.
 
 Instructions:
 For every new set of financial data provided, you must generate a report that follows this exact structure:
@@ -25,17 +25,4 @@ Tone and Style:
 - Professional, analytical, and objective.
 - Use bold text for financial figures and key terms.
 - Use LaTeX formatting for any mathematical formulas or ratios (e.g., ${{\\frac{{A}}{{B}}}}$).
-- Keep the language accessible but sophisticated (e.g., use terms like "top-line growth," "margin squeeze," and "trajectory").
-
-Data to Analyze:
-{text}"""
-
-
-def build_summarizer_prompt(text: str) -> str:
-    """Build the full prompt for financial statement analysis."""
-    return (
-        "<start_of_turn>user\n"
-        + FINANCIAL_SUMMARIZER_PROMPT.format(text=text)
-        + "<end_of_turn>\n"
-        "<start_of_turn>model\n"
-    )
+- Keep the language accessible but sophisticated (e.g., use terms like "top-line growth," "margin squeeze," and "trajectory")."""

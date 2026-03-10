@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Union
 
 import httpx
@@ -480,12 +481,18 @@ class ScreenerClient:
             )
 
         async with _screener_lock:
+            logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
+            t0 = time.perf_counter()
             resp = await self._http.get(
                 SEARCH_URL,
                 params={"q": query, "v": "3", "fts": "1"},
             )
+            elapsed_ms = (time.perf_counter() - t0) * 1000
             await asyncio.sleep(_COURTESY_DELAY)
 
+        logger.info(
+            "Screener GET %s → %s (%.0fms)", SEARCH_URL, resp.status_code, elapsed_ms
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -501,9 +508,15 @@ class ScreenerClient:
 
         try:
             async with _screener_lock:
+                logger.debug("Screener GET %s", url)
+                t0 = time.perf_counter()
                 resp = await self._http.get(url)
+                elapsed_ms = (time.perf_counter() - t0) * 1000
                 await asyncio.sleep(_COURTESY_DELAY)
 
+            logger.info(
+                "Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms
+            )
             if resp.status_code != 200:
                 logger.warning(
                     "quick_ratios API returned %s for warehouse_id=%s",
@@ -549,16 +562,20 @@ class ScreenerClient:
             )
         if self._http is None:
             raise RuntimeError(
-                "Screener. Call await clientClient not initialised.init() first."
+                "ScreenerClient not initialised. Call await client.init() first."
             )
 
         mode = "consolidated" if consolidated else "standalone"
         url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
 
         async with _screener_lock:
+            logger.debug("Screener GET %s", url)
+            t0 = time.perf_counter()
             resp = await self._http.get(url)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
             await asyncio.sleep(_COURTESY_DELAY)
 
+        logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:
             raise ValueError(f"Symbol '{symbol}' not found on screener.in")
 
@@ -613,9 +630,13 @@ class ScreenerClient:
         url = TRADES_URL.format(warehouse_id=warehouse_id)
 
         async with _screener_lock:
+            logger.debug("Screener GET %s", url)
+            t0 = time.perf_counter()
             resp = await self._http.get(url)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
             await asyncio.sleep(_COURTESY_DELAY)
 
+        logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:
             raise ValueError(f"Warehouse ID '{warehouse_id}' not found on screener.in")
 
@@ -656,9 +677,13 @@ class ScreenerClient:
         url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
 
         async with _screener_lock:
+            logger.debug("Screener GET %s", url)
+            t0 = time.perf_counter()
             resp = await self._http.get(url)  # type: ignore[union-attr]
+            elapsed_ms = (time.perf_counter() - t0) * 1000
             await asyncio.sleep(_COURTESY_DELAY)
 
+        logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:
             raise ValueError(f"Symbol '{symbol}' not found on screener.in")
 

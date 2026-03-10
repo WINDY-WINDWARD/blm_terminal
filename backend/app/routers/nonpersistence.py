@@ -15,7 +15,10 @@ a time so concurrent requests queue up rather than flooding the upstream API.
 import asyncio
 import logging
 import time
+from functools import partial
 
+import numpy as np
+import pandas as pd
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -38,6 +41,22 @@ _last_request_at: float = 0.0  # monotonic timestamp of the last NSE call
 CACHE_TTL_SECONDS: float = 600.0  # 10 minutes — override per-call if needed
 
 _cache: dict[str, tuple[float, object]] = {}
+
+
+def _df_to_json_dict(df: pd.DataFrame) -> list[dict]:
+    """Convert DataFrame to dict, replacing NaN/NA with None for JSON compatibility."""
+    return df.replace({np.nan: None, pd.NA: None}).to_dict(orient="records")
+
+
+def _clean_nan(obj):
+    """Recursively replace NaN with None in dicts/lists for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _clean_nan(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_clean_nan(item) for item in obj]
+    elif isinstance(obj, float) and (np.isnan(obj) or np.isinf(obj)):
+        return None
+    return obj
 
 
 def _cache_get(key: str, ttl: float = CACHE_TTL_SECONDS) -> object | None:
@@ -118,7 +137,7 @@ async def top_gainers() -> JSONResponse:
     Data is fetched live on every call — no caching.
     """
     df = await _throttled_call(nse_client.get_top_gainers)
-    return JSONResponse(content=df.to_dict(orient="records"))
+    return JSONResponse(content=_df_to_json_dict(df))
 
 
 @router.get(
@@ -132,7 +151,7 @@ async def top_losers() -> JSONResponse:
     Data is fetched live on every call — no caching.
     """
     df = await _throttled_call(nse_client.get_top_losers)
-    return JSONResponse(content=df.to_dict(orient="records"))
+    return JSONResponse(content=_df_to_json_dict(df))
 
 
 @router.get(
@@ -152,7 +171,7 @@ async def bulk_deals(symbol: str) -> JSONResponse:
         return JSONResponse(content=cached)
 
     df = await _throttled_call(nse_client.check_bulk_deals, symbol)
-    data = df.to_dict(orient="records")
+    data = _df_to_json_dict(df)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)
 
@@ -175,7 +194,7 @@ async def block_deals(symbol: str) -> JSONResponse:
         return JSONResponse(content=cached)
 
     df = await _throttled_call(nse_client.check_block_deals, symbol)
-    data = df.to_dict(orient="records")
+    data = _df_to_json_dict(df)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)
 
@@ -198,7 +217,7 @@ async def high_short_interest() -> JSONResponse:
         return JSONResponse(content=cached)
 
     df = await _throttled_call(nse_client.get_high_short_interest)
-    data = df.to_dict(orient="records")
+    data = _df_to_json_dict(df)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)
 
@@ -228,6 +247,7 @@ async def change_ranges(symbol: str) -> JSONResponse:
         return JSONResponse(content=cached)
 
     data = await _throttled_call(nse_client.get_change_ranges, symbol)
+    data = _clean_nan(data)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)
 
@@ -249,5 +269,6 @@ async def symbol_data(symbol: str) -> JSONResponse:
         return JSONResponse(content=cached)
 
     data = await _throttled_call(nse_client.get_symbol_data, symbol.upper())
+    data = _clean_nan(data)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)

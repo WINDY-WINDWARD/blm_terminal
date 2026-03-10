@@ -14,7 +14,7 @@ Status: 200
   GET /api/stockuniverse
 ============================================================
 Status: 200
-Response: List of 2250 items
+Response: List of 2269 items
 Sample item (first):
 {
   "symbol": "20MICRONS",
@@ -51,7 +51,7 @@ Status: 200
     "basicIndustry": "Refineries & Marketing"
   },
   "lastUpdateTime": "2026-03-05T16:00:00",
-  "screenerTradesId": null
+  "screenerTradesId": "2726"
 }
 
 ============================================================
@@ -83,7 +83,7 @@ Sample item (first):
 Status: 200
 Response: CSV text (4145 chars)
 
-Full CSV content:
+Full CSV content (first 5000 chars):
 ```
 "QUARTER ENDED"|"31-DEC-2024"|"30-SEP-2024"|"30-JUN-2024"|"31-MAR-2024"|"31-DEC-2023"
 "PARTICULARS"|"UNAUDITED"|"UNAUDITED"|"UNAUDITED"|"AUDITED"|"UNAUDITED"
@@ -155,33 +155,33 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "BDL",
+  "symbol": "DMART",
   "identifier": "",
   "series": "EQ",
-  "open": "1281.3",
-  "dayHigh": "1374.9",
-  "dayLow": "1276.1",
-  "lastPrice": "1355",
-  "previousClose": "1280.6",
-  "change": 74.4,
-  "pChange": 5.81,
-  "totalTradedVolume": 5023734,
-  "totalTradedValue": 6790731959.82,
-  "yearHigh": "2096.6",
-  "yearLow": "1030.35",
-  "nearWKH": 35.37155394448153,
-  "nearWKL": -31.50871063230942,
-  "perChange365d": 19.51,
-  "perChange30d": 6.96,
+  "open": "3866.9",
+  "dayHigh": "3982",
+  "dayLow": "3814.5",
+  "lastPrice": "3967.1",
+  "previousClose": "3875.8",
+  "change": 91.3,
+  "pChange": 2.36,
+  "totalTradedVolume": 933615,
+  "totalTradedValue": 3647568451.95,
+  "yearHigh": "4949.5",
+  "yearLow": "3475",
+  "nearWKH": 19.84846954237802,
+  "nearWKL": -14.161151079136689,
+  "perChange365d": 10.37,
+  "perChange30d": 1.96,
   "date365dAgo": "07-Mar-2025",
   "date30dAgo": "06-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/BDLEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/BDL-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/BDL-EQ.svg",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/DMARTEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/DMART-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/DMART-EQ.svg",
   "meta": {
-    "symbol": "BDL",
-    "companyName": "Bharat Dynamics Limited",
-    "industry": "Aerospace & Defense",
+    "symbol": "DMART",
+    "companyName": "Avenue Supermarts Limited",
+    "industry": "Diversified Retail",
     "activeSeries": [
       "EQ",
       "T0"
@@ -195,15 +195,15 @@ Sample item (first):
     "tempSuspendedSeries": [],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE171Z01026",
-    "slb_isin": "INE171Z01026",
-    "listingDate": "2018-03-23",
+    "isin": "INE192R01011",
+    "slb_isin": "INE192R01011",
+    "listingDate": "2017-03-21",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "06-Mar-2026 16:00:00",
-      "preOpenTime": "06-Mar-2026 09:07:43",
+      "equityTime": "09-Mar-2026 16:00:00",
+      "preOpenTime": "09-Mar-2026 09:07:13",
       "QuotePreOpenFlag": false
     }
   }
@@ -216,33 +216,33 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "ASHOKLEY",
+  "symbol": "PGEL",
   "identifier": "",
   "series": "EQ",
-  "open": "202.49",
-  "dayHigh": "202.49",
-  "dayLow": "194.12",
-  "lastPrice": "194.84",
-  "previousClose": "203.04",
-  "change": -8.2,
-  "pChange": -4.04,
-  "totalTradedVolume": 23585465,
-  "totalTradedValue": 4655063227.05,
-  "yearHigh": "215.42",
-  "yearLow": "95.93",
-  "nearWKH": 9.553430507845132,
-  "nearWKL": -103.10643177316793,
-  "perChange365d": -7.2,
-  "perChange30d": -3.55,
+  "open": "599",
+  "dayHigh": "599",
+  "dayLow": "517.5",
+  "lastPrice": "519.6",
+  "previousClose": "609.25",
+  "change": -89.65,
+  "pChange": -14.71,
+  "totalTradedVolume": 11304952,
+  "totalTradedValue": 6110552655.04,
+  "yearHigh": "1008",
+  "yearLow": "465",
+  "nearWKH": 48.45238095238095,
+  "nearWKL": -11.741935483870972,
+  "perChange365d": -40.44,
+  "perChange30d": -10.69,
   "date365dAgo": "07-Mar-2025",
   "date30dAgo": "06-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/ASHOKLEYEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/ASHOKLEY-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/ASHOKLEY-EQ.svg",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/PGELEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/PGEL-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/PGEL-EQ.svg",
   "meta": {
-    "symbol": "ASHOKLEY",
-    "companyName": "Ashok Leyland Limited",
-    "industry": "Commercial Vehicles",
+    "symbol": "PGEL",
+    "companyName": "PG Electroplast Limited",
+    "industry": "Consumer Electronics",
     "activeSeries": [
       "EQ",
       "T0"
@@ -256,15 +256,15 @@ Sample item (first):
     "tempSuspendedSeries": [],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE208A01029",
-    "slb_isin": "INE208A01029",
-    "listingDate": "1995-05-25",
+    "isin": "INE457L01029",
+    "slb_isin": "INE457L01029",
+    "listingDate": "2011-09-26",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "06-Mar-2026 16:00:00",
-      "preOpenTime": "06-Mar-2026 09:07:43",
+      "equityTime": "09-Mar-2026 16:00:00",
+      "preOpenTime": "09-Mar-2026 09:07:13",
       "QuotePreOpenFlag": false
     }
   }
@@ -286,15 +286,15 @@ Response: List of 0 items
   GET /api/market/high-short-interest
 ============================================================
 Status: 200
-Response: List of 177 items
+Response: List of 68 items
 Sample item (first):
 {
-  "date": "05-Mar-2026",
-  "symbol": "AARTIIND",
-  "name": "AARTI INDUSTRIES LTD",
+  "date": "06-Mar-2026",
+  "symbol": "ADANIENSOL",
+  "name": "ADANI ENERGY SOLUTION LTD",
   "clientName": null,
   "buySell": null,
-  "qty": "1000",
+  "qty": "5",
   "watp": null,
   "remarks": null
 }
@@ -304,15 +304,15 @@ Sample item (first):
 ============================================================
 Status: 200
 {
-  "oneDayPercent": -10.7,
-  "oneWeekPercent": 0.94,
-  "oneMonthPercent": -3.02,
-  "threeMonthPercent": -8.67,
-  "sixMonthPercent": 2.33,
-  "oneYearPercent": 16.32,
-  "twoYearPercent": -6.39,
-  "threeYearPercent": 16.83,
-  "fiveYearPercent": 29.16
+  "oneDayPercent": -9.96,
+  "oneWeekPercent": 4.46,
+  "oneMonthPercent": -2.94,
+  "threeMonthPercent": -7.24,
+  "sixMonthPercent": 3.08,
+  "oneYearPercent": 13.51,
+  "twoYearPercent": -4.08,
+  "threeYearPercent": 20.26,
+  "fiveYearPercent": 29.49
 }
 
 ============================================================
@@ -343,7 +343,7 @@ Status: 200
         "sellQuantity4": 0,
         "sellPrice5": 0,
         "sellQuantity5": 0,
-        "lastPrice": 1407,
+        "lastPrice": 1418.6,
         "totalBuyQuantity": 0,
         "totalSellQuantity": 0,
         "perBuyQty": 0,
@@ -356,15 +356,15 @@ Status: 200
         "symbol": "RELIANCE",
         "series": "EQ",
         "marketType": "N",
-        "open": 1396.5,
-        "dayHigh": 1424.3,
-        "dayLow": 1390.3,
-        "previousClose": 1389.4,
-        "averagePrice": 1412.86,
-        "change": 17.6,
-        "pChange": 1.27,
-        "basePrice": 1389.4,
-        "closePrice": 1404.8,
+        "open": 1375,
+        "dayHigh": 1429.4,
+        "dayLow": 1370,
+        "previousClose": 1404.8,
+        "averagePrice": 1404.07,
+        "change": 13.8,
+        "pChange": 0.98,
+        "basePrice": 1404.8,
+        "closePrice": 1424,
         "indicativeClose": 0,
         "ic_change": 0,
         "ic_pchange": 0,
@@ -376,29 +376,29 @@ Status: 200
         "ieq": 0
       },
       "tradeInfo": {
-        "totalTradedVolume": 19311971,
-        "totalTradedValue": 27285111347.06,
+        "totalTradedVolume": 24870822,
+        "totalTradedValue": 34920375045.54,
         "series": "EQ",
-        "lastPrice": 1407,
+        "lastPrice": 1418.6,
         "issuedSize": 13532472634,
-        "basePrice": 1389.4,
-        "ffmc": 9473579316301.68,
+        "basePrice": 1404.8,
+        "ffmc": 9551684163543.4,
         "faceValue": 10,
         "impactCost": 0.01,
-        "deliveryToTradedQuantity": 55.63,
+        "deliveryToTradedQuantity": 47.14,
         "applicableMargin": 12.5,
         "marketLot": null,
-        "quantitytraded": 19311971,
-        "deliveryquantity": 10743452,
-        "totalMarketCap": 19040188996038,
-        "secwisedelposdate": "06-Mar-2026 00:00:00"
+        "quantitytraded": 24870822,
+        "deliveryquantity": 11723015,
+        "totalMarketCap": 19197165678592.4,
+        "secwisedelposdate": "09-Mar-2026 00:00:00"
       },
       "priceInfo": {
         "yearHightDt": "05-Jan-2026 00:00:00",
         "yearLowDt": "07-Apr-2025 00:00:00",
         "yearHigh": 1611.8,
         "yearLow": 1114.85,
-        "priceBand": "1264.40-1545.20",
+        "priceBand": "1281.60-1566.40",
         "cmDailyVolatility": "1.32",
         "cmAnnualVolatility": "25.22",
         "tickSize": 0.1,
@@ -415,8 +415,8 @@ Status: 200
         "isSuspended": "Active",
         "basicIndustry": "Refineries & Marketing",
         "index": "Nifty 50",
-        "deliveryQuantity": "10743452",
-        "deliveryTotradedQuantity": "55.63",
+        "deliveryQuantity": "11723015",
+        "deliveryTotradedQuantity": "47.14",
         "securityvar": "8.23",
         "indexvar": "0",
         "extremelossMargin": "3.5",
@@ -476,7 +476,7 @@ Status: 200
         "nameOfComplianceOfficer": null,
         "sddcompliance": null
       },
-      "lastUpdateTime": "06-Mar-2026 16:00:00"
+      "lastUpdateTime": "09-Mar-2026 16:00:00"
     }
   ]
 }
@@ -502,9 +502,9 @@ Status: 200
   "name": "Reliance Industries Ltd",
   "screener_warehouse_id": "6598251",
   "ratios": {
-    "market_cap": "19,01,041 Cr.",
-    "price": "1,405",
-    "pe": "24.8",
+    "market_cap": "19,26,475 Cr.",
+    "price": "1,424",
+    "pe": "25.1",
     "book_value": "648",
     "dividend_yield": "0.39 %",
     "roce": "9.69 %",
@@ -603,6 +603,28 @@ Sample record (first):
   "value": 1384,
   "value_in": "price",
   "small_quantity": false
+}
+
+============================================================
+  GET /api/ai/health
+============================================================
+Status: 200
+{
+  "status": "ready",
+  "model": "gemma-2-9b"
+}
+
+============================================================
+  POST /api/ai/summarize
+============================================================
+Using data from: GET /api/corporatefilings/RELIANCE
+Status: 200
+Response: JSON with summary
+{
+  "summary": "## Quarterly Financial Statement Analysis - [Company Name]\n\n**Opening Statement:** This looks like a standard quarterly financial statement for [Company Name], covering the period ended December 31, 2024. The report provides key financial data including revenue, expenses, profitability, and basic earnings per share.\n\n**Executive Summary:**  [Company Name] reported **Total Income of \u20b913,147,400** for the quarter ended December 31, 2024. This represents a **QoQ decrease of -4.0%** compared to the previous quarter's \u20b913,785,500.  Profit After Tax (PAT) stood at **\u20b9872,100**, indicating a **QoQ decline of -10.6%**.\n\n**Section 1: Revenue & Income Trends:**\n\n| Metric | Q4 2024 | Q3 2024 | Q2 2024 | Q1 2024 | Q4 2023 |\n|---|---|---|---|---|---|\n| **Revenue from Operations** | \u20b912,826,000 | \u20b913,405,400 | \u20b913,433,100 | \u20b915,101,400 | \u20b913,057,900 |\n| **YoY Change (Revenue from Operations)** |  -12.4% | -12.4% | -12.4% | -12.4% | \n| **QoQ Change (Revenue from Operations)** | -4.0% | 0.2% | 0.2% | 0.2% |\n\n**Section 2: Expense Analysis:**\n\n*  The largest expense category was **Other Expenses**, accounting for **\u20b91,948,600** in Q4 2024. This represents a **QoQ increase of 1.7%**.\n* **Employee Benefits Expense** also saw a notable rise, increasing by **3.7% QoQ** to \u20b9218,100.\n*  **Finance Costs** decreased by **-10.6% QoQ** to \u20b9237,100.\n\n**Section 3: Profitability & Margins:**\n\n| Metric | Q4 2024 | Q3 2024 |\n|---|---|---|\n| **PBT (Profit Before Tax)** | \u20b91,159,700 | \u20b91,021,400 |\n| **Net Profit (PAT)** | \u20b9872,100 | \u20b9771,300 |\n| **Basic EPS** | \u20b96.44 | \u20b911.4 |\n\n*Note: This analysis does not include details on specific tax impacts or one-off items that may have affected the reported figures.*\n\n\n**Section 4: Key Financial Ratios:**\n\n* **EBITDA Margin:**  (To be calculated based on provided data)\n* **Net Profit Margin:** (To be calculated based on provided data)\n\nThe company's efficiency can be further assessed by analyzing its working capital management, inventory turnover, and days sales outstanding.\n\n\n**Section 5: Investor Perspective:**\n\n* **YoY Growth:** Revenue grew by -12.4% year-on-year, indicating a challenging operating environment.\n* **Changes in Equity Base/Share Capital:** The paid-up equity share capital remained stable at \u20b91,353,200.\n* **Debt Position:**  The company's debt position is not readily apparent from the provided data. Further analysis of the \"Details of Debt Securities\" section would be required to assess its leverage.\n\n**Closing:** I can provide you with specific growth percentages for different line items or compare these figures against industry benchmarks and competitors upon request. Please let me know if you have any further questions or require additional analysis.",
+  "input_tokens": 2352,
+  "output_tokens": 861,
+  "model": "google/gemma-2-9b"
 }
 
 ============================================================
