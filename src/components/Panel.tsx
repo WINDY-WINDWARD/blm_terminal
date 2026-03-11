@@ -12,6 +12,7 @@ import { SettingsWidget } from './widgets/SettingsWidget';
 import { FundamentalsWidget } from './widgets/FundamentalsWidget';
 import { DealsWidget } from './widgets/DealsWidget';
 import { LargedealsWidget } from './widgets/LargedealsWidget';
+import { BreakoutsWidget } from './widgets/BreakoutsWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -34,6 +35,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'FDM':      return <FundamentalsWidget />;
       case 'DEALS':    return <DealsWidget />;
       case 'LARGEDEALS': return <LargedealsWidget />;
+      case 'BREAKOUTS': return <BreakoutsWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">

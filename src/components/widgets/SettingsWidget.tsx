@@ -184,7 +184,7 @@ export function SettingsWidget() {
           Watchlist Columns
         </div>
         {loading ? (
-          <div className="text-terminal-gray">Loading...</div>
+          <div className="text-white">Loading...</div>
         ) : (
           <ColumnCheckboxes
             columns={WATCHLIST_COLUMNS}
@@ -200,7 +200,7 @@ export function SettingsWidget() {
           Movers Columns
         </div>
         {loading ? (
-          <div className="text-terminal-gray">Loading...</div>
+          <div className="text-white">Loading...</div>
         ) : (
           <ColumnCheckboxes
             columns={MOVERS_COLUMNS}

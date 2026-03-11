@@ -109,7 +109,7 @@ function useChangeRanges(symbol: string) {
 }
 
 function formatRange(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-terminal-gray">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
   const isUp = val > 0;
   return (
     <span className={isUp ? 'text-terminal-green' : 'text-terminal-red'}>
@@ -119,7 +119,7 @@ function formatRange(val: number | null | undefined): React.ReactNode {
 }
 
 function formatPrice(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-terminal-gray">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
   return <span>{val.toFixed(2)}</span>;
 }
 
@@ -142,7 +142,7 @@ function WatchRow({ item, isActive, columns, onRowClick, onRemove, removing }: W
   const yearLow = symbolData?.yearLow;
   const isUp = (chgPct ?? 0) >= 0;
   const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
-  const dash = <span className="text-terminal-gray">—</span>;
+  const dash = <span className="text-white/60">—</span>;
 
   const renderCell = (col: string) => {
     switch (col) {
@@ -205,7 +205,7 @@ function WatchRow({ item, isActive, columns, onRowClick, onRemove, removing }: W
       </td>
       <td className="p-1 border-r border-terminal-gray text-terminal-amber font-bold">
         <span>{item.symbol}</span>
-        <span className="text-terminal-gray text-[9px] ml-1">{item.exchange}</span>
+        <span className="text-white/60 text-[9px] ml-1">{item.exchange}</span>
       </td>
       {columns.map((col) => (
         <td key={col} className="p-1 text-right border-r border-terminal-gray">
@@ -390,11 +390,11 @@ export function WatchWidget() {
                   key={result.symbol}
                   onClick={() => handleSelectResult(result)}
                   className={`px-1 py-0.5 cursor-pointer hover:bg-zinc-800 ${
-                    index === activeIndex ? 'bg-zinc-800 text-terminal-amber' : 'text-terminal-gray'
+                    index === activeIndex ? 'bg-zinc-800 text-terminal-amber' : 'text-white/70'
                   }`}
                 >
                   <span className="text-terminal-amber font-bold">{result.symbol}</span>
-                  <span className="ml-1 truncate">{result.companyName}</span>
+                  <span className="ml-1 truncate text-white/80">{result.companyName}</span>
                 </div>
               ))}
             </div>
@@ -412,7 +412,7 @@ export function WatchWidget() {
       {/* Watchlist table */}
       <div className="flex-1 overflow-auto">
         {isLoading && (
-          <div className="p-2 text-terminal-gray">LOADING WATCHLIST...</div>
+          <div className="p-2 text-white">LOADING WATCHLIST...</div>
         )}
         {isError && (
           <div className="p-2 text-terminal-red">FAILED TO LOAD WATCHLIST</div>
@@ -445,7 +445,10 @@ export function WatchWidget() {
                 ))}
                 {watchlist.length === 0 && (
                   <tr>
-                    <td colSpan={watchlistColumns.length + 2} className="p-2 text-terminal-gray text-center">
+                    <td
+                      colSpan={watchlistColumns.length + 2}
+                      className="p-2 text-white text-center"
+                    >
                       No symbols. Add one above.
                     </td>
                   </tr>

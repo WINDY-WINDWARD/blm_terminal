@@ -108,9 +108,11 @@ export function LiveTicker() {
 
   if (items.length === 0) {
     return (
-      <div className="h-6 bg-terminal-bg border-t border-terminal-gray flex items-center
-                      overflow-hidden whitespace-nowrap text-xs font-mono shrink-0 px-4">
-        <span className="text-terminal-gray">Loading market data…</span>
+      <div
+        className="h-6 bg-terminal-bg border-t border-terminal-gray flex items-center
+                      overflow-hidden whitespace-nowrap text-xs font-mono shrink-0 px-4"
+      >
+        <span className="text-white">Loading market data…</span>
       </div>
     );
   }

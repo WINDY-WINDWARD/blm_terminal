@@ -233,12 +233,12 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
         {/* Recent orders */}
         {recentOrders.length > 0 && (
           <div className="mt-3">
-            <div className="text-terminal-gray text-[10px] mb-1 border-b border-terminal-gray pb-0.5">
+            <div className="text-white text-[10px] mb-1 border-b border-terminal-gray pb-0.5">
               RECENT ORDERS
             </div>
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="text-terminal-gray text-[9px]">
+                <tr className="text-white/70 text-[9px]">
                   <th className="p-0.5">SYMBOL</th>
                   <th className="p-0.5">ACT</th>
                   <th className="p-0.5 text-right">QTY</th>

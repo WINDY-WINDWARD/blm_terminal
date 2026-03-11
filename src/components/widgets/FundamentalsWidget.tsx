@@ -165,7 +165,7 @@ function RatioRow({ label, value }: { label: string; value: string | null | unde
         {label}
       </td>
       <td className="py-[3px] text-right text-terminal-amber text-[10px] font-mono font-bold whitespace-nowrap">
-        {value ?? <span className="text-terminal-gray/60 font-normal">—</span>}
+        {value ?? <span className="text-white/60 font-normal">—</span>}
       </td>
     </tr>
   );
@@ -213,7 +213,7 @@ export function FundamentalsWidget() {
 
   if (isLoading) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-terminal-gray gap-1">
+      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-white gap-1">
         <span className="text-terminal-amber/60 animate-pulse">LOADING FUNDAMENTALS...</span>
         <span className="text-white text-[10px]">{symbol}</span>
       </div>
@@ -344,7 +344,7 @@ export function FundamentalsWidget() {
                       {q.period}
                     </td>
                     <td className="py-[3px] text-right text-terminal-amber text-[10px] font-bold whitespace-nowrap">
-                      {q.sales ?? <span className="text-terminal-gray/60 font-normal">—</span>}
+                      {q.sales ?? <span className="text-white/60 font-normal">—</span>}
                     </td>
                     <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
                       {q.net_profit != null ? (
@@ -358,7 +358,7 @@ export function FundamentalsWidget() {
                           {q.net_profit}
                         </span>
                       ) : (
-                        <span className="text-terminal-gray/60 font-normal">—</span>
+                        <span className="text-white/60 font-normal">—</span>
                       )}
                     </td>
                     <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
@@ -373,7 +373,7 @@ export function FundamentalsWidget() {
                           {q.eps}
                         </span>
                       ) : (
-                        <span className="text-terminal-gray/60 font-normal">—</span>
+                        <span className="text-white/60 font-normal">—</span>
                       )}
                     </td>
                   </tr>

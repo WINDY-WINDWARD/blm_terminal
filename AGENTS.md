@@ -8,8 +8,8 @@ Guidelines for AI coding agents working in this repository.
 
 A financial terminal UI built with **Next.js 16 (App Router)**, **React 19**, **TypeScript**,
 **Tailwind CSS v4**, **Jotai** for state, and a native **WebSocket** client for real-time data.
-Panels host widgets (chart, order entry, positions, watchlist, movers, deals, fundamentals,
-settings) backed by a **Next.js API proxy** over the OpenAlgo trading API, with **Prisma +
+Panels host widgets (chart, order entry, positions, watchlist, movers, deals, large deals,
+breakouts, fundamentals, settings) backed by a **Next.js API proxy** over the OpenAlgo trading API, with **Prisma +
 SQLite** (`better-sqlite3`) for local persistence. A separate **FastAPI** analytics backend
 (`backend/`) serves NSE filings/market data via a catch-all `/api/py/[...path]` Next.js proxy.
 
@@ -88,6 +88,8 @@ src/
 │   ├── widgets/
 │   │   ├── ChartWidget.tsx         # Candlestick chart (lightweight-charts)
 │   │   ├── DealsWidget.tsx         # Bulk/block deals from Python backend
+│   │   ├── LargedealsWidget.tsx    # NSE bulk/block/short deals snapshot
+│   │   ├── BreakoutsWidget.tsx     # 52-week high/low breakouts from Python backend
 │   │   ├── FundamentalsWidget.tsx  # Company fundamentals from Python backend
 │   │   ├── MoversWidget.tsx        # Top gainers/losers
 │   │   ├── OrderWidget.tsx         # Order entry + order book

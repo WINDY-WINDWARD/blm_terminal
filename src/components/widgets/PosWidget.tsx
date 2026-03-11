@@ -32,7 +32,7 @@ export function PosWidget() {
 
   if (isLoading) {
     return (
-      <div className="h-full w-full flex items-center justify-center font-mono text-xs text-terminal-gray">
+      <div className="h-full w-full flex items-center justify-center font-mono text-xs text-white">
         LOADING POSITIONS...
       </div>
     );
@@ -43,7 +43,7 @@ export function PosWidget() {
     return (
       <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-2">
         <span className="text-terminal-red">POSITIONS UNAVAILABLE</span>
-        <span className="text-terminal-gray text-[10px]">{msg}</span>
+        <span className="text-white/70 text-[10px]">{msg}</span>
       </div>
     );
   }
@@ -88,7 +88,7 @@ export function PosWidget() {
                 <tr key={i} className="border-b border-terminal-gray hover:bg-zinc-900">
                   <td className="p-1 border-r border-terminal-gray text-terminal-amber font-bold">
                     <span>{row.symbol}</span>
-                    <span className="text-terminal-gray text-[9px] ml-1">{row.product}</span>
+                    <span className="text-white/60 text-[9px] ml-1">{row.product}</span>
                   </td>
                   <td className={`p-1 text-right border-r border-terminal-gray ${qty >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}>
                     {qty}
@@ -108,7 +108,7 @@ export function PosWidget() {
             })}
             {openPositions.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-2 text-terminal-gray text-center">
+                <td colSpan={5} className="p-2 text-white text-center">
                   No open positions
                 </td>
               </tr>

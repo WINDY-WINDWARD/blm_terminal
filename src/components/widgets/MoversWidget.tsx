@@ -42,7 +42,7 @@ function formatPrice(val: number): string {
 }
 
 function formatChange(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-terminal-gray">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
   const isUp = val > 0;
   return (
     <span className={isUp ? 'text-terminal-green font-bold' : 'text-terminal-red font-bold'}>
@@ -52,7 +52,7 @@ function formatChange(val: number | null | undefined): React.ReactNode {
 }
 
 function formatRange(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-terminal-gray">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
   const isUp = val > 0;
   return (
     <span className={isUp ? 'text-terminal-green' : 'text-terminal-red'}>
@@ -62,7 +62,7 @@ function formatRange(val: number | null | undefined): React.ReactNode {
 }
 
 function formatPriceCell(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-terminal-gray">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
   return <span>{val.toFixed(2)}</span>;
 }
 
@@ -111,7 +111,7 @@ function MoverRowComponent({ row, columns, onClick, colorClass }: MoverRowProps)
 
   const yearHigh = quote?.yearHigh;
   const yearLow = quote?.yearLow;
-  const dash = <span className="text-terminal-gray">—</span>;
+  const dash = <span className="text-white/60">—</span>;
 
   const renderCell = (col: string) => {
     switch (col) {
@@ -220,7 +220,7 @@ export function MoversWidget() {
 
   if (gainersLoading || losersLoading) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-terminal-gray gap-2 p-4">
+      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-white gap-2 p-4">
         <span>Loading movers...</span>
       </div>
     );
@@ -228,7 +228,7 @@ export function MoversWidget() {
 
   if (gainerRows.length === 0 && loserRows.length === 0) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-terminal-gray gap-2 p-4">
+      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-white gap-2 p-4">
         <span>No data available.</span>
       </div>
     );

@@ -20,6 +20,7 @@ const VALID_WIDGETS = [
   'FDM',
   'DEALS',
   'LARGEDEALS',
+  'BREAKOUTS',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
@@ -54,9 +55,15 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   // Command processor: apply widget command to focused panel
   useEffect(() => {
     if (!activeCommand) return;
-    const isValid = VALID_WIDGETS.includes(activeCommand);
+
+    let targetCommand = activeCommand;
+    if (activeCommand === 'BREAKOUT') {
+      targetCommand = 'BREAKOUTS';
+    }
+
+    const isValid = VALID_WIDGETS.includes(targetCommand);
     if (isValid) {
-      setActivePanels((prev) => ({ ...prev, [focusedPanel]: activeCommand }));
+      setActivePanels((prev) => ({ ...prev, [focusedPanel]: targetCommand }));
     }
     setActiveCommand('');
   }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand]);

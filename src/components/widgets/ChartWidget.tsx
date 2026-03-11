@@ -343,7 +343,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           placeholder="NSE"
           className="w-14 bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase text-center"
         />
-        <span className="text-terminal-gray">:</span>
+        <span className="text-white/60">:</span>
         <input
           type="text"
           value={inputSymbol}
@@ -364,24 +364,25 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
               key={iv}
               type="button"
               onClick={() => handleIntervalChange(iv)}
-              className={`px-1.5 py-0.5 text-[10px] border ${interval === iv
+              className={`px-1.5 py-0.5 text-[10px] border ${
+                interval === iv
                   ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
-                  : 'bg-black text-terminal-gray border-terminal-gray hover:text-terminal-amber'
-                }`}
+                  : 'bg-black text-white/60 border-terminal-gray hover:text-terminal-amber'
+              }`}
             >
               {iv}
             </button>
           ))}
         </div>
 
-        {isLoading && <span className="text-terminal-gray text-[10px] ml-1">LOADING…</span>}
+        {isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
         {isError && <span className="text-terminal-red text-[10px] ml-1">API ERR</span>}
 
         <button
           type="button"
           onClick={handleRefresh}
           disabled={isLoading}
-          className="px-1.5 py-0.5 text-[10px] border border-terminal-gray text-terminal-gray hover:text-terminal-amber hover:border-terminal-amber bg-black disabled:opacity-40 ml-1"
+          className="px-1.5 py-0.5 text-[10px] border border-terminal-gray text-white/70 hover:text-terminal-amber hover:border-terminal-amber bg-black disabled:opacity-40 ml-1"
           title="Refresh chart data"
         >
           ↺
@@ -395,14 +396,14 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
               seriesRef.current.priceScale().applyOptions({ autoScale: true });
             }
           }}
-          className="px-1.5 py-0.5 text-[10px] border border-terminal-gray text-terminal-gray hover:text-terminal-amber hover:border-terminal-amber bg-black ml-0.5"
+          className="px-1.5 py-0.5 text-[10px] border border-terminal-gray text-white/70 hover:text-terminal-amber hover:border-terminal-amber bg-black ml-0.5"
           title="Recenter chart"
         >
           ⊡
         </button>
 
         {!isFocused && (
-          <span className="text-terminal-gray text-[10px] ml-auto">{symbol}</span>
+          <span className="text-white/60 text-[10px] ml-auto">{symbol}</span>
         )}
       </form>
 
