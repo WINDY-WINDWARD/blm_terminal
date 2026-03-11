@@ -104,12 +104,84 @@ function normalizeRow(item: RawBreakoutItem): BreakoutRow {
   };
 }
 
+type SortColumn = 'symbol' | 'name' | 'ltp' | 'change' | 'pChange' | 'new52WHL' | 'prev52WHL' | 'prevHLDate';
+type SortDirection = 'asc' | 'desc';
+
 interface BreakoutTableProps {
   rows: BreakoutRow[];
   onRowClick: (row: BreakoutRow) => void;
 }
 
+type ColumnConfig = {
+  key: SortColumn;
+  label: string;
+  textAlign: 'left' | 'right';
+  defaultSort: SortDirection;
+};
+
+const COLUMNS: ColumnConfig[] = [
+  { key: 'symbol', label: 'Symbol', textAlign: 'left', defaultSort: 'asc' },
+  { key: 'name', label: 'Name', textAlign: 'left', defaultSort: 'asc' },
+  { key: 'ltp', label: 'LTP', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'change', label: 'Change', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'pChange', label: 'Change %', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'new52WHL', label: 'New 52W', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'prev52WHL', label: 'Prev 52W', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'prevHLDate', label: 'Prev HL Date', textAlign: 'right', defaultSort: 'asc' },
+];
+
+function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
+  // Handle nulls and undefined — sort last regardless of direction
+  const aNull = a === null || a === undefined;
+  const bNull = b === null || b === undefined;
+  if (aNull && bNull) return 0;
+  if (aNull) return 1;
+  if (bNull) return -1;
+
+  // Numeric comparison
+  if (typeof a === 'number' && typeof b === 'number') {
+    const result = a - b;
+    return direction === 'asc' ? result : -result;
+  }
+
+  // String comparison (includes date strings)
+  if (typeof a === 'string' && typeof b === 'string') {
+    const result = a.localeCompare(b);
+    return direction === 'asc' ? result : -result;
+  }
+
+  return 0;
+}
+
 function BreakoutTable({ rows, onRowClick }: BreakoutTableProps) {
+  const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const handleHeaderClick = (column: SortColumn) => {
+    const columnConfig = COLUMNS.find((c) => c.key === column);
+    if (!columnConfig) return;
+
+    if (sortColumn === column) {
+      // Toggle direction if clicking same column
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New column: use default sort direction
+      setSortColumn(column);
+      setSortDirection(columnConfig.defaultSort);
+    }
+  };
+
+  // Sort rows
+  const sortedRows = (() => {
+    if (!sortColumn) return rows;
+
+    return [...rows].sort((a, b) => {
+      const aVal = a[sortColumn];
+      const bVal = b[sortColumn];
+      return compareValues(aVal, bVal, sortDirection);
+    });
+  })();
+
   if (!rows.length) {
     return (
       <div className="text-white/40 text-[10px] py-2 px-1">
@@ -118,23 +190,32 @@ function BreakoutTable({ rows, onRowClick }: BreakoutTableProps) {
     );
   }
 
+  const getSortIndicator = (column: SortColumn) => {
+    if (sortColumn !== column) return '';
+    return sortDirection === 'asc' ? ' ▲' : ' ▼';
+  };
+
   return (
     <div className="overflow-auto">
       <table className="w-full border-collapse text-[10px] min-w-[640px]">
         <thead className="sticky top-0 bg-terminal-bg z-10">
           <tr className="text-[9px] text-white/60 uppercase border-b border-terminal-gray/60">
-            <th className="text-left pb-1 font-normal pr-2 whitespace-nowrap">Symbol</th>
-            <th className="text-left pb-1 font-normal pr-2 whitespace-nowrap">Name</th>
-            <th className="text-right pb-1 font-normal pr-2 whitespace-nowrap">LTP</th>
-            <th className="text-right pb-1 font-normal pr-2 whitespace-nowrap">Change</th>
-            <th className="text-right pb-1 font-normal pr-2 whitespace-nowrap">Change %</th>
-            <th className="text-right pb-1 font-normal pr-2 whitespace-nowrap">New 52W</th>
-            <th className="text-right pb-1 font-normal pr-2 whitespace-nowrap">Prev 52W</th>
-            <th className="text-right pb-1 font-normal whitespace-nowrap">Prev HL Date</th>
+            {COLUMNS.map((col) => (
+              <th
+                key={col.key}
+                onClick={() => handleHeaderClick(col.key)}
+                className={`pb-1 font-normal pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
+                  col.textAlign === 'left' ? 'text-left' : 'text-right'
+                }`}
+              >
+                {col.label}
+                {getSortIndicator(col.key)}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {sortedRows.map((row) => (
             <tr
               key={row.symbol}
               onClick={() => onRowClick(row)}
