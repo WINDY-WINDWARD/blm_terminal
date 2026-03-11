@@ -521,6 +521,26 @@ Sample item (first):
 }
 
 ============================================================
+  GET /api/market/volume-gainers
+============================================================
+Status: 200
+Top-level keys: ['data', 'timestamp']
+data: List of 25 items
+Sample item (first):
+{
+  "symbol": "GSEC10ABSL",
+  "companyName": "AdityaBirlaSunLifeMF - Aditya Birla Sun Life CRISIL 10 Year Gilt ETF",
+  "volume": 64363,
+  "week1AvgVolume": 10866,
+  "week1volChange": 5.923338855144487,
+  "week2AvgVolume": 6624,
+  "week2volChange": 9.716343105582562,
+  "ltp": 111.29,
+  "pChange": -0.12,
+  "turnover": 71.13398
+}
+
+============================================================
   GET /api/screener/search
 ============================================================
 Status: 200

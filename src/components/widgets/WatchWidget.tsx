@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { activeSymbolAtom, activeExchangeAtom, tickDataAtom, watchlistColumnsAtom } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
@@ -259,40 +259,6 @@ async function removeSymbol(id: number): Promise<void> {
   if (!res.ok) throw new Error('Failed to remove symbol');
 }
 
-function useSymbolData(symbol: string) {
-  return useQuery<SymbolQuote | null>({
-    queryKey: ['market/symbol-data', symbol],
-    queryFn: async () => {
-      const res = await fetch(`/api/py/market/symbol-data/${encodeURIComponent(symbol)}`);
-      if (!res.ok) return null;
-      const payload = (await res.json()) as NseSymbolData;
-      const equity = payload.equityResponse?.[0];
-      const ltp = equity?.orderBook?.lastPrice ?? equity?.tradeInfo?.lastPrice ?? 0;
-      const pChange = equity?.metaData?.pChange ?? 0;
-      const yearHigh = equity?.priceInfo?.yearHigh;
-      const yearLow = equity?.priceInfo?.yearLow;
-      if (!ltp) return null;
-      return { ltp, pChange, yearHigh, yearLow };
-    },
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-    enabled: !!symbol,
-  });
-}
-
-function useChangeRanges(symbol: string) {
-  return useQuery<ChangeRanges | null>({
-    queryKey: ['market/change-ranges', symbol],
-    queryFn: async () => {
-      const res = await fetch(`/api/py/market/change-ranges/${encodeURIComponent(symbol)}`);
-      if (!res.ok) return null;
-      return res.json() as Promise<ChangeRanges>;
-    },
-    staleTime: 300_000,
-    enabled: !!symbol,
-  });
-}
-
 export function WatchWidget() {
   const qc = useQueryClient();
   const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
@@ -315,21 +281,45 @@ export function WatchWidget() {
     staleTime: Infinity,
   });
 
-  // Fetch data for all symbols in parallel
-  const symbolQueries = watchlist.map((item) => ({
-    ...useSymbolData(item.symbol),
-    symbol: item.symbol,
-  }));
+  // Fetch data for all symbols in parallel using useQueries
+  const symbolQueries = useQueries({
+    queries: watchlist.map((item) => ({
+      queryKey: ['market/symbol-data', item.symbol],
+      queryFn: async () => {
+        const res = await fetch(`/api/py/market/symbol-data/${encodeURIComponent(item.symbol)}`);
+        if (!res.ok) return null;
+        const payload = (await res.json()) as NseSymbolData;
+        const equity = payload.equityResponse?.[0];
+        const ltp = equity?.orderBook?.lastPrice ?? equity?.tradeInfo?.lastPrice ?? 0;
+        const pChange = equity?.metaData?.pChange ?? 0;
+        const yearHigh = equity?.priceInfo?.yearHigh;
+        const yearLow = equity?.priceInfo?.yearLow;
+        if (!ltp) return null;
+        return { ltp, pChange, yearHigh, yearLow };
+      },
+      staleTime: 60_000,
+      refetchInterval: 60_000,
+      enabled: !!item.symbol,
+    })),
+  });
 
-  const rangeQueries = watchlist.map((item) => ({
-    ...useChangeRanges(item.symbol),
-    symbol: item.symbol,
-  }));
+  const rangeQueries = useQueries({
+    queries: watchlist.map((item) => ({
+      queryKey: ['market/change-ranges', item.symbol],
+      queryFn: async () => {
+        const res = await fetch(`/api/py/market/change-ranges/${encodeURIComponent(item.symbol)}`);
+        if (!res.ok) return null;
+        return res.json() as Promise<ChangeRanges>;
+      },
+      staleTime: 300_000,
+      enabled: !!item.symbol,
+    })),
+  });
 
   // Build derived row data
-  const rowDataList: WatchRowData[] = watchlist.map((item) => {
-    const quote = symbolQueries.find((q) => q.symbol === item.symbol);
-    const ranges = rangeQueries.find((q) => q.symbol === item.symbol);
+  const rowDataList: WatchRowData[] = watchlist.map((item, idx) => {
+    const quote = symbolQueries[idx];
+    const ranges = rangeQueries[idx];
 
     return {
       item,

@@ -189,6 +189,29 @@ class NSEClient:
 
         return payload
 
+    def get_volume_gainers(self) -> dict:
+        """Fetch volume gainers snapshot from NSE India."""
+        url = "https://www.nseindia.com/api/live-analysis-volume-gainers"
+
+        logger.debug("NSE GET %s", url)
+        t0 = time.perf_counter()
+        try:
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE request failed: GET %s", url)
+            raise
+
+        payload = resp.json()
+        if not isinstance(payload, dict) or "data" not in payload:
+            raise ValueError(
+                f"Unexpected response format from live-analysis-volume-gainers: {payload!r}"
+            )
+
+        return payload
+
     def get_largedeal_snapshot(self) -> dict:
         """Fetch the full largedeal snapshot (bulk/short/block) from NSE India.
 

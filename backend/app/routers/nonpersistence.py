@@ -86,6 +86,8 @@ def _ttl_for_key(key: str) -> float:
         return _SYMBOL_DATA_TTL
     if key in {"52week_low", "52week_high"}:
         return _FIFTY_TWO_WEEK_TTL
+    if key == "volume_gainers":
+        return _VOLUME_GAINERS_TTL
     # Bulk/block deals and largedeal snapshot use the default cache TTL.
     return CACHE_TTL_SECONDS
 
@@ -272,6 +274,7 @@ _CHANGE_RANGES_TTL: float = 300.0  # 5 minutes
 
 _SYMBOL_DATA_TTL: float = 60.0  # 1 minute
 _FIFTY_TWO_WEEK_TTL: float = 3 * 60 * 60.0  # 3 hours
+_VOLUME_GAINERS_TTL: float = 25 * 60.0  # 25 minutes
 
 
 @router.get(
@@ -360,6 +363,28 @@ async def fifty_two_week_high() -> JSONResponse:
         return JSONResponse(content=cached)
 
     data = await _throttled_call(nse_client.get_52week_high_stocks)
+    data = _clean_nan(data)
+    _cache_set(cache_key, data)
+    return JSONResponse(content=data)
+
+
+@router.get(
+    "/volume-gainers",
+    summary="Volume gainers snapshot from NSE",
+    response_class=JSONResponse,
+)
+async def volume_gainers() -> JSONResponse:
+    """Return NSE volume gainers snapshot.
+
+    Results are cached for 25 minutes to reduce repeated upstream calls.
+    """
+    cache_key = "volume_gainers"
+    cached = _cache_get(cache_key, ttl=_VOLUME_GAINERS_TTL)
+    if cached is not None:
+        logger.debug("Cache hit for %s", cache_key)
+        return JSONResponse(content=cached)
+
+    data = await _throttled_call(nse_client.get_volume_gainers)
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)

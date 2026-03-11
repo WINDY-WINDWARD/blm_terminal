@@ -555,6 +555,64 @@ class TestMarket52WeekLowHigh:
             assert isinstance(data["timestamp"], str)
 
 
+@pytest.mark.slow
+class TestMarketVolumeGainers:
+    @pytest.fixture(autouse=True)
+    def delay(self):
+        time.sleep(NSE_COURTESY_DELAY)
+
+    # ------------------------------------------------------------------
+    # Shared helper: fetch once and skip if NSE is unreachable.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch() -> requests.Response:
+        resp = get("/api/market/volume-gainers")
+        if resp.status_code == 500:
+            pytest.skip("NSE volume-gainers upstream not reachable (500)")
+        return resp
+
+    # ------------------------------------------------------------------
+    # Tests
+    # ------------------------------------------------------------------
+
+    def test_returns_200_or_500(self):
+        resp = get("/api/market/volume-gainers")
+        assert resp.status_code in (200, 500), (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+
+    def test_content_type_json(self):
+        resp = self._fetch()
+        assert "application/json" in resp.headers.get("content-type", "")
+
+    def test_response_is_dict(self):
+        """Top-level response should be a dict."""
+        resp = self._fetch()
+        assert isinstance(resp.json(), dict)
+
+    def test_response_has_data_array(self):
+        """Response must have 'data' key containing a list."""
+        data = self._fetch().json()
+        assert "data" in data
+        assert isinstance(data["data"], list)
+
+    def test_data_items_have_expected_fields(self):
+        """If data is non-empty, items should have core fields."""
+        data = self._fetch().json()
+        if data["data"]:
+            first = data["data"][0]
+            assert isinstance(first, dict)
+            for key in ("symbol", "volume", "ltp", "pChange"):
+                assert key in first, f"Expected field '{key}' in item"
+
+    def test_response_has_timestamp(self):
+        """Response should have optional 'timestamp' field as string if present."""
+        data = self._fetch().json()
+        if "timestamp" in data:
+            assert isinstance(data["timestamp"], str)
+
+
 # ---------------------------------------------------------------------------
 # /api/screener/...
 # ---------------------------------------------------------------------------

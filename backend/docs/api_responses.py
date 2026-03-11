@@ -273,6 +273,21 @@ def main():
     else:
         out.print_json(body)
 
+    # Market - Volume Gainers
+    out.print_section("GET /api/market/volume-gainers")
+    status, body = get("/api/market/volume-gainers")
+    out.write(f"Status: {status}")
+    if isinstance(body, dict):
+        out.write(f"Top-level keys: {list(body.keys())}")
+        data_field = body.get("data")
+        if isinstance(data_field, list):
+            out.write(f"data: List of {len(data_field)} items")
+            if data_field:
+                out.write("Sample item (first):")
+                out.print_json(data_field[0])
+    else:
+        out.print_json(body)
+
     # Screener - Search
     out.print_section("GET /api/screener/search")
     status, body = get("/api/screener/search?q=reliance")
