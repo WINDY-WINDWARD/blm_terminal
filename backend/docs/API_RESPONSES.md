@@ -14,22 +14,22 @@ Status: 200
   GET /api/stockuniverse
 ============================================================
 Status: 200
-Response: List of 2269 items
+Response: List of 2253 items
 Sample item (first):
 {
   "symbol": "20MICRONS",
   "companyName": "20 Microns Limited",
   "segment": "EQUITY",
   "industry": "Industrial Minerals",
-  "sectorPE": 9.13,
-  "symbolPE": 9.19,
+  "sectorPE": 8.86,
+  "symbolPE": 8.91,
   "industryInfo": {
     "macro": "Commodities",
     "sector": "Metals & Mining",
     "industry": "Minerals & Mining",
     "basicIndustry": "Industrial Minerals"
   },
-  "lastUpdateTime": "2026-03-05T16:00:00",
+  "lastUpdateTime": "2026-03-10T14:31:25",
   "screenerTradesId": null
 }
 
@@ -42,15 +42,15 @@ Status: 200
   "companyName": "Reliance Industries Limited",
   "segment": "EQUITY",
   "industry": "Refineries & Marketing",
-  "sectorPE": 18.68,
-  "symbolPE": 18.68,
+  "sectorPE": 19.78,
+  "symbolPE": 19.78,
   "industryInfo": {
     "macro": "Energy",
     "sector": "Oil Gas & Consumable Fuels",
     "industry": "Petroleum Products",
     "basicIndustry": "Refineries & Marketing"
   },
-  "lastUpdateTime": "2026-03-05T16:00:00",
+  "lastUpdateTime": "2026-03-10T16:00:00",
   "screenerTradesId": "2726"
 }
 
@@ -73,7 +73,7 @@ Sample item (first):
     "industry": "Telecom - Services",
     "basicIndustry": "Telecom - Cellular & Fixed line services"
   },
-  "lastUpdateTime": "2026-03-05T16:00:00",
+  "lastUpdateTime": "2026-03-10T16:00:00",
   "screenerTradesId": null
 }
 
@@ -155,36 +155,35 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "DMART",
+  "symbol": "PREMIERENE",
   "identifier": "",
   "series": "EQ",
-  "open": "3866.9",
-  "dayHigh": "3982",
-  "dayLow": "3814.5",
-  "lastPrice": "3967.1",
-  "previousClose": "3875.8",
-  "change": 91.3,
-  "pChange": 2.36,
-  "totalTradedVolume": 933615,
-  "totalTradedValue": 3647568451.95,
-  "yearHigh": "4949.5",
-  "yearLow": "3475",
-  "nearWKH": 19.84846954237802,
-  "nearWKL": -14.161151079136689,
-  "perChange365d": 10.37,
-  "perChange30d": 1.96,
-  "date365dAgo": "07-Mar-2025",
+  "open": "749",
+  "dayHigh": "795",
+  "dayLow": "747.75",
+  "lastPrice": "785",
+  "previousClose": "747.75",
+  "change": 37.25,
+  "pChange": 4.98,
+  "totalTradedVolume": 5224183,
+  "totalTradedValue": 4071623746.54,
+  "yearHigh": "1163.9",
+  "yearLow": "660",
+  "nearWKH": 32.55434315662858,
+  "nearWKL": -18.939393939393938,
+  "perChange365d": -12.16,
+  "perChange30d": -0.94,
+  "date365dAgo": "10-Mar-2025",
   "date30dAgo": "06-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/DMARTEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/DMART-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/DMART-EQ.svg",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/PREMIERENEEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/PREMIERENE-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/PREMIERENE-EQ.svg",
   "meta": {
-    "symbol": "DMART",
-    "companyName": "Avenue Supermarts Limited",
-    "industry": "Diversified Retail",
+    "symbol": "PREMIERENE",
+    "companyName": "Premier Energies Limited",
+    "industry": "Other Electrical Equipment",
     "activeSeries": [
-      "EQ",
-      "T0"
+      "EQ"
     ],
     "debtSeries": [],
     "isFNOSec": true,
@@ -195,15 +194,15 @@ Sample item (first):
     "tempSuspendedSeries": [],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE192R01011",
-    "slb_isin": "INE192R01011",
-    "listingDate": "2017-03-21",
+    "isin": "INE0BS701011",
+    "slb_isin": "INE0BS701011",
+    "listingDate": "2024-09-03",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "09-Mar-2026 16:00:00",
-      "preOpenTime": "09-Mar-2026 09:07:13",
+      "equityTime": "11-Mar-2026 16:00:00",
+      "preOpenTime": "11-Mar-2026 09:07:27",
       "QuotePreOpenFlag": false
     }
   }
@@ -216,33 +215,33 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "PGEL",
+  "symbol": "COLPAL",
   "identifier": "",
   "series": "EQ",
-  "open": "599",
-  "dayHigh": "599",
-  "dayLow": "517.5",
-  "lastPrice": "519.6",
-  "previousClose": "609.25",
-  "change": -89.65,
-  "pChange": -14.71,
-  "totalTradedVolume": 11304952,
-  "totalTradedValue": 6110552655.04,
-  "yearHigh": "1008",
-  "yearLow": "465",
-  "nearWKH": 48.45238095238095,
-  "nearWKL": -11.741935483870972,
-  "perChange365d": -40.44,
-  "perChange30d": -10.69,
-  "date365dAgo": "07-Mar-2025",
+  "open": "2198.3",
+  "dayHigh": "2198.3",
+  "dayLow": "2046",
+  "lastPrice": "2051",
+  "previousClose": "2198.3",
+  "change": -147.3,
+  "pChange": -6.7,
+  "totalTradedVolume": 1659346,
+  "totalTradedValue": 3470721280.52,
+  "yearHigh": "2747.4",
+  "yearLow": "2029.4",
+  "nearWKH": 25.34760136856665,
+  "nearWKL": -1.0643539962550461,
+  "perChange365d": -15.77,
+  "perChange30d": -3.64,
+  "date365dAgo": "10-Mar-2025",
   "date30dAgo": "06-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/PGELEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/PGEL-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/PGEL-EQ.svg",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/COLPALEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/COLPAL-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/COLPAL-EQ.svg",
   "meta": {
-    "symbol": "PGEL",
-    "companyName": "PG Electroplast Limited",
-    "industry": "Consumer Electronics",
+    "symbol": "COLPAL",
+    "companyName": "Colgate Palmolive (India) Limited",
+    "industry": "Personal Care",
     "activeSeries": [
       "EQ",
       "T0"
@@ -256,15 +255,15 @@ Sample item (first):
     "tempSuspendedSeries": [],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE457L01029",
-    "slb_isin": "INE457L01029",
-    "listingDate": "2011-09-26",
+    "isin": "INE259A01022",
+    "slb_isin": "INE259A01022",
+    "listingDate": "2007-12-17",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "09-Mar-2026 16:00:00",
-      "preOpenTime": "09-Mar-2026 09:07:13",
+      "equityTime": "11-Mar-2026 16:00:00",
+      "preOpenTime": "11-Mar-2026 09:07:27",
       "QuotePreOpenFlag": false
     }
   }
@@ -286,15 +285,15 @@ Response: List of 0 items
   GET /api/market/high-short-interest
 ============================================================
 Status: 200
-Response: List of 68 items
+Response: List of 91 items
 Sample item (first):
 {
-  "date": "06-Mar-2026",
-  "symbol": "ADANIENSOL",
-  "name": "ADANI ENERGY SOLUTION LTD",
+  "date": "10-Mar-2026",
+  "symbol": "ABB",
+  "name": "ABB LTD.",
   "clientName": null,
   "buySell": null,
-  "qty": "5",
+  "qty": "50",
   "watp": null,
   "remarks": null
 }
@@ -304,15 +303,15 @@ Sample item (first):
 ============================================================
 Status: 200
 {
-  "oneDayPercent": -9.96,
-  "oneWeekPercent": 4.46,
-  "oneMonthPercent": -2.94,
-  "threeMonthPercent": -7.24,
-  "sixMonthPercent": 3.08,
-  "oneYearPercent": 13.51,
-  "twoYearPercent": -4.08,
-  "threeYearPercent": 20.26,
-  "fiveYearPercent": 29.49
+  "oneDayPercent": -11.98,
+  "oneWeekPercent": 3.11,
+  "oneMonthPercent": -5.58,
+  "threeMonthPercent": -10.24,
+  "sixMonthPercent": 0.25,
+  "oneYearPercent": 11.18,
+  "twoYearPercent": -5.44,
+  "threeYearPercent": 19.41,
+  "fiveYearPercent": 27.12
 }
 
 ============================================================
@@ -343,7 +342,7 @@ Status: 200
         "sellQuantity4": 0,
         "sellPrice5": 0,
         "sellQuantity5": 0,
-        "lastPrice": 1418.6,
+        "lastPrice": 1386.8,
         "totalBuyQuantity": 0,
         "totalSellQuantity": 0,
         "perBuyQty": 0,
@@ -356,15 +355,15 @@ Status: 200
         "symbol": "RELIANCE",
         "series": "EQ",
         "marketType": "N",
-        "open": 1375,
-        "dayHigh": 1429.4,
-        "dayLow": 1370,
-        "previousClose": 1404.8,
-        "averagePrice": 1404.07,
-        "change": 13.8,
-        "pChange": 0.98,
-        "basePrice": 1404.8,
-        "closePrice": 1424,
+        "open": 1424.9,
+        "dayHigh": 1434,
+        "dayLow": 1383.6,
+        "previousClose": 1408.8,
+        "averagePrice": 1402.94,
+        "change": -22,
+        "pChange": -1.56,
+        "basePrice": 1408.8,
+        "closePrice": 1390.2,
         "indicativeClose": 0,
         "ic_change": 0,
         "ic_pchange": 0,
@@ -376,29 +375,29 @@ Status: 200
         "ieq": 0
       },
       "tradeInfo": {
-        "totalTradedVolume": 24870822,
-        "totalTradedValue": 34920375045.54,
+        "totalTradedVolume": 21848087,
+        "totalTradedValue": 30651555175.78,
         "series": "EQ",
-        "lastPrice": 1418.6,
+        "lastPrice": 1386.8,
         "issuedSize": 13532472634,
-        "basePrice": 1404.8,
-        "ffmc": 9551684163543.4,
+        "basePrice": 1408.8,
+        "ffmc": 9337569151277.31,
         "faceValue": 10,
         "impactCost": 0.01,
-        "deliveryToTradedQuantity": 47.14,
+        "deliveryToTradedQuantity": 45.03,
         "applicableMargin": 12.5,
         "marketLot": null,
-        "quantitytraded": 24870822,
-        "deliveryquantity": 11723015,
-        "totalMarketCap": 19197165678592.4,
-        "secwisedelposdate": "09-Mar-2026 00:00:00"
+        "quantitytraded": 21848087,
+        "deliveryquantity": 9837323,
+        "totalMarketCap": 18766833048831.2,
+        "secwisedelposdate": "11-Mar-2026 00:00:00"
       },
       "priceInfo": {
         "yearHightDt": "05-Jan-2026 00:00:00",
         "yearLowDt": "07-Apr-2025 00:00:00",
         "yearHigh": 1611.8,
         "yearLow": 1114.85,
-        "priceBand": "1281.60-1566.40",
+        "priceBand": "1268.00-1549.60",
         "cmDailyVolatility": "1.32",
         "cmAnnualVolatility": "25.22",
         "tickSize": 0.1,
@@ -410,14 +409,14 @@ Status: 200
         "secStatus": "Listed",
         "listingDate": "29-Nov-1995 00:00:00",
         "pdSectorInd": "NIFTY 500                                         ",
-        "pdSectorPe": "19.51",
-        "pdSymbolPe": "19.51",
+        "pdSectorPe": "19.57",
+        "pdSymbolPe": "19.57",
         "isSuspended": "Active",
         "basicIndustry": "Refineries & Marketing",
         "index": "Nifty 50",
-        "deliveryQuantity": "11723015",
-        "deliveryTotradedQuantity": "47.14",
-        "securityvar": "8.23",
+        "deliveryQuantity": "9837323",
+        "deliveryTotradedQuantity": "45.03",
+        "securityvar": "8.22",
         "indexvar": "0",
         "extremelossMargin": "3.5",
         "varMargin": "9",
@@ -476,9 +475,49 @@ Status: 200
         "nameOfComplianceOfficer": null,
         "sddcompliance": null
       },
-      "lastUpdateTime": "09-Mar-2026 16:00:00"
+      "lastUpdateTime": "11-Mar-2026 16:00:00"
     }
   ]
+}
+
+============================================================
+  GET /api/market/52week-low
+============================================================
+Status: 200
+Top-level keys: ['data', 'low', 'timestamp']
+data: List of 140 items
+Sample item (first):
+{
+  "symbol": "ABSLLIQUID",
+  "series": "EQ",
+  "comapnyName": "Aditya Birla Sun Life CRISIL Liquid Overnight ETF",
+  "new52WHL": 999.99,
+  "prev52WHL": 999.99,
+  "prevHLDate": "10-Mar-2026",
+  "ltp": 999.99,
+  "prevClose": "999.99",
+  "change": 0,
+  "pChange": 0
+}
+
+============================================================
+  GET /api/market/52week-high
+============================================================
+Status: 200
+Top-level keys: ['high', 'data', 'timestamp']
+data: List of 32 items
+Sample item (first):
+{
+  "symbol": "ABB",
+  "series": "EQ",
+  "comapnyName": "ABB India Limited",
+  "new52WHL": 6325,
+  "prev52WHL": 6260,
+  "prevHLDate": "10-Jun-2025",
+  "ltp": 6268.5,
+  "prevClose": "6224.5",
+  "change": 44,
+  "pChange": 0.7068840870752671
 }
 
 ============================================================
@@ -502,12 +541,12 @@ Status: 200
   "name": "Reliance Industries Ltd",
   "screener_warehouse_id": "6598251",
   "ratios": {
-    "market_cap": "19,26,475 Cr.",
-    "price": "1,424",
-    "pe": "25.1",
+    "market_cap": "18,80,950 Cr.",
+    "price": "1,390",
+    "pe": "24.5",
     "book_value": "648",
-    "dividend_yield": "0.39 %",
-    "roce": "9.69 %",
+    "dividend_yield": "0.40 %",
+    "roce": "9.69%",
     "roe": "8.40 %",
     "face_value": "10.0",
     "high_52w": "1,612",
@@ -521,7 +560,14 @@ Status: 200
     "total_assets": "20,38,946Cr.",
     "ebit": "1,42,777Cr.",
     "working_capital": "46,670Cr.",
-    "sales": "10,24,548Cr."
+    "sales": "10,24,548Cr.",
+    "return_on_equity": "8.40%",
+    "debt_to_equity": "0.43",
+    "sales_growth": "9.01%",
+    "profit_growth": "10.9%",
+    "sales_growth_5years": "10.0%",
+    "profit_var_5yrs": "9.93%",
+    "change_in_prom_hold": "0.00%"
   },
   "quarters": [
     {
@@ -610,21 +656,19 @@ Sample record (first):
 ============================================================
 Status: 200
 {
-  "status": "ready",
-  "model": "gemma-2-9b"
+  "status": "unconfigured",
+  "model": null
 }
 
 ============================================================
   POST /api/ai/summarize
 ============================================================
 Using data from: GET /api/corporatefilings/RELIANCE
-Status: 200
-Response: JSON with summary
+Status: 503
+Response: Model still loading (503 Service Unavailable)
 {
-  "summary": "## Quarterly Financial Statement Analysis - [Company Name]\n\n**Opening Statement:** This looks like a standard quarterly financial statement for [Company Name], covering the period ended December 31, 2024. The report provides key financial data including revenue, expenses, profitability, and basic earnings per share.\n\n**Executive Summary:**  [Company Name] reported **Total Income of \u20b913,147,400** for the quarter ended December 31, 2024. This represents a **QoQ decrease of -4.0%** compared to the previous quarter's \u20b913,785,500.  Profit After Tax (PAT) stood at **\u20b9872,100**, indicating a **QoQ decline of -10.6%**.\n\n**Section 1: Revenue & Income Trends:**\n\n| Metric | Q4 2024 | Q3 2024 | Q2 2024 | Q1 2024 | Q4 2023 |\n|---|---|---|---|---|---|\n| **Revenue from Operations** | \u20b912,826,000 | \u20b913,405,400 | \u20b913,433,100 | \u20b915,101,400 | \u20b913,057,900 |\n| **YoY Change (Revenue from Operations)** |  -12.4% | -12.4% | -12.4% | -12.4% | \n| **QoQ Change (Revenue from Operations)** | -4.0% | 0.2% | 0.2% | 0.2% |\n\n**Section 2: Expense Analysis:**\n\n*  The largest expense category was **Other Expenses**, accounting for **\u20b91,948,600** in Q4 2024. This represents a **QoQ increase of 1.7%**.\n* **Employee Benefits Expense** also saw a notable rise, increasing by **3.7% QoQ** to \u20b9218,100.\n*  **Finance Costs** decreased by **-10.6% QoQ** to \u20b9237,100.\n\n**Section 3: Profitability & Margins:**\n\n| Metric | Q4 2024 | Q3 2024 |\n|---|---|---|\n| **PBT (Profit Before Tax)** | \u20b91,159,700 | \u20b91,021,400 |\n| **Net Profit (PAT)** | \u20b9872,100 | \u20b9771,300 |\n| **Basic EPS** | \u20b96.44 | \u20b911.4 |\n\n*Note: This analysis does not include details on specific tax impacts or one-off items that may have affected the reported figures.*\n\n\n**Section 4: Key Financial Ratios:**\n\n* **EBITDA Margin:**  (To be calculated based on provided data)\n* **Net Profit Margin:** (To be calculated based on provided data)\n\nThe company's efficiency can be further assessed by analyzing its working capital management, inventory turnover, and days sales outstanding.\n\n\n**Section 5: Investor Perspective:**\n\n* **YoY Growth:** Revenue grew by -12.4% year-on-year, indicating a challenging operating environment.\n* **Changes in Equity Base/Share Capital:** The paid-up equity share capital remained stable at \u20b91,353,200.\n* **Debt Position:**  The company's debt position is not readily apparent from the provided data. Further analysis of the \"Details of Debt Securities\" section would be required to assess its leverage.\n\n**Closing:** I can provide you with specific growth percentages for different line items or compare these figures against industry benchmarks and competitors upon request. Please let me know if you have any further questions or require additional analysis.",
-  "input_tokens": 2352,
-  "output_tokens": 861,
-  "model": "google/gemma-2-9b"
+  "_error": "Upstream error",
+  "_status": 503
 }
 
 ============================================================

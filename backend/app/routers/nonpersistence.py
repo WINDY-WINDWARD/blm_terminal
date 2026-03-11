@@ -72,10 +72,32 @@ def _cache_set(key: str, data: object) -> None:
     _cache[key] = (time.monotonic(), data)
 
 
+def _ttl_for_key(key: str) -> float:
+    """Return the TTL to use for a given cache *key*.
+
+    Keys can have different lifetimes; fall back to the default TTL when no
+    specific mapping is defined.
+    """
+    # Import-time references are resolved at call time, after all globals
+    # (including per-endpoint TTLs) have been defined.
+    if key.startswith("change_ranges:"):
+        return _CHANGE_RANGES_TTL
+    if key.startswith("symbol_data:"):
+        return _SYMBOL_DATA_TTL
+    if key in {"52week_low", "52week_high"}:
+        return _FIFTY_TWO_WEEK_TTL
+    # Bulk/block deals and largedeal snapshot use the default cache TTL.
+    return CACHE_TTL_SECONDS
+
+
 def _cache_evict_expired() -> None:
     """Remove all entries whose TTL has elapsed."""
     now = time.monotonic()
-    expired = [k for k, (t, _) in _cache.items() if now - t >= CACHE_TTL_SECONDS]
+    expired: list[str] = []
+    for k, (t, _) in list(_cache.items()):
+        ttl = _ttl_for_key(k)
+        if now - t >= ttl:
+            expired.append(k)
     for k in expired:
         del _cache[k]
     if expired:
@@ -249,6 +271,7 @@ async def largedeal_snapshot() -> JSONResponse:
 _CHANGE_RANGES_TTL: float = 300.0  # 5 minutes
 
 _SYMBOL_DATA_TTL: float = 60.0  # 1 minute
+_FIFTY_TWO_WEEK_TTL: float = 3 * 60 * 60.0  # 3 hours
 
 
 @router.get(
@@ -293,6 +316,50 @@ async def symbol_data(symbol: str) -> JSONResponse:
         return JSONResponse(content=cached)
 
     data = await _throttled_call(nse_client.get_symbol_data, symbol.upper())
+    data = _clean_nan(data)
+    _cache_set(cache_key, data)
+    return JSONResponse(content=data)
+
+
+@router.get(
+    "/52week-low",
+    summary="52-week low stocks snapshot from NSE",
+    response_class=JSONResponse,
+)
+async def fifty_two_week_low() -> JSONResponse:
+    """Return NSE 52-week low stocks snapshot.
+
+    Results are cached for 3 hours to reduce repeated upstream calls.
+    """
+    cache_key = "52week_low"
+    cached = _cache_get(cache_key, ttl=_FIFTY_TWO_WEEK_TTL)
+    if cached is not None:
+        logger.debug("Cache hit for %s", cache_key)
+        return JSONResponse(content=cached)
+
+    data = await _throttled_call(nse_client.get_52week_low_stocks)
+    data = _clean_nan(data)
+    _cache_set(cache_key, data)
+    return JSONResponse(content=data)
+
+
+@router.get(
+    "/52week-high",
+    summary="52-week high stocks snapshot from NSE",
+    response_class=JSONResponse,
+)
+async def fifty_two_week_high() -> JSONResponse:
+    """Return NSE 52-week high stocks snapshot.
+
+    Results are cached for 3 hours to reduce repeated upstream calls.
+    """
+    cache_key = "52week_high"
+    cached = _cache_get(cache_key, ttl=_FIFTY_TWO_WEEK_TTL)
+    if cached is not None:
+        logger.debug("Cache hit for %s", cache_key)
+        return JSONResponse(content=cached)
+
+    data = await _throttled_call(nse_client.get_52week_high_stocks)
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return JSONResponse(content=data)

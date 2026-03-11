@@ -243,6 +243,36 @@ def main():
     out.write(f"Status: {status}")
     out.print_json(body)
 
+    # Market - 52 Week Low
+    out.print_section("GET /api/market/52week-low")
+    status, body = get("/api/market/52week-low")
+    out.write(f"Status: {status}")
+    if isinstance(body, dict):
+        out.write(f"Top-level keys: {list(body.keys())}")
+        data_field = body.get("data")
+        if isinstance(data_field, list):
+            out.write(f"data: List of {len(data_field)} items")
+            if data_field:
+                out.write("Sample item (first):")
+                out.print_json(data_field[0])
+    else:
+        out.print_json(body)
+
+    # Market - 52 Week High
+    out.print_section("GET /api/market/52week-high")
+    status, body = get("/api/market/52week-high")
+    out.write(f"Status: {status}")
+    if isinstance(body, dict):
+        out.write(f"Top-level keys: {list(body.keys())}")
+        data_field = body.get("data")
+        if isinstance(data_field, list):
+            out.write(f"data: List of {len(data_field)} items")
+            if data_field:
+                out.write("Sample item (first):")
+                out.print_json(data_field[0])
+    else:
+        out.print_json(body)
+
     # Screener - Search
     out.print_section("GET /api/screener/search")
     status, body = get("/api/screener/search?q=reliance")

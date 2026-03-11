@@ -112,6 +112,8 @@ These endpoints live under `/api/market` and are intended for short-lived snapsh
 - `GET /api/market/bulk-deals/{symbol}` — bulk deals for `{symbol}` (JSON array)
 - `GET /api/market/block-deals/{symbol}` — block deals for `{symbol}` (JSON array)
 - `GET /api/market/high-short-interest` — stocks with high short interest (JSON array)
+ - `GET /api/market/52week-low` — 52-week low stocks snapshot (JSON object, cached 3h)
+ - `GET /api/market/52week-high` — 52-week high stocks snapshot (JSON object, cached 3h)
 
 Examples:
 

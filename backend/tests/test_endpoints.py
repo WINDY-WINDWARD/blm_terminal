@@ -466,6 +466,95 @@ class TestMarketSymbolData:
         )
 
 
+@pytest.mark.slow
+class TestMarket52WeekLowHigh:
+    @pytest.fixture(autouse=True)
+    def delay(self):
+        time.sleep(NSE_COURTESY_DELAY)
+
+    # ------------------------------------------------------------------
+    # Shared helpers: fetch once and skip if NSE is unreachable.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fetch_low() -> requests.Response:
+        resp = get("/api/market/52week-low")
+        if resp.status_code == 500:
+            pytest.skip("NSE 52week-low upstream not reachable (500)")
+        return resp
+
+    @staticmethod
+    def _fetch_high() -> requests.Response:
+        resp = get("/api/market/52week-high")
+        if resp.status_code == 500:
+            pytest.skip("NSE 52week-high upstream not reachable (500)")
+        return resp
+
+    # ------------------------------------------------------------------
+    # Status / content-type
+    # ------------------------------------------------------------------
+
+    def test_low_returns_200_or_500(self):
+        resp = get("/api/market/52week-low")
+        assert resp.status_code in (200, 500), (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+
+    def test_high_returns_200_or_500(self):
+        resp = get("/api/market/52week-high")
+        assert resp.status_code in (200, 500), (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+
+    def test_low_content_type_json(self):
+        resp = self._fetch_low()
+        assert "application/json" in resp.headers.get("content-type", "")
+
+    def test_high_content_type_json(self):
+        resp = self._fetch_high()
+        assert "application/json" in resp.headers.get("content-type", "")
+
+    # ------------------------------------------------------------------
+    # Shape & key checks
+    # ------------------------------------------------------------------
+
+    def test_low_response_has_expected_shape(self):
+        data = self._fetch_low().json()
+        assert isinstance(data, dict)
+        assert "data" in data
+        assert isinstance(data["data"], list)
+        if data["data"]:
+            first = data["data"][0]
+            assert isinstance(first, dict)
+            # Core fields we expect based on NSE sample payload
+            for key in ("symbol", "series", "ltp"):
+                assert key in first
+
+    def test_high_response_has_expected_shape(self):
+        data = self._fetch_high().json()
+        assert isinstance(data, dict)
+        assert "data" in data
+        assert isinstance(data["data"], list)
+        if data["data"]:
+            first = data["data"][0]
+            assert isinstance(first, dict)
+            for key in ("symbol", "series", "ltp"):
+                assert key in first
+
+    def test_low_metadata_fields_types(self):
+        """Check that optional metadata fields like 'low' and 'timestamp' have sane types."""
+        data = self._fetch_low().json()
+        if "low" in data:
+            assert isinstance(data["low"], int)
+        if "timestamp" in data:
+            assert isinstance(data["timestamp"], str)
+
+    def test_high_metadata_fields_types(self):
+        data = self._fetch_high().json()
+        if "timestamp" in data:
+            assert isinstance(data["timestamp"], str)
+
+
 # ---------------------------------------------------------------------------
 # /api/screener/...
 # ---------------------------------------------------------------------------

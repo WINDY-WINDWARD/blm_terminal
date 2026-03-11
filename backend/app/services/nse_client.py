@@ -143,6 +143,52 @@ class NSEClient:
             logger.exception("NSE: high short interest fetch failed")
             raise
 
+    def get_52week_low_stocks(self) -> dict:
+        """Fetch 52-week low stocks snapshot from NSE India."""
+        url = "https://www.nseindia.com/api/live-analysis-data-52weeklowstock"
+
+        logger.debug("NSE GET %s", url)
+        t0 = time.perf_counter()
+        try:
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE request failed: GET %s", url)
+            raise
+
+        payload = resp.json()
+        if not isinstance(payload, dict) or "data" not in payload:
+            raise ValueError(
+                f"Unexpected response format from live-analysis-data-52weeklowstock: {payload!r}"
+            )
+
+        return payload
+
+    def get_52week_high_stocks(self) -> dict:
+        """Fetch 52-week high stocks snapshot from NSE India."""
+        url = "https://www.nseindia.com/api/live-analysis-data-52weekhighstock"
+
+        logger.debug("NSE GET %s", url)
+        t0 = time.perf_counter()
+        try:
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE request failed: GET %s", url)
+            raise
+
+        payload = resp.json()
+        if not isinstance(payload, dict) or "data" not in payload:
+            raise ValueError(
+                f"Unexpected response format from live-analysis-data-52weekhighstock: {payload!r}"
+            )
+
+        return payload
+
     def get_largedeal_snapshot(self) -> dict:
         """Fetch the full largedeal snapshot (bulk/short/block) from NSE India.
 
