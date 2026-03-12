@@ -809,3 +809,102 @@ class TestScreenerQuarterly:
         company_data = company_resp.json()
         quarterly_data = quarterly_resp.json()
         assert company_data["symbol"] == quarterly_data["symbol"]
+
+
+# ---------------------------------------------------------------------------
+# /api/watchlist
+# ---------------------------------------------------------------------------
+
+
+class TestWatchlist:
+    """Tests for the watchlist CRUD endpoints."""
+
+    TEST_SYMBOL = "TCS"
+    TEST_EXCHANGE = "NSE"
+
+    def test_list_returns_200(self):
+        """GET /api/watchlist should return 200."""
+        resp = get("/api/watchlist")
+        assert resp.status_code == 200
+
+    def test_list_returns_list(self):
+        """GET /api/watchlist should return a list."""
+        resp = get("/api/watchlist")
+        data = resp.json()
+        assert isinstance(data, list)
+
+    def test_list_item_schema(self):
+        """Each item should have id, symbol, exchange, created_at."""
+        resp = get("/api/watchlist")
+        items = resp.json()
+        if not items:
+            pytest.skip("watchlist is empty")
+        required_keys = {"id", "symbol", "exchange", "created_at"}
+        for item in items:
+            assert required_keys.issubset(item.keys()), (
+                f"Missing keys in item: {set(item.keys())}"
+            )
+
+    def test_add_item_returns_201(self):
+        """POST /api/watchlist should create a new item and return 201."""
+        payload = {"symbol": self.TEST_SYMBOL, "exchange": self.TEST_EXCHANGE}
+        resp = requests.post(f"{BASE_URL}/api/watchlist", json=payload)
+        assert resp.status_code == 201, (
+            f"Unexpected status {resp.status_code}: {resp.text}"
+        )
+        data = resp.json()
+        assert data["symbol"] == self.TEST_SYMBOL
+        assert data["exchange"] == self.TEST_EXCHANGE
+
+    def test_add_item_idempotent(self):
+        """Adding the same symbol/exchange twice should return the existing item."""
+        payload = {"symbol": self.TEST_SYMBOL, "exchange": self.TEST_EXCHANGE}
+        resp1 = requests.post(f"{BASE_URL}/api/watchlist", json=payload)
+        assert resp1.status_code == 201
+        item1 = resp1.json()
+
+        resp2 = requests.post(f"{BASE_URL}/api/watchlist", json=payload)
+        assert resp2.status_code == 201
+        item2 = resp2.json()
+
+        # Should return the same item (idempotent)
+        assert item1["id"] == item2["id"]
+
+    def test_add_item_normalizes_input(self):
+        """Input symbol/exchange should be uppercased."""
+        payload = {"symbol": "tcs", "exchange": "nse"}
+        resp = requests.post(f"{BASE_URL}/api/watchlist", json=payload)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["symbol"] == "TCS"
+        assert data["exchange"] == "NSE"
+
+    def test_add_item_missing_fields_returns_422(self):
+        """Missing symbol or exchange should return 422."""
+        resp1 = requests.post(f"{BASE_URL}/api/watchlist", json={"symbol": "TCS"})
+        assert resp1.status_code == 422
+
+        resp2 = requests.post(f"{BASE_URL}/api/watchlist", json={"exchange": "NSE"})
+        assert resp2.status_code == 422
+
+        resp3 = requests.post(f"{BASE_URL}/api/watchlist", json={})
+        assert resp3.status_code == 422
+
+    def test_delete_item_returns_200(self):
+        """DELETE /api/watchlist/{id} should remove the item."""
+        # First add an item to delete
+        payload = {"symbol": "DELTEST", "exchange": "NSE"}
+        add_resp = requests.post(f"{BASE_URL}/api/watchlist", json=payload)
+        assert add_resp.status_code == 201
+        item_id = add_resp.json()["id"]
+
+        # Now delete it
+        resp = requests.delete(f"{BASE_URL}/api/watchlist/{item_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("ok") is True
+
+    def test_delete_nonexistent_returns_404(self):
+        """Deleting a non-existent ID should return 404."""
+        resp = requests.delete(f"{BASE_URL}/api/watchlist/999999")
+        assert resp.status_code == 404

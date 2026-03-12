@@ -18,6 +18,7 @@ from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models.corporatefilings import CorporateFiling
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
+from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.services.nse_client import nse_client
 from app.services.screener_client import _parse_all_quarters, screener_client
 
@@ -111,7 +112,7 @@ async def get_top_losers() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
-    """Return all bulk deals for a specific stock symbol on NSE India."""
+    """Return Recent bulk deals for a specific stock symbol on NSE India."""
     symbol = symbol.upper()
     cache_key = f"mcp_bulk_deals:{symbol}"
     cached = _cache_get(cache_key)
@@ -126,7 +127,7 @@ async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_block_deals(symbol: str) -> list[dict[str, Any]]:
-    """Return all block deals for a specific stock symbol on NSE India."""
+    """Return Recent block deals for a specific stock symbol on NSE India."""
     symbol = symbol.upper()
     cache_key = f"mcp_block_deals:{symbol}"
     cached = _cache_get(cache_key)
@@ -189,8 +190,8 @@ async def get_change_ranges(symbol: str) -> dict[str, float | None]:
 @mcp.tool()
 async def get_symbol_data(symbol: str) -> dict[str, Any]:
     """Return live symbol data from NSE's GetQuoteApi getSymbolData endpoint. used to fetch latest data
-        like ltp, dayHigh, dayLow, 52weekHigh, 52weekLow, etc. also sector and industry info for the symbol. 
-        with metadata on the company
+    like ltp, dayHigh, dayLow, 52weekHigh, 52weekLow, etc. also sector and industry info for the symbol.
+    with metadata on the company
     """
     symbol = symbol.upper()
     cache_key = f"mcp_symbol_data:{symbol}"
@@ -540,3 +541,84 @@ async def search_stock_universe(prefix: str) -> list[dict[str, Any]]:
             }
             for r in rows
         ]
+
+
+# ---------------------------------------------------------------------------
+# Watchlist Endpoints
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_watchlist() -> list[dict[str, Any]]:
+    """Return all stocks the user is interested in, ordered by creation time.
+
+    Each item contains: id, symbol, exchange, createdAt.
+    """
+    async with AsyncSessionLocal() as db:
+        q = select(WatchlistItemModel).order_by(WatchlistItemModel.created_at)
+        res = await db.execute(q)
+        rows = res.scalars().all()
+        return [
+            {
+                "id": r.id,
+                "symbol": r.symbol,
+                "exchange": r.exchange,
+                "createdAt": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+
+@mcp.tool()
+async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
+    """Add a symbol/exchange pair to the watchlist (idempotent).
+
+    If the pair already exists the existing row is returned unchanged.
+    Returns the persisted item: id, symbol, exchange, createdAt.
+    """
+    symbol = symbol.strip().upper()
+    exchange = exchange.strip().upper()
+    if not symbol or not exchange:
+        raise ValueError("symbol and exchange must be non-empty strings")
+
+    async with AsyncSessionLocal() as db:
+        existing = await db.execute(
+            select(WatchlistItemModel).where(
+                WatchlistItemModel.symbol == symbol,
+                WatchlistItemModel.exchange == exchange,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            return {
+                "id": row.id,
+                "symbol": row.symbol,
+                "exchange": row.exchange,
+                "createdAt": row.created_at.isoformat() if row.created_at else None,
+            }
+
+        item = WatchlistItemModel(symbol=symbol, exchange=exchange)
+        db.add(item)
+        await db.commit()
+        await db.refresh(item)
+        return {
+            "id": item.id,
+            "symbol": item.symbol,
+            "exchange": item.exchange,
+            "createdAt": item.created_at.isoformat() if item.created_at else None,
+        }
+
+
+@mcp.tool()
+async def remove_watchlist_item(item_id: int) -> dict[str, Any]:
+    """Remove a watchlist item by its numeric id.
+
+    Returns {"ok": true, "id": <item_id>} on success.
+    Raises ValueError if the item does not exist.
+    """
+    async with AsyncSessionLocal() as db:
+        item = await db.get(WatchlistItemModel, item_id)
+        if item is None:
+            raise ValueError(f"watchlist item {item_id} not found")
+        await db.delete(item)
+        await db.commit()
+        return {"ok": True, "id": item_id}

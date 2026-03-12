@@ -14,7 +14,7 @@ Status: 200
   GET /api/stockuniverse
 ============================================================
 Status: 200
-Response: List of 2253 items
+Response: List of 2254 items
 Sample item (first):
 {
   "symbol": "20MICRONS",
@@ -76,6 +76,20 @@ Sample item (first):
   "lastUpdateTime": "2026-03-10T16:00:00",
   "screenerTradesId": null
 }
+
+============================================================
+  GET /api/watchlist
+============================================================
+Status: 200
+Response: List of 20 items
+Sample item (first):
+{
+  "id": 1,
+  "symbol": "IDFCFIRSTB",
+  "exchange": "NSE",
+  "created_at": "2026-03-09T19:16:45.049000"
+}
+
 
 ============================================================
   GET /api/corporatefilings/{symbol}
@@ -155,33 +169,33 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "PREMIERENE",
+  "symbol": "JSWENERGY",
   "identifier": "",
   "series": "EQ",
-  "open": "749",
-  "dayHigh": "795",
-  "dayLow": "747.75",
-  "lastPrice": "785",
-  "previousClose": "747.75",
-  "change": 37.25,
-  "pChange": 4.98,
-  "totalTradedVolume": 5224183,
-  "totalTradedValue": 4071623746.54,
-  "yearHigh": "1163.9",
-  "yearLow": "660",
-  "nearWKH": 32.55434315662858,
-  "nearWKL": -18.939393939393938,
-  "perChange365d": -12.16,
-  "perChange30d": -0.94,
-  "date365dAgo": "10-Mar-2025",
-  "date30dAgo": "06-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/PREMIERENEEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/PREMIERENE-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/PREMIERENE-EQ.svg",
+  "open": "484",
+  "dayHigh": "528",
+  "dayLow": "484",
+  "lastPrice": "519",
+  "previousClose": "488",
+  "change": 31.0,
+  "pChange": 6.35,
+  "totalTradedVolume": 19316979,
+  "totalTradedValue": 10017978479.19,
+  "yearHigh": "579",
+  "yearLow": "427.75",
+  "nearWKH": 10.362694300518134,
+  "nearWKL": -21.332554061952074,
+  "perChange365d": 0.6,
+  "perChange30d": 7.15,
+  "date365dAgo": "12-Mar-2025",
+  "date30dAgo": "10-Feb-2026",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/JSWENERGYEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/JSWENERGY-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/JSWENERGY-EQ.svg",
   "meta": {
-    "symbol": "PREMIERENE",
-    "companyName": "Premier Energies Limited",
-    "industry": "Other Electrical Equipment",
+    "symbol": "JSWENERGY",
+    "companyName": "JSW Energy Limited",
+    "industry": "Power Generation",
     "activeSeries": [
       "EQ"
     ],
@@ -191,18 +205,20 @@ Sample item (first):
     "isSLBSec": true,
     "isDebtSec": false,
     "isSuspended": false,
-    "tempSuspendedSeries": [],
+    "tempSuspendedSeries": [
+      "BE"
+    ],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE0BS701011",
-    "slb_isin": "INE0BS701011",
-    "listingDate": "2024-09-03",
+    "isin": "INE121E01018",
+    "slb_isin": "INE121E01018",
+    "listingDate": "2010-01-04",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "11-Mar-2026 16:00:00",
-      "preOpenTime": "11-Mar-2026 09:07:27",
+      "equityTime": "12-Mar-2026 16:00:00",
+      "preOpenTime": "12-Mar-2026 09:07:07",
       "QuotePreOpenFlag": false
     }
   }
@@ -215,36 +231,35 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "COLPAL",
+  "symbol": "PPLPHARMA",
   "identifier": "",
   "series": "EQ",
-  "open": "2198.3",
-  "dayHigh": "2198.3",
-  "dayLow": "2046",
-  "lastPrice": "2051",
-  "previousClose": "2198.3",
-  "change": -147.3,
-  "pChange": -6.7,
-  "totalTradedVolume": 1659346,
-  "totalTradedValue": 3470721280.52,
-  "yearHigh": "2747.4",
-  "yearLow": "2029.4",
-  "nearWKH": 25.34760136856665,
-  "nearWKL": -1.0643539962550461,
-  "perChange365d": -15.77,
-  "perChange30d": -3.64,
-  "date365dAgo": "10-Mar-2025",
-  "date30dAgo": "06-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/COLPALEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/COLPAL-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/COLPAL-EQ.svg",
+  "open": "155.2",
+  "dayHigh": "155.2",
+  "dayLow": "144.96",
+  "lastPrice": "145.5",
+  "previousClose": "155.42",
+  "change": -9.92,
+  "pChange": -6.38,
+  "totalTradedVolume": 8629241,
+  "totalTradedValue": 1273589679.19,
+  "yearHigh": "240.95",
+  "yearLow": "144.96",
+  "nearWKH": 39.61402780659888,
+  "nearWKL": -0.3725165562913852,
+  "perChange365d": -27.89,
+  "perChange30d": -10.94,
+  "date365dAgo": "12-Mar-2025",
+  "date30dAgo": "10-Feb-2026",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/PPLPHARMAEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/PPLPHARMA-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/PPLPHARMA-EQ.svg",
   "meta": {
-    "symbol": "COLPAL",
-    "companyName": "Colgate Palmolive (India) Limited",
-    "industry": "Personal Care",
+    "symbol": "PPLPHARMA",
+    "companyName": "Piramal Pharma Limited",
+    "industry": "Pharmaceuticals",
     "activeSeries": [
-      "EQ",
-      "T0"
+      "EQ"
     ],
     "debtSeries": [],
     "isFNOSec": true,
@@ -255,15 +270,15 @@ Sample item (first):
     "tempSuspendedSeries": [],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE259A01022",
-    "slb_isin": "INE259A01022",
-    "listingDate": "2007-12-17",
+    "isin": "INE0DK501011",
+    "slb_isin": "INE0DK501011",
+    "listingDate": "2022-10-19",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "11-Mar-2026 16:00:00",
-      "preOpenTime": "11-Mar-2026 09:07:27",
+      "equityTime": "12-Mar-2026 16:00:00",
+      "preOpenTime": "12-Mar-2026 09:07:07",
       "QuotePreOpenFlag": false
     }
   }
@@ -285,12 +300,12 @@ Response: List of 0 items
   GET /api/market/high-short-interest
 ============================================================
 Status: 200
-Response: List of 91 items
+Response: List of 71 items
 Sample item (first):
 {
-  "date": "10-Mar-2026",
-  "symbol": "ABB",
-  "name": "ABB LTD.",
+  "date": "11-Mar-2026",
+  "symbol": "AARTIIND",
+  "name": "AARTI INDUSTRIES LTD",
   "clientName": null,
   "buySell": null,
   "qty": "50",
@@ -303,15 +318,15 @@ Sample item (first):
 ============================================================
 Status: 200
 {
-  "oneDayPercent": -11.98,
-  "oneWeekPercent": 3.11,
-  "oneMonthPercent": -5.58,
-  "threeMonthPercent": -10.24,
-  "sixMonthPercent": 0.25,
-  "oneYearPercent": 11.18,
-  "twoYearPercent": -5.44,
-  "threeYearPercent": 19.41,
-  "fiveYearPercent": 27.12
+  "oneDayPercent": -11.78,
+  "oneWeekPercent": 0.04,
+  "oneMonthPercent": -4.07,
+  "threeMonthPercent": -10.7,
+  "sixMonthPercent": -0.36,
+  "oneYearPercent": 10.58,
+  "twoYearPercent": -5.79,
+  "threeYearPercent": 19.69,
+  "fiveYearPercent": 30.05
 }
 
 ============================================================
@@ -342,7 +357,7 @@ Status: 200
         "sellQuantity4": 0,
         "sellPrice5": 0,
         "sellQuantity5": 0,
-        "lastPrice": 1386.8,
+        "lastPrice": 1390,
         "totalBuyQuantity": 0,
         "totalSellQuantity": 0,
         "perBuyQty": 0,
@@ -355,15 +370,15 @@ Status: 200
         "symbol": "RELIANCE",
         "series": "EQ",
         "marketType": "N",
-        "open": 1424.9,
-        "dayHigh": 1434,
-        "dayLow": 1383.6,
-        "previousClose": 1408.8,
-        "averagePrice": 1402.94,
-        "change": -22,
-        "pChange": -1.56,
-        "basePrice": 1408.8,
-        "closePrice": 1390.2,
+        "open": 1390,
+        "dayHigh": 1410.9,
+        "dayLow": 1381.1,
+        "previousClose": 1390.2,
+        "averagePrice": 1397.56,
+        "change": -0.2,
+        "pChange": -0.01,
+        "basePrice": 1390.2,
+        "closePrice": 1392.2,
         "indicativeClose": 0,
         "ic_change": 0,
         "ic_pchange": 0,
@@ -375,31 +390,31 @@ Status: 200
         "ieq": 0
       },
       "tradeInfo": {
-        "totalTradedVolume": 21848087,
-        "totalTradedValue": 30651555175.78,
+        "totalTradedVolume": 20939959,
+        "totalTradedValue": 29264849100.04,
         "series": "EQ",
-        "lastPrice": 1386.8,
+        "lastPrice": 1390,
         "issuedSize": 13532472634,
-        "basePrice": 1408.8,
-        "ffmc": 9337569151277.31,
+        "basePrice": 1390.2,
+        "ffmc": 9359115316033.64,
         "faceValue": 10,
         "impactCost": 0.01,
-        "deliveryToTradedQuantity": 45.03,
+        "deliveryToTradedQuantity": 42.85,
         "applicableMargin": 12.5,
         "marketLot": null,
-        "quantitytraded": 21848087,
-        "deliveryquantity": 9837323,
-        "totalMarketCap": 18766833048831.2,
-        "secwisedelposdate": "11-Mar-2026 00:00:00"
+        "quantitytraded": 20939959,
+        "deliveryquantity": 8971814,
+        "totalMarketCap": 18810136961260,
+        "secwisedelposdate": "12-Mar-2026 00:00:00"
       },
       "priceInfo": {
         "yearHightDt": "05-Jan-2026 00:00:00",
         "yearLowDt": "07-Apr-2025 00:00:00",
         "yearHigh": 1611.8,
         "yearLow": 1114.85,
-        "priceBand": "1268.00-1549.60",
-        "cmDailyVolatility": "1.32",
-        "cmAnnualVolatility": "25.22",
+        "priceBand": "1253.00-1531.40",
+        "cmDailyVolatility": "1.31",
+        "cmAnnualVolatility": "25.03",
         "tickSize": 0.1,
         "inav": 0,
         "isINav": "False",
@@ -409,14 +424,14 @@ Status: 200
         "secStatus": "Listed",
         "listingDate": "29-Nov-1995 00:00:00",
         "pdSectorInd": "NIFTY 500                                         ",
-        "pdSectorPe": "19.57",
-        "pdSymbolPe": "19.57",
+        "pdSectorPe": "19.31",
+        "pdSymbolPe": "19.31",
         "isSuspended": "Active",
         "basicIndustry": "Refineries & Marketing",
         "index": "Nifty 50",
-        "deliveryQuantity": "9837323",
-        "deliveryTotradedQuantity": "45.03",
-        "securityvar": "8.22",
+        "deliveryQuantity": "8971814",
+        "deliveryTotradedQuantity": "42.85",
+        "securityvar": "8.2",
         "indexvar": "0",
         "extremelossMargin": "3.5",
         "varMargin": "9",
@@ -475,7 +490,7 @@ Status: 200
         "nameOfComplianceOfficer": null,
         "sddcompliance": null
       },
-      "lastUpdateTime": "11-Mar-2026 16:00:00"
+      "lastUpdateTime": "12-Mar-2026 16:00:00"
     }
   ]
 }
@@ -485,19 +500,19 @@ Status: 200
 ============================================================
 Status: 200
 Top-level keys: ['data', 'low', 'timestamp']
-data: List of 140 items
+data: List of 323 items
 Sample item (first):
 {
-  "symbol": "ABSLLIQUID",
+  "symbol": "ABREL",
   "series": "EQ",
-  "comapnyName": "Aditya Birla Sun Life CRISIL Liquid Overnight ETF",
-  "new52WHL": 999.99,
-  "prev52WHL": 999.99,
+  "comapnyName": "Aditya Birla Real Estate Limited",
+  "new52WHL": 1141.6,
+  "prev52WHL": 1170.1,
   "prevHLDate": "10-Mar-2026",
-  "ltp": 999.99,
-  "prevClose": "999.99",
-  "change": 0,
-  "pChange": 0
+  "ltp": 1199.9,
+  "prevClose": "1183",
+  "change": 16.9,
+  "pChange": 1.4285714285714286
 }
 
 ============================================================
@@ -505,19 +520,19 @@ Sample item (first):
 ============================================================
 Status: 200
 Top-level keys: ['high', 'data', 'timestamp']
-data: List of 32 items
+data: List of 31 items
 Sample item (first):
 {
   "symbol": "ABB",
   "series": "EQ",
   "comapnyName": "ABB India Limited",
-  "new52WHL": 6325,
-  "prev52WHL": 6260,
-  "prevHLDate": "10-Jun-2025",
-  "ltp": 6268.5,
-  "prevClose": "6224.5",
-  "change": 44,
-  "pChange": 0.7068840870752671
+  "new52WHL": 6429.5,
+  "prev52WHL": 6325,
+  "prevHLDate": "11-Mar-2026",
+  "ltp": 6415.5,
+  "prevClose": "6280",
+  "change": 135.5,
+  "pChange": 2.1576433121019107
 }
 
 ============================================================
@@ -528,16 +543,16 @@ Top-level keys: ['data', 'timestamp']
 data: List of 25 items
 Sample item (first):
 {
-  "symbol": "GSEC10ABSL",
-  "companyName": "AdityaBirlaSunLifeMF - Aditya Birla Sun Life CRISIL 10 Year Gilt ETF",
-  "volume": 64363,
-  "week1AvgVolume": 10866,
-  "week1volChange": 5.923338855144487,
-  "week2AvgVolume": 6624,
-  "week2volChange": 9.716343105582562,
-  "ltp": 111.29,
-  "pChange": -0.12,
-  "turnover": 71.13398
+  "symbol": "MOQUALITY",
+  "companyName": "Motilal Oswal Mutual Fund - Motilal Oswal S&P BSE Quality ETF",
+  "volume": 206273,
+  "week1AvgVolume": 34888,
+  "week1volChange": 5.912377585630344,
+  "week2AvgVolume": 21488,
+  "week2volChange": 9.599450856291885,
+  "ltp": 188.92,
+  "pChange": -0.38,
+  "turnover": 389.54656
 }
 
 ============================================================
@@ -561,18 +576,17 @@ Status: 200
   "name": "Reliance Industries Ltd",
   "screener_warehouse_id": "6598251",
   "ratios": {
-    "market_cap": "18,80,950 Cr.",
-    "price": "1,390",
+    "market_cap": "18,82,771 Cr.",
+    "price": "1,392",
     "pe": "24.5",
     "book_value": "648",
-    "dividend_yield": "0.40 %",
+    "dividend_yield": "0.40%",
     "roce": "9.69%",
     "roe": "8.40 %",
     "face_value": "10.0",
     "high_52w": "1,612",
     "low_52w": "1,115",
     "eps_growth_5years": "9.92%",
-    "eps": "61.5",
     "dividend_payout": "10.7%",
     "piotroski_score": "4.00",
     "promoter_holding": "50.0%",
@@ -587,7 +601,49 @@ Status: 200
     "profit_growth": "10.9%",
     "sales_growth_5years": "10.0%",
     "profit_var_5yrs": "9.93%",
-    "change_in_prom_hold": "0.00%"
+    "change_in_prom_hold": "0.00%",
+    "opm": "17.4%",
+    "profit_after_tax": "76,747Cr.",
+    "mar_cap": "18,82,771Cr.",
+    "sales_qtr": "2,64,905Cr.",
+    "price_to_earning": "24.5",
+    "price_to_book_value": "2.15",
+    "industry_pe": "9.96",
+    "current_price": "1,392",
+    "price_to_sales": "1.84",
+    "enterprise_value": "21,45,864Cr.",
+    "current_ratio": "1.10",
+    "peg_ratio": "4.57",
+    "pat_qtr": "18,645Cr.",
+    "qtr_sales_var": "10.4%",
+    "qtr_profit_var": "0.57%",
+    "earnings_yield": "6.65%",
+    "pledged_percentage": "0.00%",
+    "debt": "3,74,593Cr.",
+    "eps": "61.5",
+    "cmp_/_fcf": "124",
+    "evebitda": "10.8",
+    "int_coverage": "5.36",
+    "sales_growth_3years": "11.5%",
+    "profit_var_3yrs": "5.37%",
+    "sales_last_year": "9,62,820Cr.",
+    "op_ann": "1,65,598Cr.",
+    "ebidt_last_year": "1,82,019Cr.",
+    "dep_ann": "53,136Cr.",
+    "ebit_last_year": "1,28,883Cr.",
+    "pbt_ann": "1,06,017Cr.",
+    "interest_last_year": "24,269Cr.",
+    "tax_last_year": "25,230Cr.",
+    "pat_ann": "68,732Cr.",
+    "rsi": "45.4",
+    "macd": "-12.3",
+    "market_cap_to_sales": "1.84",
+    "debt_to_profit": "4.61",
+    "graham": "947",
+    "altman_z_score": "2.84",
+    "roe_3yr": "8.79%",
+    "chg_in_fii_hold": "0.44%",
+    "chg_in_dii_hold": "-0.15%"
   },
   "quarters": [
     {
@@ -669,6 +725,31 @@ Sample record (first):
   "value": 1384,
   "value_in": "price",
   "small_quantity": false
+}
+
+============================================================
+  GET /api/screener/quarterly/{symbol}
+============================================================
+Status: 200
+symbol: RELIANCE
+consolidated: True
+quarterly_results: 4 year(s)
+Sample year (2022):
+{
+  "Dec": {
+    "Sales": "216,737",
+    "Expenses": "181,728",
+    "Operating Profit": "35,009",
+    "OPM %": "16%",
+    "Other Income": "3,377",
+    "Interest": "5,201",
+    "Depreciation": "10,183",
+    "Profit before tax": "23,002",
+    "Tax %": "23%",
+    "Net Profit": "17,806",
+    "EPS in Rs": "11.67",
+    "Raw PDF": null
+  }
 }
 
 ============================================================

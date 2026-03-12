@@ -23,6 +23,7 @@ from app.routers import (
     market_router,
     screener_router,
     stockuniverse_router,
+    watchlist_router,
 )
 from app.routers.nonpersistence import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
@@ -257,6 +258,7 @@ app.include_router(filings_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
+app.include_router(watchlist_router, prefix="/api")
 
 # Mount MCP server under /api/mcp
 app.mount("/api/mcp", mcp_server.mcp.streamable_http_app())

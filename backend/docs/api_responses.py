@@ -110,6 +110,31 @@ def post(
         return 0, {"_error": str(e)}
 
 
+def delete(path: str) -> tuple[int, Union[str, object]]:
+    import requests
+
+    print(f">>> DELETE {path}")
+    try:
+        resp = requests.delete(f"{BASE_URL}{path}", timeout=60)
+        status = resp.status_code
+        if status == 200:
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    body = resp.json()
+                except json.JSONDecodeError:
+                    body = resp.text
+            else:
+                body = resp.text
+        elif status >= 500:
+            body = {"_error": "Upstream error", "_status": status}
+        else:
+            body = resp.text
+        return status, body
+    except Exception as e:
+        return 0, {"_error": str(e)}
+
+
 def main():
     out.write("BLM Analytics API Documentation")
     out.write(f"Base URL: {BASE_URL}")
@@ -148,6 +173,31 @@ def main():
             out.print_json(body[0])
     else:
         out.write(f"Response: {body}")
+
+    # Watchlist
+    out.print_section("GET /api/watchlist")
+    status, body = get("/api/watchlist")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    out.print_section("POST /api/watchlist")
+    status, body = post("/api/watchlist", {"symbol": "TCS", "exchange": "NSE"})
+    out.write(f"Status: {status}")
+    out.print_json(body)
+
+    out.print_section("DELETE /api/watchlist/{id}")
+    # First get an id to delete
+    status, list_body = get("/api/watchlist")
+    delete_id = list_body[0]["id"] if isinstance(list_body, list) and list_body else 1
+    status, body = delete(f"/api/watchlist/{delete_id}")
+    out.write(f"Status: {status}")
+    out.print_json(body)
 
     # Corporate Filings
     out.print_section("GET /api/corporatefilings/{symbol}")

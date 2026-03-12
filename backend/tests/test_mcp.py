@@ -108,6 +108,10 @@ class TestMCPToolDiscovery:
             "list_stock_universe",
             "get_stock_universe",
             "search_stock_universe",
+            "list_watchlist",
+            "get_watchlist_symbols",
+            "add_watchlist_item",
+            "remove_watchlist_item",
         }
         assert expected_tools.issubset(tool_names)
 
@@ -374,6 +378,160 @@ class TestMCPScreenerQuarterly:
                 "name": "get_company_quarterly_results",
                 "arguments": {"symbol": "INVALID@@@"},
             },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+
+class TestMCPWatchlistTools:
+    """Tests for watchlist MCP tools."""
+
+    TEST_SYMBOL = "WATCH"
+    TEST_EXCHANGE = "NSE"
+
+    def test_list_watchlist(self):
+        """list_watchlist should return all watchlist items."""
+        result = mcp_request("tools/call", {"name": "list_watchlist", "arguments": {}})
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        assert content[0]["type"] == "text"
+
+    def test_list_watchlist_returns_array(self):
+        """list_watchlist should return a JSON array."""
+        result = mcp_request("tools/call", {"name": "list_watchlist", "arguments": {}})
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, list)
+        if data:
+            assert "id" in data[0]
+            assert "symbol" in data[0]
+            assert "exchange" in data[0]
+
+    def test_get_watchlist_symbols(self):
+        """get_watchlist_symbols should return just the symbols."""
+        result = mcp_request(
+            "tools/call", {"name": "get_watchlist_symbols", "arguments": {}}
+        )
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        assert content[0]["type"] == "text"
+        import json
+
+        data = json.loads(content[0]["text"])
+        assert isinstance(data, list)
+        assert all(isinstance(s, str) for s in data)
+
+    def test_add_watchlist_item(self):
+        """add_watchlist_item should create a new item."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "add_watchlist_item",
+                "arguments": {
+                    "symbol": self.TEST_SYMBOL,
+                    "exchange": self.TEST_EXCHANGE,
+                },
+            },
+        )
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        assert content[0]["type"] == "text"
+        import json
+
+        data = json.loads(content[0]["text"])
+        assert data["symbol"] == self.TEST_SYMBOL
+        assert data["exchange"] == self.TEST_EXCHANGE
+        assert "id" in data
+
+    def test_add_watchlist_item_idempotent(self):
+        """Adding the same item twice should return the existing item."""
+        result1 = mcp_request(
+            "tools/call",
+            {
+                "name": "add_watchlist_item",
+                "arguments": {
+                    "symbol": self.TEST_SYMBOL,
+                    "exchange": self.TEST_EXCHANGE,
+                },
+            },
+        )
+        result2 = mcp_request(
+            "tools/call",
+            {
+                "name": "add_watchlist_item",
+                "arguments": {
+                    "symbol": self.TEST_SYMBOL,
+                    "exchange": self.TEST_EXCHANGE,
+                },
+            },
+        )
+        import json
+
+        data1 = json.loads(result1["result"]["content"][0]["text"])
+        data2 = json.loads(result2["result"]["content"][0]["text"])
+        assert data1["id"] == data2["id"]
+
+    def test_add_watchlist_item_normalizes_input(self):
+        """Input should be normalized to uppercase."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "add_watchlist_item",
+                "arguments": {"symbol": "test", "exchange": "nse"},
+            },
+        )
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert data["symbol"] == "TEST"
+        assert data["exchange"] == "NSE"
+
+    def test_add_watchlist_item_missing_fields(self):
+        """Missing fields should produce an error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "add_watchlist_item", "arguments": {"symbol": "TEST"}},
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_remove_watchlist_item(self):
+        """remove_watchlist_item should delete an item by id."""
+        # First add an item to delete
+        add_result = mcp_request(
+            "tools/call",
+            {
+                "name": "add_watchlist_item",
+                "arguments": {"symbol": "DELTEST", "exchange": "NSE"},
+            },
+        )
+        import json
+
+        item = json.loads(add_result["result"]["content"][0]["text"])
+        item_id = item["id"]
+
+        # Now delete it
+        result = mcp_request(
+            "tools/call",
+            {"name": "remove_watchlist_item", "arguments": {"item_id": item_id}},
+        )
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        data = json.loads(content[0]["text"])
+        assert data.get("ok") is True
+
+    def test_remove_watchlist_item_not_found(self):
+        """Removing a non-existent item should error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "remove_watchlist_item", "arguments": {"item_id": 999999}},
         )
         assert "error" in result or (
             "result" in result and result["result"].get("isError") is True

@@ -1,45 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
 
 export const runtime = 'nodejs';
 
-// GET /api/watchlist — return all watchlist items
+const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:8000';
+
+// GET /api/watchlist — return all watchlist items from the Python backend
 export async function GET() {
   try {
-    const items = await prisma.watchlistItem.findMany({
-      orderBy: { createdAt: 'asc' },
+    const res = await fetch(`${BACKEND_URL}/api/watchlist`, {
+      headers: { accept: 'application/json' },
     });
-    return NextResponse.json(items);
+    const data: unknown = await res.json();
+    return NextResponse.json(data, { status: res.status });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }
 
-// POST /api/watchlist — add a symbol { symbol, exchange }
+// POST /api/watchlist — add { symbol, exchange } via the Python backend
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json() as { symbol?: string; exchange?: string };
-    const symbol = body.symbol?.trim().toUpperCase();
-    const exchange = body.exchange?.trim().toUpperCase();
-
-    if (!symbol || !exchange) {
-      return NextResponse.json({ error: 'symbol and exchange are required' }, { status: 400 });
-    }
-
-    const item = await prisma.watchlistItem.upsert({
-      where: { symbol_exchange: { symbol, exchange } },
-      update: {},
-      create: { symbol, exchange },
+    const body = await req.text();
+    const res = await fetch(`${BACKEND_URL}/api/watchlist`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body,
     });
-    return NextResponse.json(item, { status: 201 });
+    const data: unknown = await res.json();
+    return NextResponse.json(data, { status: res.status });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }
 
-// DELETE /api/watchlist?id=<id> — remove a watchlist item by id
+// DELETE /api/watchlist?id=<id> — remove a watchlist item via the Python backend
 export async function DELETE(req: NextRequest) {
   try {
     const idParam = req.nextUrl.searchParams.get('id');
@@ -49,10 +45,14 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'id query param is required' }, { status: 400 });
     }
 
-    await prisma.watchlistItem.delete({ where: { id } });
-    return NextResponse.json({ ok: true });
+    const res = await fetch(`${BACKEND_URL}/api/watchlist/${id}`, {
+      method: 'DELETE',
+      headers: { accept: 'application/json' },
+    });
+    const data: unknown = await res.json();
+    return NextResponse.json(data, { status: res.status });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }
