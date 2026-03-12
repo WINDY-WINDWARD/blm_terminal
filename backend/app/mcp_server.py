@@ -111,7 +111,7 @@ async def get_top_losers() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
-    """Return today's bulk deals for a specific stock symbol on NSE India."""
+    """Return all bulk deals for a specific stock symbol on NSE India."""
     symbol = symbol.upper()
     cache_key = f"mcp_bulk_deals:{symbol}"
     cached = _cache_get(cache_key)
@@ -126,7 +126,7 @@ async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_block_deals(symbol: str) -> list[dict[str, Any]]:
-    """Return today's block deals for a specific stock symbol on NSE India."""
+    """Return all block deals for a specific stock symbol on NSE India."""
     symbol = symbol.upper()
     cache_key = f"mcp_block_deals:{symbol}"
     cached = _cache_get(cache_key)
@@ -155,7 +155,7 @@ async def get_high_short_interest() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_largedeal_snapshot() -> dict[str, Any]:
-    """Return the full largedeal snapshot (bulk/short/block) from NSE India."""
+    """Returns a snapshot of recent large deals (Insiders + bulk + block) across NSE, with details like symbol, price, quantity, deal type, and timestamp."""
     cache_key = "mcp_largedeal_snapshot"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -188,7 +188,10 @@ async def get_change_ranges(symbol: str) -> dict[str, float | None]:
 
 @mcp.tool()
 async def get_symbol_data(symbol: str) -> dict[str, Any]:
-    """Return live symbol data from NSE's GetQuoteApi getSymbolData endpoint."""
+    """Return live symbol data from NSE's GetQuoteApi getSymbolData endpoint. used to fetch latest data
+        like ltp, dayHigh, dayLow, 52weekHigh, 52weekLow, etc. also sector and industry info for the symbol. 
+        with metadata on the company
+    """
     symbol = symbol.upper()
     cache_key = f"mcp_symbol_data:{symbol}"
     cached = _cache_get(cache_key)
@@ -203,7 +206,7 @@ async def get_symbol_data(symbol: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_52week_low_stocks() -> dict[str, Any]:
-    """Return NSE 52-week low stocks snapshot."""
+    """Return Global List of stocks which have crossed their previous NSE 52-week low and set new 52-week lows."""
     cache_key = "mcp_52week_low"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -217,7 +220,7 @@ async def get_52week_low_stocks() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_52week_high_stocks() -> dict[str, Any]:
-    """Return NSE 52-week high stocks snapshot."""
+    """Return Global List of stocks which have crossed their previous NSE 52-week high and set new 52-week highs."""
     cache_key = "mcp_52week_high"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -231,7 +234,7 @@ async def get_52week_high_stocks() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_volume_gainers() -> dict[str, Any]:
-    """Return NSE volume gainers snapshot."""
+    """Returns Global List of stocks with highest volume gain compared to average weekly volume, along with percentage gain."""
     cache_key = "mcp_volume_gainers"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -248,58 +251,58 @@ async def get_volume_gainers() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
-async def get_corporate_filings(symbol: str) -> dict[str, Any]:
-    """Return quarterly financial results for a symbol as CSV.
+# @mcp.tool()
+# async def get_corporate_filings(symbol: str) -> dict[str, Any]:
+#     """Return quarterly financial results for a symbol as CSV.
 
-    Returns structured data containing: symbol, media_type, and csv_text.
-    """
-    symbol = symbol.upper().strip()
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError(f"Invalid symbol format: {symbol}")
+#     Returns structured data containing: symbol, media_type, and csv_text.
+#     """
+#     symbol = symbol.upper().strip()
+#     if not _SYMBOL_RE.fullmatch(symbol):
+#         raise ValueError(f"Invalid symbol format: {symbol}")
 
-    async with AsyncSessionLocal() as db:
-        record = await db.get(CorporateFiling, symbol)
+#     async with AsyncSessionLocal() as db:
+#         record = await db.get(CorporateFiling, symbol)
 
-        from datetime import datetime, timedelta, timezone
+#         from datetime import datetime, timedelta, timezone
 
-        stale_after = timedelta(days=30)
-        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
-        needs_refresh = record is None or (now - record.last_fetched_at) > stale_after
+#         stale_after = timedelta(days=30)
+#         now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+#         needs_refresh = record is None or (now - record.last_fetched_at) > stale_after
 
-        if needs_refresh:
-            try:
-                csv_text: str = await asyncio.to_thread(
-                    nse_client.get_corporate_filing_comparison, symbol
-                )
-            except Exception as exc:
-                logger.exception("NSE fetch failed for %s", symbol)
-                raise RuntimeError(
-                    f"Failed to fetch corporate filings for {symbol} from NSE: {exc}"
-                ) from exc
+#         if needs_refresh:
+#             try:
+#                 csv_text: str = await asyncio.to_thread(
+#                     nse_client.get_corporate_filing_comparison, symbol
+#                 )
+#             except Exception as exc:
+#                 logger.exception("NSE fetch failed for %s", symbol)
+#                 raise RuntimeError(
+#                     f"Failed to fetch corporate filings for {symbol} from NSE: {exc}"
+#                 ) from exc
 
-            now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
-            if record is None:
-                record = CorporateFiling(
-                    symbol=symbol,
-                    csv_data=csv_text,
-                    last_fetched_at=now,
-                )
-                db.add(record)
-            else:
-                record.csv_data = csv_text
-                record.last_fetched_at = now
+#             now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+#             if record is None:
+#                 record = CorporateFiling(
+#                     symbol=symbol,
+#                     csv_data=csv_text,
+#                     last_fetched_at=now,
+#                 )
+#                 db.add(record)
+#             else:
+#                 record.csv_data = csv_text
+#                 record.last_fetched_at = now
 
-            await db.commit()
-            logger.info("Corporate filings refreshed for %s", symbol)
-        else:
-            csv_text = record.csv_data
+#             await db.commit()
+#             logger.info("Corporate filings refreshed for %s", symbol)
+#         else:
+#             csv_text = record.csv_data
 
-    return {
-        "symbol": symbol,
-        "media_type": "text/csv",
-        "csv_text": csv_text,
-    }
+#     return {
+#         "symbol": symbol,
+#         "media_type": "text/csv",
+#         "csv_text": csv_text,
+#     }
 
 
 # ---------------------------------------------------------------------------
@@ -420,10 +423,6 @@ async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
                 }
             }
         }
-
-    Results are served from the shared raw-HTML cache (15-minute TTL).  If
-    ``screener_company`` was already called for this symbol within the TTL
-    window no new network request is made.
 
     Requires screener.in authentication (browser session).
     """
