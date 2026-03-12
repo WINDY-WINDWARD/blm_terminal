@@ -19,7 +19,7 @@ from app.database import AsyncSessionLocal
 from app.models.corporatefilings import CorporateFiling
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.services.nse_client import nse_client
-from app.services.screener_client import screener_client
+from app.services.screener_client import _parse_all_quarters, screener_client
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +391,76 @@ async def screener_trades(symbol: str, consolidated: bool = True) -> dict[str, A
 
     _cache_set(cache_key, data)
     return data
+
+
+@mcp.tool()
+async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
+    """Return full quarterly results for a company from screener.in (consolidated).
+
+    Results are structured as year → month → {metric: value}, covering all
+    rows in the #quarters table (Sales, Expenses, OPM%, Other Income, Interest,
+    Depreciation, Profit before tax, Tax %, Net Profit, EPS in Rs, etc.) and
+    all available periods — not just the last 4.
+
+    Periods follow the format "Sep 2024"; trailing-twelve-month entries are
+    returned under a month key of e.g. "Mar TTM".
+
+    Example output::
+
+        {
+            "symbol": "HDFCBANK",
+            "consolidated": true,
+            "quarterly_results": {
+                "2024": {
+                    "Sep": { "Sales": "12345", "Net Profit": "1234", ... },
+                    "Dec": { ... }
+                },
+                "2025": {
+                    "Mar TTM": { ... }
+                }
+            }
+        }
+
+    Results are served from the shared raw-HTML cache (15-minute TTL).  If
+    ``screener_company`` was already called for this symbol within the TTL
+    window no new network request is made.
+
+    Requires screener.in authentication (browser session).
+    """
+    from bs4 import BeautifulSoup
+
+    consolidated = True
+    symbol = symbol.upper().strip()
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise ValueError(f"Invalid symbol format: {symbol}")
+
+    if not screener_client.is_authenticated:
+        raise RuntimeError(
+            "screener.in session not available. "
+            "Log in at https://www.screener.in in Chrome, then restart the backend."
+        )
+
+    cache_key = f"mcp_screener:quarterly:{symbol}:{'c' if consolidated else 's'}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    html = await screener_client.get_company_html(symbol, consolidated=consolidated)
+    soup = BeautifulSoup(html, "lxml")
+    quarterly_results = _parse_all_quarters(soup)
+
+    result: dict[str, Any] = {
+        "symbol": symbol,
+        "consolidated": consolidated,
+        "quarterly_results": quarterly_results,
+    }
+
+    # Store with stored-at timestamp; quarterly data warrants the same 15-min
+    # TTL as the HTML cache — use _cache_set (flat 10-min TTL) here since the
+    # HTML cache is the authoritative 15-min layer; parsed quarterly data is
+    # just a view over it.
+    _cache_set(cache_key, result)
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -83,7 +83,9 @@ def get(path: str) -> tuple[int, Union[str, object]]:
         return 0, {"_error": str(e)}
 
 
-def post(path: str, payload: Union[object, None] = None) -> tuple[int, Union[str, object]]:
+def post(
+    path: str, payload: Union[object, None] = None
+) -> tuple[int, Union[str, object]]:
     import requests
 
     print(f">>> POST {path}")
@@ -324,6 +326,26 @@ def main():
     else:
         out.print_json(body)
 
+    # Screener - Quarterly Results
+    out.print_section("GET /api/screener/quarterly/{symbol}")
+    status, body = get("/api/screener/quarterly/RELIANCE")
+    out.write(f"Status: {status}")
+    if status == 503:
+        out.write("Response: 503 — screener.in session not available (login required)")
+        out.print_json(body)
+    elif status == 200 and isinstance(body, dict):
+        out.write(f"symbol: {body.get('symbol')}")
+        out.write(f"consolidated: {body.get('consolidated')}")
+        qr = body.get("quarterly_results", {})
+        out.write(f"quarterly_results: {len(qr)} year(s)")
+        if qr:
+            # Print the first year in full to document the structure
+            first_year = next(iter(qr))
+            out.write(f"Sample year ({first_year}):")
+            out.print_json(qr[first_year])
+    else:
+        out.print_json(body)
+
     # AI Summarizer - Health
     out.print_section("GET /api/ai/health")
     status, body = get("/api/ai/health")
@@ -334,7 +356,9 @@ def main():
     out.print_section("POST /api/ai/summarize")
     if corporate_filings_data:
         out.write("Using data from: GET /api/corporatefilings/RELIANCE")
-        status, body = post("/api/ai/summarize", {"text": corporate_filings_data, "max_tokens": 1024})
+        status, body = post(
+            "/api/ai/summarize", {"text": corporate_filings_data, "max_tokens": 1024}
+        )
         out.write(f"Status: {status}")
         if status == 200 and isinstance(body, dict):
             out.write(f"Response: JSON with summary")

@@ -14,9 +14,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bs4 import BeautifulSoup
+
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
-from app.services.screener_client import screener_client
+from app.services.screener_client import _parse_all_quarters, screener_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["screener"])
@@ -192,3 +194,79 @@ async def screener_trades(
 
     _cache_set(cache_key, data, TRADES_TTL)
     return data  # type: ignore[return-value]
+
+
+QUARTERLY_TTL = 15 * 60
+
+
+@router.get("/screener/quarterly/{symbol}")
+async def screener_quarterly(
+    symbol: str,
+) -> dict[str, Any]:
+    """
+    Return full quarterly results for a company from screener.in (consolidated), structured as:
+
+        {
+            "symbol": "HDFCBANK",
+            "consolidated": true,
+            "quarterly_results": {
+                "2024": {
+                    "Sep": { "Sales": "...", "Net Profit": "...", ... },
+                    "Dec": { ... }
+                },
+                "2025": {
+                    "Mar TTM": { ... }
+                }
+            }
+        }
+
+    All rows from the #quarters table are included (Sales, Expenses, OPM%,
+    Other Income, Interest, Depreciation, Profit before tax, Tax %, Net Profit,
+    EPS in Rs, etc.) and all available periods — not just the last 4.
+
+    Results are served from the shared raw-HTML cache (15-minute TTL).  If the
+    company page was already fetched for the ``/screener/company/{symbol}``
+    endpoint within the TTL window, no new network request is made.
+
+    Requires a valid screener.in Chrome session (same as /api/screener/company).
+    """
+    consolidated = True
+    symbol = symbol.upper().strip()
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol format")
+
+    if not screener_client.is_authenticated:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "screener.in session not available. "
+                "Log in at https://www.screener.in in Chrome, then restart the backend."
+            ),
+        )
+
+    cache_key = f"screener:quarterly:{symbol}:{'c' if consolidated else 's'}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    try:
+        html = await screener_client.get_company_html(symbol, consolidated=consolidated)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("screener.in quarterly fetch failed for %s: %s", symbol, exc)
+        raise HTTPException(status_code=502, detail="screener.in request failed")
+
+    soup = BeautifulSoup(html, "lxml")
+    quarterly_results = _parse_all_quarters(soup)
+
+    result: dict[str, Any] = {
+        "symbol": symbol,
+        "consolidated": consolidated,
+        "quarterly_results": quarterly_results,
+    }
+
+    _cache_set(cache_key, result, QUARTERLY_TTL)
+    return result

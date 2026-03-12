@@ -33,6 +33,25 @@ _screener_lock = asyncio.Lock()
 # lifetime of the process and is populated on first access per symbol.
 _trades_id_cache: dict[str, str] = {}
 
+# ---------------------------------------------------------------------------
+# Raw HTML cache — shared between company and quarterly endpoints so the
+# same page is never fetched twice within the TTL window.
+# key → (expiry_monotonic, html_text)
+# ---------------------------------------------------------------------------
+_HTML_CACHE: dict[str, tuple[float, str]] = {}
+HTML_CACHE_TTL: float = 15 * 60  # 900 seconds
+
+
+def _html_cache_get(key: str) -> str | None:
+    entry = _HTML_CACHE.get(key)
+    if entry and time.monotonic() < entry[0]:
+        return entry[1]
+    return None
+
+
+def _html_cache_set(key: str, html: str) -> None:
+    _HTML_CACHE[key] = (time.monotonic() + HTML_CACHE_TTL, html)
+
 
 def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
     """Extract sessionid and csrftoken from rookiepy cookie list."""
@@ -266,6 +285,89 @@ def _parse_quarters(soup: BeautifulSoup) -> list[dict[str, str | None]]:
         )
 
     return list(reversed(quarters))
+
+
+def _parse_all_quarters(
+    soup: BeautifulSoup,
+) -> dict[str, dict[str, dict[str, str | None]]]:
+    """
+    Parse the full quarterly results table from the screener.in company page.
+
+    Returns a nested dict keyed by year → month → {metric: value}.
+
+    Period strings on screener follow the format "Sep 2024" or "Mar 2025 TTM".
+    The TTM suffix is preserved so callers can distinguish trailing-twelve-month
+    figures from discrete quarter-end figures.
+
+    Example output::
+
+        {
+            "2023": {
+                "Sep": {"Sales": "12345", "Expenses": "9876", ...},
+                "Dec": {"Sales": "13000", ...},
+            },
+            "2024": {
+                "Mar": {"Sales": "14000", ...},
+                ...
+            },
+        }
+    """
+    section = soup.select_one("#quarters")
+    if not section:
+        return {}
+
+    table = section.select_one("table")
+    if not table:
+        return {}
+
+    # Collect all period headers (skip the first blank/label column)
+    headers = [th.get_text(strip=True) for th in table.select("thead th")]
+    periods = headers[1:]  # e.g. ["Sep 2022", "Dec 2022", ..., "Mar 2025 TTM"]
+
+    # Build a mapping: row_label → [value_for_period_0, value_for_period_1, ...]
+    row_data: dict[str, list[str | None]] = {}
+    for tr in table.select("tbody tr"):
+        cells = tr.select("td")
+        if not cells:
+            continue
+        # First cell is the row label; strip trailing " +" used on expandable rows
+        label = cells[0].get_text(strip=True).rstrip(" +").strip()
+        if not label:
+            continue
+        values: list[str | None] = []
+        for td in cells[1:]:
+            raw = td.get_text(strip=True)
+            values.append(raw if raw else None)
+        row_data[label] = values
+
+    if not row_data or not periods:
+        return {}
+
+    # Assemble year → month → {metric: value}
+    result: dict[str, dict[str, dict[str, str | None]]] = {}
+    for col_idx, period in enumerate(periods):
+        # Parse "Sep 2024" or "Mar 2025 TTM" → year, month_label
+        parts = period.split()
+        if len(parts) < 2:
+            # Unexpected format — use the raw period string as both year and month
+            year_key = period
+            month_key = period
+        elif len(parts) == 2:
+            month_key, year_key = parts[0], parts[1]
+        else:
+            # e.g. ["Mar", "2025", "TTM"] → year "2025", month "Mar TTM"
+            year_key = parts[1]
+            month_key = " ".join([parts[0]] + parts[2:])  # "Mar TTM"
+
+        metrics: dict[str, str | None] = {}
+        for label, values in row_data.items():
+            metrics[label] = values[col_idx] if col_idx < len(values) else None
+
+        if year_key not in result:
+            result[year_key] = {}
+        result[year_key][month_key] = metrics
+
+    return result
 
 
 def _parse_trades_table(
@@ -534,6 +636,68 @@ class ScreenerClient:
             )
             return {}
 
+    async def get_company_html(
+        self,
+        symbol: str,
+        consolidated: bool = True,
+    ) -> str:
+        """
+        Return the raw HTML for the screener.in company page for `symbol`.
+
+        The result is cached in ``_HTML_CACHE`` for ``HTML_CACHE_TTL`` seconds
+        (15 minutes). Both :meth:`get_company` and the quarterly-results endpoint
+        call this method so the network request is never duplicated within the
+        TTL window.
+
+        Raises:
+          - RuntimeError  if not authenticated or client not initialised
+          - ValueError    if the symbol returns a 404
+          - httpx.HTTPStatusError  on other non-2xx responses
+        """
+        if not self.is_authenticated:
+            raise RuntimeError(
+                "screener.in session not available. "
+                "Please log in at https://www.screener.in in Chrome and restart the backend."
+            )
+        if self._http is None:
+            raise RuntimeError(
+                "ScreenerClient not initialised. Call await client.init() first."
+            )
+
+        symbol_upper = symbol.upper()
+        mode = "consolidated" if consolidated else "standalone"
+        html_key = f"screener:html:{symbol_upper}:{'c' if consolidated else 's'}"
+
+        cached_html = _html_cache_get(html_key)
+        if cached_html is not None:
+            logger.debug("HTML cache hit for %s (%s)", symbol_upper, mode)
+            return cached_html
+
+        url = COMPANY_URL.format(symbol=symbol_upper, mode=mode)
+
+        async with _screener_lock:
+            logger.debug("Screener GET %s", url)
+            t0 = time.perf_counter()
+            resp = await self._http.get(url)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            await asyncio.sleep(_COURTESY_DELAY)
+
+        logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
+
+        if resp.status_code == 404:
+            raise ValueError(f"Symbol '{symbol}' not found on screener.in")
+
+        if resp.status_code == 200 and _is_login_page(resp.text):
+            raise RuntimeError(
+                "screener.in session appears invalid (got login page). "
+                "Please log in at https://www.screener.in in Chrome and restart the backend."
+            )
+
+        resp.raise_for_status()
+
+        _html_cache_set(html_key, resp.text)
+        return resp.text
+
     async def get_company(
         self,
         symbol: str,
@@ -555,40 +719,10 @@ class ScreenerClient:
           - httpx.HTTPStatusError  on non-2xx from screener.in
           - ValueError  if symbol is not found (404 from screener.in)
         """
-        if not self.is_authenticated:
-            raise RuntimeError(
-                "screener.in session not available. "
-                "Please log in at https://www.screener.in in Chrome and restart the backend."
-            )
-        if self._http is None:
-            raise RuntimeError(
-                "ScreenerClient not initialised. Call await client.init() first."
-            )
-
-        mode = "consolidated" if consolidated else "standalone"
-        url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
-
-        async with _screener_lock:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
-
-        logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
-        if resp.status_code == 404:
-            raise ValueError(f"Symbol '{symbol}' not found on screener.in")
-
-        if resp.status_code == 200 and _is_login_page(resp.text):
-            raise RuntimeError(
-                "screener.in session appears invalid (got login page). "
-                "Please log in at https://www.screener.in in Chrome and restart the backend."
-            )
-
-        resp.raise_for_status()
+        html = await self.get_company_html(symbol, consolidated=consolidated)
 
         symbol_upper = symbol.upper()
-        parsed = _parse_company_page(symbol_upper, resp.text)
+        parsed = _parse_company_page(symbol_upper, html)
 
         warehouse_id = parsed.get("screener_warehouse_id")
         if warehouse_id:

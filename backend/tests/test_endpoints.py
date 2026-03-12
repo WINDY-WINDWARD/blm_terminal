@@ -690,3 +690,122 @@ class TestScreenerCompany:
         assert resp.status_code in (404, 503), (
             f"Expected 404 (auth + not found) or 503 (no auth), got {resp.status_code}"
         )
+
+
+class TestScreenerQuarterly:
+    """Tests for the screener.in quarterly results endpoint."""
+
+    def test_quarterly_returns_200_or_503(self):
+        """Returns 200 when authenticated, 503 when no screener.in session is available."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        assert resp.status_code in (200, 503), (
+            f"Expected 200 (authenticated) or 503 (no auth), got {resp.status_code}"
+        )
+
+    def test_quarterly_success_top_level_schema(self):
+        """When authenticated, response must have symbol, consolidated, quarterly_results."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        data = resp.json()
+        assert "symbol" in data
+        assert "consolidated" in data
+        assert "quarterly_results" in data
+
+    def test_quarterly_symbol_uppercased(self):
+        """symbol field in response must be uppercased regardless of request casing."""
+        resp = get("/api/screener/quarterly/reliance")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        data = resp.json()
+        assert data["symbol"] == "RELIANCE"
+
+    def test_quarterly_consolidated_flag_true_by_default(self):
+        """consolidated defaults to True."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        data = resp.json()
+        assert data["consolidated"] is True
+
+    def test_quarterly_results_is_dict(self):
+        """quarterly_results must be a dict (year-keyed)."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        data = resp.json()
+        assert isinstance(data["quarterly_results"], dict)
+
+    def test_quarterly_results_year_keys_are_numeric_strings(self):
+        """Top-level keys of quarterly_results should be year strings like '2024'."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        qr = resp.json()["quarterly_results"]
+        if not qr:
+            pytest.skip("quarterly_results is empty")
+        for year_key in qr:
+            assert year_key.isdigit() or year_key[:4].isdigit(), (
+                f"Expected year-like key, got: {year_key!r}"
+            )
+
+    def test_quarterly_results_month_values_are_dicts(self):
+        """Each month entry must be a dict mapping metric names to string values."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        qr = resp.json()["quarterly_results"]
+        if not qr:
+            pytest.skip("quarterly_results is empty")
+        for year_key, months in qr.items():
+            assert isinstance(months, dict), (
+                f"Expected dict under year '{year_key}', got {type(months)}"
+            )
+            for month_key, metrics in months.items():
+                assert isinstance(metrics, dict), (
+                    f"Expected dict under '{year_key}.{month_key}', got {type(metrics)}"
+                )
+
+    def test_quarterly_results_contains_sales_metric(self):
+        """All periods should include at least a 'Sales' metric (present on all pages)."""
+        resp = get("/api/screener/quarterly/RELIANCE")
+        if resp.status_code != 200:
+            pytest.skip("screener.in session not available (503)")
+        qr = resp.json()["quarterly_results"]
+        if not qr:
+            pytest.skip("quarterly_results is empty")
+        # Check the first available period
+        first_year = next(iter(qr))
+        first_month = next(iter(qr[first_year]))
+        metrics = qr[first_year][first_month]
+        assert "Sales" in metrics, (
+            f"Expected 'Sales' in metrics for {first_year}/{first_month}, got: {list(metrics.keys())}"
+        )
+
+    def test_quarterly_invalid_symbol_returns_422(self):
+        """Invalid symbol format must return 422."""
+        resp = get("/api/screener/quarterly/INVALID@@@")
+        assert resp.status_code == 422, (
+            f"Expected 422 for invalid symbol, got {resp.status_code}"
+        )
+
+    def test_quarterly_unknown_symbol_returns_404_or_503(self):
+        """Unknown symbol returns 404 when authenticated, 503 otherwise."""
+        resp = get("/api/screener/quarterly/THISSYMBOLDOESNOTEXIST_XYZ")
+        assert resp.status_code in (404, 503), (
+            f"Expected 404 or 503, got {resp.status_code}"
+        )
+
+    def test_quarterly_html_cache_shared_with_company(self):
+        """
+        Calling /screener/company then /screener/quarterly for the same symbol
+        should both succeed (second call served from HTML cache).
+        The test verifies consistent symbol/consolidated in both responses.
+        """
+        company_resp = get("/api/screener/company/RELIANCE")
+        quarterly_resp = get("/api/screener/quarterly/RELIANCE")
+        if company_resp.status_code != 200 or quarterly_resp.status_code != 200:
+            pytest.skip("screener.in session not available")
+        company_data = company_resp.json()
+        quarterly_data = quarterly_resp.json()
+        assert company_data["symbol"] == quarterly_data["symbol"]

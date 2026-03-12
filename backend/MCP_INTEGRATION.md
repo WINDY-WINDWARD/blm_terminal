@@ -95,7 +95,61 @@ If Perplexity Desktop eventually supports connecting to **Stateless HTTP** MCP e
 
 ---
 
-## 4. Troubleshooting
+## 4. LM Studio Integration
+
+LM Studio (v0.3.17+) supports both `stdio` and remote HTTP MCP servers via an `mcp.json` file.
+
+### Option A — Stateless HTTP (recommended, no subprocess)
+
+This uses the running FastAPI backend directly. **Start the backend first:**
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+Open LM Studio → **Program** tab (right-hand sidebar) → **Install ▸ Edit mcp.json**, then add:
+
+```json
+{
+  "mcpServers": {
+    "blm-analytics": {
+      "url": "http://127.0.0.1:8000/api/mcp/mcp"
+    }
+  }
+}
+```
+
+Save the file. LM Studio will pick up the server immediately — no restart required. The FastAPI server already runs in `stateless_http=True` / `json_response=True` mode, so LM Studio's HTTP transport connects without any handshake.
+
+### Option B — Stdio (no backend server required)
+
+If you prefer not to keep the FastAPI process running, use the stdio entrypoint instead:
+
+```json
+{
+  "mcpServers": {
+    "blm-analytics": {
+      "command": "/path/to/blm_terminal/backend/.venv/bin/python",
+      "args": [
+        "/path/to/blm_terminal/backend/run_mcp_stdio.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/path/to/blm_terminal/backend"
+      }
+    }
+  }
+}
+```
+
+Replace `/path/to/blm_terminal` with the absolute path to your cloned repository.
+
+> **Tip:** LM Studio's `mcp.json` follows [Cursor's notation](https://docs.cursor.com/context/model-context-protocol). Copy only the content inside `"mcpServers": { … }` if LM Studio prompts you to paste a snippet.
+
+---
+
+## 5. Troubleshooting
 
 - **Server Disconnected / Tool Execution Failed**: This usually means the Python executable path is incorrect or the virtual environment is missing dependencies. Verify the absolute paths in your `command` and `args`.
 - **Database Locked / Access Errors**: Because the `stdio` process runs independently of the FastAPI process, it connects to the same SQLite database. SQLite allows concurrent reads, but if you do heavy concurrent writes, you might see locking. (The current MCP tools are primarily read-only, with slight caching/upserting for filings and screener sessions).

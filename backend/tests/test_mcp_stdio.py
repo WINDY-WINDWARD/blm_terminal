@@ -59,6 +59,7 @@ EXPECTED_TOOLS = {
     "screener_search",
     "screener_company",
     "screener_trades",
+    "get_company_quarterly_results",
     "list_stock_universe",
     "get_stock_universe",
     "search_stock_universe",
@@ -224,3 +225,79 @@ class TestMCPErrorHandling:
         assert result.isError
         assert len(result.content) > 0
         assert "unknown tool" in result.content[0].text.lower()
+
+
+class TestMCPScreenerQuarterly:
+    """In-process tests for the get_company_quarterly_results MCP tool."""
+
+    async def test_tool_is_listed(self):
+        """get_company_quarterly_results must appear in the tools list."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.list_tools()
+        names = {t.name for t in result.tools}
+        assert "get_company_quarterly_results" in names
+
+    async def test_tool_has_description(self):
+        """Tool must carry a non-empty description."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.list_tools()
+        tool = next(
+            t for t in result.tools if t.name == "get_company_quarterly_results"
+        )
+        assert tool.description, "get_company_quarterly_results has no description"
+
+    async def test_call_returns_content_or_auth_error(self):
+        """
+        Returns structured data when authenticated; isError=True when no
+        screener.in session is available.  Either outcome is valid — the
+        important thing is the tool is reachable and does not raise unhandled.
+        """
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_quarterly_results", {"symbol": KNOWN_SYMBOL}
+            )
+        assert len(result.content) > 0
+        # Content must be parseable text regardless of success/failure
+        assert result.content[0].text
+
+    async def test_success_response_has_correct_schema(self):
+        """On success the first content item must include symbol and quarterly_results."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_quarterly_results", {"symbol": KNOWN_SYMBOL}
+            )
+        if result.isError:
+            pytest.skip("screener.in session not available (auth error)")
+        data = json.loads(result.content[0].text)
+        assert "symbol" in data
+        assert "consolidated" in data
+        assert "quarterly_results" in data
+        assert isinstance(data["quarterly_results"], dict)
+
+    async def test_quarterly_results_year_month_nesting(self):
+        """quarterly_results must be year → month → {metric: value}."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_quarterly_results", {"symbol": KNOWN_SYMBOL}
+            )
+        if result.isError:
+            pytest.skip("screener.in session not available")
+        data = json.loads(result.content[0].text)
+        qr = data.get("quarterly_results", {})
+        if not qr:
+            pytest.skip("quarterly_results is empty")
+        for year_key, months in qr.items():
+            assert isinstance(months, dict), f"Expected dict under year '{year_key}'"
+            for month_key, metrics in months.items():
+                assert isinstance(metrics, dict), (
+                    f"Expected dict under '{year_key}.{month_key}'"
+                )
+
+    async def test_invalid_symbol_is_error(self):
+        """Invalid symbol characters must produce isError=True."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_quarterly_results", {"symbol": "INVALID@@@"}
+            )
+        assert result.isError
+        assert len(result.content) > 0

@@ -104,6 +104,7 @@ class TestMCPToolDiscovery:
             "screener_search",
             "screener_company",
             "screener_trades",
+            "get_company_quarterly_results",
             "list_stock_universe",
             "get_stock_universe",
             "search_stock_universe",
@@ -279,3 +280,101 @@ class TestMCPErrorHandling:
             {"name": "get_stock_universe", "arguments": {"symbol": "INVALID@@@"}},
         )
         assert "error" in result or "result" in result
+
+
+class TestMCPScreenerQuarterly:
+    """Tests for the get_company_quarterly_results MCP tool."""
+
+    def test_tool_is_listed(self):
+        """get_company_quarterly_results must appear in the tools list."""
+        result = mcp_request("tools/list")
+        tool_names = {t["name"] for t in result["result"]["tools"]}
+        assert "get_company_quarterly_results" in tool_names
+
+    def test_tool_has_description(self):
+        """Tool must carry a non-empty description."""
+        result = mcp_request("tools/list")
+        tools = {t["name"]: t for t in result["result"]["tools"]}
+        tool = tools.get("get_company_quarterly_results", {})
+        assert tool.get("description"), (
+            "get_company_quarterly_results has no description"
+        )
+
+    def test_call_returns_result_or_auth_error(self):
+        """
+        Returns a successful result when authenticated, or an isError content
+        entry (RuntimeError) when no screener.in session is available.
+        Either outcome is valid — the important thing is the tool is callable.
+        """
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_quarterly_results",
+                "arguments": {"symbol": KNOWN_SYMBOL},
+            },
+        )
+        assert "result" in result or "error" in result
+        if "result" in result:
+            content = result["result"]["content"]
+            assert len(content) > 0
+            assert content[0]["type"] == "text"
+
+    def test_success_response_schema(self):
+        """On 200, the tool response must include symbol, consolidated, quarterly_results."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_quarterly_results",
+                "arguments": {"symbol": KNOWN_SYMBOL},
+            },
+        )
+        if "error" in result:
+            pytest.skip("JSON-RPC level error — server may be unavailable")
+        content = result["result"]["content"]
+        if result["result"].get("isError"):
+            pytest.skip("screener.in session not available (auth error)")
+        import json as _json
+
+        data = _json.loads(content[0]["text"])
+        assert "symbol" in data
+        assert "consolidated" in data
+        assert "quarterly_results" in data
+
+    def test_quarterly_results_nested_structure(self):
+        """quarterly_results must be year → month → {metric: value}."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_quarterly_results",
+                "arguments": {"symbol": KNOWN_SYMBOL},
+            },
+        )
+        if "error" in result:
+            pytest.skip("server unavailable")
+        if result["result"].get("isError"):
+            pytest.skip("screener.in session not available")
+        import json as _json
+
+        data = _json.loads(result["result"]["content"][0]["text"])
+        qr = data.get("quarterly_results", {})
+        if not qr:
+            pytest.skip("quarterly_results is empty")
+        for year_key, months in qr.items():
+            assert isinstance(months, dict), f"Expected dict under year '{year_key}'"
+            for month_key, metrics in months.items():
+                assert isinstance(metrics, dict), (
+                    f"Expected dict under '{year_key}.{month_key}'"
+                )
+
+    def test_invalid_symbol_is_error(self):
+        """Invalid symbol format must produce an error result."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_quarterly_results",
+                "arguments": {"symbol": "INVALID@@@"},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
