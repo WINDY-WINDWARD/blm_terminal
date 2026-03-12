@@ -3,7 +3,7 @@ Integration tests for the BLM Analytics FastAPI backend.
 
 Requirements:
   - The server must be running before you execute these tests.
-  - Default base URL is http://localhost:8000.  Override with the
+  - Default base URL is http://localhost:4455.  Override with the
     BLM_BASE_URL environment variable:
 
         BLM_BASE_URL=http://localhost:4455 pytest tests/test_endpoints.py
@@ -26,7 +26,7 @@ import requests
 # Configuration
 # ---------------------------------------------------------------------------
 
-BASE_URL: str = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+BASE_URL: str = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:4455").rstrip("/")
 
 # Seconds to wait between consecutive NSE-hitting requests.
 NSE_COURTESY_DELAY: float = 3.0
@@ -63,7 +63,7 @@ def require_server():
     except Exception as exc:
         pytest.fail(
             f"Backend server not reachable at {BASE_URL} – start it with "
-            f"`uvicorn main:app --host 127.0.0.1 --port 8000` before running tests.\n"
+            f"`uvicorn main:app --host 127.0.0.1 --port 4455` before running tests.\n"
             f"Error: {exc}"
         )
 

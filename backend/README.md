@@ -149,6 +149,60 @@ curl http://localhost:3000/api/py/market/top-gainers
 
 ---
 
+## MCP Server (Model Context Protocol)
+
+The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides programmatic access to the same read-only data via the MCP protocol, suitable for LLM integrations.
+
+**Transport:** Streamable HTTP (mounted inside FastAPI)  
+**Path:** `/api/mcp`  
+**Startup:** The MCP server shares the same lifespan as the FastAPI app — migrations, cache cleanup, stock-universe scheduler, and screener session initialization all run once at startup.
+
+### Available MCP Tools
+
+| Tool | Description |
+|---|---|
+| `health_check` | Service health status |
+| `get_top_gainers` | Today's top gainers on NSE |
+| `get_top_losers` | Today's top losers on NSE |
+| `get_bulk_deals` | Bulk deals for a symbol |
+| `get_block_deals` | Block deals for a symbol |
+| `get_high_short_interest` | Stocks with high short interest |
+| `get_largedeal_snapshot` | Full largedeal snapshot (bulk/short/block) |
+| `get_change_ranges` | Percentage changes over multiple timeframes |
+| `get_symbol_data` | Live symbol data from NSE |
+| `get_52week_low_stocks` | 52-week low stocks snapshot |
+| `get_52week_high_stocks` | 52-week high stocks snapshot |
+| `get_volume_gainers` | Volume gainers snapshot |
+| `get_corporate_filings` | Quarterly financial results as CSV (structured) |
+| `screener_search` | Search screener.in for companies |
+| `screener_company` | Company fundamentals from screener.in (requires auth) |
+| `screener_trades` | Insider trades from screener.in (requires auth) |
+| `list_stock_universe` | All stock universe records |
+| `get_stock_universe` | Single stock universe record by symbol |
+| `search_stock_universe` | Search stock universe by prefix |
+
+**Note:** AI endpoints (`/api/ai-summarizer/*`) are **not** exposed via MCP in v1.
+
+### Testing MCP
+
+Use the MCP Inspector for local development:
+
+```bash
+cd backend
+source .venv/bin/activate
+uv run mcp dev app/mcp_server.py
+```
+
+Or call the JSON-RPC endpoint directly:
+
+```bash
+curl -X POST http://localhost:4455/api/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+---
+
 ## Operational notes & caveats
 
 - NSE requires careful HTTP headers and cookies. The `nse_client` module bootstraps a session by first visiting the NSE homepage and reuses cookies. Avoid heavy parallel scraping.

@@ -29,6 +29,7 @@ from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
 from app.backgroundtasks import stock_universe_scheduler
+from app import mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -175,15 +176,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Set AI_API_KEY (and optionally AI_API_BASE_URL, AI_MODEL) in .env."
         )
 
-    yield
+    # The MCP streamable-HTTP session manager requires its task group to be
+    # running for the duration of the application.  streamable_http_app() is
+    # called at mount time (module scope), so _session_manager is already
+    # created; we just need to start it here inside the lifespan.
+    assert mcp_server.mcp._session_manager is not None, (
+        "MCP session manager not initialised — ensure app.mount() runs before lifespan"
+    )
+    async with mcp_server.mcp._session_manager.run():
+        yield
 
-    logger.info("Shutting down — closing clients...")
-    cleanup_task.cancel()
-    universe_task.cancel()
+        logger.info("Shutting down — closing clients...")
+        cleanup_task.cancel()
+        universe_task.cancel()
 
-    await ai_summarizer.close()
-    await nse_client.close()
-    await screener_client.close()
+        await ai_summarizer.close()
+        await nse_client.close()
+        await screener_client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +257,9 @@ app.include_router(filings_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
+
+# Mount MCP server under /api/mcp
+app.mount("/api/mcp", mcp_server.mcp.streamable_http_app())
 
 
 @app.get("/health", tags=["meta"])
