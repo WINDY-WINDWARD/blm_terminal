@@ -493,7 +493,8 @@ async def list_stock_universe() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_stock_universe(symbol: str) -> dict[str, Any]:
-    """Return a single stock universe record by symbol from the database."""
+    """ PREFER screener_company or get_symbol_data for stock research; this is a fallback for basic symbol/company name/sector search.
+    Return a single stock universe record by symbol from the database."""
     symbol = symbol.upper().strip()
     async with AsyncSessionLocal() as db:
         rec = await db.get(StockUniverseModel, symbol)
