@@ -187,3 +187,82 @@ async def news_scheduler() -> None:
     except asyncio.CancelledError:
         logger.info("news_scheduler: cancelled, shutting down cleanly")
         await news_fetcher.close()
+
+
+WATCHLIST_NEWS_INTERVAL = 5 * 60
+WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
+
+
+async def refresh_watchlist_news() -> None:
+    """Fetch/refresh company news for all symbols in the watchlist."""
+    from app.models.watchlist import WatchlistItem
+    from app.models.news import NewsArticle
+    from sqlalchemy import select, func
+    from datetime import datetime, timedelta, timezone
+
+    async with _db_lock:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(WatchlistItem.symbol))
+            symbols = [row[0] for row in result]
+
+    if not symbols:
+        logger.debug("refresh_watchlist_news: watchlist is empty, skipping")
+        return
+
+    logger.info(
+        "refresh_watchlist_news: refreshing news for %d symbols: %s",
+        len(symbols),
+        symbols,
+    )
+
+    for symbol in symbols:
+        async with _db_lock:
+            async with AsyncSessionLocal() as session:
+                stale_check = await session.execute(
+                    select(func.max(NewsArticle.fetched_at)).where(
+                        NewsArticle.company_symbol == symbol.upper()
+                    )
+                )
+                latest = stale_check.scalar_one_or_none()
+
+        if latest is not None:
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - latest).total_seconds()
+            if age < WATCHLIST_NEWS_STALE_SECONDS:
+                logger.debug(
+                    "refresh_watchlist_news: %s is fresh (age=%.0fs), skipping",
+                    symbol,
+                    age,
+                )
+                continue
+
+        try:
+            async with _db_lock:
+                async with AsyncSessionLocal() as session:
+                    count = await news_fetcher.fetch_company_news(
+                        symbol=symbol, db=session
+                    )
+            logger.info(
+                "refresh_watchlist_news: %s — %d articles stored/tagged", symbol, count
+            )
+        except Exception:
+            logger.exception("refresh_watchlist_news: failed for %s", symbol)
+
+        await asyncio.sleep(2)
+
+
+async def watchlist_news_scheduler() -> None:
+    """Run refresh_watchlist_news every 5 minutes."""
+    try:
+        logger.info("watchlist_news_scheduler: initial run at startup")
+        await refresh_watchlist_news()
+
+        while True:
+            logger.info(
+                "watchlist_news_scheduler: next run in %d s", WATCHLIST_NEWS_INTERVAL
+            )
+            await asyncio.sleep(WATCHLIST_NEWS_INTERVAL)
+            await refresh_watchlist_news()
+    except asyncio.CancelledError:
+        logger.info("watchlist_news_scheduler: cancelled, shutting down cleanly")

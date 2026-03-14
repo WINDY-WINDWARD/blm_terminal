@@ -402,6 +402,45 @@ def main():
     out.write(f"Status: {status}")
     out.print_json(body)
 
+    # News - Global
+    out.print_section("GET /api/news/global")
+    status, body = get("/api/news/global")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    # News - Company (GET)
+    out.print_section("GET /api/news/company/{symbol}")
+    status, body = get("/api/news/company/RELIANCE")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    elif status == 404:
+        out.write("Response: 404 — No articles found for symbol")
+        out.print_json(body)
+    else:
+        out.print_json(body)
+
+    # News - Company (POST)
+    out.print_section("POST /api/news/company")
+    status, body = post("/api/news/company", {"symbol": "RELIANCE"})
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
     # AI Summarizer - Summarize (using actual corporate filings data)
     out.print_section("POST /api/ai/summarize")
     if corporate_filings_data:

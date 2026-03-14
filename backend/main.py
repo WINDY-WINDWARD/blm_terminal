@@ -30,7 +30,11 @@ from app.routers.nonpersistence import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
-from app.backgroundtasks import news_scheduler, stock_universe_scheduler
+from app.backgroundtasks import (
+    news_scheduler,
+    stock_universe_scheduler,
+    watchlist_news_scheduler,
+)
 from app import mcp_server
 
 logger = logging.getLogger(__name__)
@@ -165,6 +169,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cleanup_task = await start_cache_cleanup()
     universe_task = asyncio.create_task(stock_universe_scheduler())
     news_task = asyncio.create_task(news_scheduler())
+    watchlist_task = asyncio.create_task(watchlist_news_scheduler())
     await screener_client.init()
 
     if ai_summarizer.is_configured:
@@ -193,6 +198,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cleanup_task.cancel()
         universe_task.cancel()
         news_task.cancel()
+        watchlist_task.cancel()
 
         await ai_summarizer.close()
         await nse_client.close()
