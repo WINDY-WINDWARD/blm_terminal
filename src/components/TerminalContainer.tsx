@@ -21,6 +21,7 @@ const VALID_WIDGETS = [
   'DEALS',
   'LARGEDEALS',
   'BREAKOUTS',
+  'NEWS',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {

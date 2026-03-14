@@ -22,6 +22,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'DEALS', desc: 'Bulk/block deals' },
   { cmd: 'LARGEDEALS', desc: 'Large deals snapshot' },
   { cmd: 'BREAKOUTS', desc: '52-week breakouts' },
+  { cmd: 'NEWS', desc: 'Market & company news' },
 ];
 
 export function CommandBar() {
@@ -159,7 +160,7 @@ export function CommandBar() {
           onBlur={() => {
             setTimeout(() => setSelectedIdx(-1), 250);
           }}
-          placeholder="CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS"
+          placeholder="CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS"
           className="bg-transparent text-white placeholder-blue-300/60 w-full outline-none uppercase font-mono text-xs tracking-wider"
           autoComplete="off"
         />
