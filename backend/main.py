@@ -21,6 +21,7 @@ from app.routers import (
     ai_summarizer_router,
     filings_router,
     market_router,
+    news_router,
     screener_router,
     stockuniverse_router,
     watchlist_router,
@@ -29,7 +30,7 @@ from app.routers.nonpersistence import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
-from app.backgroundtasks import stock_universe_scheduler
+from app.backgroundtasks import news_scheduler, stock_universe_scheduler
 from app import mcp_server
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
     universe_task = asyncio.create_task(stock_universe_scheduler())
+    news_task = asyncio.create_task(news_scheduler())
     await screener_client.init()
 
     if ai_summarizer.is_configured:
@@ -190,6 +192,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Shutting down — closing clients...")
         cleanup_task.cancel()
         universe_task.cancel()
+        news_task.cancel()
 
         await ai_summarizer.close()
         await nse_client.close()
@@ -256,6 +259,7 @@ async def log_requests(request: Request, call_next) -> Response:  # type: ignore
 app.include_router(ai_summarizer_router, prefix="/api")
 app.include_router(filings_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
+app.include_router(news_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")

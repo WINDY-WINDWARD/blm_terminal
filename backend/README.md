@@ -1,6 +1,6 @@
 # BLM Analytics — Python FastAPI Backend
 
-This lightweight FastAPI service provides NSE India analytics used by the BLM Terminal frontend. It fetches and caches NSE data (corporate filings CSVs, market snapshots, and the stock universe) and exposes a small REST surface under `/api/*`.
+This FastAPI service provides NSE India analytics used by the BLM Terminal frontend. It fetches and caches NSE data (corporate filings, market snapshots, news, stock universe, watchlist) and exposes a REST surface under `/api/*`, plus a streamable HTTP MCP server at `/api/mcp`.
 
 This README explains how to run the backend locally and lists all available endpoints with example requests.
 
@@ -8,19 +8,33 @@ This README explains how to run the backend locally and lists all available endp
 
 ## Prerequisites
 
-- Python 3.11+ recommended
+- Python 3.11+
 - A virtual environment (venv) or similar isolation
 - Network access to `https://www.nseindia.com`
 
 ## Project layout (relevant files)
 
-- `main.py` — FastAPI app entrypoint
+- `main.py` — FastAPI app entrypoint + Alembic migration runner
 - `app/config.py` — runtime settings (loaded from `.env`)
 - `app/database.py` — async SQLAlchemy engine, `Base`, and `get_db()` dependency
-- `app/models/` — ORM models (`corporatefilings.py`, `stockuniverse.py`)
-- `app/routers/` — API routers (`corporatefilings.py`, `nonpersistence.py`, `stockuniverse.py`)
-- `app/services/nse_client.py` — NSE HTTP client and helpers
-- `app/backgroundtasks.py` — nightly stock universe sync scheduler
+- `app/models/` — ORM models (`corporatefilings.py`, `news.py`, `stockuniverse.py`, `watchlist.py`)
+- `app/schemas/` — Pydantic v2 request/response schemas (one file per domain)
+- `app/routers/` — API routers:
+  - `corporatefilings.py` — NSE quarterly results CSV cache
+  - `nonpersistence.py` — short-lived market snapshots (gainers, deals, breakouts, etc.)
+  - `stockuniverse.py` — DB-backed stock universe CRUD
+  - `watchlist.py` — persistent watchlist (used by Next.js `/api/watchlist` proxy)
+  - `news.py` — news fetching and caching
+  - `screener.py` — Screener.in fundamentals proxy
+  - `ai_summarizer.py` — OpenAI-backed summarizer
+- `app/services/` — outbound HTTP clients:
+  - `nse_client.py` — NSE session bootstrap + HTTP helpers
+  - `screener_client.py` — Screener.in scraper
+  - `news_fetcher.py` — news aggregation
+  - `moneycontrol_client.py` — MoneyControl data
+  - `ai_summarizer.py` — OpenAI integration
+- `app/mcp_server.py` — MCP tool definitions (streamable HTTP, mounted at `/api/mcp`)
+- `app/backgroundtasks.py` — nightly stock universe sync + news scheduler
 - `alembic/` — Alembic migration environment (`env.py`, `versions/`)
 - `alembic.ini` — Alembic configuration
 - `.env.example` — example environment variables
@@ -33,7 +47,7 @@ Copy `backend/.env.example` to `backend/.env` and adjust values as needed. Impor
 
 - `NSE_BASE_URL` — base URL for NSE (default: `https://www.nseindia.com`)
 - `DB_PATH` — SQLite DB file path used by this backend (default: `./data.db`)
-- `PORT` — port the server listens on (default: `8000`)
+- `PORT` — port the server listens on (default: `4455`)
 - `NSE_REQUEST_DELAY_MS` — polite delay between NSE requests (ms)
 - `NSE_CACHE_TTL_SECONDS` — how long fetched data is considered fresh (seconds)
 - `LOG_LEVEL` — logging level (INFO/DEBUG)
@@ -60,6 +74,21 @@ cp .env.example .env
 # run the server (reload in dev)
 uvicorn main:app --reload --port ${PORT:-4455}
 ```
+
+### Running tests
+
+Tests are an integration suite — they require the server running at `http://127.0.0.1:4455`.
+`asyncio_mode = "auto"` is set in `pyproject.toml`; no `@pytest.mark.asyncio` decorator is needed.
+
+```bash
+pytest                                                                # all tests
+pytest tests/test_endpoints.py                                        # single file
+pytest tests/test_endpoints.py::TestMarketTopGainers::test_structure  # single test
+pytest -m "not slow"                                                  # skip NSE-hitting tests
+BLM_BASE_URL=http://host:port pytest                                  # override base URL
+```
+
+Tag any test that hits NSE upstream with `@pytest.mark.slow`; CI always runs with `-m "not slow"`.
 
 Notes:
 - On every startup the app runs `alembic upgrade head` automatically — all pending migrations are applied before the server accepts requests.
@@ -136,7 +165,64 @@ curl http://localhost:4455/api/stockuniverse/RELIANCE
 curl http://localhost:4455/api/stockuniverse/search/INF
 ```
 
-5) Proxy via Next.js (developer convenience)
+5) Watchlist (DB-backed, used by Next.js frontend)
+
+- `GET    /api/watchlist` — return all watchlist items
+- `POST   /api/watchlist` — add a symbol (`{"symbol": "RELIANCE", "exchange": "NSE"}`)
+- `DELETE /api/watchlist/{id}` — remove by ID
+
+6) News
+
+- `GET /api/news/global` — latest cached global news items (MoneyControl)
+- `GET /api/news/company/{symbol}` — news for a specific company symbol
+- `POST /api/news/company` — fetch and store news for a company symbol
+
+  **Request body (both mc_url fields are optional):**
+  ```json
+  {
+    "symbol": "RELIANCE",
+    "mc_url": "https://www.moneycontrol.com/..."   // optional — auto-resolved if omitted
+  }
+  ```
+
+  The `mc_url` parameter is optional. If omitted, the backend automatically resolves it via:
+  1. StockUniverse table (cached)
+  2. MoneyControl autocomplete API
+  3. Fallback map (for known symbols like RELIANCE, INFY, TCS, etc.)
+
+  **Response:** Returns an array of news articles with fields: `url`, `title`, `text`, `publish_date`, `fetched_at`, `company_symbol`, `source`.
+
+  **Examples:**
+  ```bash
+  # Fetch news for INFY (auto-resolves URL)
+  curl -X POST http://localhost:4455/api/news/company \
+    -H "Content-Type: application/json" \
+    -d '{"symbol": "INFY"}'
+
+  # Fetch news for TITAN (resolves via autocomplete API)
+  curl -X POST http://localhost:4455/api/news/company \
+    -H "Content-Type: application/json" \
+    -d '{"symbol": "TITAN"}'
+
+  # Fetch news with explicit URL
+  curl -X POST http://localhost:4455/api/news/company \
+    -H "Content-Type: application/json" \
+    -d '{"symbol": "RELIANCE", "mc_url": "https://www.moneycontrol.com/india/stockpricequote/refineries/relianceindustries/RI"}'
+
+  # Get cached company news
+  curl http://localhost:4455/api/news/company/INFY
+
+  # Get global news
+  curl http://localhost:4455/api/news/global
+  ```
+
+7) Screener (fundamentals)
+
+- `GET /api/screener/search?q=reliance` — search Screener.in for companies
+- `GET /api/screener/company/{slug}` — company fundamentals (requires Screener auth)
+- `GET /api/screener/trades/{slug}` — insider trades (requires Screener auth)
+
+8) Proxy via Next.js (developer convenience)
 
 - If you run the Next.js dev server, the repo contains `src/app/api/py/[...path]/route.ts` which maps e.g.
   - `GET /api/py/market/top-gainers` → `http://localhost:4455/api/market/top-gainers`
@@ -180,6 +266,7 @@ The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides pr
 | `list_stock_universe` | All stock universe records |
 | `get_stock_universe` | Single stock universe record by symbol |
 | `search_stock_universe` | Search stock universe by prefix |
+| `get_company_news` | Company-specific news from MoneyControl — auto-resolves MC URL from symbol |
 
 **Note:** AI endpoints (`/api/ai-summarizer/*`) are **not** exposed via MCP in v1.
 
@@ -352,13 +439,7 @@ alembic history               # list all revisions for reference
 | File | Purpose |
 |---|---|
 | `alembic.ini` | Alembic config — sets `sqlalchemy.url` from `settings.db_path` |
-| `alembic/env.py` | Migration runtime — imports `Base`, both models, configures batch mode and type comparison |
+| `alembic/env.py` | Migration runtime — imports `Base`, all models, configures batch mode and type comparison |
 | `alembic/versions/` | One `.py` file per revision; commit all of these |
 | `main.py` `_run_migrations_sync()` | Calls `upgrade head` at every server startup |
-
-
-
-- add a `requirements.txt` or `constraints.txt` for pip installs,
-- add a small `docker-compose.yml` for running Next.js + the Python backend together,
-- generate a minimal test suite for the routers (pytest + pytest-asyncio).
 

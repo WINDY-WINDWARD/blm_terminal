@@ -3,6 +3,7 @@
 from app.routers.ai_summarizer import router as ai_summarizer_router
 from app.routers.corporatefilings import router as filings_router
 from app.routers.nonpersistence import router as market_router
+from app.routers.news import router as news_router
 from app.routers.screener import router as screener_router
 from app.routers.stockuniverse import router as stockuniverse_router
 from app.routers.watchlist import router as watchlist_router
@@ -11,6 +12,7 @@ __all__ = [
     "ai_summarizer_router",
     "filings_router",
     "market_router",
+    "news_router",
     "screener_router",
     "stockuniverse_router",
     "watchlist_router",

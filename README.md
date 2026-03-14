@@ -36,7 +36,7 @@ BLM Terminal is a full-stack trading dashboard that sits in front of an [OpenAlg
 | **Real-time data** | Native WebSocket client for live tick streaming via OpenAlgo |
 | **Charts** | Lightweight candlestick charts (`lightweight-charts`) with OHLCV history |
 | **Order management** | Place, view, and track orders and positions in a single panel |
-| **Watchlist** | Persistent, editable watchlist backed by SQLite via Prisma |
+| **Watchlist** | Persistent, editable watchlist backed by the Python analytics backend (SQLite) |
 | **Market movers** | Top gainers / losers fetched from the Python analytics backend |
 | **Fundamentals & Deals** | NSE corporate filings, bulk/block deal data via the FastAPI service |
 | **Data warehouse** | Standalone FastAPI + SQLite backend — runs independently; archives OHLCV and filing data with configurable TTL caching |
@@ -52,11 +52,13 @@ Browser
   └── Next.js 16 Frontend (port 3000)
         ├── /api/openalgo/*   → rate-limit → cache → OpenAlgo API (port 8800)
         ├── /api/py/*         → Python FastAPI backend (port 4455)
-        ├── /api/settings     → Prisma → SQLite (frontend DB)
-        └── /api/watchlist    → Prisma → SQLite (frontend DB)
+        ├── /api/settings     → Prisma → SQLite (TopMoverSymbol, UserSettings)
+        └── /api/watchlist    → Python FastAPI backend (watchlist in backend DB)
 
 Python FastAPI Backend (port 4455)          ← standalone, no Next.js dependency
   ├── NSE HTTP client (cached, polite delay)
+  ├── Screener, MoneyControl, News, AI Summarizer services
+  ├── MCP server at /api/mcp (streamable HTTP)
   ├── Alembic migrations (auto-applied on startup)
   └── SQLite data warehouse (data.db)
 ```
@@ -166,7 +168,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile          # Python FastAPI image
     ports:
-      - "4455:4455"
+      - "8000:8000"
     env_file: ./backend/.env
     volumes:
       - backend_data:/app/data        # persist SQLite warehouse
@@ -204,6 +206,7 @@ uvicorn main:app --reload --port 4455
 
 # Tests (requires running server)
 pytest                          # all tests
+pytest tests/test_endpoints.py::TestMarketTopGainers::test_structure  # single test
 pytest -m "not slow"            # skip NSE-hitting tests
 ```
 
@@ -218,23 +221,31 @@ src/
 │   │   ├── openalgo/         # Broker proxy: rate-limit → cache → OpenAlgo
 │   │   ├── py/[...path]/     # Catch-all proxy → Python backend
 │   │   ├── settings/         # User settings (Prisma/SQLite)
-│   │   └── watchlist/        # Watchlist CRUD (Prisma/SQLite)
+│   │   └── watchlist/        # Watchlist CRUD (proxied to Python backend)
 │   ├── globals.css           # Tailwind v4 design tokens
 │   ├── layout.tsx
 │   └── page.tsx
 ├── components/
-│   ├── widgets/              # ChartWidget, OrderWidget, PosWidget, …
-│   └── …                     # CommandBar, GridSystem, LiveTicker, Panel
+│   ├── widgets/              # ChartWidget, OrderWidget, PosWidget, WatchWidget, …
+│   └── …                     # CommandBar, GridSystem, LiveTicker, Panel, ErrorBoundary
 ├── lib/                      # Shared utilities and singletons
+│   ├── socket.ts             # Native WebSocket singleton (wsService)
+│   ├── cache.ts              # In-memory TTL cache (Map-backed, fixed-window rate limiter)
+│   └── …                     # openalgo.ts, openalgo-server.ts, prisma.ts, logger.ts
 └── store/
     └── terminalStore.ts      # All Jotai atoms
-backend/                      # FastAPI analytics service (Python ≥ 3.11)
+backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatch build)
 ├── app/
-│   ├── routers/              # corporatefilings, nonpersistence, screener, …
-│   ├── services/             # nse_client, screener_client, ai_summarizer
-│   └── models/               # SQLAlchemy ORM models
+│   ├── routers/              # corporatefilings, market, news, screener, watchlist,
+│   │                         # stockuniverse, ai_summarizer, nonpersistence
+│   ├── services/             # nse_client, screener_client, news_fetcher,
+│   │                         # moneycontrol_client, ai_summarizer
+│   ├── models/               # SQLAlchemy ORM models (corporatefilings, news,
+│   │                         # stockuniverse, watchlist)
+│   └── schemas/              # Pydantic v2 request/response schemas
 ├── alembic/                  # DB migrations (auto-applied on startup)
-└── main.py                   # FastAPI entrypoint
+└── main.py                   # FastAPI entrypoint + migration runner
 prisma/
-└── schema.prisma             # WatchlistItem, TopMoverSymbol, UserSettings
+└── schema.prisma             # Models: TopMoverSymbol, UserSettings
+                              # (watchlist lives in the Python backend DB)
 ```

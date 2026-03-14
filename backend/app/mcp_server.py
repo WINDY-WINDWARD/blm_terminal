@@ -17,10 +17,12 @@ from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
 from app.models.corporatefilings import CorporateFiling
+from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.services.nse_client import nse_client
 from app.services.screener_client import _parse_all_quarters, screener_client
+from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -493,7 +495,7 @@ async def list_stock_universe() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_stock_universe(symbol: str) -> dict[str, Any]:
-    """ PREFER screener_company or get_symbol_data for stock research; this is a fallback for basic symbol/company name/sector search.
+    """PREFER screener_company or get_symbol_data for stock research; this is a fallback for basic symbol/company name/sector search.
     Return a single stock universe record by symbol from the database."""
     symbol = symbol.upper().strip()
     async with AsyncSessionLocal() as db:
@@ -569,6 +571,7 @@ async def list_watchlist() -> list[dict[str, Any]]:
             for r in rows
         ]
 
+
 @mcp.tool()
 async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
     """Add a symbol/exchange pair to the watchlist (idempotent).
@@ -622,4 +625,136 @@ async def remove_watchlist_item(item_id: int) -> dict[str, Any]:
             raise ValueError(f"watchlist item {item_id} not found")
         await db.delete(item)
         await db.commit()
-        return {"ok": True, "id": item_id}
+    return {"ok": True, "id": item_id}
+
+
+# ---------------------------------------------------------------------------
+# News Endpoints
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_global_news(days: int = 7, limit: int = 50) -> list[dict[str, Any]]:
+    """Return cached global news articles from MoneyControl.
+
+    Args:
+        days: Number of days to look back (default: 7)
+        limit: Maximum number of articles to return (default: 50)
+    """
+    from datetime import datetime, timedelta
+
+    start_date = datetime.now() - timedelta(days=days)
+
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(NewsArticle)
+            .where(NewsArticle.source == SOURCE_NAME)
+            .where(NewsArticle.publish_date >= start_date)
+            .order_by(NewsArticle.publish_date.desc().nullslast())
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        articles = result.scalars().all()
+
+        return [
+            {
+                "url": a.url,
+                "title": a.title,
+                "text": a.text,
+                "publish_date": a.publish_date.isoformat() if a.publish_date else None,
+                "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
+            }
+            for a in articles
+        ]
+
+
+_COMPANY_NEWS_STALE_SECONDS = 5 * 60  # matches global crawl cadence
+
+
+@mcp.tool()
+async def get_company_news(
+    symbol: str, days: int = 30, limit: int = 50, refresh: bool = False
+) -> list[dict[str, Any]]:
+    """Return news articles for a specific company symbol from MoneyControl.
+
+    Automatically fetches fresh articles from MoneyControl when needed:
+      - No articles stored yet for the symbol (first call)
+      - The most recently fetched article is older than 5 minutes (matches the
+        global news crawl cadence — company pages are re-scraped at the same rate)
+      - refresh=True is passed explicitly
+
+    For unknown symbols (not in the built-in map), returns whatever is already
+    stored in the DB without attempting a live fetch.
+
+    Args:
+        symbol: NSE ticker symbol (e.g., "RELIANCE", "INFY")
+        days: Number of days to look back (default: 30)
+        limit: Maximum number of articles to return (default: 50)
+        refresh: Force a live fetch from MoneyControl even if articles are fresh (default: False)
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import func, or_
+
+    symbol = symbol.upper()
+    start_date = datetime.now() - timedelta(days=days)
+
+    async def _query_db(db) -> list[dict[str, Any]]:
+        stmt = (
+            select(NewsArticle)
+            .where(NewsArticle.company_symbol == symbol)
+            .where(
+                or_(
+                    NewsArticle.publish_date >= start_date,
+                    NewsArticle.publish_date.is_(None),
+                )
+            )
+            .order_by(NewsArticle.publish_date.desc().nullslast())
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        articles = result.scalars().all()
+        return [
+            {
+                "url": a.url,
+                "title": a.title,
+                "text": a.text,
+                "publish_date": a.publish_date.isoformat() if a.publish_date else None,
+                "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
+            }
+            for a in articles
+        ]
+
+    async def _latest_fetched_at(db) -> datetime | None:
+        """Return the most recent fetched_at timestamp for this symbol's articles."""
+        stmt = select(func.max(NewsArticle.fetched_at)).where(
+            NewsArticle.company_symbol == symbol
+        )
+        result = await db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async with AsyncSessionLocal() as db:
+        existing = await _query_db(db)
+        latest_fetched = await _latest_fetched_at(db)
+
+    # Determine staleness: compare the most recent fetched_at to now
+    stale = True
+    if latest_fetched is not None:
+        age_seconds = (datetime.now() - latest_fetched).total_seconds()
+        stale = age_seconds > _COMPANY_NEWS_STALE_SECONDS
+
+    should_fetch = refresh or len(existing) == 0 or stale
+
+    if should_fetch:
+        logger.info(
+            "get_company_news: fetching %s (stale=%s, existing=%d, refresh=%s)",
+            symbol,
+            stale,
+            len(existing),
+            refresh,
+        )
+        async with AsyncSessionLocal() as db:
+            await news_fetcher.fetch_company_news(symbol=symbol, db=db)
+        async with AsyncSessionLocal() as db:
+            return await _query_db(db)
+
+    return existing

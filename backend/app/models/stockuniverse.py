@@ -28,6 +28,7 @@ class StockUniverse(Base):
         DateTime(timezone=False), nullable=True
     )
     screener_trades_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    mc_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
