@@ -292,7 +292,7 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=settings.port,
-        reload=True,
+        reload=False,
         # Disable uvicorn's own logging dictConfig so our _configure_logging()
         # remains the sole logging authority (file handler stays in place).
         log_config=None,
