@@ -266,3 +266,132 @@ async def watchlist_news_scheduler() -> None:
             await refresh_watchlist_news()
     except asyncio.CancelledError:
         logger.info("watchlist_news_scheduler: cancelled, shutting down cleanly")
+
+
+def _is_market_open() -> bool:
+    """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST).
+
+    Uses the server's local timezone. For more accurate IST handling,
+    consider using pytz or zoneinfo.
+    """
+    import pytz
+
+    now_utc = datetime.datetime.now(pytz.utc)
+    now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+
+    # Check if it's a weekday (Mon=0, Fri=4, Sat=5, Sun=6)
+    if now_ist.weekday() >= 5:
+        return False
+
+    # Check market hours (09:15 - 15:30 IST)
+    market_start = now_ist.replace(
+        hour=settings.market_start_hour,
+        minute=settings.market_start_minute,
+        second=0,
+        microsecond=0,
+    )
+    market_end = now_ist.replace(
+        hour=settings.market_end_hour,
+        minute=settings.market_end_minute,
+        second=0,
+        microsecond=0,
+    )
+
+    return market_start <= now_ist <= market_end
+
+
+def _seconds_until_market_open() -> float:
+    """Calculate seconds until the next market open time (09:15 IST).
+
+    Returns 0 if market is currently open.
+    """
+    import pytz
+
+    now_utc = datetime.datetime.now(pytz.utc)
+    now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+
+    # If it's Saturday or Sunday, calculate time until Monday 09:15
+    if now_ist.weekday() == 5:  # Saturday
+        days_until_monday = 2
+    elif now_ist.weekday() == 6:  # Sunday
+        days_until_monday = 1
+    else:
+        # It's a weekday
+        market_start = now_ist.replace(
+            hour=settings.market_start_hour,
+            minute=settings.market_start_minute,
+            second=0,
+            microsecond=0,
+        )
+
+        if now_ist < market_start:
+            # Before market open today
+            return (market_start - now_ist).total_seconds()
+        else:
+            # After market close today, next open is tomorrow
+            days_until_monday = 1
+            # If it's Friday, next open is Monday
+            if now_ist.weekday() == 4:
+                days_until_monday = 3
+
+    # Calculate next Monday 09:15
+    next_open = now_ist + datetime.timedelta(days=days_until_monday)
+    next_open = next_open.replace(
+        hour=settings.market_start_hour,
+        minute=settings.market_start_minute,
+        second=0,
+        microsecond=0,
+    )
+
+    return (next_open - now_ist).total_seconds()
+
+
+async def refresh_market_data() -> None:
+    """Fetch and store all industry and sector data from MoneyControl."""
+    from app.services.mc_market_fetcher import market_data_fetcher
+
+    async with _db_lock:
+        async with AsyncSessionLocal() as session:
+            await market_data_fetcher.refresh_all(session)
+
+
+async def market_data_scheduler() -> None:
+    """Run market data refresh during market hours only.
+
+    Schedule:
+    - Weekdays: Every 5 minutes during market hours (09:15-15:30 IST)
+    - Weekends/After hours: Sleep until next market open
+
+    Designed to be started as an asyncio background task via asyncio.create_task().
+    Handles CancelledError cleanly so the lifespan shutdown is not blocked.
+    """
+    from app.services.mc_market_fetcher import market_data_fetcher
+
+    try:
+        logger.info("market_data_scheduler: initial run at startup")
+        await refresh_market_data()
+
+        while True:
+            if _is_market_open():
+                # Market is open - refresh every 5 minutes
+                wait = 5 * 60
+                logger.info(
+                    "market_data_scheduler: market is open, next run in %d s", wait
+                )
+                await asyncio.sleep(wait)
+
+                if _is_market_open():  # Check again after sleep in case market closed
+                    await refresh_market_data()
+            else:
+                # Market is closed - wait until next open
+                wait = _seconds_until_market_open()
+                logger.info(
+                    "market_data_scheduler: market is closed, next run in %.0f s (%.1f hours)",
+                    wait,
+                    wait / 3600,
+                )
+                await asyncio.sleep(wait)
+
+    except asyncio.CancelledError:
+        logger.info("market_data_scheduler: cancelled, shutting down cleanly")
+        await market_data_fetcher.close()

@@ -22,5 +22,11 @@ class Settings(BaseSettings):
     ai_max_tokens: int = 512
     ai_temperature: float = 0.3
 
+    # Market hours (IST) - for scheduler to determine when to run
+    market_start_hour: int = 9
+    market_start_minute: int = 15
+    market_end_hour: int = 15
+    market_end_minute: int = 30
+
 
 settings = Settings()

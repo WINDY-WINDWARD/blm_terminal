@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
 from app.models.corporatefilings import CorporateFiling
+from app.models.marketcategory import MarketCategory, MarketCategoryStock
 from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
@@ -758,3 +759,244 @@ async def get_company_news(
             return await _query_db(db)
 
     return existing
+
+
+# ---------------------------------------------------------------------------
+# Market Categories (Industries & Sectors) Endpoints
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_industries() -> list[dict[str, Any]]:
+    """Return all industries with their metadata from MoneyControl.
+
+    Returns a list of industries sorted by name. Each industry includes:
+    - category_type: "industry"
+    - slug: URL-friendly identifier (e.g., "bank-private")
+    - name: Display name (e.g., "Bank - Private")
+    - url: Link to MoneyControl page
+    - market_cap: Total market cap in Rs Cr
+    - pe: Industry PE ratio
+    - advance: Number of advancing stocks
+    - decline: Number of declining stocks
+    - sentiment: Market sentiment (Bullish, Bearish, Neutral, etc.)
+    - earnings_yoy: Year-over-year earnings change %
+    """
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(MarketCategory)
+            .where(MarketCategory.category_type == "industry")
+            .order_by(MarketCategory.name)
+        )
+        result = await db.execute(stmt)
+        categories = result.scalars().all()
+        return [
+            {
+                "category_type": c.category_type,
+                "slug": c.slug,
+                "name": c.name,
+                "url": c.url,
+                "market_cap": c.market_cap,
+                "pe": c.pe,
+                "advance": c.advance,
+                "decline": c.decline,
+                "sentiment": c.sentiment,
+                "earnings_yoy": c.earnings_yoy,
+                "last_updated": c.last_updated.isoformat() if c.last_updated else None,
+            }
+            for c in categories
+        ]
+
+
+@mcp.tool()
+async def list_sectors() -> list[dict[str, Any]]:
+    """Return all sectors with their metadata from MoneyControl.
+
+    Returns a list of sectors sorted by name. Each sector includes:
+    - category_type: "sector"
+    - slug: URL-friendly identifier (e.g., "banks")
+    - name: Display name (e.g., "Banks")
+    - url: Link to MoneyControl page
+    - market_cap: Total market cap in Rs Cr
+    - pe: Sector PE ratio
+    - advance: Number of advancing stocks
+    - decline: Number of declining stocks
+    - sentiment: Market sentiment (Bullish, Bearish, Neutral, etc.)
+    - earnings_yoy: Year-over-year earnings change %
+    """
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(MarketCategory)
+            .where(MarketCategory.category_type == "sector")
+            .order_by(MarketCategory.name)
+        )
+        result = await db.execute(stmt)
+        categories = result.scalars().all()
+        return [
+            {
+                "category_type": c.category_type,
+                "slug": c.slug,
+                "name": c.name,
+                "url": c.url,
+                "market_cap": c.market_cap,
+                "pe": c.pe,
+                "advance": c.advance,
+                "decline": c.decline,
+                "sentiment": c.sentiment,
+                "earnings_yoy": c.earnings_yoy,
+                "last_updated": c.last_updated.isoformat() if c.last_updated else None,
+            }
+            for c in categories
+        ]
+
+
+@mcp.tool()
+async def get_industry_stocks(slug: str) -> list[dict[str, Any]]:
+    """Return all stocks in a specific industry from MoneyControl.
+
+    Args:
+        slug: Industry slug identifier (e.g., "bank-private", "it-services-consulting")
+
+    Returns a list of stocks in the industry, sorted by market cap descending.
+    Each stock includes:
+    - symbol: Stock identifier (e.g., "HDF01")
+    - company_name: Company name (e.g., "HDFC Bank")
+    - exchange: Exchange (NSE/BSE)
+    - curr_price: Current price in Rs
+    - per_change: % change
+    - market_cap: Market cap in Rs Cr
+    - ttm_pe: Trailing 12-month PE
+    - net_profit: Latest net profit in Rs Cr
+    - net_profit_yoy: Net profit YOY %
+    - tech_trend: Technical trend (Very Bullish, Bullish, Neutral, Bearish, Very Bearish)
+    - mc_url: MoneyControl stock page URL
+    - categories: List of categories the stock belongs to (both industries and sectors)
+    """
+    slug = slug.strip().lower()
+
+    # First check if industry exists
+    async with AsyncSessionLocal() as db:
+        stmt = select(MarketCategory).where(
+            MarketCategory.category_type == "industry", MarketCategory.slug == slug
+        )
+        result = await db.execute(stmt)
+        category = result.scalar_one_or_none()
+
+        if not category:
+            raise ValueError(
+                f"Industry '{slug}' not found. Use list_industries() to get valid slugs."
+            )
+
+    # Get all stocks and filter in Python
+    async with AsyncSessionLocal() as db:
+        stmt = select(MarketCategoryStock)
+        result = await db.execute(stmt)
+        all_stocks = result.scalars().all()
+
+        stocks = [
+            s
+            for s in all_stocks
+            if s.categories
+            and any(
+                c.get("type") == "industry" and c.get("slug") == slug
+                for c in s.categories
+            )
+        ]
+
+        # Sort by market cap descending
+        stocks.sort(key=lambda x: x.market_cap or 0, reverse=True)
+
+        return [
+            {
+                "symbol": s.symbol,
+                "company_name": s.company_name,
+                "exchange": s.exchange,
+                "curr_price": s.curr_price,
+                "per_change": s.per_change,
+                "market_cap": s.market_cap,
+                "ttm_pe": s.ttm_pe,
+                "net_profit": s.net_profit,
+                "net_profit_yoy": s.net_profit_yoy,
+                "tech_trend": s.tech_trend,
+                "mc_url": s.mc_url,
+                "categories": s.categories,
+                "last_updated": s.last_updated.isoformat() if s.last_updated else None,
+            }
+            for s in stocks
+        ]
+
+
+@mcp.tool()
+async def get_sector_stocks(slug: str) -> list[dict[str, Any]]:
+    """Return all stocks in a specific sector from MoneyControl.
+
+    Args:
+        slug: Sector slug identifier (e.g., "banks", "finance", "it-services")
+
+    Returns a list of stocks in the sector, sorted by market cap descending.
+    Each stock includes:
+    - symbol: Stock identifier (e.g., "HDF01")
+    - company_name: Company name (e.g., "HDFC Bank")
+    - exchange: Exchange (NSE/BSE)
+    - curr_price: Current price in Rs
+    - per_change: % change
+    - market_cap: Market cap in Rs Cr
+    - ttm_pe: Trailing 12-month PE
+    - net_profit: Latest net profit in Rs Cr
+    - net_profit_yoy: Net profit YOY %
+    - tech_trend: Technical trend (Very Bullish, Bullish, Neutral, Bearish, Very Bearish)
+    - mc_url: MoneyControl stock page URL
+    - categories: List of categories the stock belongs to (both industries and sectors)
+    """
+    slug = slug.strip().lower()
+
+    # First check if sector exists
+    async with AsyncSessionLocal() as db:
+        stmt = select(MarketCategory).where(
+            MarketCategory.category_type == "sector", MarketCategory.slug == slug
+        )
+        result = await db.execute(stmt)
+        category = result.scalar_one_or_none()
+
+        if not category:
+            raise ValueError(
+                f"Sector '{slug}' not found. Use list_sectors() to get valid slugs."
+            )
+
+    # Get all stocks and filter in Python
+    async with AsyncSessionLocal() as db:
+        stmt = select(MarketCategoryStock)
+        result = await db.execute(stmt)
+        all_stocks = result.scalars().all()
+
+        stocks = [
+            s
+            for s in all_stocks
+            if s.categories
+            and any(
+                c.get("type") == "sector" and c.get("slug") == slug
+                for c in s.categories
+            )
+        ]
+
+        # Sort by market cap descending
+        stocks.sort(key=lambda x: x.market_cap or 0, reverse=True)
+
+        return [
+            {
+                "symbol": s.symbol,
+                "company_name": s.company_name,
+                "exchange": s.exchange,
+                "curr_price": s.curr_price,
+                "per_change": s.per_change,
+                "market_cap": s.market_cap,
+                "ttm_pe": s.ttm_pe,
+                "net_profit": s.net_profit,
+                "net_profit_yoy": s.net_profit_yoy,
+                "tech_trend": s.tech_trend,
+                "mc_url": s.mc_url,
+                "categories": s.categories,
+                "last_updated": s.last_updated.isoformat() if s.last_updated else None,
+            }
+            for s in stocks
+        ]

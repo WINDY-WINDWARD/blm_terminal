@@ -65,7 +65,7 @@ From the repository root:
 ```bash
 cd backend
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate # or for Windows PowerShell: .\.venv\bin\Activate.ps1
 pip install -e ".[dev]"
 
 # copy and edit .env as needed

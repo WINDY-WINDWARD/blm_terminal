@@ -81,13 +81,13 @@ Sample item (first):
   GET /api/watchlist
 ============================================================
 Status: 200
-Response: List of 24 items
+Response: List of 23 items
 Sample item (first):
 {
-  "id": 1,
-  "symbol": "IDFCFIRSTB",
+  "id": 3,
+  "symbol": "IRCTC",
   "exchange": "NSE",
-  "created_at": "2026-03-09T19:16:45.049000"
+  "created_at": "2026-03-10T12:24:41.870000"
 }
 
 ============================================================
@@ -204,9 +204,9 @@ Sample item (first):
   "nearWKH": 44.6578947368421,
   "nearWKL": -8.668130732463508,
   "perChange365d": -36.83,
-  "perChange30d": -7.53,
+  "perChange30d": -5.71,
   "date365dAgo": "13-Mar-2025",
-  "date30dAgo": "11-Feb-2026",
+  "date30dAgo": "12-Feb-2026",
   "chartTodayPath": "https://nsearchives.nseindia.com/today/SYNGENEEQN.svg",
   "chart30dPath": "https://nsearchives.nseindia.com/30d/SYNGENE-EQ.svg",
   "chart365dPath": "https://nsearchives.nseindia.com/365d/SYNGENE-EQ.svg",
@@ -563,10 +563,10 @@ Sample item (first):
   "symbol": "ZYDUSWELL",
   "companyName": "Zydus Wellness Limited",
   "volume": 48286539,
-  "week1AvgVolume": 8114410,
-  "week1volChange": 5.950714105039255,
-  "week2AvgVolume": 4932643,
-  "week2volChange": 9.789180394278224,
+  "week1AvgVolume": 9723723,
+  "week1volChange": 4.965848781051275,
+  "week2AvgVolume": 5452051,
+  "week2volChange": 8.856581149286386,
   "ltp": 412.05,
   "pChange": 5.95,
   "turnover": 205971.06075
@@ -772,7 +772,7 @@ Status: 200
   GET /api/news/global
 ============================================================
 Status: 200
-Response: List of 169 items
+Response: List of 172 items
 Sample item (first):
 {
   "url": "https://www.moneycontrol.com/news/brand-connect/the-digital-leapfrog-why-the-next-era-of-economic-agency-for-women-is-on-chain-13860050.html",
@@ -797,11 +797,11 @@ Sample item (first):
   "url": "https://www.moneycontrol.com/news/business/stocks/buy-reliance-industries-target-of-rs-1750-motilal-oswal-2-13858981.html",
   "source": "moneycontrol_company",
   "title": "Buy Reliance Industries; target of Rs 1750: Motilal Oswal",
-  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy VA Tech Wabag; target of Rs 1900: Motilal OswalBuy Hindustan Copper; target of Rs 650: Anand RathiBuy Aditya Infotech; target of Rs 1850: ICICI SecuritiesDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email addressSubscribeTrending newsBengaluru student offers Rs 15,000 to hire \u2018fake parent\u2019 for PTM, leaves internet in splits'Rs 25 crore in FD': Man shares how uncle turned Rs 60,000 land into Rs 14.5 lakh monthly income\u2018Why are you roasting CBSE\u2019: YouTube shares QR code for students after Class 12 maths paper controversyBadshah receives death threat note from Lawrence Bishnoi's gang after Panipat firing: 'Next time, will put a bullet through your forehead'Happy Birthday Aamir Khan: Times when he proved he is Bollywood\u2019s Mr. Perfectionist1st IITian Chief Minister of India: 25 Years, 4 Terms, 0 Corruption \u2014 the Manohar Parrikar storyIndian billionaire who donated Rs 6000 crore to his employees: He runs Rs 1.5 lakh crore company but owns no phone or luxury carScientists discover a massive 26 kg viper in Greece that weighs three times more than a king cobraKaradaiyan Nombu 2026 date and time: When will Savitri vratham be observed? Know manjal saradu muhurtham, rituals and significancePrajakta Koli calls Bruges a real-life fairytale place: 8 magical spots to explore in Belgium\u2019s UNESCO city10 mistakes to avoid when buying a new Induction cooktop\u201cIG is a drug\u201d: US jury set to deliberate in landmark social media addiction trial against Meta and YouTube8 best exercises for people over 40 to keep joints healthy4 best cookware suitable for induction cooking, plus 6 that won\u2019t work5 Feng Shui paintings to attract wealth and good luck into your home",
+  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy JSW Infrastructure; target of Rs 360: Motilal OswalBuy VA Tech Wabag; target of Rs 1900: Motilal OswalBuy Hindustan Copper; target of Rs 650: Anand RathiDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email addressSubscribeTrending newsBengaluru student offers Rs 15,000 to hire \u2018fake parent\u2019 for PTM, leaves internet in splits'Rs 25 crore in FD': Man shares how uncle turned Rs 60,000 land into Rs 14.5 lakh monthly income\u2018Why are you roasting CBSE\u2019: YouTube shares QR code for students after Class 12 maths paper controversyBadshah receives death threat note from Lawrence Bishnoi's gang after Panipat firing: 'Next time, will put a bullet through your forehead'Oscars 2026: When and where to watch the 98th Academy Awards in India1st IITian Chief Minister of India: 25 Years, 4 Terms, 0 Corruption \u2014 the Manohar Parrikar storyIndian billionaire who donated Rs 6000 crore to his employees: He runs Rs 1.5 lakh crore company but owns no phone or luxury carScientists discover a massive 26 kg viper in Greece that weighs three times more than a king cobraKaradaiyan Nombu 2026 date and time: When will Savitri vratham be observed? Know manjal saradu muhurtham, rituals and significancePrajakta Koli calls Bruges a real-life fairytale place: 8 magical spots to explore in Belgium\u2019s UNESCO city10 mistakes to avoid when buying a new Induction cooktop\u201cIG is a drug\u201d: US jury set to deliberate in landmark social media addiction trial against Meta and YouTube8 best exercises for people over 40 to keep joints healthy4 best cookware suitable for induction cooking, plus 6 that won\u2019t work5 Feng Shui paintings to attract wealth and good luck into your home",
   "authors": null,
   "top_image": "https://images.moneycontrol.com/static-mcnews/2025/11/20251118070809_Buy_1280x720_3.png",
   "publish_date": null,
-  "fetched_at": "2026-03-14T05:04:40.456852",
+  "fetched_at": "2026-03-14T18:22:00.544493",
   "created_at": "2026-03-13T22:19:14",
   "company_symbol": "RELIANCE"
 }
@@ -816,13 +816,121 @@ Sample item (first):
   "url": "https://www.moneycontrol.com/news/business/stocks/buy-reliance-industries-target-of-rs-1750-motilal-oswal-2-13858981.html",
   "source": "moneycontrol_company",
   "title": "Buy Reliance Industries; target of Rs 1750: Motilal Oswal",
-  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy VA Tech Wabag; target of Rs 1900: Motilal OswalBuy Hindustan Copper; target of Rs 650: Anand RathiBuy Aditya Infotech; target of Rs 1850: ICICI SecuritiesDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email addressSubscribeTrending newsBengaluru student offers Rs 15,000 to hire \u2018fake parent\u2019 for PTM, leaves internet in splits'Rs 25 crore in FD': Man shares how uncle turned Rs 60,000 land into Rs 14.5 lakh monthly income\u2018Why are you roasting CBSE\u2019: YouTube shares QR code for students after Class 12 maths paper controversyBadshah receives death threat note from Lawrence Bishnoi's gang after Panipat firing: 'Next time, will put a bullet through your forehead'Happy Birthday Aamir Khan: Times when he proved he is Bollywood\u2019s Mr. Perfectionist1st IITian Chief Minister of India: 25 Years, 4 Terms, 0 Corruption \u2014 the Manohar Parrikar storyIndian billionaire who donated Rs 6000 crore to his employees: He runs Rs 1.5 lakh crore company but owns no phone or luxury carScientists discover a massive 26 kg viper in Greece that weighs three times more than a king cobraKaradaiyan Nombu 2026 date and time: When will Savitri vratham be observed? Know manjal saradu muhurtham, rituals and significancePrajakta Koli calls Bruges a real-life fairytale place: 8 magical spots to explore in Belgium\u2019s UNESCO city10 mistakes to avoid when buying a new Induction cooktop\u201cIG is a drug\u201d: US jury set to deliberate in landmark social media addiction trial against Meta and YouTube8 best exercises for people over 40 to keep joints healthy4 best cookware suitable for induction cooking, plus 6 that won\u2019t work5 Feng Shui paintings to attract wealth and good luck into your home",
+  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy JSW Infrastructure; target of Rs 360: Motilal OswalBuy VA Tech Wabag; target of Rs 1900: Motilal OswalBuy Hindustan Copper; target of Rs 650: Anand RathiDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email addressSubscribeTrending newsBengaluru student offers Rs 15,000 to hire \u2018fake parent\u2019 for PTM, leaves internet in splits'Rs 25 crore in FD': Man shares how uncle turned Rs 60,000 land into Rs 14.5 lakh monthly income\u2018Why are you roasting CBSE\u2019: YouTube shares QR code for students after Class 12 maths paper controversyBadshah receives death threat note from Lawrence Bishnoi's gang after Panipat firing: 'Next time, will put a bullet through your forehead'Oscars 2026: When and where to watch the 98th Academy Awards in India1st IITian Chief Minister of India: 25 Years, 4 Terms, 0 Corruption \u2014 the Manohar Parrikar storyIndian billionaire who donated Rs 6000 crore to his employees: He runs Rs 1.5 lakh crore company but owns no phone or luxury carScientists discover a massive 26 kg viper in Greece that weighs three times more than a king cobraKaradaiyan Nombu 2026 date and time: When will Savitri vratham be observed? Know manjal saradu muhurtham, rituals and significancePrajakta Koli calls Bruges a real-life fairytale place: 8 magical spots to explore in Belgium\u2019s UNESCO city10 mistakes to avoid when buying a new Induction cooktop\u201cIG is a drug\u201d: US jury set to deliberate in landmark social media addiction trial against Meta and YouTube8 best exercises for people over 40 to keep joints healthy4 best cookware suitable for induction cooking, plus 6 that won\u2019t work5 Feng Shui paintings to attract wealth and good luck into your home",
   "authors": null,
   "top_image": "https://images.moneycontrol.com/static-mcnews/2025/11/20251118070809_Buy_1280x720_3.png",
   "publish_date": null,
-  "fetched_at": "2026-03-14T17:12:04.288424",
+  "fetched_at": "2026-03-14T18:49:01.210923",
   "created_at": "2026-03-13T22:19:14",
   "company_symbol": "RELIANCE"
+}
+
+============================================================
+  GET /api/markets/industries
+============================================================
+Status: 200
+Response: List of 189 items
+Sample item (first):
+{
+  "category_type": "industry",
+  "slug": "abrasives",
+  "name": "Abrasives",
+  "url": "https://www.moneycontrol.com/markets/industry-analysis/abrasives/",
+  "market_cap": null,
+  "pe": null,
+  "advance": null,
+  "decline": 6,
+  "sentiment": null,
+  "earnings_yoy": null,
+  "last_updated": "2026-03-14T18:44:20.240996",
+  "created_at": "2026-03-14T18:16:06"
+}
+
+============================================================
+  GET /api/markets/sectors
+============================================================
+Status: 200
+Response: List of 39 items
+Sample item (first):
+{
+  "category_type": "sector",
+  "slug": "agri",
+  "name": "Agri",
+  "url": "https://www.moneycontrol.com/markets/sector-analysis/agri/",
+  "market_cap": null,
+  "pe": null,
+  "advance": null,
+  "decline": 135,
+  "sentiment": null,
+  "earnings_yoy": null,
+  "last_updated": "2026-03-14T18:46:25.069066",
+  "created_at": "2026-03-14T18:18:38"
+}
+
+============================================================
+  GET /api/markets/industries/{slug}/stocks
+============================================================
+Status: 200
+Response: List of 28 items
+Sample item (first):
+{
+  "id": 1695,
+  "symbol": "HDF01",
+  "company_name": "HDFC Bank",
+  "exchange": "NSE",
+  "curr_price": 817.0,
+  "per_change": -1.89,
+  "market_cap": 1257391.0,
+  "ttm_pe": 16.88,
+  "net_profit": 20691.0,
+  "net_profit_yoy": 12.82,
+  "tech_trend": "Very Bearish",
+  "mc_url": "https://www.moneycontrol.com/india/stockpricequote/banks-private-sector/hdfcbank/HDF01",
+  "categories": [
+    {
+      "type": "industry",
+      "slug": "bank-private"
+    },
+    {
+      "type": "sector",
+      "slug": "banks"
+    }
+  ],
+  "last_updated": "2026-03-14T18:45:50.169840",
+  "created_at": "2026-03-14T18:13:30"
+}
+
+============================================================
+  GET /api/markets/sectors/{slug}/stocks
+============================================================
+Status: 200
+Response: List of 40 items
+Sample item (first):
+{
+  "id": 1695,
+  "symbol": "HDF01",
+  "company_name": "HDFC Bank",
+  "exchange": "NSE",
+  "curr_price": 817.0,
+  "per_change": -1.89,
+  "market_cap": 1257391.0,
+  "ttm_pe": 16.88,
+  "net_profit": 20691.0,
+  "net_profit_yoy": 12.82,
+  "tech_trend": "Very Bearish",
+  "mc_url": "https://www.moneycontrol.com/india/stockpricequote/banks-private-sector/hdfcbank/HDF01",
+  "categories": [
+    {
+      "type": "industry",
+      "slug": "bank-private"
+    },
+    {
+      "type": "sector",
+      "slug": "banks"
+    }
+  ],
+  "last_updated": "2026-03-14T18:45:50.169840",
+  "created_at": "2026-03-14T18:13:30"
 }
 
 ============================================================

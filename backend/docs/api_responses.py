@@ -441,6 +441,54 @@ def main():
     else:
         out.print_json(body)
 
+    # Markets - Industries
+    out.print_section("GET /api/markets/industries")
+    status, body = get("/api/markets/industries")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    # Markets - Sectors
+    out.print_section("GET /api/markets/sectors")
+    status, body = get("/api/markets/sectors")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    # Markets - Industry Stocks
+    out.print_section("GET /api/markets/industries/{slug}/stocks")
+    status, body = get("/api/markets/industries/bank-private/stocks")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    # Markets - Sector Stocks
+    out.print_section("GET /api/markets/sectors/{slug}/stocks")
+    status, body = get("/api/markets/sectors/banks/stocks")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
     # AI Summarizer - Summarize (using actual corporate filings data)
     out.print_section("POST /api/ai/summarize")
     if corporate_filings_data:
