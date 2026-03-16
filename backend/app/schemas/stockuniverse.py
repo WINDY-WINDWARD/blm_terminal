@@ -16,6 +16,11 @@ class StockUniverse(BaseModel):
     industryInfo: dict[str, str]
     lastUpdateTime: datetime | None
     screenerTradesId: str | None = None
+    mcUrl: str | None = None
+    reviewStatus: str | None = None
+    matchConfidence: float | None = None
+    mcMatchSource: str | None = None
+    mcCompanyName: str | None = None
 
     @field_validator("sectorPE", "symbolPE", mode="before")
     @classmethod

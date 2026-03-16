@@ -29,6 +29,10 @@ class StockUniverse(Base):
     )
     screener_trades_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     mc_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    review_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mc_match_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    mc_company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

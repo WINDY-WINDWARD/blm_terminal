@@ -4,15 +4,17 @@ This router only returns data from the database and makes no direct
 calls to the NSE client/service.
 """
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.schemas.stockuniverse import StockUniverse as StockUniverseSchema
+from app.services.mc_stock_linker import MCStockLinker
 
 
 router = APIRouter()
@@ -30,6 +32,11 @@ def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
         industryInfo=obj.industry_info or {},
         lastUpdateTime=obj.last_update_time,
         screenerTradesId=obj.screener_trades_id,
+        mcUrl=obj.mc_url,
+        reviewStatus=obj.review_status,
+        matchConfidence=obj.match_confidence,
+        mcMatchSource=obj.mc_match_source,
+        mcCompanyName=obj.mc_company_name,
     )
 
 
@@ -83,3 +90,63 @@ async def search_stock_universe(
     res = await db.execute(q)
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
+
+
+class MatchResultResponse(BaseModel):
+    total_matched: int
+    exact_matches: int
+    url_extract_matches: int
+    fuzzy_matches: int
+    ambiguous_matches: int
+
+
+@router.post(
+    "/stockuniverse/run-mc-linker",
+    response_model=MatchResultResponse,
+    tags=["stockuniverse"],
+)
+async def run_mc_linker(db: AsyncSession = Depends(get_db)) -> MatchResultResponse:
+    """Run the MoneyControl stock linker to match stocks with MC data."""
+    linker = MCStockLinker(db)
+    result = await linker.run_matching()
+    return MatchResultResponse(**result)
+
+
+@router.get(
+    "/stockuniverse/pending-review",
+    response_model=List[StockUniverseSchema],
+    tags=["stockuniverse"],
+)
+async def get_pending_review(
+    limit: int = 50, db: AsyncSession = Depends(get_db)
+) -> List[StockUniverseSchema]:
+    """Get stocks that need manual review (ambiguous matches)."""
+    linker = MCStockLinker(db)
+    records = await linker.get_pending_review(limit)
+    return [_orm_to_schema(r) for r in records]
+
+
+class ConfirmMatchRequest(BaseModel):
+    confirmed: bool
+    mc_url: Optional[str] = None
+
+
+@router.put(
+    "/stockuniverse/{symbol}/confirm-match",
+    response_model=StockUniverseSchema,
+    tags=["stockuniverse"],
+)
+async def confirm_match(
+    symbol: str,
+    body: ConfirmMatchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> StockUniverseSchema:
+    """Confirm or reject an ambiguous match."""
+    linker = MCStockLinker(db)
+    success = await linker.confirm_match(symbol, body.confirmed, body.mc_url)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found"
+        )
+    rec = await db.get(StockUniverseModel, symbol)
+    return _orm_to_schema(rec)
