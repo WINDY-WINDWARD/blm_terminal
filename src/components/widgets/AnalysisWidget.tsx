@@ -59,6 +59,26 @@ function getSentimentColor(sentiment: string): string {
   }
 }
 
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return '—';
+  try {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  } catch {
+    return '—';
+  }
+}
+
 function TabButton({
   active,
   onClick,
@@ -82,6 +102,50 @@ function TabButton({
   );
 }
 
+type SortKey = 'market_cap' | 'pe' | 'advance' | 'decline' | 'earnings_yoy' | 'sentiment' | 'name';
+type SortDir = 'asc' | 'desc';
+
+interface SortHeaderProps {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
+}
+
+function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
+  const columns: { key: SortKey; label: string; width: string }[] = [
+    { key: 'name', label: 'Name', width: 'flex-1 min-w-0' },
+    { key: 'market_cap', label: 'MCap', width: 'w-20' },
+    { key: 'pe', label: 'PE', width: 'w-10' },
+    { key: 'advance', label: 'Advance', width: 'w-10' },
+    { key: 'decline', label: 'Decline', width: 'w-10' },
+    { key: 'earnings_yoy', label: 'Earn %', width: 'w-14' },
+    { key: 'sentiment', label: 'Sentiment', width: 'w-16' },
+  ];
+
+  return (
+    <div className="flex gap-3 px-2 py-1 bg-zinc-900/60 text-[9px] border-b border-terminal-gray/30 font-mono">
+      <span className="flex-1 min-w-0" />
+      {columns.slice(1).map((col) => (
+        <button
+          key={col.key}
+          onClick={() => onSort(col.key)}
+          className={`flex items-center gap-0.5 ${col.width} justify-end ${
+            sortKey === col.key ? 'text-terminal-amber' : 'text-white/40 hover:text-white/60'
+          }`}
+        >
+          {col.label}
+          {sortKey === col.key && (
+            <span>{sortDir === 'asc' ? '▴' : '▾'}</span>
+          )}
+        </button>
+      ))}
+      <span className="w-10 text-right text-white/40">Stks</span>
+      <span className="w-12 text-right text-white/40">Updated</span>
+      <span className="w-10" />
+    </div>
+  );
+}
+
 interface CategoryAccordionProps {
   category: Category;
   expanded: boolean;
@@ -102,17 +166,35 @@ function CategoryAccordion({ category, expanded, onToggle, stockCount }: Categor
             {category.name}
           </span>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <span className="text-white/50 text-[9px] font-mono">
-            MCap: ₹{fmtCrore(category.market_cap)}
+        <div className="flex items-center gap-3 shrink-0 text-[9px] font-mono">
+          <span className="text-white/50 w-20 text-right">
+            ₹{fmtCrore(category.market_cap)}
           </span>
-          <span className={`text-[9px] font-mono ${getSentimentColor(category.sentiment)}`}>
+          <span className="text-white/60 w-10 text-right">
+            {category.pe ? `${category.pe.toFixed(1)}x` : '—'}
+          </span>
+          <span className="text-terminal-green w-10 text-right">
+            {category.advance || 0}▲
+          </span>
+          <span className="text-terminal-red w-10 text-right">
+            {category.decline || 0}▼
+          </span>
+          <span className={`w-14 text-right ${
+            category.earnings_yoy && category.earnings_yoy > 0 ? 'text-terminal-green' :
+            category.earnings_yoy && category.earnings_yoy < 0 ? 'text-terminal-red' : 'text-white/50'
+          }`}>
+            {fmtPercent(category.earnings_yoy)}
+          </span>
+          <span className={`w-16 ${getSentimentColor(category.sentiment)}`}>
             {category.sentiment}
           </span>
-          <span className="inline-flex items-center justify-center min-w-[20px] h-[16px] rounded-full bg-terminal-gray text-[9px] text-white px-1">
+          <span className="w-10 text-right text-white/50">
             {stockCount}
           </span>
-          <span className="text-white/50 text-[10px]">
+          <span className="text-white/40 w-12 text-right">
+            {formatRelativeTime(category.last_updated)}
+          </span>
+          <span className="text-white/50 text-[10px] w-4 text-right">
             {expanded ? '▾' : '▸'}
           </span>
         </div>
@@ -223,6 +305,8 @@ function StockList({ categorySlug, categoryType }: StockListProps) {
 export function AnalysisWidget() {
   const [activeTab, setActiveTab] = useState<Tab>('sector');
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [sortKey, setSortKey] = useState<SortKey>('market_cap');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   const { data: sectors = [], isLoading: sectorsLoading } = useQuery<Category[]>({
     queryKey: ['market/sectors'],
@@ -273,9 +357,27 @@ export function AnalysisWidget() {
     );
   }
 
-  const sortedCategories = [...categories].sort((a, b) => 
-    (b.market_cap || 0) - (a.market_cap || 0)
-  );
+  const sortedCategories = [...categories].sort((a, b) => {
+    const aVal = sortKey === 'name' ? (a.name || '') : (a[sortKey] ?? (sortKey === 'sentiment' ? '' : 0));
+    const bVal = sortKey === 'name' ? (b.name || '') : (b[sortKey] ?? (sortKey === 'sentiment' ? '' : 0));
+
+    if (sortKey === 'name' || sortKey === 'sentiment') {
+      const aStr = String(aVal).toLowerCase();
+      const bStr = String(bVal).toLowerCase();
+      return sortDir === 'asc' ? aStr.localeCompare(bStr) : bStr.localeCompare(aStr);
+    }
+
+    return sortDir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+  });
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
+  };
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
@@ -303,6 +405,8 @@ export function AnalysisWidget() {
           label="Industry Analysis"
         />
       </div>
+
+      <SortHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
 
       <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
         {categories.length === 0 ? (
