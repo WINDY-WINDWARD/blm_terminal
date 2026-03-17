@@ -1,8 +1,50 @@
 """Pydantic schemas for the watchlist endpoints."""
 
+import re
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+WATCHLIST_NAME_REGEX = re.compile(r"^[A-Za-z-]+$")
+
+
+class WatchlistCreate(BaseModel):
+    """Input schema for creating a watchlist."""
+
+    name: str = Field(..., min_length=1, max_length=32)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, v: object) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("must be a non-empty string")
+        v = v.strip()
+        if len(v) > 32:
+            raise ValueError("must be at most 32 characters")
+        if not WATCHLIST_NAME_REGEX.match(v):
+            raise ValueError("must contain only letters and hyphens")
+        return v
+
+
+class WatchlistOut(BaseModel):
+    """Output schema for a persisted watchlist."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    created_at: datetime
+
+
+class WatchlistWithCountOut(BaseModel):
+    """Output schema for a watchlist with item count."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    created_at: datetime
+    item_count: int
 
 
 class WatchlistItemCreate(BaseModel):
@@ -10,6 +52,7 @@ class WatchlistItemCreate(BaseModel):
 
     symbol: str
     exchange: str
+    watchlist_id: int | None = None
 
     @field_validator("symbol", "exchange", mode="before")
     @classmethod
@@ -25,6 +68,7 @@ class WatchlistItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    watchlist_id: int
     symbol: str
     exchange: str
     created_at: datetime

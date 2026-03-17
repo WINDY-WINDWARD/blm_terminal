@@ -3,12 +3,21 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
-import { activeSymbolAtom, activeExchangeAtom, tickDataAtom, watchlistColumnsAtom } from '@/store/terminalStore';
+import { 
+  activeSymbolAtom, 
+  activeExchangeAtom, 
+  tickDataAtom, 
+  watchlistColumnsAtom,
+  watchlistsAtom,
+  activeWatchlistIdAtom,
+  type Watchlist
+} from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 import type { TickData } from '@/lib/socket';
 
 interface WatchlistItem {
   id: number;
+  watchlist_id: number;
   symbol: string;
   exchange: string;
 }
@@ -238,14 +247,14 @@ async function searchSymbols(query: string): Promise<AutocompleteResult[]> {
   return res.json() as Promise<AutocompleteResult[]>;
 }
 
-async function fetchWatchlist(): Promise<WatchlistItem[]> {
-  const res = await fetch('/api/watchlist');
+async function fetchWatchlist(watchlistId: number = 1): Promise<WatchlistItem[]> {
+  const res = await fetch(`/api/watchlist?watchlist_id=${watchlistId}`);
   if (!res.ok) throw new Error('Failed to fetch watchlist');
   return res.json() as Promise<WatchlistItem[]>;
 }
 
-async function addSymbol(symbol: string, exchange: string): Promise<WatchlistItem> {
-  const res = await fetch('/api/watchlist', {
+async function addSymbol(symbol: string, exchange: string, watchlistId: number = 1): Promise<WatchlistItem> {
+  const res = await fetch(`/api/watchlist?watchlist_id=${watchlistId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, exchange }),
@@ -254,9 +263,25 @@ async function addSymbol(symbol: string, exchange: string): Promise<WatchlistIte
   return res.json() as Promise<WatchlistItem>;
 }
 
-async function removeSymbol(id: number): Promise<void> {
-  const res = await fetch(`/api/watchlist?id=${id}`, { method: 'DELETE' });
+async function removeSymbol(id: number, watchlistId: number = 1): Promise<void> {
+  const res = await fetch(`/api/watchlist?id=${id}&watchlist_id=${watchlistId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to remove symbol');
+}
+
+async function fetchWatchlists(): Promise<Watchlist[]> {
+  const res = await fetch('/api/watchlists');
+  if (!res.ok) throw new Error('Failed to fetch watchlists');
+  return res.json() as Promise<Watchlist[]>;
+}
+
+async function createWatchlist(name: string): Promise<Watchlist> {
+  const res = await fetch('/api/watchlists', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error('Failed to create watchlist');
+  return res.json() as Promise<Watchlist>;
 }
 
 export function WatchWidget() {
@@ -265,6 +290,8 @@ export function WatchWidget() {
   const [activeExchange, setActiveExchange] = useAtom(activeExchangeAtom);
   const [, setTickData] = useAtom(tickDataAtom);
   const [watchlistColumns] = useAtom(watchlistColumnsAtom);
+  const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
+  const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
 
   const [newSymbol, setNewSymbol] = useState('');
   const [newExchange, setNewExchange] = useState('NSE');
@@ -273,11 +300,25 @@ export function WatchWidget() {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newWatchlistName, setNewWatchlistName] = useState('');
   const debounceRef = React.useRef<NodeJS.Timeout | null>(null);
 
+  // Fetch watchlists on mount
+  useQuery({
+    queryKey: ['watchlists'],
+    queryFn: async () => {
+      const data = await fetchWatchlists();
+      setWatchlists(data);
+      return data;
+    },
+    staleTime: 300_000,
+  });
+
+  // Current watchlist data
   const { data: watchlist = [], isLoading, isError } = useQuery({
-    queryKey: ['watchlist'],
-    queryFn: fetchWatchlist,
+    queryKey: ['watchlist', activeWatchlistId],
+    queryFn: () => fetchWatchlist(activeWatchlistId),
     staleTime: Infinity,
   });
 
@@ -431,16 +472,30 @@ export function WatchWidget() {
 
   const addMutation = useMutation({
     mutationFn: ({ symbol, exchange }: { symbol: string; exchange: string }) =>
-      addSymbol(symbol, exchange),
+      addSymbol(symbol, exchange, activeWatchlistId),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['watchlist'] });
+      void qc.invalidateQueries({ queryKey: ['watchlist', activeWatchlistId] });
+      void qc.invalidateQueries({ queryKey: ['watchlists'] });
       setNewSymbol('');
     },
   });
 
   const removeMutation = useMutation({
-    mutationFn: (id: number) => removeSymbol(id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['watchlist'] }),
+    mutationFn: (id: number) => removeSymbol(id, activeWatchlistId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['watchlist', activeWatchlistId] });
+      void qc.invalidateQueries({ queryKey: ['watchlists'] });
+    },
+  });
+
+  const createWatchlistMutation = useMutation({
+    mutationFn: (name: string) => createWatchlist(name),
+    onSuccess: (newWatchlist) => {
+      void qc.invalidateQueries({ queryKey: ['watchlists'] });
+      setActiveWatchlistId(newWatchlist.id);
+      setShowCreateModal(false);
+      setNewWatchlistName('');
+    },
   });
 
   const handleSymbolChange = (value: string) => {
@@ -535,8 +590,82 @@ export function WatchWidget() {
     addMutation.mutate({ symbol: s, exchange: ex });
   };
 
+  const handleCreateWatchlist = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newWatchlistName.trim();
+    if (!name) return;
+    if (name.length > 32) return;
+    if (!/^[A-Za-z-]+$/.test(name)) return;
+    createWatchlistMutation.mutate(name);
+  };
+
+  const currentWatchlist = watchlists.find(w => w.id === activeWatchlistId);
+
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden relative">
+      {/* Watchlist selector header */}
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-terminal-gray bg-blue-950 flex-shrink-0">
+        <span className="text-white/60 uppercase text-[10px]">Watchlist:</span>
+        <select
+          value={activeWatchlistId}
+          onChange={(e) => setActiveWatchlistId(Number(e.target.value))}
+          className="bg-black border border-terminal-gray text-terminal-amber px-2 py-0.5 uppercase text-xs"
+        >
+          {watchlists.map((wl) => (
+            <option key={wl.id} value={wl.id}>
+              {wl.name}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => setShowCreateModal(true)}
+          className="ml-1 text-terminal-amber hover:text-white text-xs font-bold border border-terminal-amber hover:bg-terminal-amber hover:text-black px-1.5 py-0.5"
+          title="Create new watchlist"
+        >
+          +
+        </button>
+      </div>
+
+      {/* Create watchlist modal */}
+      {showCreateModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="bg-black border border-terminal-amber p-3 w-64">
+            <div className="text-terminal-amber font-bold mb-2 text-center">NEW WATCHLIST</div>
+            <form onSubmit={handleCreateWatchlist}>
+              <input
+                type="text"
+                value={newWatchlistName}
+                onChange={(e) => setNewWatchlistName(e.target.value)}
+                placeholder="Name (letters, hyphen)"
+                maxLength={32}
+                pattern="^[A-Za-z-]+$"
+                className="w-full bg-black border border-terminal-gray text-terminal-amber px-2 py-1 uppercase mb-2"
+                autoFocus
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateModal(false);
+                    setNewWatchlistName('');
+                  }}
+                  className="px-2 py-1 text-white border border-terminal-gray hover:bg-terminal-gray"
+                >
+                  CANCEL
+                </button>
+                <button
+                  type="submit"
+                  disabled={createWatchlistMutation.isPending || !newWatchlistName.trim() || !/^[A-Za-z-]+$/.test(newWatchlistName.trim())}
+                  className="px-2 py-1 bg-terminal-amber text-black font-bold hover:bg-amber-400 disabled:opacity-50"
+                >
+                  CREATE
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Add symbol form */}
       <form
         onSubmit={handleAdd}

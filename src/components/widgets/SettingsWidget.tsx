@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
-import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom } from '@/store/terminalStore';
+import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom, watchlistsAtom, activeWatchlistIdAtom, type Watchlist } from '@/store/terminalStore';
 
 const WATCHLIST_COLUMNS = [
   { key: 'ltp', label: 'LTP' },
@@ -61,10 +62,13 @@ function ColumnCheckboxes({
 }
 
 export function SettingsWidget() {
+  const qc = useQueryClient();
   const [wsConnected] = useAtom(wsConnectedAtom);
   const [funds] = useAtom(fundsAtom);
   const [watchlistCols, setWatchlistCols] = useAtom(watchlistColumnsAtom);
   const [moversCols, setMoversCols] = useAtom(moversColumnsAtom);
+  const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
+  const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
 
   const [loading, setLoading] = useState(true);
 
@@ -103,6 +107,16 @@ export function SettingsWidget() {
       .finally(() => setLoading(false));
   }, [setWatchlistCols, setMoversCols]);
 
+  // Fetch watchlists on mount
+  useEffect(() => {
+    fetch('/api/watchlists')
+      .then((res) => res.json())
+      .then((data: Watchlist[]) => {
+        setWatchlists(data);
+      })
+      .catch(console.error);
+  }, [setWatchlists]);
+
   // Cleanup debounce timer on unmount
   useEffect(() => {
     return () => {
@@ -124,6 +138,29 @@ export function SettingsWidget() {
       : moversCols.filter((c) => c !== key);
     setMoversCols(newCols);
     scheduleSave();
+  };
+
+  const handleDeleteWatchlist = async (id: number, name: string) => {
+    if (!confirm(`Delete watchlist "${name}"? All items will be deleted.`)) return;
+    try {
+      const res = await fetch(`/api/watchlists/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || 'Failed to delete watchlist');
+        return;
+      }
+      // Refresh watchlists
+      const data = await fetch('/api/watchlists').then(r => r.json()) as Watchlist[];
+      setWatchlists(data);
+      // Switch to default if current was deleted
+      if (activeWatchlistId === id) {
+        setActiveWatchlistId(1);
+      }
+      void qc.invalidateQueries({ queryKey: ['watchlist'] });
+    } catch (err) {
+      console.error('Failed to delete watchlist:', err);
+      alert('Failed to delete watchlist');
+    }
   };
 
   return (
@@ -208,6 +245,37 @@ export function SettingsWidget() {
             onChange={handleMoversChange}
           />
         )}
+      </div>
+
+      {/* Watchlists Management */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Watchlists
+        </div>
+        <div className="flex flex-col gap-0.5">
+          {watchlists.map((wl) => (
+            <div key={wl.id} className="flex items-center justify-between gap-2">
+              <span className="text-white">
+                {wl.name}
+                {activeWatchlistId === wl.id && (
+                  <span className="ml-1 text-terminal-green text-[9px]">●</span>
+                )}
+              </span>
+              {wl.id !== 1 && (
+                <button
+                  onClick={() => handleDeleteWatchlist(wl.id, wl.name)}
+                  className="text-terminal-red hover:text-red-400 text-xs font-bold px-1"
+                  title="Delete watchlist"
+                >
+                  ✕
+                </button>
+              )}
+              {wl.id === 1 && (
+                <span className="text-white/40 text-[9px]">default</span>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Tips */}

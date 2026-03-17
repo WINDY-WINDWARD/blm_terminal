@@ -2,18 +2,39 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
+class Watchlist(Base):
+    """Persisted watchlist: a named container for symbols."""
+
+    __tablename__ = "watchlists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    items: Mapped[list["WatchlistItem"]] = relationship(
+        "WatchlistItem", back_populates="watchlist", cascade="all, delete-orphan"
+    )
+
+
 class WatchlistItem(Base):
-    """Persisted watchlist entry: one row per (symbol, exchange) pair."""
+    """Persisted watchlist entry: one row per (symbol, exchange) pair in a watchlist."""
 
     __tablename__ = "watchlist_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    watchlist_id: Mapped[int] = mapped_column(
+        ForeignKey("watchlists.id", ondelete="CASCADE"), nullable=False
+    )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     exchange: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -22,6 +43,8 @@ class WatchlistItem(Base):
         server_default=func.now(),
     )
 
+    watchlist: Mapped["Watchlist"] = relationship("Watchlist", back_populates="items")
+
     __table_args__ = (
-        UniqueConstraint("symbol", "exchange", name="uq_watchlist_symbol_exchange"),
+        UniqueConstraint("watchlist_id", "symbol", "exchange", name="uq_watchlist_item"),
     )

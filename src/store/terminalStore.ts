@@ -41,3 +41,16 @@ export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '
 
 export const watchlistColumnsAtom = atom<string[]>(DEFAULT_WATCHLIST_COLUMNS);
 export const moversColumnsAtom = atom<string[]>(DEFAULT_MOVERS_COLUMNS);
+
+// ─── Watchlists ─────────────────────────────────────────────────────────────
+
+export interface Watchlist {
+  id: number;
+  name: string;
+  created_at: string;
+  item_count?: number;
+}
+
+export const watchlistsAtom = atom<Watchlist[]>([]);
+
+export const activeWatchlistIdAtom = atom<number>(1);
