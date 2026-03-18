@@ -47,6 +47,7 @@ function remoteCall(method, params) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json, */*',
         'Content-Length': Buffer.byteLength(body),
         'Host': 'localhost'
       },

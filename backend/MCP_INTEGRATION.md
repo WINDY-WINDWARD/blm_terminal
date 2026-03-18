@@ -46,6 +46,42 @@ See [`blm-mcp-bundle/README.md`](../blm-mcp-bundle/README.md) for full documenta
 
 ---
 
+### Option 1b: Manual Config (Windows Workaround)
+
+If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows, you can configure the MCP server manually using the Node.js proxy.
+
+**Location:**
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+**Steps:**
+
+1. Open the config file in a text editor
+2. Add the `mcpServers` section (merge with existing content if present):
+
+```json
+{
+  "mcpServers": {
+    "blm-mcp-proxy": {
+      "command": "node",
+      "args": ["D:\\500GB\\p1\\Projects\\blm_terminal\\blm-mcp-bundle\\server\\index.js"],
+      "env": {
+        "REMOTE_HOST": "192.168.1.68",
+        "REMOTE_PORT": "4455",
+        "REMOTE_PATH": "/api/mcp/mcp"
+      }
+    }
+  }
+}
+```
+
+**Important notes for Windows:**
+- Use double backslashes (`\\`) in file paths
+- The `REMOTE_PATH` must be `/api/mcp/mcp` (FastMCP's default `/mcp` nested under `/api/mcp`)
+- Restart Claude Desktop after editing the config
+
+---
+
 ## Option 2: Direct Integration
 
 While the FastAPI application hosts the MCP server over **HTTP (Stateless Mode)** at `http://127.0.0.1:8000/api/mcp/mcp`, most desktop AI applications (like Claude Desktop and Perplexity Desktop) require the **stdio (Standard I/O) transport**.

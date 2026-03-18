@@ -31,11 +31,48 @@ Creates `blm-mcp-proxy.mcpb` in the `blm-mcp-bundle/` directory.
 
 ## Installation
 
+### Option 1: MCP Bundle (Recommended)
+
 1. Open Claude Desktop
 2. Go to **Developer → Extensions → Install Extension**
 3. Select the generated `.mcpb` file
 4. Enter the backend host/port in the settings UI
 5. Enable the extension
+
+### Option 2: Manual Config (Windows Workaround)
+
+If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows, you can configure the MCP server manually in the Claude Desktop config file.
+
+**Location:**
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+**Steps:**
+
+1. Open the config file in a text editor
+2. Add the `mcpServers` section (merge with existing content if present):
+
+```json
+{
+  "mcpServers": {
+    "blm-mcp-proxy": {
+      "command": "node",
+      "args": ["D:\\500GB\\p1\\Projects\\blm_terminal\\blm-mcp-bundle\\server\\index.js"],
+      "env": {
+        "REMOTE_HOST": "192.168.1.68",
+        "REMOTE_PORT": "4455",
+        "REMOTE_PATH": "/api/mcp/mcp"
+      }
+    }
+  }
+}
+```
+
+**Important notes for Windows:**
+- Use double backslashes (`\\`) in file paths
+- The `REMOTE_PATH` must be `/api/mcp/mcp` (FastMCP's default `/mcp` nested under `/api/mcp`)
+- Restart Claude Desktop after editing the config
 
 ## Available Tools (28)
 
