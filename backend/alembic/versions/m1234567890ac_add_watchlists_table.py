@@ -34,16 +34,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
 
-    # Add watchlist_id column to watchlist_items (nullable first, then set default)
-    op.add_column(
-        "watchlist_items",
-        sa.Column(
-            "watchlist_id",
-            sa.Integer(),
-            sa.ForeignKey("watchlists.id", ondelete="CASCADE"),
-            nullable=True,
-        ),
-    )
+    # Add watchlist_id column to watchlist_items using batch mode for SQLite
+    with op.batch_alter_table("watchlist_items") as batch_op:
+        batch_op.add_column(
+            sa.Column(
+                "watchlist_id",
+                sa.Integer(),
+                sa.ForeignKey("watchlists.id", ondelete="CASCADE"),
+                nullable=True,
+            ),
+        )
 
     # Create default watchlist
     op.execute("INSERT INTO watchlists (id, name) VALUES (1, 'Default')")
@@ -51,34 +51,32 @@ def upgrade() -> None:
     # Set all existing items to belong to Default watchlist
     op.execute("UPDATE watchlist_items SET watchlist_id = 1 WHERE watchlist_id IS NULL")
 
-    # Make watchlist_id not nullable
-    op.alter_column(
-        "watchlist_items",
-        "watchlist_id",
-        nullable=False,
-    )
+    # Make watchlist_id not nullable using batch mode
+    with op.batch_alter_table("watchlist_items") as batch_op:
+        batch_op.alter_column("watchlist_id", nullable=False)
 
-    # Update unique constraint to include watchlist_id
-    op.drop_constraint("uq_watchlist_symbol_exchange", "watchlist_items", type_="unique")
-    op.create_unique_constraint(
-        "uq_watchlist_item",
-        "watchlist_items",
-        ["watchlist_id", "symbol", "exchange"],
-    )
+    # Update unique constraint to include watchlist_id using batch mode
+    with op.batch_alter_table("watchlist_items") as batch_op:
+        batch_op.drop_constraint("uq_watchlist_symbol_exchange", type_="unique")
+        batch_op.create_unique_constraint(
+            "uq_watchlist_item",
+            ["watchlist_id", "symbol", "exchange"],
+        )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    # Drop unique constraint
-    op.drop_constraint("uq_watchlist_item", "watchlist_items", type_="unique")
-    op.create_unique_constraint(
-        "uq_watchlist_symbol_exchange",
-        "watchlist_items",
-        ["symbol", "exchange"],
-    )
+    # Drop unique constraint using batch mode
+    with op.batch_alter_table("watchlist_items") as batch_op:
+        batch_op.drop_constraint("uq_watchlist_item", type_="unique")
+        batch_op.create_unique_constraint(
+            "uq_watchlist_symbol_exchange",
+            ["symbol", "exchange"],
+        )
 
-    # Drop foreign key column
-    op.drop_column("watchlist_items", "watchlist_id")
+    # Drop foreign key column using batch mode
+    with op.batch_alter_table("watchlist_items") as batch_op:
+        batch_op.drop_column("watchlist_id")
 
     # Drop watchlists table
     op.drop_table("watchlists")

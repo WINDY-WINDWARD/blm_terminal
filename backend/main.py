@@ -14,7 +14,7 @@ from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, inspect as sa_inspect
+from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text, event as sa_event
 
 from app.config import settings
 from app.routers import (
@@ -62,7 +62,15 @@ def _run_migrations_sync() -> None:
 
     # Detect legacy databases (schema exists, no migration tracking yet).
     sync_url = f"sqlite:///{settings.db_path}"
-    sync_engine = create_engine(sync_url)
+    sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+
+    @sa_event.listens_for(sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
     try:
         with sync_engine.connect() as conn:
             inspector = sa_inspect(conn)
@@ -76,6 +84,45 @@ def _run_migrations_sync() -> None:
         alembic_command.stamp(alembic_cfg, _INITIAL_REVISION)
 
     alembic_command.upgrade(alembic_cfg, "head")
+
+
+def _ensure_watchlist_data() -> None:
+    """Ensure watchlist data consistency after migrations.
+
+    Creates Default watchlist if missing and associates any orphaned
+    watchlist_items with it. Handles partial migration runs.
+    """
+    sync_url = f"sqlite:///{settings.db_path}"
+    sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+
+    @sa_event.listens_for(sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
+    try:
+        with sync_engine.connect() as conn:
+            inspector = sa_inspect(conn)
+            tables = set(inspector.get_table_names())
+
+            if "watchlists" not in tables:
+                return
+
+            result = conn.execute(sa_text("SELECT COUNT(*) FROM watchlists WHERE id = 1"))
+            if result.scalar() == 0:
+                logger.info("Creating Default watchlist")
+                conn.execute(sa_text("INSERT INTO watchlists (id, name) VALUES (1, 'Default')"))
+                conn.commit()
+
+            result = conn.execute(sa_text("SELECT COUNT(*) FROM watchlist_items WHERE watchlist_id IS NULL"))
+            if result.scalar() > 0:
+                logger.info("Associating orphaned watchlist items with Default watchlist")
+                conn.execute(sa_text("UPDATE watchlist_items SET watchlist_id = 1 WHERE watchlist_id IS NULL"))
+                conn.commit()
+    finally:
+        sync_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
+    await asyncio.to_thread(_ensure_watchlist_data)
 
     # alembic/env.py calls fileConfig(alembic.ini) during migrations which
     # resets the root logger to WARNING/stderr-only.  Restore our handlers now.
