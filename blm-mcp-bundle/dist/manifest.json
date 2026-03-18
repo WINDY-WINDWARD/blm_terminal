@@ -1,0 +1,170 @@
+{
+  "manifest_version": "0.3",
+  "name": "blm-mcp-proxy",
+  "version": "1.0.0",
+  "display_name": "BLM MCP Proxy",
+  "description": "Proxies Claude tool calls to the BLM Analytics backend for NSE India market data, screener.in fundamentals, watchlists, and news.",
+  "author": {
+    "name": "BLM Terminal",
+    "email": "contact@blmterminal.com",
+    "url": "https://blmterminal.com"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "server/index.js"
+      ],
+      "env": {
+        "REMOTE_HOST": "192.168.1.68",
+        "REMOTE_PORT": "4455",
+        "REMOTE_PATH": "/api/mcp/mcp"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ]
+  },
+  "user_config": {
+    "remote_host": {
+      "type": "string",
+      "title": "Backend Server Host",
+      "description": "Hostname or IP of the BLM backend server",
+      "default": "192.168.1.68",
+      "required": true
+    },
+    "remote_port": {
+      "type": "number",
+      "title": "Backend Server Port",
+      "description": "Port the BLM backend MCP server is listening on",
+      "default": 4455,
+      "required": true
+    },
+    "remote_path": {
+      "type": "string",
+      "title": "Backend MCP Path",
+      "description": "URL path for the MCP endpoint on the backend server",
+      "default": "/api/mcp/mcp",
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "health_check",
+      "description": "Return service health status."
+    },
+    {
+      "name": "get_top_gainers",
+      "description": "Return today's top-gaining equities on NSE India."
+    },
+    {
+      "name": "get_top_losers",
+      "description": "Return today's top-losing equities on NSE India."
+    },
+    {
+      "name": "get_bulk_deals",
+      "description": "Return recent bulk deals for a specific stock symbol on NSE India."
+    },
+    {
+      "name": "get_block_deals",
+      "description": "Return recent block deals for a specific stock symbol on NSE India."
+    },
+    {
+      "name": "get_high_short_interest",
+      "description": "Return today's stocks with high short interest on NSE India."
+    },
+    {
+      "name": "get_largedeal_snapshot",
+      "description": "Returns a snapshot of recent large deals (Insiders + bulk + block) across NSE."
+    },
+    {
+      "name": "get_change_ranges",
+      "description": "Return percentage changes over multiple timeframes for a symbol from NSE."
+    },
+    {
+      "name": "get_symbol_data",
+      "description": "Return live symbol data from NSE (LTP, dayHigh, dayLow, 52wk high/low, sector, industry)."
+    },
+    {
+      "name": "get_52week_low_stocks",
+      "description": "Return list of stocks which have crossed their previous NSE 52-week low."
+    },
+    {
+      "name": "get_52week_high_stocks",
+      "description": "Return list of stocks which have crossed their previous NSE 52-week high."
+    },
+    {
+      "name": "get_volume_gainers",
+      "description": "Returns list of stocks with highest volume gain compared to average weekly volume."
+    },
+    {
+      "name": "screener_search",
+      "description": "Search screener.in for matching companies by name or symbol."
+    },
+    {
+      "name": "screener_company",
+      "description": "Fetch parsed fundamentals for a company from screener.in (P/E, ROCE, ROE, quarters)."
+    },
+    {
+      "name": "screener_trades",
+      "description": "Fetch insider trades, bulk deals, and block deals for a company from screener.in."
+    },
+    {
+      "name": "get_company_quarterly_results",
+      "description": "Return full quarterly results for a company from screener.in (consolidated)."
+    },
+    {
+      "name": "list_stock_universe",
+      "description": "Return all stock universe records from the database."
+    },
+    {
+      "name": "get_stock_universe",
+      "description": "Return a single stock universe record by symbol from the database."
+    },
+    {
+      "name": "search_stock_universe",
+      "description": "Return stock universe records that match the prefix in symbol or company name."
+    },
+    {
+      "name": "list_watchlist",
+      "description": "Return all stocks the user is interested in, ordered by creation time."
+    },
+    {
+      "name": "add_watchlist_item",
+      "description": "Add a symbol/exchange pair to the watchlist (idempotent)."
+    },
+    {
+      "name": "remove_watchlist_item",
+      "description": "Remove a watchlist item by its numeric id."
+    },
+    {
+      "name": "get_global_news",
+      "description": "Return cached global news articles from MoneyControl."
+    },
+    {
+      "name": "get_company_news",
+      "description": "Return news articles for a specific company symbol from MoneyControl."
+    },
+    {
+      "name": "list_industries",
+      "description": "Return all industries with their metadata from MoneyControl."
+    },
+    {
+      "name": "list_sectors",
+      "description": "Return all sectors with their metadata from MoneyControl."
+    },
+    {
+      "name": "get_industry_stocks",
+      "description": "Return all stocks in a specific industry from MoneyControl."
+    },
+    {
+      "name": "get_sector_stocks",
+      "description": "Return all stocks in a specific sector from MoneyControl."
+    }
+  ]
+}

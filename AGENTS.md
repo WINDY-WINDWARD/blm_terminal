@@ -113,7 +113,59 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatc
 └── tests/                    # Integration tests (test_endpoints.py, test_mcp.py, test_mcp_stdio.py)
 prisma/schema.prisma          # Models: TopMoverSymbol, UserSettings (watchlist is in Python backend)
 prisma.config.ts              # Prisma config (references schema.prisma)
+blm-mcp-bundle/               # Claude Desktop MCP plugin (proxy to backend)
+├── server/index.js           # Zero-dependency Node.js proxy (stdio → HTTP)
+├── manifest.json             # Plugin manifest with 28 hardcoded tools
+├── build.js                  # Cross-platform build script
+└── README.md                 # Usage instructions
 ```
+
+---
+
+## MCP Bundle (Claude Desktop Plugin)
+
+The `blm-mcp-bundle/` directory contains a Claude Desktop extension that proxies tool calls to the backend MCP server.
+
+### Building the Bundle
+
+```bash
+# Install mcpb CLI (one-time)
+npm install -g @anthropic-ai/mcpb
+
+# Build the bundle
+cd blm-mcp-bundle
+node build.js                    # Uses localhost:4455
+node build.js --port 8000        # Custom port
+PYTHON_BACKEND_URL=http://host:4455 node build.js  # From env
+```
+
+### Available Tools (28)
+
+| Category | Tools |
+|----------|-------|
+| **Market** (12) | `health_check`, `get_top_gainers`, `get_top_losers`, `get_bulk_deals`, `get_block_deals`, `get_high_short_interest`, `get_largedeal_snapshot`, `get_change_ranges`, `get_symbol_data`, `get_52week_low_stocks`, `get_52week_high_stocks`, `get_volume_gainers` |
+| **Screener** (4) | `screener_search`, `screener_company`, `screener_trades`, `get_company_quarterly_results` |
+| **Stock Universe** (3) | `list_stock_universe`, `get_stock_universe`, `search_stock_universe` |
+| **Watchlist** (3) | `list_watchlist`, `add_watchlist_item`, `remove_watchlist_item` |
+| **News** (2) | `get_global_news`, `get_company_news` |
+| **Industries/Sectors** (4) | `list_industries`, `list_sectors`, `get_industry_stocks`, `get_sector_stocks` |
+
+### Architecture
+
+```
+Claude Desktop (stdio)
+    │
+    ▼
+blm-mcp-proxy (bundled Node.js)
+    │  HTTP POST /mcp
+    ▼
+Backend MCP Server (port 4455)
+    │
+    ▼
+NSE, Screener.in, MoneyControl
+```
+
+The proxy uses zero external dependencies — only Node.js built-in modules (`http`, `readline`).
 
 ---
 

@@ -248,4 +248,33 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatc
 prisma/
 └── schema.prisma             # Models: TopMoverSymbol, UserSettings
                               # (watchlist lives in the Python backend DB)
+blm-mcp-bundle/              # Claude Desktop MCP plugin
+├── server/index.js           # Node.js proxy (stdio → HTTP)
+├── manifest.json             # Plugin manifest with 28 tools
+├── build.js                  # Cross-platform build script
+└── README.md                # Usage instructions
 ```
+
+---
+
+## Claude Desktop Integration
+
+BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 28 backend tools directly to Claude. This allows Claude to query NSE market data, screener.in fundamentals, watchlists, and news without needing the Next.js frontend.
+
+### Quick Start
+
+```bash
+# Install mcpb CLI
+npm install -g @anthropic-ai/mcpb
+
+# Build the bundle (defaults to localhost:4455)
+cd blm-mcp-bundle
+node build.js
+
+# Or specify a different backend URL
+PYTHON_BACKEND_URL=http://192.168.1.100:4455 node build.js
+```
+
+This creates `blm-mcp-proxy.mcpb`. Install it in Claude Desktop via **Developer → Extensions → Install Extension**.
+
+See [`blm-mcp-bundle/README.md`](blm-mcp-bundle/README.md) for full documentation.

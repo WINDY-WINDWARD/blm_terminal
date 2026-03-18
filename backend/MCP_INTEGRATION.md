@@ -2,6 +2,52 @@
 
 The BLM Analytics backend exposes a powerful Model Context Protocol (MCP) server that provides AI agents with direct access to NSE market data, corporate filings, screener data, and the stock universe.
 
+There are **two ways** to connect Claude Desktop to BLM Analytics:
+
+1. **MCP Bundle (Recommended)**: A pre-built `.mcpb` plugin that requires no configuration — just build and install
+2. **Direct Integration**: Configure Claude Desktop to run the Python stdio server directly
+
+---
+
+## Option 1: MCP Bundle (Recommended)
+
+The easiest way to use BLM Analytics with Claude Desktop. Build once, install with one click.
+
+### Build
+
+```bash
+# Install mcpb CLI (one-time)
+npm install -g @anthropic-ai/mcpb
+
+# Build the bundle
+cd blm-mcp-bundle
+node build.js                    # Uses localhost:4455
+node build.js --port 8000       # Custom port
+PYTHON_BACKEND_URL=http://host:4455 node build.js  # From env
+```
+
+This creates `blm-mcp-proxy.mcpb` in the `blm-mcp-bundle/` directory.
+
+### Install
+
+1. Open Claude Desktop
+2. Go to **Developer → Extensions → Install Extension**
+3. Select the `.mcpb` file
+4. Enter the backend host/port in the settings UI
+5. Enable the extension
+
+**Benefits:**
+- Zero configuration
+- Works cross-platform (Windows, macOS)
+- Auto-updates when reinstalled
+- 28 tools available immediately
+
+See [`blm-mcp-bundle/README.md`](../blm-mcp-bundle/README.md) for full documentation.
+
+---
+
+## Option 2: Direct Integration
+
 While the FastAPI application hosts the MCP server over **HTTP (Stateless Mode)** at `http://127.0.0.1:8000/api/mcp/mcp`, most desktop AI applications (like Claude Desktop and Perplexity Desktop) require the **stdio (Standard I/O) transport**.
 
 This guide explains how to connect your desktop AI assistants to the BLM Analytics MCP server using `stdio`.

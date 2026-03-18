@@ -27,7 +27,7 @@ from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("BLM Analytics", stateless_http=True, json_response=True)
+mcp = FastMCP("BLM Analytics", stateless_http=True, json_response=True, host="0.0.0.0")
 
 # Symbol validation regex (same as in screener router)
 _SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{1,30}$")
