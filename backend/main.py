@@ -14,7 +14,7 @@ from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text
+from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text, event as sa_event
 
 from app.config import settings
 from app.routers import (
@@ -62,7 +62,15 @@ def _run_migrations_sync() -> None:
 
     # Detect legacy databases (schema exists, no migration tracking yet).
     sync_url = f"sqlite:///{settings.db_path}"
-    sync_engine = create_engine(sync_url)
+    sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+
+    @sa_event.listens_for(sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
     try:
         with sync_engine.connect() as conn:
             inspector = sa_inspect(conn)
@@ -85,7 +93,15 @@ def _ensure_watchlist_data() -> None:
     watchlist_items with it. Handles partial migration runs.
     """
     sync_url = f"sqlite:///{settings.db_path}"
-    sync_engine = create_engine(sync_url)
+    sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+
+    @sa_event.listens_for(sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
     try:
         with sync_engine.connect() as conn:
             inspector = sa_inspect(conn)
