@@ -40,13 +40,15 @@ function fmtNumber(raw: string | number | null): string {
   return n.toLocaleString('en-IN');
 }
 
-function DealBadge({ kind, count }: { kind: DealTab; count: number }) {
+function DealBadge({ kind, count, active }: { kind: DealTab; count: number; active?: boolean }) {
   const label =
     kind === 'bulk' ? 'Bulk Deals' : kind === 'block' ? 'Block Deals' : 'Short Deals';
   return (
     <span className="inline-flex items-center gap-1 text-[10px]">
       <span>{label}</span>
-      <span className="inline-flex items-center justify-center min-w-[18px] h-[14px] rounded-full bg-terminal-gray text-[9px] text-white px-1">
+      <span className={`inline-flex items-center justify-center min-w-[18px] h-[14px] rounded-full text-[9px] px-1 ${
+        active ? 'bg-black/30 text-black' : 'bg-terminal-gray text-white'
+      }`}>
         {count}
       </span>
     </span>
@@ -256,11 +258,12 @@ export function LargedealsWidget() {
             onClick={() => setActiveTab(tab.id)}
             className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide border-r border-terminal-gray/40 transition-colors border-b-2 ${
               activeTab === tab.id
-                ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
+                ? 'bg-terminal-amber text-black font-bold -mb-px'
                 : 'text-white/50 hover:text-white hover:bg-zinc-900 border-transparent'
             }`}
+            style={activeTab === tab.id ? { borderBottomColor: '#ffb900' } : undefined}
           >
-            <DealBadge kind={tab.id} count={tab.count} />
+            <DealBadge kind={tab.id} count={tab.count} active={activeTab === tab.id} />
           </button>
         ))}
       </div>

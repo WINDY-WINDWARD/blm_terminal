@@ -242,9 +242,10 @@ export function DealsWidget() {
             onClick={() => setActiveTab(tab.id)}
             className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide border-r border-terminal-gray/40 transition-colors border-b-2 ${
               activeTab === tab.id
-                ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
+                ? 'bg-terminal-amber text-black font-bold -mb-px'
                 : 'text-white/50 hover:text-white hover:bg-zinc-900 border-transparent'
             }`}
+            style={activeTab === tab.id ? { borderBottomColor: '#ffb900' } : undefined}
           >
             {tab.label}
             <span className={`ml-1 text-[9px] ${activeTab === tab.id ? 'text-black/60' : 'text-white/30'}`}>
