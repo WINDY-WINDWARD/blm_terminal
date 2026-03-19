@@ -4,6 +4,7 @@ import asyncio
 import logging
 import logging.config
 import logging.handlers
+import re
 import time
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
@@ -46,6 +47,33 @@ _INITIAL_REVISION = "aaf83c15d9f1"
 _ALEMBIC_INI = str(Path(__file__).resolve().parent / "alembic.ini")
 
 
+def _get_current_revision() -> str | None:
+    """Read the current alembic_version directly from the DB."""
+    sync_url = f"sqlite:///{settings.db_path}"
+    engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(sa_text("SELECT version_num FROM alembic_version"))
+            row = result.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+    finally:
+        engine.dispose()
+
+
+def _extract_revision_from_error(exc: Exception) -> str | None:
+    """Try to extract an Alembic revision ID from a migration error string.
+
+    Looks for 12+ character hex strings (Alembic revision IDs).
+    Falls back to reading alembic_version directly if no match found.
+    """
+    match = re.search(r"\b([0-9a-f]{12,})\b", str(exc))
+    if match:
+        return match.group(1)
+    return _get_current_revision()
+
+
 def _run_migrations_sync() -> None:
     """Apply all pending Alembic migrations synchronously.
 
@@ -82,14 +110,38 @@ def _run_migrations_sync() -> None:
         alembic_command.upgrade(alembic_cfg, "head")
     except Exception as exc:
         err = str(exc).lower()
-        if "overlap" in err or "duplicate column" in err:
-            logger.warning(
-                "migrations: %s — stamping DB directly to head "
-                "(handles DBs with pre-release migration bugs or legacy column additions)",
-                type(exc).__name__,
-            )
-            alembic_command.stamp(alembic_cfg, "head")
+
+        if "duplicate column" in err:
+            # A migration partially ran before (column added manually or by a
+            # previous run) but the revision wasn't recorded.  Stamp at the
+            # current revision and retry so Alembic picks up where it left off.
+            revision = _extract_revision_from_error(exc)
+            if revision:
+                logger.warning(
+                    "migrations: duplicate column detected — stamping at %s and retrying",
+                    revision,
+                )
+                alembic_command.stamp(alembic_cfg, revision)
+                alembic_command.upgrade(alembic_cfg, "head")
+            else:
+                logger.error(
+                    "migrations: duplicate column but could not identify current revision. "
+                    "Run 'alembic upgrade head' manually to diagnose. Error: %s",
+                    exc,
+                )
+                raise
+
+        elif "overlap" in err:
+            # Multiple Alembic branches with overlapping migrations.
+            # Upgrade each head independently to avoid the merge conflict.
+            logger.warning("migrations: overlapping branches — upgrading each head individually")
+            heads = alembic_command.heads(alembic_cfg) or []
+            for head in heads:
+                logger.info("migrations: upgrading to %s", head)
+                alembic_command.upgrade(alembic_cfg, head)
+
         else:
+            logger.error("migrations: unhandled migration error: %s", exc)
             raise
 
 
