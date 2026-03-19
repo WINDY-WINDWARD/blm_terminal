@@ -31,12 +31,7 @@ from app.routers.nonpersistence import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
-from app.backgroundtasks import (
-    market_data_scheduler,
-    news_scheduler,
-    stock_universe_scheduler,
-    watchlist_news_scheduler,
-)
+from app.backgroundtasks import start_all_workers, stop_all_workers
 from app import mcp_server
 
 logger = logging.getLogger(__name__)
@@ -83,7 +78,19 @@ def _run_migrations_sync() -> None:
         logger.info("migrations: legacy DB detected — stamping to initial revision")
         alembic_command.stamp(alembic_cfg, _INITIAL_REVISION)
 
-    alembic_command.upgrade(alembic_cfg, "head")
+    try:
+        alembic_command.upgrade(alembic_cfg, "head")
+    except Exception as exc:
+        err = str(exc).lower()
+        if "overlap" in err or "duplicate column" in err:
+            logger.warning(
+                "migrations: %s — stamping DB directly to head "
+                "(handles DBs with pre-release migration bugs or legacy column additions)",
+                type(exc).__name__,
+            )
+            alembic_command.stamp(alembic_cfg, "head")
+        else:
+            raise
 
 
 def _ensure_watchlist_data() -> None:
@@ -217,10 +224,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
-    universe_task = asyncio.create_task(stock_universe_scheduler())
-    news_task = asyncio.create_task(news_scheduler())
-    watchlist_task = asyncio.create_task(watchlist_news_scheduler())
-    market_task = asyncio.create_task(market_data_scheduler())
+    start_all_workers()
     await screener_client.init()
 
     if ai_summarizer.is_configured:
@@ -247,10 +251,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         logger.info("Shutting down — closing clients...")
         cleanup_task.cancel()
-        universe_task.cancel()
-        news_task.cancel()
-        watchlist_task.cancel()
-        market_task.cancel()
+        stop_all_workers(timeout=10.0)
 
         await ai_summarizer.close()
         await nse_client.close()

@@ -73,72 +73,68 @@ class NewsFetcher:
     """Service to fetch and parse news articles from MoneyControl."""
 
     def __init__(self) -> None:
-        self._semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        self._client: httpx.AsyncClient | None = None
+        self._semaphore: asyncio.Semaphore | None = None
         self._headers = _build_headers(UA_FIREFOX)
         self._cookies_loaded = False
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                headers=self._headers,
-                timeout=httpx.Timeout(30.0, connect=10.0),
-                follow_redirects=True,
-            )
-            await self._load_fresh_cookies()
-        return self._client
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        """Lazily create Semaphore in the current event loop to avoid loop-mismatch errors."""
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+        assert self._semaphore is not None
+        return self._semaphore
 
-    async def _load_fresh_cookies(self) -> bool:
-        """Load real browser cookies from Firefox profile via rookiepy."""
-        if self._cookies_loaded:
-            return True
+    async def _get_client(self) -> httpx.AsyncClient:
+        # Always create a fresh client to avoid asyncio.Event binding to wrong loop
+        # httpx.AsyncClient creates internal asyncio.Event objects that bind to the
+        # first event loop they're used with, causing "bound to different event loop" errors
+        client = httpx.AsyncClient(
+            headers=self._headers,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=True,
+        )
+        # Load cookies into the fresh client
         try:
             import rookiepy
-
             raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
-            if not raw:
-                logger.warning(
-                    "_load_fresh_cookies: no cookies found in Firefox profile"
-                )
-                return False
-            client = await self._get_client()
-            for c in raw:
-                raw_domain = c.get("domain")
-                domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                name_str: str = str(c.get("name")) if c.get("name") else ""
-                value_str: str = str(c.get("value")) if c.get("value") else ""
-                client.cookies.set(
-                    name_str, value_str, domain=domain_str if domain_str else ""
-                )
-            self._cookies_loaded = True
-            logger.info("_load_fresh_cookies: loaded %d cookies from Firefox", len(raw))
-            return True
+            if raw:
+                for c in raw:
+                    raw_domain = c.get("domain")
+                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                    name_str: str = str(c.get("name")) if c.get("name") else ""
+                    value_str: str = str(c.get("value")) if c.get("value") else ""
+                    client.cookies.set(
+                        name_str, value_str, domain=domain_str if domain_str else ""
+                    )
+                logger.debug("Loaded %d cookies into fresh httpx client", len(raw))
         except Exception:
-            logger.warning("_load_fresh_cookies: failed to load cookies", exc_info=True)
-            return False
+            logger.debug("Could not load cookies into fresh httpx client", exc_info=True)
+        return client
 
     async def _refresh_cookies(self) -> bool:
-        """Force-refresh cookies from Firefox profile (e.g. after a 403)."""
-        self._cookies_loaded = False
-        return await self._load_fresh_cookies()
+        """Force-refresh cookies from Firefox profile (e.g. after a 403).
+        
+        Note: Since we recreate the httpx client on each call, this method
+        is now a no-op that just returns True. Cookies are loaded in _get_client().
+        """
+        return True
 
     async def _get_page(self, url: str) -> httpx.Response:
-        """Fetch a page with 403-handling: refresh cookies and retry once."""
+        """Fetch a page with 403-handling: retry once with fresh client."""
         client = await self._get_client()
         response = await client.get(url)
         if response.status_code == 403:
-            logger.warning("Got 403 on %s — refreshing cookies and retrying", url)
-            refreshed = await self._refresh_cookies()
-            if refreshed:
-                await asyncio.sleep(2)
-                response = await client.get(url)
+            logger.warning("Got 403 on %s — retrying with fresh cookies", url)
+            await asyncio.sleep(2)
+            # Create a new client with fresh cookies for retry
+            client = await self._get_client()
+            response = await client.get(url)
         response.raise_for_status()
         return response
 
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """Close the fetcher (no-op since we don't cache clients anymore)."""
+        pass
 
     async def _fetch_listing_page(self, page: int) -> str:
         """Fetch the HTML content of a news listing page."""
@@ -201,7 +197,7 @@ class NewsFetcher:
         self, url: str, source: str = SOURCE_NAME
     ) -> dict[str, Any] | None:
         """Fetch and parse a single article using httpx."""
-        async with self._semaphore:
+        async with self._get_semaphore():
             try:
                 logger.debug("Parsing article: %s", url)
                 response = await self._get_page(url)

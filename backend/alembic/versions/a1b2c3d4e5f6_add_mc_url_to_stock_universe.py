@@ -10,17 +10,28 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+import sqlalchemy.exc as sqla_exc
 
-# revision identifiers, used by Alembic.
 revision: str = "a1b2c3d4e5f6"
 down_revision: Union[str, Sequence[str], None] = "f1a3b7c92d4e"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _add_col_if_not_exists(col_name: str, col_def: sa.Column) -> None:
+    """Add a column only if it does not already exist (idempotent migration for SQLite)."""
+    try:
+        op.add_column("stock_universe", col_def)
+    except sqla_exc.OperationalError as e:
+        if "duplicate column name" in str(e).lower():
+            pass  # column already exists, safe to skip
+        else:
+            raise
+
+
 def upgrade() -> None:
-    op.add_column(
-        "stock_universe",
+    _add_col_if_not_exists(
+        "mc_url",
         sa.Column("mc_url", sa.String(512), nullable=True),
     )
 

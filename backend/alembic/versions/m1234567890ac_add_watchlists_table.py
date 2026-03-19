@@ -1,6 +1,6 @@
 """add_watchlists_table
 
-Revision ID: m1234567890ad
+Revision ID: m1234567890ac
 Revises: m9876543210ab
 Create Date: 2026-03-17 08:15:00.000000
 
@@ -12,7 +12,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "m1234567890ad"
+revision: str = "m1234567890ac"
 down_revision: Union[str, Sequence[str], None] = "m9876543210ab"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -401,9 +401,9 @@ class TestMCPWatchlistTools:
     def test_list_watchlist_returns_array(self):
         """list_watchlist should return a JSON array."""
         result = mcp_request("tools/call", {"name": "list_watchlist", "arguments": {}})
-        import json
-
-        data = json.loads(result["result"]["content"][0]["text"])
+        
+        # Use structuredContent for structured data (list of items)
+        data = result["result"]["structuredContent"]["result"]
         assert isinstance(data, list)
         if data:
             assert "id" in data[0]
@@ -416,12 +416,8 @@ class TestMCPWatchlistTools:
             "tools/call", {"name": "get_watchlist_symbols", "arguments": {}}
         )
         assert "result" in result
-        content = result["result"]["content"]
-        assert len(content) > 0
-        assert content[0]["type"] == "text"
-        import json
-
-        data = json.loads(content[0]["text"])
+        # Use structuredContent for structured data
+        data = result["result"]["structuredContent"]["result"]
         assert isinstance(data, list)
         assert all(isinstance(s, str) for s in data)
 
@@ -431,49 +427,37 @@ class TestMCPWatchlistTools:
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {
-                    "symbol": self.TEST_SYMBOL,
-                    "exchange": self.TEST_EXCHANGE,
-                },
+                "arguments": {"symbol": "WATCH", "exchange": "NSE"},
             },
         )
-        assert "result" in result
-        content = result["result"]["content"]
-        assert len(content) > 0
-        assert content[0]["type"] == "text"
-        import json
 
-        data = json.loads(content[0]["text"])
-        assert data["symbol"] == self.TEST_SYMBOL
-        assert data["exchange"] == self.TEST_EXCHANGE
+        # Dict-returning tools have structuredContent directly
+        data = result["result"]["structuredContent"]
         assert "id" in data
+        assert data["symbol"] == "WATCH"
+        assert data["exchange"] == "NSE"
 
     def test_add_watchlist_item_idempotent(self):
-        """Adding the same item twice should return the existing item."""
+        """add_watchlist_item should be idempotent."""
         result1 = mcp_request(
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {
-                    "symbol": self.TEST_SYMBOL,
-                    "exchange": self.TEST_EXCHANGE,
-                },
+                "arguments": {"symbol": "WATCH", "exchange": "NSE"},
             },
         )
+
+        data1 = result1["result"]["structuredContent"]
+
         result2 = mcp_request(
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {
-                    "symbol": self.TEST_SYMBOL,
-                    "exchange": self.TEST_EXCHANGE,
-                },
+                "arguments": {"symbol": "WATCH", "exchange": "NSE"},
             },
         )
-        import json
 
-        data1 = json.loads(result1["result"]["content"][0]["text"])
-        data2 = json.loads(result2["result"]["content"][0]["text"])
+        data2 = result2["result"]["structuredContent"]
         assert data1["id"] == data2["id"]
 
     def test_add_watchlist_item_normalizes_input(self):
@@ -485,9 +469,9 @@ class TestMCPWatchlistTools:
                 "arguments": {"symbol": "test", "exchange": "nse"},
             },
         )
-        import json
 
-        data = json.loads(result["result"]["content"][0]["text"])
+        # Dict-returning tools have structuredContent directly
+        data = result["result"]["structuredContent"]
         assert data["symbol"] == "TEST"
         assert data["exchange"] == "NSE"
 
@@ -511,9 +495,8 @@ class TestMCPWatchlistTools:
                 "arguments": {"symbol": "DELTEST", "exchange": "NSE"},
             },
         )
-        import json
 
-        item = json.loads(add_result["result"]["content"][0]["text"])
+        item = add_result["result"]["structuredContent"]
         item_id = item["id"]
 
         # Now delete it
@@ -522,9 +505,8 @@ class TestMCPWatchlistTools:
             {"name": "remove_watchlist_item", "arguments": {"item_id": item_id}},
         )
         assert "result" in result
-        content = result["result"]["content"]
-        assert len(content) > 0
-        data = json.loads(content[0]["text"])
+        # remove_watchlist_item returns a dict
+        data = result["result"]["structuredContent"]
         assert data.get("ok") is True
 
     def test_remove_watchlist_item_not_found(self):

@@ -255,58 +255,58 @@ async def get_volume_gainers() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-# @mcp.tool()
-# async def get_corporate_filings(symbol: str) -> dict[str, Any]:
-#     """Return quarterly financial results for a symbol as CSV.
+@mcp.tool()
+async def get_corporate_filings(symbol: str) -> dict[str, Any]:
+    """Return quarterly financial results for a symbol as CSV.
 
-#     Returns structured data containing: symbol, media_type, and csv_text.
-#     """
-#     symbol = symbol.upper().strip()
-#     if not _SYMBOL_RE.fullmatch(symbol):
-#         raise ValueError(f"Invalid symbol format: {symbol}")
+    Returns structured data containing: symbol, media_type, and csv_text.
+    """
+    symbol = symbol.upper().strip()
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise ValueError(f"Invalid symbol format: {symbol}")
 
-#     async with AsyncSessionLocal() as db:
-#         record = await db.get(CorporateFiling, symbol)
+    async with AsyncSessionLocal() as db:
+        record = await db.get(CorporateFiling, symbol)
 
-#         from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta, timezone
 
-#         stale_after = timedelta(days=30)
-#         now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
-#         needs_refresh = record is None or (now - record.last_fetched_at) > stale_after
+        stale_after = timedelta(days=30)
+        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        needs_refresh = record is None or (now - record.last_fetched_at) > stale_after
 
-#         if needs_refresh:
-#             try:
-#                 csv_text: str = await asyncio.to_thread(
-#                     nse_client.get_corporate_filing_comparison, symbol
-#                 )
-#             except Exception as exc:
-#                 logger.exception("NSE fetch failed for %s", symbol)
-#                 raise RuntimeError(
-#                     f"Failed to fetch corporate filings for {symbol} from NSE: {exc}"
-#                 ) from exc
+        if needs_refresh:
+            try:
+                csv_text: str = await asyncio.to_thread(
+                    nse_client.get_corporate_filing_comparison, symbol
+                )
+            except Exception as exc:
+                logger.exception("NSE fetch failed for %s", symbol)
+                raise RuntimeError(
+                    f"Failed to fetch corporate filings for {symbol} from NSE: {exc}"
+                ) from exc
 
-#             now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
-#             if record is None:
-#                 record = CorporateFiling(
-#                     symbol=symbol,
-#                     csv_data=csv_text,
-#                     last_fetched_at=now,
-#                 )
-#                 db.add(record)
-#             else:
-#                 record.csv_data = csv_text
-#                 record.last_fetched_at = now
+            now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+            if record is None:
+                record = CorporateFiling(
+                    symbol=symbol,
+                    csv_data=csv_text,
+                    last_fetched_at=now,
+                )
+                db.add(record)
+            else:
+                record.csv_data = csv_text
+                record.last_fetched_at = now
 
-#             await db.commit()
-#             logger.info("Corporate filings refreshed for %s", symbol)
-#         else:
-#             csv_text = record.csv_data
+            await db.commit()
+            logger.info("Corporate filings refreshed for %s", symbol)
+        else:
+            csv_text = record.csv_data
 
-#     return {
-#         "symbol": symbol,
-#         "media_type": "text/csv",
-#         "csv_text": csv_text,
-#     }
+    return {
+        "symbol": symbol,
+        "media_type": "text/csv",
+        "csv_text": csv_text,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +574,16 @@ async def list_watchlist() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
+async def get_watchlist_symbols() -> list[str]:
+    """Return all symbols in the watchlist (no duplicates)."""
+    async with AsyncSessionLocal() as db:
+        q = select(WatchlistItemModel.symbol).distinct().order_by(WatchlistItemModel.symbol)
+        res = await db.execute(q)
+        rows = res.scalars().all()
+        return [r for r in rows]
+
+
+@mcp.tool()
 async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
     """Add a symbol/exchange pair to the watchlist (idempotent).
 
@@ -601,7 +611,7 @@ async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
                 "createdAt": row.created_at.isoformat() if row.created_at else None,
             }
 
-        item = WatchlistItemModel(symbol=symbol, exchange=exchange)
+        item = WatchlistItemModel(symbol=symbol, exchange=exchange, watchlist_id=1)
         db.add(item)
         await db.commit()
         await db.refresh(item)
