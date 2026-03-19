@@ -1,4 +1,5 @@
 import { atom } from 'jotai';
+import { atomWithStorage } from 'jotai/utils';
 import type { TickData } from '@/lib/socket';
 import type { FundsData } from '@/lib/openalgo';
 
@@ -6,22 +7,20 @@ import type { FundsData } from '@/lib/openalgo';
 
 export const activeCommandAtom = atom<string>('');
 
-export const activePanelsAtom = atom<{ [id: string]: string }>({
-  'panel-1': 'CHART',
-  'panel-2': 'WATCH',
-  'panel-3': 'TOP',
-  'panel-4': 'POS',
-});
+export const activePanelsAtom = atomWithStorage<{ [id: string]: string }>(
+  'terminal.activePanels',
+  { 'panel-1': 'CHART', 'panel-2': 'WATCH', 'panel-3': 'TOP', 'panel-4': 'POS' },
+);
 
-export const focusedPanelAtom = atom<string>('panel-1');
+export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1');
 
 // ─── Global Active Symbol ─────────────────────────────────────────────────────
 
 /** The currently active trading symbol — shared across all widgets */
-export const activeSymbolAtom = atom<string>('RELIANCE');
+export const activeSymbolAtom = atomWithStorage<string>('terminal.activeSymbol', 'RELIANCE');
 
 /** The currently active exchange — shared across all widgets */
-export const activeExchangeAtom = atom<string>('NSE');
+export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchange', 'NSE');
 
 // ─── Other Atoms ─────────────────────────────────────────────────────────────
 
@@ -39,8 +38,8 @@ export const fundsAtom = atom<FundsData | null>(null);
 export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', '1w', '1m', '3m', '6m', '1y'];
 export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '1y'];
 
-export const watchlistColumnsAtom = atom<string[]>(DEFAULT_WATCHLIST_COLUMNS);
-export const moversColumnsAtom = atom<string[]>(DEFAULT_MOVERS_COLUMNS);
+export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
+export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS);
 
 // ─── Watchlists ─────────────────────────────────────────────────────────────
 
@@ -53,4 +52,4 @@ export interface Watchlist {
 
 export const watchlistsAtom = atom<Watchlist[]>([]);
 
-export const activeWatchlistIdAtom = atom<number>(1);
+export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1);
