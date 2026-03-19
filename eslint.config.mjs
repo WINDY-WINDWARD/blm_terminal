@@ -12,7 +12,17 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Bundled/generated files (use CommonJS require, not ESM)
+    "blm-mcp-bundle/**",
   ]),
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["warn", {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+      }],
+    },
+  },
 ]);
 
 export default eslintConfig;

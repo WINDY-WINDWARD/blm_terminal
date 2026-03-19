@@ -27,7 +27,7 @@ const VALID_WIDGETS = [
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);
-  const [activePanels, setActivePanels] = useAtom(activePanelsAtom);
+  const setActivePanels = useSetAtom(activePanelsAtom);
   const [focusedPanel] = useAtom(focusedPanelAtom);
   const setWsConnected = useSetAtom(wsConnectedAtom);
 

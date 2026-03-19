@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
  * 2. The API key is still only sent to authenticated users
  * 3. The key is still never stored in client-side environment files
  */
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   try {
     const apiKey = process.env.OPENALGO_API_KEY;
 

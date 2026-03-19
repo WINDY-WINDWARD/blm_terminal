@@ -74,14 +74,16 @@ class NewsFetcher:
 
     def __init__(self) -> None:
         self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._headers = _build_headers(UA_FIREFOX)
         self._cookies_loaded = False
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazily create Semaphore in the current event loop to avoid loop-mismatch errors."""
-        if self._semaphore is None:
+        current_loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._semaphore_loop is not current_loop:
             self._semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        assert self._semaphore is not None
+            self._semaphore_loop = current_loop
         return self._semaphore
 
     async def _get_client(self) -> httpx.AsyncClient:

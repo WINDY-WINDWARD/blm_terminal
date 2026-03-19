@@ -4,21 +4,6 @@ export const runtime = 'nodejs';
 
 const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:8000';
 
-interface WatchlistOut {
-  id: number;
-  name: string;
-  created_at: string;
-  item_count?: number;
-}
-
-interface WatchlistItemOut {
-  id: number;
-  watchlist_id: number;
-  symbol: string;
-  exchange: string;
-  created_at: string;
-}
-
 // GET /api/watchlists - list all watchlists
 export async function GET() {
   try {

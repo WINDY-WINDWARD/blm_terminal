@@ -43,13 +43,6 @@ interface NseSymbolData {
   }>;
 }
 
-interface SymbolQuote {
-  ltp: number;
-  pChange: number;
-  yearHigh?: number;
-  yearLow?: number;
-}
-
 interface AutocompleteResult {
   symbol: string;
   companyName: string;
@@ -598,8 +591,6 @@ export function WatchWidget() {
     if (!/^[A-Za-z-]+$/.test(name)) return;
     createWatchlistMutation.mutate(name);
   };
-
-  const currentWatchlist = watchlists.find(w => w.id === activeWatchlistId);
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden relative">

@@ -37,6 +37,13 @@ interface MoverRow {
   pChange: number;
 }
 
+interface TopMoverItem {
+  symbol: string;
+  lastPrice?: string | number;
+  close?: string | number;
+  pChange?: string | number;
+}
+
 function formatPrice(val: number): string {
   return val.toFixed(2);
 }
@@ -175,42 +182,42 @@ const COLUMN_LABELS: Record<string, string> = {
 };
 
 export function MoversWidget() {
-  const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const [moversColumns] = useAtom(moversColumnsAtom);
 
-  const { data: gainers = [], isLoading: gainersLoading } = useQuery({
+  const { data: gainers = [], isLoading: gainersLoading } = useQuery<TopMoverItem[]>({
     queryKey: ['market/top-gainers'],
     queryFn: async () => {
       const res = await fetch('/api/py/market/top-gainers');
       if (!res.ok) throw new Error('Failed to fetch top gainers');
-      return res.json() as Promise<any[]>;
+      return res.json();
     },
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
 
-  const { data: losers = [], isLoading: losersLoading } = useQuery({
+  const { data: losers = [], isLoading: losersLoading } = useQuery<TopMoverItem[]>({
     queryKey: ['market/top-losers'],
     queryFn: async () => {
       const res = await fetch('/api/py/market/top-losers');
       if (!res.ok) throw new Error('Failed to fetch top losers');
-      return res.json() as Promise<any[]>;
+      return res.json();
     },
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
 
-  const gainerRows: MoverRow[] = gainers.map((item) => ({
+  const gainerRows: MoverRow[] = gainers.map((item: TopMoverItem) => ({
     symbol: item.symbol,
-    close: formatPrice(parseFloat(item.lastPrice || item.close || '0')),
-    pChange: parseFloat(item.pChange),
+    close: formatPrice(parseFloat(String(item.lastPrice || item.close || '0'))),
+    pChange: parseFloat(String(item.pChange)),
   }));
 
-  const loserRows: MoverRow[] = losers.map((item) => ({
+  const loserRows: MoverRow[] = losers.map((item: TopMoverItem) => ({
     symbol: item.symbol,
-    close: formatPrice(parseFloat(item.lastPrice || item.close || '0')),
-    pChange: parseFloat(item.pChange),
+    close: formatPrice(parseFloat(String(item.lastPrice || item.close || '0'))),
+    pChange: parseFloat(String(item.pChange)),
   }));
 
   const handleRowClick = (row: MoverRow) => {

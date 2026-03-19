@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { tickDataAtom } from '@/store/terminalStore';

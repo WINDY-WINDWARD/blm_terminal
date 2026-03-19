@@ -7,7 +7,7 @@ import { getCacheTtl } from '@/lib/api-config';
 
 const ENDPOINT_NAME = 'trades';
 
-export async function POST(req: NextRequest) {
+export async function POST(_req: NextRequest) {
   try {
     // Rate limit check
     if (!rateLimiter.isAllowed(ENDPOINT_NAME)) {

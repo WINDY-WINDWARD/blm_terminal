@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAtom, useSetAtom } from 'jotai';
+import { useAtom } from 'jotai';
 import { activeSymbolAtom, activeExchangeAtom, focusedPanelAtom } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 import { wsService } from '@/lib/socket';
@@ -84,6 +84,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
 
   // Sync input fields when global symbol changes (e.g. WatchWidget / TopWidget click)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: syncs form inputs to external prop changes
     setInputSymbol(symbol);
     setInputExchange(exchange);
   }, [symbol, exchange]);
@@ -109,6 +110,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   // When data loads successfully, confirm the pending interval change
   useEffect(() => {
     if (!isLoading && !isError && pendingInterval !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clears pending state on load completion
       setPendingInterval(null);
     }
   }, [isLoading, isError, pendingInterval]);
@@ -116,6 +118,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   // If there's an error, revert the pending interval
   useEffect(() => {
     if (isError && pendingInterval !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reverts pending state on error
       setPendingInterval(null);
     }
   }, [isError, pendingInterval]);

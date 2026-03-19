@@ -91,10 +91,10 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`px-4 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors ${
+      className={`px-4 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 ${
         active
-          ? 'bg-terminal-amber text-black font-bold'
-          : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900'
+          ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
+          : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900 border-transparent'
       }`}
     >
       {label}
