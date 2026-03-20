@@ -5,6 +5,7 @@ from app.routers.corporatefilings import router as filings_router
 from app.routers.markets import router as markets_router
 from app.routers.nonpersistence import router as market_router
 from app.routers.news import router as news_router
+from app.routers.notifications import router as notifications_router
 from app.routers.screener import router as screener_router
 from app.routers.stockuniverse import router as stockuniverse_router
 from app.routers.watchlist import router as watchlist_router
@@ -15,6 +16,7 @@ __all__ = [
     "markets_router",
     "market_router",
     "news_router",
+    "notifications_router",
     "screener_router",
     "stockuniverse_router",
     "watchlist_router",
