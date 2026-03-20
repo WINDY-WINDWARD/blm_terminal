@@ -1,7 +1,7 @@
 import asyncio
-import datetime
 import logging
 import threading
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func
@@ -431,7 +431,7 @@ DAILY_NOTIFICATION_WINDOW_DAYS = 7          # lookback for deals and insider tra
 CLEANUP_READ_AFTER_DAYS = 30              # hard-delete read notifications older than this
 CLEANUP_INTERVAL = 24 * 60 * 60            # run cleanup at most once per 24 hours
 
-_cleanup_last_run: "datetime.datetime | None" = None
+_cleanup_last_run: datetime | None = None
 
 
 def _get_watchlist_symbols() -> dict[int, list[str]]:
