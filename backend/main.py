@@ -24,6 +24,7 @@ from app.routers import (
     markets_router,
     market_router,
     news_router,
+    notifications_router,
     screener_router,
     stockuniverse_router,
     watchlist_router,
@@ -378,6 +379,12 @@ app.include_router(news_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
+
+import os as _os
+if _os.environ.get("ENV") != "production":
+    from app.routers.notifications import _dev_router
+    app.include_router(_dev_router, prefix="/api")
 
 # Mount MCP server under /api/mcp
 app.mount("/api/mcp", mcp_server.mcp.streamable_http_app())
