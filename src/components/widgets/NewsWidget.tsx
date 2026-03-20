@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { activeSymbolAtom } from '@/store/terminalStore';
 
@@ -87,6 +87,17 @@ function TabButton({
 export function NewsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
   const [activeTab, setActiveTab] = useState<Tab>('global');
+  const queryClient = useQueryClient();
+
+  const handleRefresh = async () => {
+    await queryClient.cancelQueries({ queryKey: ['news/company', symbol] });
+    await fetch('/api/py/news/company', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol }),
+    });
+    queryClient.invalidateQueries({ queryKey: ['news/company', symbol] });
+  };
 
   const {
     data: globalArticles = [],
@@ -107,6 +118,7 @@ export function NewsWidget() {
   const {
     data: companyArticles = [],
     isLoading: companyLoading,
+    isFetching: companyFetching,
     error: companyError,
   } = useQuery<NewsArticle[]>({
     queryKey: ['news/company', symbol],
@@ -133,6 +145,7 @@ export function NewsWidget() {
   });
 
   const isLoading = activeTab === 'global' ? globalLoading : companyLoading;
+  const isRefreshing = activeTab === 'company' && companyFetching && !companyLoading;
   const error = activeTab === 'global' ? globalError : companyError;
   const articles = activeTab === 'global' ? globalArticles : companyArticles;
 
@@ -151,8 +164,25 @@ export function NewsWidget() {
           label="Company"
         />
         {activeTab === 'company' && symbol && (
-          <span className="ml-auto pr-2 py-1 text-[10px] text-terminal-amber">
-            {symbol}
+          <span className="ml-auto flex items-center gap-1 pr-1 py-1 text-[10px] text-terminal-amber">
+            <span>{symbol}</span>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-0.5 hover:bg-zinc-700 rounded disabled:opacity-40 transition-opacity"
+              title="Force refresh"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="10"
+                height="10"
+                fill="currentColor"
+                className={isRefreshing ? 'animate-spin' : ''}
+              >
+                <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 1 1 .908-.418A6 6 0 1 1 8 2v1z" />
+                <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z" />
+              </svg>
+            </button>
           </span>
         )}
       </div>
