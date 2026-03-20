@@ -96,7 +96,7 @@ export function NewsWidget() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol }),
     });
-    queryClient.invalidateQueries({ queryKey: ['news/company', symbol] });
+    await queryClient.refetchQueries({ queryKey: ['news/company', symbol] });
   };
 
   const {
