@@ -4,7 +4,7 @@ import logging
 import threading
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.services.nse_client import NSEClient
@@ -405,12 +405,13 @@ def market_data_worker() -> None:
 
 
 def start_all_workers() -> list[threading.Thread]:
-    """Spawn all four background worker threads and return them."""
+    """Spawn all background worker threads and return them."""
     targets = [
         stock_universe_worker,
         news_worker,
         watchlist_news_worker,
         market_data_worker,
+        watchlist_notification_worker,
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -418,6 +419,319 @@ def start_all_workers() -> list[threading.Thread]:
         _worker_threads.append(t)
         logger.info("start_all_workers: spawned %s", t.name)
     return _worker_threads
+
+
+# ---------------------------------------------------------------------------
+# Notification worker — watchlist stock alert generator
+# ---------------------------------------------------------------------------
+
+NOTIFICATION_CHECK_INTERVAL = 5 * 60       # 5 minutes  (market hours)
+AFTER_HOURS_INTERVAL = 30 * 60             # 30 minutes (outside market hours)
+DAILY_NOTIFICATION_WINDOW_DAYS = 7          # lookback for deals and insider trades
+CLEANUP_READ_AFTER_DAYS = 30              # hard-delete read notifications older than this
+CLEANUP_INTERVAL = 24 * 60 * 60            # run cleanup at most once per 24 hours
+
+_cleanup_last_run: "datetime.datetime | None" = None
+
+
+def _get_watchlist_symbols() -> dict[int, list[str]]:
+    """Return all watchlist items grouped by watchlist_id."""
+    from app.models.watchlist import WatchlistItem
+    from sqlalchemy import select
+
+    with _SyncSessionLocal() as session:
+        result = session.execute(select(WatchlistItem.watchlist_id, WatchlistItem.symbol))
+        rows = result.fetchall()
+    grouped: dict[int, list[str]] = {}
+    for wl_id, symbol in rows:
+        grouped.setdefault(wl_id, []).append(symbol.upper())
+    return grouped
+
+
+def _get_seen_today() -> set[tuple[int, str, str]]:
+    """Return {(watchlist_id, symbol, trigger_type)} for all unread notifications today."""
+    from app.models.notification import Notification
+
+    today = datetime.now().date()
+    with _SyncSessionLocal() as session:
+        rows = session.execute(
+            select(Notification.watchlist_id, Notification.symbol, Notification.trigger_type)
+            .where(
+                Notification.triggered_date == today,
+                Notification.is_read == False,
+            )
+        )
+        return {(r[0], r[1], r[2]) for r in rows}
+
+
+def _bulk_upsert_notifications(rows: list[dict]) -> None:
+    """Insert notification rows, skipping duplicates via UniqueConstraint.
+
+    rows is a list of plain dicts keyed by column name — NOT ORM objects.
+    Using ORM object __dict__ would include SQLAlchemy internal state keys,
+    causing the insert to fail or behave unexpectedly.
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from app.models.notification import Notification
+
+    if not rows:
+        return
+    with _SyncSessionLocal() as session:
+        stmt = (
+            sqlite_insert(Notification)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="uq_notification_daily")
+        )
+        session.execute(stmt)
+        session.commit()
+
+
+def _run_cleanup_if_due() -> None:
+    """Hard-delete read notifications older than CLEANUP_READ_AFTER_DAYS.
+
+    Runs at most once per CLEANUP_INTERVAL to avoid unnecessary DB writes.
+    """
+    global _cleanup_last_run
+    now = datetime.now()
+    if _cleanup_last_run is not None and (now - _cleanup_last_run).total_seconds() < CLEANUP_INTERVAL:
+        return
+    from app.models.notification import Notification
+    from datetime import timedelta as td
+
+    cutoff = datetime.combine(now.date() - td(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
+    with _SyncSessionLocal() as session:
+        deleted = session.execute(
+            delete(Notification).where(
+                Notification.is_read == True,
+                Notification.triggered_at < cutoff,
+            )
+        )
+        session.commit()
+        if deleted.rowcount > 0:
+            logger.info(
+                "notification_cleanup: deleted %d read notifications older than %s",
+                deleted.rowcount,
+                cutoff.date(),
+            )
+    _cleanup_last_run = now
+
+
+def _notification_cycle_full() -> None:
+    """Full cycle: check all 9 trigger types. Called in a worker thread."""
+    global _cleanup_last_run
+
+    try:
+        logger.info("notification_cycle_full: starting")
+        now = datetime.now()
+        today_date = now.date()
+
+        symbols_by_watchlist = _get_watchlist_symbols()
+        if not symbols_by_watchlist:
+            logger.debug("notification_cycle_full: watchlist is empty, skipping")
+            return
+
+        seen_today = _get_seen_today()
+        pending: list[dict] = []
+
+        high52 = {str(r.symbol): r for r in _nse_client.get_52week_high().itertuples()}
+        low52  = {str(r.symbol): r for r in _nse_client.get_52week_low().itertuples()}
+        vol    = {str(r.symbol): r for r in _nse_client.get_volume_gainers().itertuples()}
+        gainers = {str(r.symbol): r for r in _nse_client.get_top_gainers().itertuples()}
+        losers  = {str(r.symbol): r for r in _nse_client.get_top_losers().itertuples()}
+        deals   = _nse_client.get_largedeal_snapshot()
+
+        insider_cache: dict[str, list[dict]] = {}
+
+        for wl_id, symbols in symbols_by_watchlist.items():
+            for symbol in symbols:
+                alerts: list[tuple[str, str]] = []
+
+                if symbol in high52:
+                    row = high52[symbol]
+                    price = getattr(row, "ltp", None) or getattr(row, "new52WHL", None) or "—"
+                    alerts.append(("52w_high_breakout", f"{symbol} hit a new 52-week HIGH @ ₹{price}"))
+                if symbol in low52:
+                    row = low52[symbol]
+                    price = getattr(row, "ltp", None) or getattr(row, "new52WHL", None) or "—"
+                    alerts.append(("52w_low_breakout", f"{symbol} hit a new 52-week LOW @ ₹{price}"))
+                if symbol in vol:
+                    row = vol[symbol]
+                    ratio = getattr(row, "week1volChange", None) or 0
+                    alerts.append(("volume_breakout", f"{symbol} showing volume breakout ({ratio:+.0f}x avg)"))
+                if symbol in gainers:
+                    row = gainers[symbol]
+                    pchg = getattr(row, "pChange", 0) or 0
+                    alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
+                if symbol in losers:
+                    row = losers[symbol]
+                    pchg = getattr(row, "pChange", 0) or 0
+                    alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
+
+                for deal in deals.get_deals_for_symbol(symbol):
+                    if deal.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
+                        alerts.append((
+                            f"{deal.deal_type}_deal",
+                            f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}",
+                        ))
+
+                if symbol not in insider_cache:
+                    insider_cache[symbol] = _fetch_insider_trades_cached(symbol)
+                for trade in insider_cache[symbol]:
+                    if trade.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
+                        direction = (trade.buy_sell or "").lower()
+                        if direction in ("buy", "acquisition"):
+                            t_type = "insider_buy"
+                        elif direction in ("sell", "disposal"):
+                            t_type = "insider_sell"
+                        else:
+                            t_type = f"insider_{direction}"
+                        alerts.append((
+                            t_type,
+                            f"{symbol} insider {direction.upper()}: "
+                            f"{getattr(trade, 'acquirer_name', 'Unknown')} "
+                            f"{direction} {getattr(trade, 'qty', 0):,} shares",
+                        ))
+
+                for trigger_type, message in alerts:
+                    key = (wl_id, symbol, trigger_type)
+                    if key in seen_today:
+                        continue
+                    seen_today.add(key)
+                    pending.append({
+                        "watchlist_id": wl_id,
+                        "symbol": symbol,
+                        "exchange": "NSE",
+                        "trigger_type": trigger_type,
+                        "message": message,
+                        "triggered_at": now,
+                        "triggered_date": today_date,
+                        "is_read": False,
+                    })
+
+                if _shutdown_event.is_set():
+                    return
+
+        if pending:
+            _bulk_upsert_notifications(pending)
+            logger.info("notification_cycle_full: upserted %d notifications", len(pending))
+        else:
+            logger.info("notification_cycle_full: no new notifications")
+
+        _run_cleanup_if_due()
+    except Exception:
+        logger.exception("notification_cycle_full: unhandled exception")
+
+
+def _notification_cycle_reduced() -> None:
+    """Reduced cycle: deals + insider only. Outside market hours."""
+    try:
+        logger.info("notification_cycle_reduced: starting")
+        now = datetime.now()
+        today_date = now.date()
+
+        symbols_by_watchlist = _get_watchlist_symbols()
+        if not symbols_by_watchlist:
+            logger.debug("notification_cycle_reduced: watchlist is empty, skipping")
+            return
+
+        seen_today = _get_seen_today()
+        pending: list[dict] = []
+        deals = _nse_client.get_largedeal_snapshot()
+        insider_cache: dict[str, list[dict]] = {}
+
+        for wl_id, symbols in symbols_by_watchlist.items():
+            for symbol in symbols:
+                alerts: list[tuple[str, str]] = []
+
+                for deal in deals.get_deals_for_symbol(symbol):
+                    if deal.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
+                        alerts.append((
+                            f"{deal.deal_type}_deal",
+                            f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}",
+                        ))
+
+                if symbol not in insider_cache:
+                    insider_cache[symbol] = _fetch_insider_trades_cached(symbol)
+                for trade in insider_cache[symbol]:
+                    if trade.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
+                        direction = (trade.buy_sell or "").lower()
+                        if direction in ("buy", "acquisition"):
+                            t_type = "insider_buy"
+                        elif direction in ("sell", "disposal"):
+                            t_type = "insider_sell"
+                        else:
+                            t_type = f"insider_{direction}"
+                        alerts.append((
+                            t_type,
+                            f"{symbol} insider {direction.upper()}: "
+                            f"{getattr(trade, 'acquirer_name', 'Unknown')} "
+                            f"{direction} {getattr(trade, 'qty', 0):,} shares",
+                        ))
+
+                for trigger_type, message in alerts:
+                    key = (wl_id, symbol, trigger_type)
+                    if key in seen_today:
+                        continue
+                    seen_today.add(key)
+                    pending.append({
+                        "watchlist_id": wl_id,
+                        "symbol": symbol,
+                        "exchange": "NSE",
+                        "trigger_type": trigger_type,
+                        "message": message,
+                        "triggered_at": now,
+                        "triggered_date": today_date,
+                        "is_read": False,
+                    })
+
+                if _shutdown_event.is_set():
+                    return
+
+        if pending:
+            _bulk_upsert_notifications(pending)
+            logger.info("notification_cycle_reduced: upserted %d notifications", len(pending))
+        _run_cleanup_if_due()
+    except Exception:
+        logger.exception("notification_cycle_reduced: unhandled exception")
+
+
+def _fetch_insider_trades_cached(symbol: str) -> list[dict]:
+    """Fetch insider trades from screener.in, returning a list of trade dicts."""
+    try:
+        result = _run_async(_fetch_insider_trades_async(symbol))
+        return result
+    except Exception:
+        logger.debug("insider_trades: failed for %s, skipping", symbol)
+        return []
+
+
+async def _fetch_insider_trades_async(symbol: str) -> list[dict]:
+    """Async helper: call screener_client.get_insider_trades."""
+    from app.services.screener_client import screener_client
+
+    try:
+        data = await screener_client.get_insider_trades(symbol)
+        if data and "insider_trades" in data:
+            return data["insider_trades"]
+    except Exception:
+        pass
+    return []
+
+
+def watchlist_notification_worker() -> None:
+    """Daemon thread: monitors watchlist stocks for significant market events."""
+    logger.info("watchlist_notification_worker: started")
+    _sleep_interruptible(30)  # wait for app startup before first cycle
+
+    while not _shutdown_event.is_set():
+        if _is_market_open():
+            _notification_cycle_full()
+            _sleep_interruptible(NOTIFICATION_CHECK_INTERVAL)
+        else:
+            _notification_cycle_reduced()
+            _sleep_interruptible(AFTER_HOURS_INTERVAL)
+
+    logger.info("watchlist_notification_worker: stopped")
 
 
 def stop_all_workers(timeout: float = 35.0) -> None:

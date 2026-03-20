@@ -15,6 +15,7 @@ import { LargedealsWidget } from './widgets/LargedealsWidget';
 import { BreakoutsWidget } from './widgets/BreakoutsWidget';
 import { NewsWidget } from './widgets/NewsWidget';
 import { AnalysisWidget } from './widgets/AnalysisWidget';
+import { NotifWidget } from './widgets/NotifWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -40,6 +41,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'BREAKOUTS': return <BreakoutsWidget />;
       case 'NEWS':     return <NewsWidget />;
       case 'ANALYSIS': return <AnalysisWidget />;
+      case 'NOTIF':   return <NotifWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">
