@@ -73,7 +73,7 @@ export function NotifWidget() {
   const { data, isLoading, isError, error, refetch } = useQuery<Notification[]>({
     queryKey: ['notifications', selectedWatchlistId],
     queryFn: async () => {
-      const res = await fetch(`/api/notifications?watchlist_id=${selectedWatchlistId}`);
+      const res = await fetch(`/api/py/notifications?watchlist_id=${selectedWatchlistId}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -83,8 +83,8 @@ export function NotifWidget() {
 
   const dismissMutation = useMutation({
     mutationFn: async (id: number) => {
-      const res = await fetch(
-        `/api/notifications/${id}?watchlist_id=${selectedWatchlistId}`,
+        const res = await fetch(
+          `/api/py/notifications/${id}?watchlist_id=${selectedWatchlistId}`,
         { method: 'DELETE' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -96,8 +96,8 @@ export function NotifWidget() {
 
   const clearAllMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(
-        `/api/notifications?all=true&watchlist_id=${selectedWatchlistId}`,
+        const res = await fetch(
+          `/api/py/notifications?all=true&watchlist_id=${selectedWatchlistId}`,
         { method: 'DELETE' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
