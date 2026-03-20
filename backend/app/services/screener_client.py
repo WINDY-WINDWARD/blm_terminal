@@ -26,7 +26,7 @@ QUICK_RATIOS_URL = f"{BASE_URL}/api/company/{{warehouse_id}}/quick_ratios/"
 TRADES_URL = f"{BASE_URL}/trades/company-{{warehouse_id}}/"
 
 _COURTESY_DELAY = 1.0
-_screener_lock = asyncio.Lock()
+_screener_semaphore = asyncio.Semaphore(2)
 
 # Stable mapping of symbol → trades company ID.
 # These IDs don't change, so no TTL is needed — the dict lives for the
@@ -556,6 +556,11 @@ class ScreenerClient:
             },
             timeout=15.0,
             follow_redirects=True,
+            limits=httpx.Limits(
+                max_connections=10,
+                max_keepalive_connections=5,
+                keepalive_expiry=30.0,
+            ),
         )
         logger.info(
             "ScreenerClient initialised (authenticated=%s)",
@@ -582,7 +587,7 @@ class ScreenerClient:
                 "ScreenerClient not initialised. Call await client.init() first."
             )
 
-        async with _screener_lock:
+        async with _screener_semaphore:
             logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
             t0 = time.perf_counter()
             resp = await self._http.get(
@@ -609,7 +614,7 @@ class ScreenerClient:
         url = QUICK_RATIOS_URL.format(warehouse_id=warehouse_id)
 
         try:
-            async with _screener_lock:
+            async with _screener_semaphore:
                 logger.debug("Screener GET %s", url)
                 t0 = time.perf_counter()
                 resp = await self._http.get(url)
@@ -675,7 +680,7 @@ class ScreenerClient:
 
         url = COMPANY_URL.format(symbol=symbol_upper, mode=mode)
 
-        async with _screener_lock:
+        async with _screener_semaphore:
             logger.debug("Screener GET %s", url)
             t0 = time.perf_counter()
             resp = await self._http.get(url)
@@ -763,7 +768,7 @@ class ScreenerClient:
 
         url = TRADES_URL.format(warehouse_id=warehouse_id)
 
-        async with _screener_lock:
+        async with _screener_semaphore:
             logger.debug("Screener GET %s", url)
             t0 = time.perf_counter()
             resp = await self._http.get(url)
@@ -810,7 +815,7 @@ class ScreenerClient:
         mode = "consolidated" if consolidated else "standalone"
         url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
 
-        async with _screener_lock:
+        async with _screener_semaphore:
             logger.debug("Screener GET %s", url)
             t0 = time.perf_counter()
             resp = await self._http.get(url)  # type: ignore[union-attr]

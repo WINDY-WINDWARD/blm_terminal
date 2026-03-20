@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import threading
+from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -432,3 +433,17 @@ def stop_all_workers(timeout: float = 35.0) -> None:
             logger.warning("stop_all_workers: %s did not exit within %.1fs, abandoning", t.name, timeout)
         else:
             logger.info("stop_all_workers: %s exited cleanly", t.name)
+
+
+async def start_cache_cleanup(interval: float = 600.0) -> asyncio.Task:
+    """No-op: cachetools.TTLCache auto-evicts expired entries.
+    
+    Kept for backward compatibility with existing callers.
+    """
+    async def _noop() -> None:
+        while True:
+            await asyncio.sleep(interval)
+
+    task = asyncio.create_task(_noop(), name="cache-cleanup-noop")
+    logger.info("Cache cleanup: using cachetools.TTLCache (auto-eviction, no manual cleanup needed)")
+    return task

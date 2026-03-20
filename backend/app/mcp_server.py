@@ -6,6 +6,7 @@ All tools call service and DB logic directly rather than making HTTP calls back 
 
 import asyncio
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -62,25 +63,13 @@ def _clean_nan(obj):
     return obj
 
 
-# Minimum gap (in seconds) between two consecutive NSE requests.
-_NSE_COURTESY_DELAY_SECONDS: float = 2.0
-_nse_lock = asyncio.Lock()
-_last_request_at: float = 0.0
+USE_ASYNC_NSE = os.getenv("USE_ASYNC_NSE", "false").lower() == "true"
+if USE_ASYNC_NSE:
+    from app.services.nse_client_async import nse_client_async as _active_client
+else:
+    from app.services.nse_client import nse_client as _active_client
 
-
-async def _throttled_call(fn, *args):
-    global _last_request_at
-    async with _nse_lock:
-        elapsed = time.monotonic() - _last_request_at
-        wait = _NSE_COURTESY_DELAY_SECONDS - elapsed
-        if wait > 0:
-            logger.debug("MCP: Courtesy delay: sleeping %.2fs before NSE request", wait)
-            await asyncio.sleep(wait)
-        try:
-            result = await asyncio.to_thread(fn, *args)
-        finally:
-            _last_request_at = time.monotonic()
-    return result
+from app.services.nse_rate_limiter import throttled_nse_call
 
 
 # ---------------------------------------------------------------------------
@@ -99,17 +88,34 @@ async def health_check() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+async def _mcp_snapshot() -> dict:
+    """Fetch largedeal snapshot through the rate limiter (one NSE call)."""
+    return await throttled_nse_call(
+        "mcp:largedeal-snapshot",
+        _active_client.get_largedeal_snapshot,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+
+
 @mcp.tool()
 async def get_top_gainers() -> list[dict[str, Any]]:
     """Return today's top-gaining equities on NSE India."""
-    df = await _throttled_call(nse_client.get_top_gainers)
+    df = await throttled_nse_call(
+        "top-gainers",
+        _active_client.get_top_gainers,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     return _df_to_json_dict(df)
 
 
 @mcp.tool()
 async def get_top_losers() -> list[dict[str, Any]]:
     """Return today's top-losing equities on NSE India."""
-    df = await _throttled_call(nse_client.get_top_losers)
+    df = await throttled_nse_call(
+        "top-losers",
+        _active_client.get_top_losers,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     return _df_to_json_dict(df)
 
 
@@ -122,10 +128,11 @@ async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
-    df = await _throttled_call(nse_client.check_bulk_deals, symbol)
-    data = _df_to_json_dict(df)
-    _cache_set(cache_key, data)
-    return data
+    snapshot = await _mcp_snapshot()
+    rows = snapshot.get("BULK_DEALS_DATA", [])
+    filtered = [r for r in rows if r.get("symbol", "").upper() == symbol]
+    _cache_set(cache_key, filtered)
+    return filtered
 
 
 @mcp.tool()
@@ -137,10 +144,11 @@ async def get_block_deals(symbol: str) -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
-    df = await _throttled_call(nse_client.check_block_deals, symbol)
-    data = _df_to_json_dict(df)
-    _cache_set(cache_key, data)
-    return data
+    snapshot = await _mcp_snapshot()
+    rows = snapshot.get("BLOCK_DEALS_DATA", [])
+    filtered = [r for r in rows if r.get("symbol", "").upper() == symbol]
+    _cache_set(cache_key, filtered)
+    return filtered
 
 
 @mcp.tool()
@@ -151,8 +159,8 @@ async def get_high_short_interest() -> list[dict[str, Any]]:
     if cached is not None:
         return cached
 
-    df = await _throttled_call(nse_client.get_high_short_interest)
-    data = _df_to_json_dict(df)
+    snapshot = await _mcp_snapshot()
+    data = snapshot.get("SHORT_DEALS_DATA", [])
     _cache_set(cache_key, data)
     return data
 
@@ -165,7 +173,11 @@ async def get_largedeal_snapshot() -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    data = await _throttled_call(nse_client.get_largedeal_snapshot)
+    data = await throttled_nse_call(
+        "largedeal-snapshot",
+        _active_client.get_largedeal_snapshot,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return data
@@ -184,7 +196,12 @@ async def get_change_ranges(symbol: str) -> dict[str, float | None]:
     if cached is not None:
         return cached
 
-    data = await _throttled_call(nse_client.get_change_ranges, symbol)
+    data = await throttled_nse_call(
+        f"change-ranges:{symbol}",
+        _active_client.get_change_ranges,
+        symbol,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return data
@@ -202,7 +219,12 @@ async def get_symbol_data(symbol: str) -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    data = await _throttled_call(nse_client.get_symbol_data, symbol)
+    data = await throttled_nse_call(
+        f"symbol-data:{symbol}",
+        _active_client.get_symbol_data,
+        symbol,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return data
@@ -216,7 +238,11 @@ async def get_52week_low_stocks() -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    data = await _throttled_call(nse_client.get_52week_low_stocks)
+    data = await throttled_nse_call(
+        "52week-low",
+        _active_client.get_52week_low_stocks,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return data
@@ -230,7 +256,11 @@ async def get_52week_high_stocks() -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    data = await _throttled_call(nse_client.get_52week_high_stocks)
+    data = await throttled_nse_call(
+        "52week-high",
+        _active_client.get_52week_high_stocks,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return data
@@ -244,7 +274,11 @@ async def get_volume_gainers() -> dict[str, Any]:
     if cached is not None:
         return cached
 
-    data = await _throttled_call(nse_client.get_volume_gainers)
+    data = await throttled_nse_call(
+        "volume-gainers",
+        _active_client.get_volume_gainers,
+        is_async_fn=USE_ASYNC_NSE,
+    )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
     return data
@@ -276,8 +310,11 @@ async def get_corporate_filings(symbol: str) -> dict[str, Any]:
 
         if needs_refresh:
             try:
-                csv_text: str = await asyncio.to_thread(
-                    nse_client.get_corporate_filing_comparison, symbol
+                csv_text: str = await throttled_nse_call(
+                    f"corporate-filing:{symbol}",
+                    _active_client.get_corporate_filing_comparison,
+                    symbol,
+                    is_async_fn=USE_ASYNC_NSE,
                 )
             except Exception as exc:
                 logger.exception("NSE fetch failed for %s", symbol)

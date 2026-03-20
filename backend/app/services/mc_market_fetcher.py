@@ -64,6 +64,11 @@ class MarketDataFetcher:
                 headers=self._headers,
                 timeout=httpx.Timeout(30.0, connect=10.0),
                 follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                    keepalive_expiry=30.0,
+                ),
             )
             await self._load_fresh_cookies()
         return self._client

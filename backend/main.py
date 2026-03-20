@@ -28,10 +28,11 @@ from app.routers import (
     stockuniverse_router,
     watchlist_router,
 )
-from app.routers.nonpersistence import start_cache_cleanup
+from app.backgroundtasks import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
+from app.services.news_fetcher import news_fetcher
 from app.backgroundtasks import start_all_workers, stop_all_workers
 from app import mcp_server
 
@@ -278,6 +279,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cleanup_task = await start_cache_cleanup()
     start_all_workers()
     await screener_client.init()
+    await news_fetcher.init()
 
     if ai_summarizer.is_configured:
         logger.info(
@@ -308,6 +310,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await ai_summarizer.close()
         await nse_client.close()
         await screener_client.close()
+        await news_fetcher.close()
 
 
 # ---------------------------------------------------------------------------

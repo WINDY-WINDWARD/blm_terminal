@@ -1,20 +1,17 @@
 """This router serves non-cached data directly from NSE India.
 
-It is intended for one-time-use market snapshots (top gainers, top losers,
-most active, etc.) that we do not want to persist in our database.
-
-some endpoints can have a cache layer with a short TTL of 10 minutes
-
-Because NSE India rate-limits these endpoints aggressively, every outgoing
-request is guarded by a courtesy delay: if the previous request finished less
-than COURTESY_DELAY_SECONDS ago, the handler sleeps for the remaining time
-before hitting NSE again.  An asyncio.Lock ensures only one NSE call runs at
-a time so concurrent requests queue up rather than flooding the upstream API.
+Performance optimizations (v1.3):
+- Global semaphore (2 concurrent NSE requests) replaces single Lock
+- Per-endpoint courtesy delay (no more global 2s gap between ANY calls)
+- Request coalescing: simultaneous requests share one upstream call
+- Circuit breaker with OPEN → HALF_OPEN → CLOSED recovery
+- Shared snapshot cache: bulk/block/short deals from ONE NSE call
+- Shared market-turnover cache: top-gainers and top-losers share ONE call
+- cachetools.TTLCache replaces dict-based TTL (auto-eviction, thread-safe)
 """
 
-import asyncio
 import logging
-import time
+import os
 from functools import partial
 
 import numpy as np
@@ -22,34 +19,30 @@ import pandas as pd
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from app.services.nse_client import nse_client
+from app.services.cache import nse_cache
+from app.services.nse_rate_limiter import throttled_nse_call
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/market", tags=["market"])
 
-# Minimum gap (in seconds) between two consecutive NSE requests.
-COURTESY_DELAY_SECONDS: float = 2.0
+USE_ASYNC_NSE = os.getenv("USE_ASYNC_NSE", "false").lower() == "true"
+if USE_ASYNC_NSE:
+    from app.services.nse_client_async import nse_client_async as _active_client
+else:
+    from app.services.nse_client import nse_client as _active_client
 
-_nse_lock = asyncio.Lock()
-_last_request_at: float = 0.0  # monotonic timestamp of the last NSE call
-
-# ---------------------------------------------------------------------------
-# Simple in-memory TTL cache  {key: (stored_at, data)}
-# ---------------------------------------------------------------------------
-
-CACHE_TTL_SECONDS: float = 600.0  # 10 minutes — override per-call if needed
-
-_cache: dict[str, tuple[float, object]] = {}
+_CHANGE_RANGES_TTL = 300.0
+_SYMBOL_DATA_TTL = 60.0
+_FIFTY_TWO_WEEK_TTL = 3 * 60 * 60.0
+_VOLUME_GAINERS_TTL = 25 * 60.0
 
 
 def _df_to_json_dict(df: pd.DataFrame) -> list[dict]:
-    """Convert DataFrame to dict, replacing NaN/NA with None for JSON compatibility."""
     return df.replace({np.nan: None, pd.NA: None}).to_dict(orient="records")
 
 
 def _clean_nan(obj):
-    """Recursively replace NaN with None in dicts/lists for JSON serialization."""
     if isinstance(obj, dict):
         return {k: _clean_nan(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -59,332 +52,214 @@ def _clean_nan(obj):
     return obj
 
 
-def _cache_get(key: str, ttl: float = CACHE_TTL_SECONDS) -> object | None:
-    """Return cached data for *key* if it exists and has not expired."""
-    entry = _cache.get(key)
-    if entry and (time.monotonic() - entry[0]) < ttl:
-        return entry[1]
-    return None
+def _cache_response(data: object, cache_key: str, ttl: float) -> JSONResponse:
+    nse_cache[cache_key] = data
+    response = JSONResponse(content=_clean_nan(data))
+    response.headers["Cache-Control"] = f"public, max-age={int(ttl)}"
+    return response
 
 
-def _cache_set(key: str, data: object) -> None:
-    """Store *data* under *key* with the current timestamp."""
-    _cache[key] = (time.monotonic(), data)
+def _json_response(data: object, ttl: float) -> JSONResponse:
+    response = JSONResponse(content=_clean_nan(data))
+    response.headers["Cache-Control"] = f"public, max-age={int(ttl)}"
+    return response
 
 
-def _ttl_for_key(key: str) -> float:
-    """Return the TTL to use for a given cache *key*.
+async def _get_largedeal_snapshot_shared() -> dict:
+    """Fetch largedeal snapshot once; derive bulk/block/short from it.
 
-    Keys can have different lifetimes; fall back to the default TTL when no
-    specific mapping is defined.
+    Cached for 10 minutes so concurrent requests for bulk-deals:X,
+    block-deals:X, and high-short-interest all share the same upstream fetch.
+    Works in Phase 1 (sync nsepython via to_thread) and Phase 2 (async httpx).
     """
-    # Import-time references are resolved at call time, after all globals
-    # (including per-endpoint TTLs) have been defined.
-    if key.startswith("change_ranges:"):
-        return _CHANGE_RANGES_TTL
-    if key.startswith("symbol_data:"):
-        return _SYMBOL_DATA_TTL
-    if key in {"52week_low", "52week_high"}:
-        return _FIFTY_TWO_WEEK_TTL
-    if key == "volume_gainers":
-        return _VOLUME_GAINERS_TTL
-    # Bulk/block deals and largedeal snapshot use the default cache TTL.
-    return CACHE_TTL_SECONDS
+    cached = nse_cache.get("largedeal-snapshot")
+    if cached is not None:
+        logger.debug("Shared snapshot cache hit")
+        return cached
+
+    data = await throttled_nse_call(
+        "largedeal-snapshot",
+        _active_client.get_largedeal_snapshot,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    nse_cache["largedeal-snapshot"] = data
+    return data
 
 
-def _cache_evict_expired() -> None:
-    """Remove all entries whose TTL has elapsed."""
-    now = time.monotonic()
-    expired: list[str] = []
-    for k, (t, _) in list(_cache.items()):
-        ttl = _ttl_for_key(k)
-        if now - t >= ttl:
-            expired.append(k)
-    for k in expired:
-        del _cache[k]
-    if expired:
-        logger.debug("Cache evicted %d expired entries", len(expired))
+async def _get_market_turnover_shared() -> list[dict]:
+    """Fetch market turnover payload once; cache for subsequent calls.
 
-
-async def start_cache_cleanup(interval: float = CACHE_TTL_SECONDS) -> asyncio.Task:
-    """Start a background task that evicts expired cache entries every *interval* seconds.
-
-    Returns the Task so the caller can cancel it on shutdown.
+    Both top-gainers and top-losers hit the same NSE URL. Cache the payload
+    so simultaneous requests share one upstream call.
     """
+    cached = nse_cache.get("market-turnover")
+    if cached is not None:
+        logger.debug("Market turnover cache hit")
+        return cached
 
-    async def _loop() -> None:
-        while True:
-            await asyncio.sleep(interval)
-            _cache_evict_expired()
-
-    task = asyncio.create_task(_loop(), name="cache-cleanup")
-    logger.info("Cache cleanup task started (interval=%.0fs)", interval)
-    return task
-
-
-async def _throttled_call(fn, *args):
-    """Run a synchronous *fn* in a thread-pool, honouring the courtesy delay.
-
-    Acquires the lock so concurrent calls are serialised, waits out any
-    remaining courtesy window, then delegates to asyncio.to_thread.
-    """
-    global _last_request_at
-
-    async with _nse_lock:
-        elapsed = time.monotonic() - _last_request_at
-        wait = COURTESY_DELAY_SECONDS - elapsed
-        if wait > 0:
-            logger.debug("Courtesy delay: sleeping %.2fs before NSE request", wait)
-            await asyncio.sleep(wait)
-
-        try:
-            result = await asyncio.to_thread(fn, *args)
-        finally:
-            _last_request_at = time.monotonic()
-
-    return result
+    rows = await throttled_nse_call(
+        "market-turnover",
+        _active_client._get_market_turnover,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    nse_cache["market-turnover"] = rows
+    return rows
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/top-gainers",
-    summary="Top gainers on NSE",
-    response_class=JSONResponse,
-)
+@router.get("/top-gainers", summary="Top gainers on NSE", response_class=JSONResponse)
 async def top_gainers() -> JSONResponse:
-    """Return today's top-gaining equities on NSE India.
+    cached = nse_cache.get("top-gainers")
+    if cached is not None:
+        return _json_response(cached, 60.0)
 
-    Data is fetched live on every call — no caching.
-    """
-    df = await _throttled_call(nse_client.get_top_gainers)
-    return JSONResponse(content=_df_to_json_dict(df))
+    rows = await _get_market_turnover_shared()
+    df = pd.DataFrame(rows)
+    df_eq = df[df["series"] == "EQ"].copy()
+    df_eq["pChange"] = pd.to_numeric(df_eq["pChange"], errors="coerce")
+    df_eq = df_eq.dropna(subset=["pChange"])
+    df_eq = df_eq.sort_values("pChange", ascending=False).head(20)
+    data = _df_to_json_dict(df_eq)
+    return _cache_response(data, "top-gainers", 60.0)
 
 
-@router.get(
-    "/top-losers",
-    summary="Top losers on NSE",
-    response_class=JSONResponse,
-)
+@router.get("/top-losers", summary="Top losers on NSE", response_class=JSONResponse)
 async def top_losers() -> JSONResponse:
-    """Return today's top-losing equities on NSE India.
+    cached = nse_cache.get("top-losers")
+    if cached is not None:
+        return _json_response(cached, 60.0)
 
-    Data is fetched live on every call — no caching.
-    """
-    df = await _throttled_call(nse_client.get_top_losers)
-    return JSONResponse(content=_df_to_json_dict(df))
+    rows = await _get_market_turnover_shared()
+    df = pd.DataFrame(rows)
+    df_eq = df[df["series"] == "EQ"].copy()
+    df_eq["pChange"] = pd.to_numeric(df_eq["pChange"], errors="coerce")
+    df_eq = df_eq.dropna(subset=["pChange"])
+    df_eq = df_eq.sort_values("pChange", ascending=True).head(20)
+    data = _df_to_json_dict(df_eq)
+    return _cache_response(data, "top-losers", 60.0)
 
 
-@router.get(
-    "/bulk-deals/{symbol}",
-    summary="Bulk deals for a specific stock symbol on NSE",
-    response_class=JSONResponse,
-)
+@router.get("/bulk-deals/{symbol}", summary="Bulk deals for a specific stock symbol on NSE", response_class=JSONResponse)
 async def bulk_deals(symbol: str) -> JSONResponse:
-    """Return today's bulk deals for a specific stock symbol on NSE India.
-
-    Data is fetched live on every call — with a 10min in-memory cache.
-    """
-    cache_key = f"bulk_deals:{symbol.upper()}"
-    cached = _cache_get(cache_key)
+    cache_key = f"bulk-deals:{symbol.upper()}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, 600.0)
 
-    df = await _throttled_call(nse_client.check_bulk_deals, symbol)
-    data = _df_to_json_dict(df)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    snapshot = await _get_largedeal_snapshot_shared()
+    rows = [
+        r for r in snapshot.get("BULK_DEALS_DATA", [])
+        if r.get("symbol", "").upper() == symbol.upper()
+    ]
+    return _cache_response(rows, cache_key, 600.0)
 
 
-# block deals
-@router.get(
-    "/block-deals/{symbol}",
-    summary="Block deals for a specific stock symbol on NSE",
-    response_class=JSONResponse,
-)
+@router.get("/block-deals/{symbol}", summary="Block deals for a specific stock symbol on NSE", response_class=JSONResponse)
 async def block_deals(symbol: str) -> JSONResponse:
-    """Return today's block deals for a specific stock symbol on NSE India.
-
-    Data is fetched live on every call — with a 10min in-memory cache.
-    """
-    cache_key = f"block_deals:{symbol.upper()}"
-    cached = _cache_get(cache_key)
+    cache_key = f"block-deals:{symbol.upper()}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, 600.0)
 
-    df = await _throttled_call(nse_client.check_block_deals, symbol)
-    data = _df_to_json_dict(df)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    snapshot = await _get_largedeal_snapshot_shared()
+    rows = [
+        r for r in snapshot.get("BLOCK_DEALS_DATA", [])
+        if r.get("symbol", "").upper() == symbol.upper()
+    ]
+    return _cache_response(rows, cache_key, 600.0)
 
 
-# check high short volume stocks
-@router.get(
-    "/high-short-interest",
-    summary="Stocks with high short interest on NSE",
-    response_class=JSONResponse,
-)
+@router.get("/high-short-interest", summary="Stocks with high short interest on NSE", response_class=JSONResponse)
 async def high_short_interest() -> JSONResponse:
-    """Return today's stocks with high short interest on NSE India.
-
-    Data is fetched live on every call — with a 10min in-memory cache.
-    """
-    cache_key = "high_short_interest"
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get("high-short-interest")
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, 600.0)
 
-    df = await _throttled_call(nse_client.get_high_short_interest)
-    data = _df_to_json_dict(df)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    snapshot = await _get_largedeal_snapshot_shared()
+    data = snapshot.get("SHORT_DEALS_DATA", [])
+    return _cache_response(data, "high-short-interest", 600.0)
 
 
-@router.get(
-    "/largedeal-snapshot",
-    summary="Full largedeal snapshot (bulk/short/block) from NSE",
-    response_class=JSONResponse,
-)
+@router.get("/largedeal-snapshot", summary="Full largedeal snapshot (bulk/short/block) from NSE", response_class=JSONResponse)
 async def largedeal_snapshot() -> JSONResponse:
-    """Return the full largedeal snapshot from NSE India.
-
-    This surfaces the BULK_DEALS_DATA, SHORT_DEALS_DATA, and BLOCK_DEALS_DATA
-    arrays (plus as_on_date and counters) in a single JSON payload. Results are
-    cached for a short period to avoid hammering NSE.
-    """
-    cache_key = "largedeal_snapshot"
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get("largedeal-snapshot")
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, 600.0)
 
-    data = await _throttled_call(nse_client.get_largedeal_snapshot)
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
-
-
-_CHANGE_RANGES_TTL: float = 300.0  # 5 minutes
-
-_SYMBOL_DATA_TTL: float = 60.0  # 1 minute
-_FIFTY_TWO_WEEK_TTL: float = 3 * 60 * 60.0  # 3 hours
-_VOLUME_GAINERS_TTL: float = 25 * 60.0  # 25 minutes
+    data = await throttled_nse_call(
+        "largedeal-snapshot",
+        _active_client.get_largedeal_snapshot,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    return _cache_response(_clean_nan(data), "largedeal-snapshot", 600.0)
 
 
-@router.get(
-    "/change-ranges/{symbol}",
-    summary="Percentage changes over multiple timeframes for a symbol",
-    response_class=JSONResponse,
-)
+@router.get("/change-ranges/{symbol}", summary="Percentage changes over multiple timeframes for a symbol", response_class=JSONResponse)
 async def change_ranges(symbol: str) -> JSONResponse:
-    """Return pre-computed percentage changes for *symbol* from NSE's getYearwiseData.
-
-    Keys: oneDayPercent, oneWeekPercent, oneMonthPercent, threeMonthPercent,
-    sixMonthPercent, oneYearPercent, twoYearPercent, threeYearPercent, fiveYearPercent.
-
-    Results are cached for 5 minutes.
-    """
-    cache_key = f"change_ranges:{symbol.upper()}"
-    cached = _cache_get(cache_key, ttl=_CHANGE_RANGES_TTL)
+    cache_key = f"change-ranges:{symbol.upper()}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, _CHANGE_RANGES_TTL)
 
-    data = await _throttled_call(nse_client.get_change_ranges, symbol)
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    data = await throttled_nse_call(
+        f"change-ranges:{symbol.upper()}",
+        partial(_active_client.get_change_ranges, symbol.upper()),
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    return _cache_response(_clean_nan(data), cache_key, _CHANGE_RANGES_TTL)
 
 
-@router.get(
-    "/symbol-data/{symbol}",
-    summary="Live symbol data from NSE (getSymbolData)",
-    response_class=JSONResponse,
-)
+@router.get("/symbol-data/{symbol}", summary="Live symbol data from NSE (getSymbolData)", response_class=JSONResponse)
 async def symbol_data(symbol: str) -> JSONResponse:
-    """Return live symbol data from NSE's `getSymbolData` endpoint.
-
-    Results are cached for a short period to limit repeated hits.
-    """
-    cache_key = f"symbol_data:{symbol.upper()}"
-    cached = _cache_get(cache_key, ttl=_SYMBOL_DATA_TTL)
+    cache_key = f"symbol-data:{symbol.upper()}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, _SYMBOL_DATA_TTL)
 
-    data = await _throttled_call(nse_client.get_symbol_data, symbol.upper())
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    data = await throttled_nse_call(
+        f"symbol-data:{symbol.upper()}",
+        partial(_active_client.get_symbol_data, symbol.upper()),
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    return _cache_response(_clean_nan(data), cache_key, _SYMBOL_DATA_TTL)
 
 
-@router.get(
-    "/52week-low",
-    summary="52-week low stocks snapshot from NSE",
-    response_class=JSONResponse,
-)
+@router.get("/52week-low", summary="52-week low stocks snapshot from NSE", response_class=JSONResponse)
 async def fifty_two_week_low() -> JSONResponse:
-    """Return NSE 52-week low stocks snapshot.
-
-    Results are cached for 3 hours to reduce repeated upstream calls.
-    """
-    cache_key = "52week_low"
-    cached = _cache_get(cache_key, ttl=_FIFTY_TWO_WEEK_TTL)
+    cached = nse_cache.get("52week-low")
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, _FIFTY_TWO_WEEK_TTL)
 
-    data = await _throttled_call(nse_client.get_52week_low_stocks)
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    data = await throttled_nse_call(
+        "52week-low",
+        _active_client.get_52week_low_stocks,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    return _cache_response(_clean_nan(data), "52week-low", _FIFTY_TWO_WEEK_TTL)
 
 
-@router.get(
-    "/52week-high",
-    summary="52-week high stocks snapshot from NSE",
-    response_class=JSONResponse,
-)
+@router.get("/52week-high", summary="52-week high stocks snapshot from NSE", response_class=JSONResponse)
 async def fifty_two_week_high() -> JSONResponse:
-    """Return NSE 52-week high stocks snapshot.
-
-    Results are cached for 3 hours to reduce repeated upstream calls.
-    """
-    cache_key = "52week_high"
-    cached = _cache_get(cache_key, ttl=_FIFTY_TWO_WEEK_TTL)
+    cached = nse_cache.get("52week-high")
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, _FIFTY_TWO_WEEK_TTL)
 
-    data = await _throttled_call(nse_client.get_52week_high_stocks)
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    data = await throttled_nse_call(
+        "52week-high",
+        _active_client.get_52week_high_stocks,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    return _cache_response(_clean_nan(data), "52week-high", _FIFTY_TWO_WEEK_TTL)
 
 
-@router.get(
-    "/volume-gainers",
-    summary="Volume gainers snapshot from NSE",
-    response_class=JSONResponse,
-)
+@router.get("/volume-gainers", summary="Volume gainers snapshot from NSE", response_class=JSONResponse)
 async def volume_gainers() -> JSONResponse:
-    """Return NSE volume gainers snapshot.
-
-    Results are cached for 25 minutes to reduce repeated upstream calls.
-    """
-    cache_key = "volume_gainers"
-    cached = _cache_get(cache_key, ttl=_VOLUME_GAINERS_TTL)
+    cached = nse_cache.get("volume-gainers")
     if cached is not None:
-        logger.debug("Cache hit for %s", cache_key)
-        return JSONResponse(content=cached)
+        return _json_response(cached, _VOLUME_GAINERS_TTL)
 
-    data = await _throttled_call(nse_client.get_volume_gainers)
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return JSONResponse(content=data)
+    data = await throttled_nse_call(
+        "volume-gainers",
+        _active_client.get_volume_gainers,
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    return _cache_response(_clean_nan(data), "volume-gainers", _VOLUME_GAINERS_TTL)

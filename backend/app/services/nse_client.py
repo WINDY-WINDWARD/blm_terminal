@@ -212,6 +212,39 @@ class NSEClient:
 
         return payload
 
+    def _get_market_turnover(self) -> list[dict]:
+        """Fetch market turnover rows for top-gainers/losers.
+
+        First tries the raw market-turnover JSON endpoint (same URL as the async
+        client).  If that fails — e.g. a 404 outside market hours — falls back
+        to nsepython.nse_get_top_gainers() and extracts the DataFrame rows so
+        both paths return the same list[dict] shape.
+
+        Returns:
+            list of row dicts, each containing symbol/series/pChange fields.
+        """
+        url = "https://www.nseindia.com/api/live-analysis-market-turnover"
+        try:
+            t0 = time.perf_counter()
+            resp = self._session.get(url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+            payload = resp.json()
+            rows: list[dict] = payload.get("data", [])
+            if not rows:
+                raise ValueError("No data in market turnover response")
+            return rows
+        except Exception as exc:
+            logger.warning(
+                "market-turnover endpoint failed (%s), falling back to nsepython",
+                exc,
+            )
+            df = nsepython.nse_get_top_gainers()
+            if "data" in df.columns:
+                return df["data"].tolist()
+            return df.to_dict(orient="records")
+
     def get_largedeal_snapshot(self) -> dict:
         """Fetch the full largedeal snapshot (bulk/short/block) from NSE India.
 
