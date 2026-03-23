@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, date
 from typing import Any
 
+import pandas as pd
 from sqlalchemy import delete, func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -17,6 +19,64 @@ from app.services.mc_market_fetcher import market_data_fetcher
 logger = logging.getLogger(__name__)
 
 _nse_client = NSEClient()
+
+
+# ---------------------------------------------------------------------------
+# Data structures and helpers for notification system
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DealRecord:
+    """Normalized deal record from NSE largedeal snapshot."""
+    symbol: str
+    deal_type: str       # "bulk", "block", "short"
+    date: str            # raw date string from NSE (e.g., "12-Mar-2026")
+    qty: int             # coerced from string
+    watp: float          # coerced from string/null
+    client_name: str | None
+    buy_sell: str | None
+
+
+def _coerce_int(val) -> int:
+    """Coerce string/None to int safely."""
+    if val is None:
+        return 0
+    try:
+        return int(str(val).replace(",", ""))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _coerce_float(val) -> float:
+    """Coerce string/None to float safely."""
+    if val is None:
+        return 0.0
+    try:
+        return float(str(val).replace(",", ""))
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _is_recent(date_str: str | None, days: int) -> bool:
+    """Check if a date string is within the last N days.
+    
+    Args:
+        date_str: Date in NSE format "12-Mar-2026", or None
+        days: Number of days to look back
+    Returns:
+        True if date is within the last `days` days, False otherwise
+    """
+    if not date_str:
+        return False
+    try:
+        dt = datetime.strptime(date_str, "%d-%b-%Y").date()
+        today = date.today()
+        if dt > today:
+            return False
+        return (today - dt).days <= days
+    except ValueError:
+        logger.warning("Unparseable date: %s", date_str)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +113,8 @@ def _run_async(coro):
 
 def _seconds_until_midnight() -> float:
     """Return seconds from now until the next 00:00:00 local time."""
-    now = datetime.datetime.now()
-    tomorrow_midnight = (now + datetime.timedelta(days=1)).replace(
+    now = datetime.now()
+    tomorrow_midnight = (now + timedelta(days=1)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     return (tomorrow_midnight - now).total_seconds()
@@ -67,7 +127,7 @@ def _stock_universe_sync() -> None:
         stock_list: list[str] = _nse_client.get_stock_list()
         logger.info("stock_universe_sync: %d symbols to process", len(stock_list))
 
-        stale_delta = datetime.timedelta(days=30)
+        stale_delta = timedelta(days=30)
 
         with _SyncSessionLocal() as session:
             for symbol in stock_list:
@@ -83,7 +143,7 @@ def _stock_universe_sync() -> None:
                     )
                 if last_time is not None:
                     try:
-                        now = datetime.datetime.now()
+                        now = datetime.now()
                         if (now - last_time) < stale_delta:
                             logger.debug(
                                 "Skipping %s — last update was %s (within %d days)",
@@ -303,7 +363,7 @@ def _is_market_open() -> bool:
     """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST)."""
     import pytz
 
-    now_utc = datetime.datetime.now(pytz.utc)
+    now_utc = datetime.now(pytz.utc)
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
 
     if now_ist.weekday() >= 5:
@@ -329,7 +389,7 @@ def _seconds_until_market_open() -> float:
     """Calculate seconds until the next market open time (09:15 IST)."""
     import pytz
 
-    now_utc = datetime.datetime.now(pytz.utc)
+    now_utc = datetime.now(pytz.utc)
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
 
     if now_ist.weekday() == 5:
@@ -351,7 +411,7 @@ def _seconds_until_market_open() -> float:
             if now_ist.weekday() == 4:
                 days_until_monday = 3
 
-    next_open = now_ist + datetime.timedelta(days=days_until_monday)
+    next_open = now_ist + timedelta(days=days_until_monday)
     next_open = next_open.replace(
         hour=settings.market_start_hour,
         minute=settings.market_start_minute,
@@ -419,6 +479,141 @@ def start_all_workers() -> list[threading.Thread]:
         _worker_threads.append(t)
         logger.info("start_all_workers: spawned %s", t.name)
     return _worker_threads
+
+
+# ---------------------------------------------------------------------------
+# Parse helpers for NSE data
+# ---------------------------------------------------------------------------
+
+def _parse_52week_data(data: dict) -> dict[str, dict]:
+    """Parse 52-week high/low response into {symbol: {...}} mapping."""
+    result = {}
+    for item in data.get("data", []):
+        symbol = item.get("symbol")
+        if symbol:
+            result[symbol] = {
+                "ltp": item.get("ltp"),
+                "new52WHL": item.get("new52WHL"),
+                "pChange": item.get("pChange"),
+            }
+    return result
+
+
+def _parse_volume_gainers(data: dict) -> dict[str, dict]:
+    """Parse volume gainers response into {symbol: {...}} mapping."""
+    result = {}
+    for item in data.get("data", []):
+        symbol = item.get("symbol")
+        if symbol:
+            result[symbol] = {
+                "week1volChange": item.get("week1volChange"),
+                "pChange": item.get("pChange"),
+            }
+    return result
+
+
+def _parse_largedeal_snapshot(snapshot: dict) -> dict[str, list[DealRecord]]:
+    """Parse largedeal snapshot into dict of {symbol: [DealRecord, ...]}."""
+    deals_by_symbol: dict[str, list[DealRecord]] = {}
+    
+    # Process bulk deals
+    for item in snapshot.get("BULK_DEALS_DATA", []):
+        if item.get("symbol"):
+            symbol = item["symbol"].upper()
+            deal = DealRecord(
+                symbol=symbol,
+                deal_type="bulk",
+                date=item.get("date", ""),
+                qty=_coerce_int(item.get("qty")),
+                watp=_coerce_float(item.get("watp")),
+                client_name=item.get("clientName"),
+                buy_sell=item.get("buySell"),
+            )
+            deals_by_symbol.setdefault(symbol, []).append(deal)
+    
+    # Process block deals
+    for item in snapshot.get("BLOCK_DEALS_DATA", []):
+        if item.get("symbol"):
+            symbol = item["symbol"].upper()
+            deal = DealRecord(
+                symbol=symbol,
+                deal_type="block",
+                date=item.get("date", ""),
+                qty=_coerce_int(item.get("qty")),
+                watp=_coerce_float(item.get("watp")),
+                client_name=item.get("clientName"),
+                buy_sell=item.get("buySell"),
+            )
+            deals_by_symbol.setdefault(symbol, []).append(deal)
+    
+    # Process short deals (short-selling, NOT insider trades)
+    for item in snapshot.get("SHORT_DEALS_DATA", []):
+        if item.get("symbol"):
+            symbol = item["symbol"].upper()
+            deal = DealRecord(
+                symbol=symbol,
+                deal_type="short",
+                date=item.get("date", ""),
+                qty=_coerce_int(item.get("qty")),
+                watp=_coerce_float(item.get("watp")),
+                client_name=item.get("clientName"),
+                buy_sell=item.get("buySell"),
+            )
+            deals_by_symbol.setdefault(symbol, []).append(deal)
+    
+    return deals_by_symbol
+
+
+# ---------------------------------------------------------------------------
+# Safe fetch wrappers for NSE endpoints
+# ---------------------------------------------------------------------------
+
+def _safe_fetch_52week_high() -> dict:
+    try:
+        return _nse_client.get_52week_high_stocks()
+    except Exception:
+        logger.exception("Failed to fetch 52-week high data")
+        return {}
+
+
+def _safe_fetch_52week_low() -> dict:
+    try:
+        return _nse_client.get_52week_low_stocks()
+    except Exception:
+        logger.exception("Failed to fetch 52-week low data")
+        return {}
+
+
+def _safe_fetch_volume_gainers() -> dict:
+    try:
+        return _nse_client.get_volume_gainers()
+    except Exception:
+        logger.exception("Failed to fetch volume gainers")
+        return {}
+
+
+def _safe_fetch_top_gainers() -> pd.DataFrame | None:
+    try:
+        return _nse_client.get_top_gainers()
+    except Exception:
+        logger.exception("Failed to fetch top gainers")
+        return None
+
+
+def _safe_fetch_top_losers() -> pd.DataFrame | None:
+    try:
+        return _nse_client.get_top_losers()
+    except Exception:
+        logger.exception("Failed to fetch top losers")
+        return None
+
+
+def _safe_fetch_largedeal_snapshot() -> dict:
+    try:
+        return _nse_client.get_largedeal_snapshot()
+    except Exception:
+        logger.exception("Failed to fetch largedeal snapshot")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +711,81 @@ def _run_cleanup_if_due() -> None:
     _cleanup_last_run = now
 
 
+def _build_alerts(
+    symbol: str,
+    high52_data: dict | None = None,
+    low52_data: dict | None = None,
+    vol_data: dict | None = None,
+    gainers_df: pd.DataFrame | None = None,
+    losers_df: pd.DataFrame | None = None,
+    deals_by_symbol: dict[str, list[DealRecord]] | None = None,
+    insider_trades: list[dict] | None = None,
+) -> list[tuple[str, str]]:
+    """Build list of (trigger_type, message) tuples for a symbol."""
+    alerts: list[tuple[str, str]] = []
+    
+    # 52-week high/low
+    if high52_data and symbol in high52_data:
+        row = high52_data[symbol]
+        price = row.get("ltp") or row.get("new52WHL") or "—"
+        alerts.append(("52w_high_breakout", f"{symbol} hit a new 52-week HIGH @ ₹{price}"))
+    
+    if low52_data and symbol in low52_data:
+        row = low52_data[symbol]
+        price = row.get("ltp") or row.get("new52WHL") or "—"
+        alerts.append(("52w_low_breakout", f"{symbol} hit a new 52-week LOW @ ₹{price}"))
+    
+    # Volume breakout
+    if vol_data and symbol in vol_data:
+        ratio = vol_data[symbol].get("week1volChange", 0)
+        alerts.append(("volume_breakout", f"{symbol} showing volume breakout ({ratio:+.0f}x avg)"))
+    
+    # Top gainers/losers (DataFrame)
+    if gainers_df is not None:
+        for row in gainers_df.itertuples():
+            if row.symbol == symbol:
+                pchg = getattr(row, "pChange", 0) or 0
+                alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
+                break
+    
+    if losers_df is not None:
+        for row in losers_df.itertuples():
+            if row.symbol == symbol:
+                pchg = getattr(row, "pChange", 0) or 0
+                alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
+                break
+    
+    # Deals (bulk/block/short) — O(1) lookup via pre-indexed dict
+    if deals_by_symbol and symbol in deals_by_symbol:
+        for deal in deals_by_symbol[symbol]:
+            if _is_recent(deal.date, DAILY_NOTIFICATION_WINDOW_DAYS):
+                alerts.append((
+                    f"{deal.deal_type}_deal",
+                    f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}"
+                ))
+    
+    # Insider trades (from screener.in)
+    if insider_trades:
+        for trade in insider_trades:
+            # trade is a dict with "direction": "up"/"down"
+            direction = (trade.get("direction") or "").lower()
+            if direction == "up":
+                t_type = "insider_buy"
+            elif direction == "down":
+                t_type = "insider_sell"
+            else:
+                t_type = f"insider_{direction}" if direction else "insider_unknown"
+            
+            person = trade.get("person", "Unknown")
+            qty = trade.get("quantity", 0)
+            alerts.append((
+                t_type,
+                f"{symbol} insider {direction}: {person} {direction} {qty:,} shares"
+            ))
+    
+    return alerts
+
+
 def _notification_cycle_full() -> None:
     """Full cycle: check all 9 trigger types. Called in a worker thread."""
     global _cleanup_last_run
@@ -533,65 +803,42 @@ def _notification_cycle_full() -> None:
         seen_today = _get_seen_today()
         pending: list[dict] = []
 
-        high52 = {str(r.symbol): r for r in _nse_client.get_52week_high().itertuples()}
-        low52  = {str(r.symbol): r for r in _nse_client.get_52week_low().itertuples()}
-        vol    = {str(r.symbol): r for r in _nse_client.get_volume_gainers().itertuples()}
-        gainers = {str(r.symbol): r for r in _nse_client.get_top_gainers().itertuples()}
-        losers  = {str(r.symbol): r for r in _nse_client.get_top_losers().itertuples()}
-        deals   = _nse_client.get_largedeal_snapshot()
+        # Fetch NSE data with error handling
+        high52_raw = _safe_fetch_52week_high()
+        low52_raw = _safe_fetch_52week_low()
+        vol_raw = _safe_fetch_volume_gainers()
+        gainers_df = _safe_fetch_top_gainers()
+        losers_df = _safe_fetch_top_losers()
+        deals_raw = _safe_fetch_largedeal_snapshot()
 
+        # Parse raw data
+        high52_data = _parse_52week_data(high52_raw)
+        low52_data = _parse_52week_data(low52_raw)
+        vol_data = _parse_volume_gainers(vol_raw)
+        deals = _parse_largedeal_snapshot(deals_raw)
+
+        # Cache insider trades per symbol
         insider_cache: dict[str, list[dict]] = {}
 
         for wl_id, symbols in symbols_by_watchlist.items():
             for symbol in symbols:
-                alerts: list[tuple[str, str]] = []
-
-                if symbol in high52:
-                    row = high52[symbol]
-                    price = getattr(row, "ltp", None) or getattr(row, "new52WHL", None) or "—"
-                    alerts.append(("52w_high_breakout", f"{symbol} hit a new 52-week HIGH @ ₹{price}"))
-                if symbol in low52:
-                    row = low52[symbol]
-                    price = getattr(row, "ltp", None) or getattr(row, "new52WHL", None) or "—"
-                    alerts.append(("52w_low_breakout", f"{symbol} hit a new 52-week LOW @ ₹{price}"))
-                if symbol in vol:
-                    row = vol[symbol]
-                    ratio = getattr(row, "week1volChange", None) or 0
-                    alerts.append(("volume_breakout", f"{symbol} showing volume breakout ({ratio:+.0f}x avg)"))
-                if symbol in gainers:
-                    row = gainers[symbol]
-                    pchg = getattr(row, "pChange", 0) or 0
-                    alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
-                if symbol in losers:
-                    row = losers[symbol]
-                    pchg = getattr(row, "pChange", 0) or 0
-                    alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
-
-                for deal in deals.get_deals_for_symbol(symbol):
-                    if deal.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
-                        alerts.append((
-                            f"{deal.deal_type}_deal",
-                            f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}",
-                        ))
-
+                # Get insider trades for this symbol (cached)
                 if symbol not in insider_cache:
                     insider_cache[symbol] = _fetch_insider_trades_cached(symbol)
-                for trade in insider_cache[symbol]:
-                    if trade.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
-                        direction = (trade.buy_sell or "").lower()
-                        if direction in ("buy", "acquisition"):
-                            t_type = "insider_buy"
-                        elif direction in ("sell", "disposal"):
-                            t_type = "insider_sell"
-                        else:
-                            t_type = f"insider_{direction}"
-                        alerts.append((
-                            t_type,
-                            f"{symbol} insider {direction.upper()}: "
-                            f"{getattr(trade, 'acquirer_name', 'Unknown')} "
-                            f"{direction} {getattr(trade, 'qty', 0):,} shares",
-                        ))
 
+                # Build all alerts for this symbol
+                alerts = _build_alerts(
+                    symbol=symbol,
+                    high52_data=high52_data,
+                    low52_data=low52_data,
+                    vol_data=vol_data,
+                    gainers_df=gainers_df,
+                    losers_df=losers_df,
+                    deals_by_symbol=deals,
+                    insider_trades=insider_cache[symbol],
+                )
+
+                # Add to pending if not seen today
                 for trigger_type, message in alerts:
                     key = (wl_id, symbol, trigger_type)
                     if key in seen_today:
@@ -636,38 +883,27 @@ def _notification_cycle_reduced() -> None:
 
         seen_today = _get_seen_today()
         pending: list[dict] = []
-        deals = _nse_client.get_largedeal_snapshot()
+
+        # Only fetch deals (market-hour triggers omitted)
+        deals_raw = _safe_fetch_largedeal_snapshot()
+        deals = _parse_largedeal_snapshot(deals_raw)
+
         insider_cache: dict[str, list[dict]] = {}
 
         for wl_id, symbols in symbols_by_watchlist.items():
             for symbol in symbols:
-                alerts: list[tuple[str, str]] = []
-
-                for deal in deals.get_deals_for_symbol(symbol):
-                    if deal.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
-                        alerts.append((
-                            f"{deal.deal_type}_deal",
-                            f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}",
-                        ))
-
+                # Get insider trades for this symbol (cached)
                 if symbol not in insider_cache:
                     insider_cache[symbol] = _fetch_insider_trades_cached(symbol)
-                for trade in insider_cache[symbol]:
-                    if trade.is_recent(days=DAILY_NOTIFICATION_WINDOW_DAYS):
-                        direction = (trade.buy_sell or "").lower()
-                        if direction in ("buy", "acquisition"):
-                            t_type = "insider_buy"
-                        elif direction in ("sell", "disposal"):
-                            t_type = "insider_sell"
-                        else:
-                            t_type = f"insider_{direction}"
-                        alerts.append((
-                            t_type,
-                            f"{symbol} insider {direction.upper()}: "
-                            f"{getattr(trade, 'acquirer_name', 'Unknown')} "
-                            f"{direction} {getattr(trade, 'qty', 0):,} shares",
-                        ))
 
+                # Build alerts (only deals + insider)
+                alerts = _build_alerts(
+                    symbol=symbol,
+                    deals_by_symbol=deals,
+                    insider_trades=insider_cache[symbol],
+                )
+
+                # Add to pending if not seen today
                 for trigger_type, message in alerts:
                     key = (wl_id, symbol, trigger_type)
                     if key in seen_today:
