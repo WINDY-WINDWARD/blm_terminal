@@ -24,6 +24,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'BREAKOUTS', desc: '52-week breakouts' },
   { cmd: 'NEWS', desc: 'Market & company news' },
   { cmd: 'ANALYSIS', desc: 'Sector & industry analysis' },
+  { cmd: 'NOTIF', desc: 'Notifications generated' },
 ];
 
 export function CommandBar() {
@@ -129,6 +130,8 @@ export function CommandBar() {
     );
   };
 
+  const placeholder = WIDGET_COMMANDS.map((w) => w.cmd).join(' · ');
+
   return (
     <div className="flex items-center bg-blue-900 text-white h-8 px-2 border-b border-terminal-gray font-sans font-bold text-sm shrink-0 gap-3 relative">
       {/* WS connection indicator */}
@@ -161,7 +164,7 @@ export function CommandBar() {
           onBlur={() => {
             setTimeout(() => setSelectedIdx(-1), 250);
           }}
-          placeholder="CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS"
+          placeholder={placeholder}
           className="bg-transparent text-white placeholder-blue-300/60 w-full outline-none uppercase font-mono text-xs tracking-wider"
           autoComplete="off"
         />
