@@ -139,8 +139,20 @@ class NewsFetcher:
 
     async def _get_page(self, url: str) -> httpx.Response:
         """Fetch a page with 403-handling: retry once with fresh cookies."""
-        client = await self._get_client()
-        response = await client.get(url)
+        try:
+            client = await self._get_client()
+            response = await client.get(url)
+        except RuntimeError as e:
+            # Client was closed (e.g., during shutdown) — reinitialize and retry
+            if "client has been closed" in str(e).lower():
+                logger.debug("httpx client was closed, reinitializing for %s", url)
+                self._client = None
+                self._client_loop = None
+                await self.init()
+                client = await self._get_client()
+                response = await client.get(url)
+            else:
+                raise
         if response.status_code == 403:
             logger.warning("Got 403 on %s — refreshing cookies and retrying", url)
             await asyncio.sleep(2)
@@ -532,6 +544,24 @@ class NewsFetcher:
         try:
             client = await self._get_client()
             response = await client.get(url)
+        except RuntimeError as e:
+            # Client was closed (e.g., during shutdown) — reinitialize and retry
+            if "client has been closed" in str(e).lower():
+                logger.debug("httpx client was closed, reinitializing for autocomplete %s", symbol)
+                self._client = None
+                self._client_loop = None
+                await self.init()
+                client = await self._get_client()
+                response = await client.get(url)
+            else:
+                raise
+        except Exception:
+            logger.exception(
+                "resolve_mc_url: autocomplete API call failed for %s", symbol
+            )
+            return None
+
+        try:
             if response.status_code != 200:
                 logger.warning(
                     "resolve_mc_url: autocomplete API returned %s for %s",
