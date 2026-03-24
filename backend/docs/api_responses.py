@@ -174,7 +174,7 @@ def main():
     else:
         out.write(f"Response: {body}")
 
-    # Watchlist
+    # Watchlist (Legacy - Default watchlist only)
     out.print_section("GET /api/watchlist")
     status, body = get("/api/watchlist")
     out.write(f"Status: {status}")
@@ -196,6 +196,72 @@ def main():
     status, list_body = get("/api/watchlist")
     delete_id = list_body[0]["id"] if isinstance(list_body, list) and list_body else 1
     status, body = delete(f"/api/watchlist/{delete_id}")
+    out.write(f"Status: {status}")
+    out.print_json(body)
+
+    # Watchlist CRUD (New multi-watchlist system)
+    out.print_section("GET /api/watchlists")
+    status, body = get("/api/watchlists")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    out.print_section("POST /api/watchlists")
+    status, body = post("/api/watchlists", {"name": "Test Watchlist"})
+    out.write(f"Status: {status}")
+    created_watchlist_id = body.get("id") if isinstance(body, dict) else None
+    out.print_json(body)
+
+    # Clean up: delete the test watchlist
+    if created_watchlist_id and created_watchlist_id != 1:
+        out.print_section(f"DELETE /api/watchlists/{created_watchlist_id}")
+        status, body = delete(f"/api/watchlists/{created_watchlist_id}")
+        out.write(f"Status: {status}")
+        out.print_json(body)
+
+    out.print_section("GET /api/watchlists/{watchlist_id}/items")
+    status, body = get("/api/watchlists/1/items")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    out.print_section("POST /api/watchlists/{watchlist_id}/items")
+    status, body = post("/api/watchlists/1/items", {"symbol": "INFY", "exchange": "NSE"})
+    out.write(f"Status: {status}")
+    created_item_id = body.get("id") if isinstance(body, dict) else None
+    out.print_json(body)
+
+    # Clean up: delete the test item
+    if created_item_id:
+        out.print_section(f"DELETE /api/watchlists/1/items/{created_item_id}")
+        status, body = delete(f"/api/watchlists/1/items/{created_item_id}")
+        out.write(f"Status: {status}")
+        out.print_json(body)
+
+    # Notifications
+    out.print_section("GET /api/notifications?watchlist_id=1")
+    status, body = get("/api/notifications?watchlist_id=1")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    out.print_section("DELETE /api/notifications?watchlist_id=1&all=true")
+    status, body = delete("/api/notifications?watchlist_id=1&all=true")
     out.write(f"Status: {status}")
     out.print_json(body)
 
@@ -337,6 +403,24 @@ def main():
             if data_field:
                 out.write("Sample item (first):")
                 out.print_json(data_field[0])
+    else:
+        out.print_json(body)
+
+    # Market - Largedeal Snapshot
+    out.print_section("GET /api/market/largedeal-snapshot")
+    status, body = get("/api/market/largedeal-snapshot")
+    out.write(f"Status: {status}")
+    if isinstance(body, dict):
+        out.write(f"Top-level keys: {list(body.keys())}")
+        for key in ("BULK_DEALS_DATA", "BLOCK_DEALS_DATA", "SHORT_DEALS_DATA"):
+            data_field = body.get(key)
+            if isinstance(data_field, list):
+                out.write(f"{key}: {len(data_field)} items")
+                if data_field:
+                    out.write(f"Sample {key} item (first):")
+                    out.print_json(data_field[0])
+            else:
+                out.write(f"{key}: {data_field}")
     else:
         out.print_json(body)
 
