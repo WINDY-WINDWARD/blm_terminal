@@ -105,14 +105,14 @@ Sample item (first):
   GET /api/watchlist
 ============================================================
 Status: 200
-Response: List of 21 items
+Response: List of 20 items
 Sample item (first):
 {
-  "id": 6,
+  "id": 7,
   "watchlist_id": 1,
-  "symbol": "IRFC",
+  "symbol": "WEBELSOLAR",
   "exchange": "NSE",
-  "created_at": "2026-03-10T12:36:24.478000"
+  "created_at": "2026-03-10T12:36:58.393000"
 }
 
 ============================================================
@@ -145,7 +145,7 @@ Sample item (first):
   "id": 1,
   "name": "Default",
   "created_at": "2026-03-19T08:04:29",
-  "item_count": 20
+  "item_count": 19
 }
 
 ============================================================
@@ -158,14 +158,14 @@ Status: 422
   GET /api/watchlists/{watchlist_id}/items
 ============================================================
 Status: 200
-Response: List of 20 items
+Response: List of 19 items
 Sample item (first):
 {
-  "id": 7,
+  "id": 8,
   "watchlist_id": 1,
-  "symbol": "WEBELSOLAR",
+  "symbol": "NEWGEN",
   "exchange": "NSE",
-  "created_at": "2026-03-10T12:36:58.393000"
+  "created_at": "2026-03-10T12:38:42.526000"
 }
 
 ============================================================
@@ -173,15 +173,15 @@ Sample item (first):
 ============================================================
 Status: 201
 {
-  "id": 54,
+  "id": 55,
   "watchlist_id": 1,
   "symbol": "INFY",
   "exchange": "NSE",
-  "created_at": "2026-03-24T19:18:44"
+  "created_at": "2026-03-24T21:07:53"
 }
 
 ============================================================
-  DELETE /api/watchlists/1/items/54
+  DELETE /api/watchlists/1/items/55
 ============================================================
 Status: 200
 {
@@ -764,7 +764,7 @@ Status: 200
   "name": "Reliance Industries Ltd",
   "screener_warehouse_id": "6598251",
   "ratios": {
-    "market_cap": "19,11,261 Cr.",
+    "market_cap": "19,10,514 Cr.",
     "price": "1,412",
     "pe": "24.9",
     "book_value": "648",
@@ -789,13 +789,13 @@ Status: 200
     "profit_growth": "10.9%",
     "opm": "17.4%",
     "profit_after_tax": "76,747Cr.",
-    "mar_cap": "19,11,261Cr.",
+    "mar_cap": "19,10,514Cr.",
     "sales_qtr": "2,64,905Cr.",
     "price_to_earning": "24.9",
     "price_to_book_value": "2.18",
     "industry_pe": "13.9",
     "current_price": "1,412",
-    "price_to_sales": "1.87",
+    "price_to_sales": "1.86",
     "peg_ratio": "4.64",
     "pat_qtr": "18,645Cr.",
     "qtr_sales_var": "10.4%",
@@ -815,7 +815,7 @@ Status: 200
     "pat_ann": "68,732Cr.",
     "rsi": "51.0",
     "macd": "-5.05",
-    "market_cap_to_sales": "1.87",
+    "market_cap_to_sales": "1.86",
     "debt_to_profit": "4.61",
     "graham": "947",
     "altman_z_score": "2.86",
@@ -988,13 +988,13 @@ Sample item (first):
   "slug": "abrasives",
   "name": "Abrasives",
   "url": "https://www.moneycontrol.com/markets/industry-analysis/abrasives/",
-  "market_cap": 31396.0,
-  "pe": 42.53,
-  "advance": 4,
+  "market_cap": 31811.0,
+  "pe": 42.73,
+  "advance": 5,
   "decline": 1,
-  "sentiment": "Bearish",
+  "sentiment": "Very Bearish",
   "earnings_yoy": 0.164,
-  "last_updated": "2026-03-24T08:01:06.698343",
+  "last_updated": "2026-03-24T20:10:21.501240",
   "created_at": "2026-03-14T19:47:09"
 }
 
@@ -1009,13 +1009,13 @@ Sample item (first):
   "slug": "agri",
   "name": "Agri",
   "url": "https://www.moneycontrol.com/markets/sector-analysis/agri/",
-  "market_cap": 307702.0,
-  "pe": 26.08,
-  "advance": 86,
-  "decline": 62,
+  "market_cap": 311671.0,
+  "pe": 26.39,
+  "advance": 98,
+  "decline": 58,
   "sentiment": "Bearish",
   "earnings_yoy": 0.3,
-  "last_updated": "2026-03-24T07:51:28.063279",
+  "last_updated": "2026-03-24T20:13:05.431728",
   "created_at": "2026-03-14T19:49:11"
 }
 
@@ -1048,7 +1048,7 @@ Sample item (first):
       "slug": "banks"
     }
   ],
-  "last_updated": "2026-03-24T18:40:43.701701",
+  "last_updated": "2026-03-24T20:12:02.870144",
   "created_at": "2026-03-14T18:13:30"
 }
 
@@ -1081,7 +1081,7 @@ Sample item (first):
       "slug": "banks"
     }
   ],
-  "last_updated": "2026-03-24T18:40:43.701701",
+  "last_updated": "2026-03-24T20:12:02.870144",
   "created_at": "2026-03-14T18:13:30"
 }
 
@@ -1091,9 +1091,9 @@ Sample item (first):
 Status: 200
 {
   "symbol": "TCS",
-  "morningstarId": "792760B1-C368-4050-A8D7-BBAD450E2522",
-  "fairValue": null,
-  "updatedAt": null
+  "morningstarId": "0P0000BEC4",
+  "fairValue": "2890",
+  "updatedAt": "2026-03-24T21:08:09.647561+00:00"
 }
 
 ============================================================
@@ -1104,7 +1104,7 @@ Response: List of 1 items
 Sample item (first):
 {
   "symbol": "RELIANCE",
-  "morningstarId": "5D9AA6FB-DD57-4A9F-B5FD-287A1B5015B2"
+  "morningstarId": "0P0000NIOM"
 }
 
 ============================================================

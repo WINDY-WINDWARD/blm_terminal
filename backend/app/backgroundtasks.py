@@ -1015,6 +1015,108 @@ def _get_full_lock() -> asyncio.Lock:
     return _full_sync_lock
 
 
+async def _batch_update_fair_values(
+    symbols: list[str],
+    update_morningstar_id: bool = False,
+    update_fair_value: bool = True,
+) -> tuple[int, int]:
+    """Batch update fair values for symbols. Returns (updated, failed)."""
+    updated = 0
+    failed = 0
+    pending: list[tuple] = []
+
+    async with AsyncSessionLocal() as db:
+        for i, symbol in enumerate(symbols, 1):
+            try:
+                result = await morningstar_client.get_fair_value_by_symbol(symbol)
+                fair_value = result.get("fairValue")
+                
+                if fair_value:
+                    values: dict = {
+                        "fair_value": fair_value,
+                        "fair_value_updated_at": datetime.now(timezone.utc),
+                    }
+                    if update_morningstar_id:
+                        values["morningstar_id"] = result.get("morningstarId")
+                    
+                    pending.append((values, symbol))
+                    updated += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                logger.warning(f"Failed to fetch fair value for {symbol}: {e}")
+                failed += 1
+
+            if len(pending) >= DB_BATCH_SIZE:
+                for values, sym in pending:
+                    stmt = (
+                        update(stockuniverse.StockUniverse)
+                        .where(stockuniverse.StockUniverse.symbol == sym)
+                        .values(**values)
+                    )
+                    await db.execute(stmt)
+                await db.commit()
+                logger.debug(f"Fair value sync progress: {i}/{len(symbols)}")
+                pending = []
+
+            await asyncio.sleep(REQUEST_DELAY)
+
+        if pending:
+            for values, sym in pending:
+                stmt = (
+                    update(stockuniverse.StockUniverse)
+                    .where(stockuniverse.StockUniverse.symbol == sym)
+                    .values(**values)
+                )
+                await db.execute(stmt)
+            await db.commit()
+
+    return updated, failed
+
+
+async def _batch_resolve_morningstar_ids(symbols: list[str]) -> int:
+    """Batch resolve Morningstar IDs for symbols. Returns count of resolved IDs."""
+    resolved = 0
+    pending: list[tuple] = []
+
+    async with AsyncSessionLocal() as db:
+        for i, symbol in enumerate(symbols, 1):
+            try:
+                ms_id = await morningstar_client.resolve_symbol_to_id(symbol)
+                if ms_id:
+                    pending.append((ms_id, symbol))
+                    resolved += 1
+                    logger.debug(f"Resolved {symbol} -> {ms_id}")
+            except Exception as e:
+                logger.warning(f"Failed to resolve ID for {symbol}: {e}")
+
+            if len(pending) >= DB_BATCH_SIZE:
+                for mid, sym in pending:
+                    stmt = (
+                        update(stockuniverse.StockUniverse)
+                        .where(stockuniverse.StockUniverse.symbol == sym)
+                        .values(morningstar_id=mid)
+                    )
+                    await db.execute(stmt)
+                await db.commit()
+                logger.info(f"ID sync progress: {i}/{len(symbols)}")
+                pending = []
+
+            await asyncio.sleep(REQUEST_DELAY)
+
+        if pending:
+            for mid, sym in pending:
+                stmt = (
+                    update(stockuniverse.StockUniverse)
+                    .where(stockuniverse.StockUniverse.symbol == sym)
+                    .values(morningstar_id=mid)
+                )
+                await db.execute(stmt)
+            await db.commit()
+
+    return resolved
+
+
 async def sync_watchlist_fair_values():
     """Fetch fair values for all watchlist stocks every 3 hours."""
     lock = _get_watchlist_lock()
@@ -1030,38 +1132,12 @@ async def sync_watchlist_fair_values():
             result = await db.execute(stmt)
             symbols = [row[0] for row in result.fetchall()]
 
-        updated = 0
-        failed = 0
+        if not symbols:
+            logger.info("No symbols in watchlist to sync")
+            await _update_sync_timestamp("last_watchlist_fairvalue_sync")
+            return
 
-        async with AsyncSessionLocal() as db:
-            for i, symbol in enumerate(symbols, 1):
-                try:
-                    result = await morningstar_client.get_fair_value_by_symbol(symbol, db)
-                    if result.get("fairValue"):
-                        stmt = (
-                            update(stockuniverse.StockUniverse)
-                            .where(stockuniverse.StockUniverse.symbol == symbol)
-                            .values(
-                                morningstar_id=result.get("morningstarId"),
-                                fair_value=result.get("fairValue"),
-                                fair_value_updated_at=datetime.now(timezone.utc),
-                            )
-                        )
-                        await db.execute(stmt)
-                        updated += 1
-                    else:
-                        failed += 1
-                except Exception as e:
-                    logger.warning(f"Failed to fetch fair value for {symbol}: {e}")
-                    failed += 1
-
-                if i % DB_BATCH_SIZE == 0:
-                    await db.commit()
-                    logger.debug(f"Watchlist sync progress: {i}/{len(symbols)}")
-
-                await asyncio.sleep(REQUEST_DELAY)
-
-            await db.commit()
+        updated, failed = await _batch_update_fair_values(symbols)
 
         logger.info(f"Watchlist fair value sync complete: {updated} updated, {failed} failed")
         await _update_sync_timestamp("last_watchlist_fairvalue_sync")
@@ -1082,78 +1158,19 @@ async def sync_all_fair_values():
             result = await db.execute(stmt)
             all_symbols = [row[0] for row in result.fetchall()]
 
+        if not all_symbols:
+            logger.info("No symbols in stock universe to sync")
+            await _update_sync_timestamp("last_full_fairvalue_sync")
+            return
+
         logger.info("Step 1: Populating missing Morningstar IDs")
-        batch_counter = 0
+        resolved_count = await _batch_resolve_morningstar_ids(all_symbols)
+        logger.info(f"Step 1 complete: {resolved_count} IDs populated")
 
-        pending_updates = []
-
-        for symbol in all_symbols:
-            try:
-                ms_id = await morningstar_client.resolve_symbol_to_id(symbol)
-                if ms_id:
-                    pending_updates.append((symbol, ms_id))
-                    logger.debug(f"Resolved {symbol} -> {ms_id}")
-
-                if len(pending_updates) >= DB_BATCH_SIZE:
-                    async with AsyncSessionLocal() as db:
-                        for sym, mid in pending_updates:
-                            stmt = (
-                                update(stockuniverse.StockUniverse)
-                                .where(stockuniverse.StockUniverse.symbol == sym)
-                                .values(morningstar_id=mid)
-                            )
-                            await db.execute(stmt)
-                        await db.commit()
-                    batch_counter += len(pending_updates)
-                    logger.info(f"ID sync progress: {batch_counter}/{len(all_symbols)}")
-                    pending_updates = []
-            except Exception as e:
-                logger.warning(f"Failed to resolve ID for {symbol}: {e}")
-
-            await asyncio.sleep(REQUEST_DELAY)
-
-        if pending_updates:
-            async with AsyncSessionLocal() as db:
-                for sym, mid in pending_updates:
-                    stmt = (
-                        update(stockuniverse.StockUniverse)
-                        .where(stockuniverse.StockUniverse.symbol == sym)
-                        .values(morningstar_id=mid)
-                    )
-                    await db.execute(stmt)
-                await db.commit()
-            batch_counter += len(pending_updates)
-
-        logger.info(f"Step 1 complete: {batch_counter} IDs populated")
         logger.info("Step 2: Fetching fair values")
-        batch_counter = 0
-
-        for symbol in all_symbols:
-            try:
-                result = await morningstar_client.get_fair_value_by_symbol(symbol)
-                if result.get("fairValue"):
-                    async with AsyncSessionLocal() as db:
-                        stmt = (
-                            update(stockuniverse.StockUniverse)
-                            .where(stockuniverse.StockUniverse.symbol == symbol)
-                            .values(
-                                morningstar_id=result.get("morningstarId"),
-                                fair_value=result.get("fairValue"),
-                                fair_value_updated_at=datetime.now(timezone.utc),
-                            )
-                        )
-                        await db.execute(stmt)
-                        batch_counter += 1
-
-                        if batch_counter % DB_BATCH_SIZE == 0:
-                            await db.commit()
-                            logger.info(f"Fair value progress: {batch_counter}/{len(all_symbols)}")
-            except Exception as e:
-                logger.debug(f"Failed to fetch fair value for {symbol}: {e}")
-
-            await asyncio.sleep(REQUEST_DELAY)
-
-        logger.info("Full universe fair value sync complete")
+        updated, failed = await _batch_update_fair_values(all_symbols, update_morningstar_id=True)
+        
+        logger.info(f"Full universe fair value sync complete: {updated} updated, {failed} failed")
         await _update_sync_timestamp("last_full_fairvalue_sync")
 
 

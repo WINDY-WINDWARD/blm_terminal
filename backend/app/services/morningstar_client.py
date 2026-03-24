@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,19 +17,45 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.stockuniverse import StockUniverse
 
+
+@dataclass
+class FairValueResult:
+    """Result of a fair value lookup."""
+    symbol: str
+    morningstar_id: str | None
+    fair_value: float | None
+    updated_at: datetime | None
+
 logger = logging.getLogger(__name__)
 
 MORNINGSTAR_BASE_URL = "https://api-global.morningstar.com"
 MORNINGSTAR_PAGE_URL = "https://www.morningstar.in"
+AUTOCOMPLETE_URL = "https://morningstar.in/handlers/autocompletehandler.ashx"
 
 TOKEN_CACHE_TTL = 60 * 60
-HTML_CACHE_TTL = 15 * 60
 ID_CACHE_TTL = 24 * 60 * 60
-FAIR_VALUE_CACHE_TTL = 3 * 60 * 60
 
 MAX_CONCURRENT_REQUESTS = 2
 REQUEST_DELAY = 1.0
 DB_BATCH_SIZE = 50
+
+SAL_CONTENT_TYPE = "nNsGdN3REOnPMlKDShOYjlk6VYiEVLSdpfpXAm7o2Tk="
+DEFAULT_TOKEN_PAGE = "https://www.morningstar.in/stocks/0p0000bec4/nse-tata-consultancy-services-ltd/overview.aspx"
+
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+API_PARAMS = {
+    "languageId": "en",
+    "locale": "en",
+    "clientId": "RSIN_SAL",
+    "component": "sal-price-fairvalue",
+    "version": "4.13.0",
+    "secExchangeList": "NSE",
+}
 
 _token_cache: dict[str, tuple[float, dict[str, str]]] = {}
 _token_refresh_lock: asyncio.Lock | None = None
@@ -115,7 +142,7 @@ class MorningstarClient:
         """Fetch fresh tokens from Morningstar page using CookieHelper approach."""
         client = await _get_client()
         
-        url = "https://www.morningstar.in/stocks/0p0000bec4/nse-tata-consultancy-services-ltd/overview.aspx"
+        url = DEFAULT_TOKEN_PAGE
         
         cookies = await self._load_browser_cookies()
         if cookies:
@@ -234,16 +261,15 @@ class MorningstarClient:
         client = await _get_client()
         
         try:
-            url = f"https://morningstar.in/handlers/autocompletehandler.ashx?criteria={symbol}"
+            url = f"{AUTOCOMPLETE_URL}?criteria={symbol}"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
                 "Accept": "application/xml, text/xml, */*",
             }
             
             response = await client.get(url, headers=headers)
             response.raise_for_status()
             
-            import xml.etree.ElementTree as ET
             root = ET.fromstring(response.text)
             
             for table in root.findall(".//Table"):
@@ -277,22 +303,14 @@ class MorningstarClient:
                 realtime_token = tokens.get("X-Api-Realtime-E", "")
 
                 url = f"{MORNINGSTAR_BASE_URL}/sal-service/v1/stock/priceFairValue/v3/{security_id}/data"
-                params = {
-                    "languageId": "en",
-                    "locale": "en",
-                    "clientId": "RSIN_SAL",
-                    "component": "sal-price-fairvalue",
-                    "version": "4.13.0",
-                    "secExchangeList": "NSE",
-                    "access_token": access_token,
-                }
+                params = {**API_PARAMS, "access_token": access_token}
                 headers = {
                     "X-Api-Realtime-E": realtime_token,
-                    "X-Sal-Contenttype": "nNsGdN3REOnPMlKDShOYjlk6VYiEVLSdpfpXAm7o2Tk=",
+                    "X-Sal-Contenttype": SAL_CONTENT_TYPE,
                     "Accept": "application/json",
                 }
 
-                logger.debug(f"Fetching fair value for {security_id} with access_token: {access_token[:20] if access_token else 'NONE'}...")
+                logger.debug(f"Fetching fair value for {security_id}")
 
                 response = await client.get(url, params=params, headers=headers)
 
@@ -340,7 +358,7 @@ class MorningstarClient:
     async def get_fair_value_by_symbol(
         self, symbol: str, db: AsyncSession | None = None
     ) -> dict[str, Any]:
-        """Full pipeline: symbol → ID → fair value."""
+        """Full pipeline: symbol → ID → fair value. Returns dict for backward compatibility."""
         symbol_upper = symbol.upper().strip()
 
         ms_id = await self.resolve_symbol_to_id(symbol_upper, db)
@@ -362,6 +380,15 @@ class MorningstarClient:
             if fair_value
             else None,
         }
+
+    def get_fair_value_result(self, symbol: str, ms_id: str | None, fair_value: float | None) -> FairValueResult:
+        """Create a FairValueResult from raw values."""
+        return FairValueResult(
+            symbol=symbol.upper().strip(),
+            morningstar_id=ms_id,
+            fair_value=fair_value,
+            updated_at=datetime.now(timezone.utc) if fair_value else None,
+        )
 
 
 morningstar_client = MorningstarClient()
