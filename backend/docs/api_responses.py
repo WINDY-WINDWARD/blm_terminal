@@ -513,17 +513,17 @@ def main():
     else:
         out.print_json(body)
 
-    # News - Company (POST)
-    out.print_section("POST /api/news/company")
-    status, body = post("/api/news/company", {"symbol": "RELIANCE"})
-    out.write(f"Status: {status}")
-    if isinstance(body, list):
-        out.write(f"Response: List of {len(body)} items")
-        if body:
-            out.write("Sample item (first):")
-            out.print_json(body[0])
-    else:
-        out.print_json(body)
+    # # News - Company (POST)
+    # out.print_section("POST /api/news/company")
+    # status, body = post("/api/news/company", {"symbol": "RELIANCE"})
+    # out.write(f"Status: {status}")
+    # if isinstance(body, list):
+    #     out.write(f"Response: List of {len(body)} items")
+    #     if body:
+    #         out.write("Sample item (first):")
+    #         out.print_json(body[0])
+    # else:
+    #     out.print_json(body)
 
     # Markets - Industries
     out.print_section("GET /api/markets/industries")
@@ -564,6 +564,24 @@ def main():
     # Markets - Sector Stocks
     out.print_section("GET /api/markets/sectors/{slug}/stocks")
     status, body = get("/api/markets/sectors/banks/stocks")
+    out.write(f"Status: {status}")
+    if isinstance(body, list):
+        out.write(f"Response: List of {len(body)} items")
+        if body:
+            out.write("Sample item (first):")
+            out.print_json(body[0])
+    else:
+        out.print_json(body)
+
+    # Morningstar - Fair Value by Symbol
+    out.print_section("GET /api/morningstar/fairvalue/{symbol}")
+    status, body = get("/api/morningstar/fairvalue/TCS")
+    out.write(f"Status: {status}")
+    out.print_json(body)
+
+    # Morningstar - Search for Morningstar ID
+    out.print_section("GET /api/morningstar/search")
+    status, body = get("/api/morningstar/search?q=reliance")
     out.write(f"Status: {status}")
     if isinstance(body, list):
         out.write(f"Response: List of {len(body)} items")

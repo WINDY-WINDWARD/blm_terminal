@@ -2,15 +2,20 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import delete, func
+import pytz
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.services.nse_client import NSEClient
 from app.models import stockuniverse
+from app.models.watchlist import WatchlistItem
+from app.models.news import NewsArticle
+from app.models.notification import Notification
+from app.models.system_config import SystemConfig
 from app.database import _SyncSessionLocal, AsyncSessionLocal
 from app.config import settings
 from app.services.news_fetcher import news_fetcher
@@ -18,7 +23,9 @@ from app.services.mc_market_fetcher import market_data_fetcher
 from app.services.morningstar_client import (
     REQUEST_DELAY,
     DB_BATCH_SIZE,
+    morningstar_client,
 )
+from app.services.screener_client import screener_client
 
 logger = logging.getLogger(__name__)
 
@@ -297,11 +304,6 @@ async def _fetch_company_news_async(symbol: str) -> int:
 
 def _watchlist_news_sync() -> None:
     """Fetch and persist news for each symbol in the watchlist."""
-    from app.models.watchlist import WatchlistItem
-    from app.models.news import NewsArticle
-    from sqlalchemy import select
-    from datetime import datetime, timezone
-
     try:
         logger.info("watchlist_news_sync: starting")
         with _SyncSessionLocal() as session:
@@ -635,9 +637,6 @@ _cleanup_last_run: datetime | None = None
 
 def _get_watchlist_symbols() -> dict[int, list[str]]:
     """Return all watchlist items grouped by watchlist_id."""
-    from app.models.watchlist import WatchlistItem
-    from sqlalchemy import select
-
     with _SyncSessionLocal() as session:
         result = session.execute(select(WatchlistItem.watchlist_id, WatchlistItem.symbol))
         rows = result.fetchall()
@@ -649,8 +648,6 @@ def _get_watchlist_symbols() -> dict[int, list[str]]:
 
 def _get_seen_today() -> set[tuple[int, str, str]]:
     """Return {(watchlist_id, symbol, trigger_type)} for all unread notifications today."""
-    from app.models.notification import Notification
-
     today = datetime.now().date()
     with _SyncSessionLocal() as session:
         rows = session.execute(
@@ -670,9 +667,6 @@ def _bulk_upsert_notifications(rows: list[dict]) -> None:
     Using ORM object __dict__ would include SQLAlchemy internal state keys,
     causing the insert to fail or behave unexpectedly.
     """
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    from app.models.notification import Notification
-
     if not rows:
         return
     with _SyncSessionLocal() as session:
@@ -694,10 +688,8 @@ def _run_cleanup_if_due() -> None:
     now = datetime.now()
     if _cleanup_last_run is not None and (now - _cleanup_last_run).total_seconds() < CLEANUP_INTERVAL:
         return
-    from app.models.notification import Notification
-    from datetime import timedelta as td
 
-    cutoff = datetime.combine(now.date() - td(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
+    cutoff = datetime.combine(now.date() - timedelta(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
     with _SyncSessionLocal() as session:
         deleted = session.execute(
             delete(Notification).where(
@@ -947,8 +939,6 @@ def _fetch_insider_trades_cached(symbol: str) -> list[dict]:
 
 async def _fetch_insider_trades_async(symbol: str) -> list[dict]:
     """Async helper: call screener_client.get_insider_trades."""
-    from app.services.screener_client import screener_client
-
     try:
         data = await screener_client.get_insider_trades(symbol)
         if data and "insider_trades" in data:
@@ -1027,11 +1017,6 @@ def _get_full_lock() -> asyncio.Lock:
 
 async def sync_watchlist_fair_values():
     """Fetch fair values for all watchlist stocks every 3 hours."""
-    from app.models.watchlist import WatchlistItem
-    from app.services.morningstar_client import morningstar_client
-    from sqlalchemy import select, update
-    from datetime import timezone
-
     lock = _get_watchlist_lock()
     if lock.locked():
         logger.warning("Watchlist sync already running, skipping this cycle")
@@ -1084,15 +1069,12 @@ async def sync_watchlist_fair_values():
 
 async def sync_all_fair_values():
     """Fetch fair values for all stocks in stock_universe."""
-    from app.services.morningstar_client import morningstar_client
-    from sqlalchemy import select, update
-    from datetime import timezone
-
-    if _full_sync_lock.locked():
+    lock = _get_full_lock()
+    if lock.locked():
         logger.warning("Full sync already running, skipping this cycle")
         return
 
-    async with _full_sync_lock:
+    async with lock:
         logger.info("Starting full universe fair value sync")
 
         async with AsyncSessionLocal() as db:
@@ -1103,28 +1085,46 @@ async def sync_all_fair_values():
         logger.info("Step 1: Populating missing Morningstar IDs")
         batch_counter = 0
 
+        pending_updates = []
+
         for symbol in all_symbols:
             try:
                 ms_id = await morningstar_client.resolve_symbol_to_id(symbol)
                 if ms_id:
-                    async with AsyncSessionLocal() as db:
-                        stmt = (
-                            update(stockuniverse.StockUniverse)
-                            .where(stockuniverse.StockUniverse.symbol == symbol)
-                            .where(stockuniverse.StockUniverse.morningstar_id.is_(None))
-                            .values(morningstar_id=ms_id)
-                        )
-                        await db.execute(stmt)
-                        batch_counter += 1
+                    pending_updates.append((symbol, ms_id))
+                    logger.debug(f"Resolved {symbol} -> {ms_id}")
 
-                        if batch_counter % DB_BATCH_SIZE == 0:
-                            await db.commit()
-                            logger.info(f"ID sync progress: {batch_counter}/{len(all_symbols)}")
+                if len(pending_updates) >= DB_BATCH_SIZE:
+                    async with AsyncSessionLocal() as db:
+                        for sym, mid in pending_updates:
+                            stmt = (
+                                update(stockuniverse.StockUniverse)
+                                .where(stockuniverse.StockUniverse.symbol == sym)
+                                .values(morningstar_id=mid)
+                            )
+                            await db.execute(stmt)
+                        await db.commit()
+                    batch_counter += len(pending_updates)
+                    logger.info(f"ID sync progress: {batch_counter}/{len(all_symbols)}")
+                    pending_updates = []
             except Exception as e:
-                logger.debug(f"Failed to resolve ID for {symbol}: {e}")
+                logger.warning(f"Failed to resolve ID for {symbol}: {e}")
 
             await asyncio.sleep(REQUEST_DELAY)
 
+        if pending_updates:
+            async with AsyncSessionLocal() as db:
+                for sym, mid in pending_updates:
+                    stmt = (
+                        update(stockuniverse.StockUniverse)
+                        .where(stockuniverse.StockUniverse.symbol == sym)
+                        .values(morningstar_id=mid)
+                    )
+                    await db.execute(stmt)
+                await db.commit()
+            batch_counter += len(pending_updates)
+
+        logger.info(f"Step 1 complete: {batch_counter} IDs populated")
         logger.info("Step 2: Fetching fair values")
         batch_counter = 0
 
@@ -1159,9 +1159,6 @@ async def sync_all_fair_values():
 
 async def _update_sync_timestamp(key: str):
     """Update system_config with current timestamp using upsert."""
-    from app.models.system_config import SystemConfig
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
     async with AsyncSessionLocal() as db:
         stmt = sqlite_insert(SystemConfig).values(
             key=key,
@@ -1181,8 +1178,6 @@ async def _update_sync_timestamp(key: str):
 
 async def _should_trigger_full_sync() -> bool:
     """Check if full sync should run at startup."""
-    from sqlalchemy import select, func
-
     async with AsyncSessionLocal() as db:
         stmt = select(func.max(stockuniverse.StockUniverse.fair_value_updated_at))
         result = await db.execute(stmt)
@@ -1191,7 +1186,6 @@ async def _should_trigger_full_sync() -> bool:
         if last_update is None:
             return True
 
-        from datetime import timedelta
         now_naive = datetime.utcnow()
         if now_naive - last_update > timedelta(hours=24):
             return True

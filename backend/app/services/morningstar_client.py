@@ -112,21 +112,31 @@ class MorningstarClient:
             return await self._refresh_tokens()
 
     async def _refresh_tokens(self) -> dict[str, str]:
-        """Fetch fresh tokens from Morningstar page."""
-        cookies = await self._load_browser_cookies()
-        if not cookies:
-            logger.warning("No browser cookies available for Morningstar")
-            return {}
-
+        """Fetch fresh tokens from Morningstar page using CookieHelper approach."""
         client = await _get_client()
+        
         url = "https://www.morningstar.in/stocks/0p0000bec4/nse-tata-consultancy-services-ltd/overview.aspx"
-
-        for name, value in cookies.items():
-            client.cookies.set(name, value, domain="morningstar.in")
-
-        response = await client.get(url)
-        response.raise_for_status()
-
+        
+        cookies = await self._load_browser_cookies()
+        if cookies:
+            for name, value in cookies.items():
+                client.cookies.set(name, value, domain="morningstar.in")
+                logger.debug(f"Set cookie: {name[:20]}...")
+        
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        
+        response = await client.get(url, headers=headers)
+        
+        logger.debug(f"Token fetch response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch token page, status: {response.status_code}")
+            return {}
+        
         return await self._extract_tokens_from_html(response.text)
 
     async def _extract_tokens_from_html(self, html: str) -> dict[str, str]:
@@ -138,9 +148,26 @@ class MorningstarClient:
 
         tokens = {}
         if access_token:
-            tokens["access_token"] = access_token.get("content", "")
+            token_value = access_token.get("content", "")
+            if token_value:
+                tokens["access_token"] = token_value
+                logger.info(f"Found accessToken: {token_value[:20]}...")
+            else:
+                logger.warning("accessToken meta tag found but empty content")
+        else:
+            logger.warning("No accessToken meta tag found in page")
         if realtime_token:
-            tokens["X-Api-Realtime-E"] = realtime_token.get("content", "")
+            token_value = realtime_token.get("content", "")
+            if token_value:
+                tokens["X-Api-Realtime-E"] = token_value
+                logger.info(f"Found realtimeToken: {token_value[:20]}...")
+            else:
+                logger.warning("realtimeToken meta tag found but empty content")
+        else:
+            logger.warning("No realtimeToken meta tag found in page")
+
+        if not tokens:
+            logger.warning("No tokens extracted from Morningstar page")
 
         _token_cache_set("default", tokens)
         return tokens
@@ -192,41 +219,46 @@ class MorningstarClient:
                 _id_cache_set(symbol_upper, ms_id)
                 return ms_id
 
-        ms_id = await self._search_algolia(symbol)
+        ms_id = await self._search_autocomplete(symbol)
 
         if ms_id:
             _id_cache_set(symbol_upper, ms_id)
+            logger.info(f"Resolved {symbol_upper} to Morningstar ID: {ms_id}")
+        else:
+            logger.warning(f"Could not resolve {symbol_upper} to Morningstar ID via Algolia")
 
         return ms_id
 
-    async def _search_algolia(self, symbol: str) -> str | None:
-        """Search Morningstar via Algolia to get security ID."""
+    async def _search_autocomplete(self, symbol: str) -> str | None:
+        """Search Morningstar India autocomplete to get security ID."""
         client = await _get_client()
-        headers = {
-            "X-Algolia-Application-Id": "17IQHZWXZW",
-            "X-Algolia-API-Key": "be7c37718f927d0137a88a11b69ae419",
-            "Content-Type": "application/json",
-        }
-        body = json.dumps(
-            {"query": symbol, "restrictHighlightAndSnippetArrays": True}
-        )
-
+        
         try:
-            response = await client.post(
-                "https://17iqhzwxzw-dsn.algolia.net/1/indexes/companies/query",
-                headers=headers,
-                content=body,
-            )
+            url = f"https://morningstar.in/handlers/autocompletehandler.ashx?criteria={symbol}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/xml, text/xml, */*",
+            }
+            
+            response = await client.get(url, headers=headers)
             response.raise_for_status()
-            data = response.json()
-
-            for hit in data.get("hits", []):
-                if hit.get("ticker", "").upper() == symbol.upper():
-                    return hit.get("objectID") or hit.get("secId")
-
+            
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(response.text)
+            
+            for table in root.findall(".//Table"):
+                exchange_elem = table.find("Exchange")
+                if exchange_elem is not None and exchange_elem.text == "NSE":
+                    ms_id_elem = table.find("ID")
+                    if ms_id_elem is not None and ms_id_elem.text:
+                        ms_id = ms_id_elem.text
+                        logger.info(f"Autocomplete found NSE ID for {symbol}: {ms_id}")
+                        return ms_id
+            
+            logger.warning(f"No NSE ID found for {symbol} in autocomplete results")
             return None
         except Exception as e:
-            logger.error(f"Algolia search failed for {symbol}: {e}")
+            logger.error(f"Autocomplete search failed for {symbol}: {e}")
             return None
 
     async def get_fair_value(self, security_id: str) -> float | None:
@@ -234,7 +266,15 @@ class MorningstarClient:
         try:
             async with self._semaphore:
                 tokens = await self._ensure_tokens()
+                
+                if not tokens:
+                    logger.warning(f"No tokens available for fair value fetch, skipping {security_id}")
+                    return None
+                
                 client = await _get_client()
+
+                access_token = tokens.get("access_token", "")
+                realtime_token = tokens.get("X-Api-Realtime-E", "")
 
                 url = f"{MORNINGSTAR_BASE_URL}/sal-service/v1/stock/priceFairValue/v3/{security_id}/data"
                 params = {
@@ -243,34 +283,55 @@ class MorningstarClient:
                     "clientId": "RSIN_SAL",
                     "component": "sal-price-fairvalue",
                     "version": "4.13.0",
-                    "access_token": tokens.get("access_token", ""),
+                    "secExchangeList": "NSE",
+                    "access_token": access_token,
                 }
                 headers = {
-                    "X-Api-Realtime-E": tokens.get("X-Api-Realtime-E", ""),
+                    "X-Api-Realtime-E": realtime_token,
+                    "X-Sal-Contenttype": "nNsGdN3REOnPMlKDShOYjlk6VYiEVLSdpfpXAm7o2Tk=",
+                    "Accept": "application/json",
                 }
+
+                logger.debug(f"Fetching fair value for {security_id} with access_token: {access_token[:20] if access_token else 'NONE'}...")
 
                 response = await client.get(url, params=params, headers=headers)
 
+                logger.debug(f"Fair value response status: {response.status_code}, body: {response.text[:500]}")
+
                 if response.status_code == 401:
+                    logger.warning(f"401 response body: {response.text[:500]}")
                     logger.info("Token expired, refreshing...")
                     await self._refresh_tokens()
                     tokens = await self._ensure_tokens()
-                    params["access_token"] = tokens.get("access_token", "")
-                    headers["X-Api-Realtime-E"] = tokens.get("X-Api-Realtime-E", "")
+                    access_token = tokens.get("access_token", "")
+                    realtime_token = tokens.get("X-Api-Realtime-E", "")
+                    params["access_token"] = access_token
+                    headers["X-Api-Realtime-E"] = realtime_token
                     response = await client.get(url, params=params, headers=headers)
+                    logger.debug(f"Retry fair value response status: {response.status_code}")
 
-                response.raise_for_status()
-                data = response.json()
-                return data["chart"]["chartDatums"]["recent"]["latestFairValue"]
+                if response.status_code == 206:
+                    logger.debug(f"Got 206 Partial Content for {security_id}, attempting to parse")
+                elif response.status_code >= 400:
+                    response.raise_for_status()
+
+                try:
+                    data = response.json()
+                except Exception as e:
+                    logger.warning(f"Failed to parse fair value response for {security_id}: {e}, response: {response.text[:200]}")
+                    return None
+
+                try:
+                    return data["chart"]["chartDatums"]["recent"]["latestFairValue"]
+                except (KeyError, TypeError) as e:
+                    logger.warning(f"Unexpected fair value response structure for {security_id}: {e}, data: {data}")
+                    return None
 
         except httpx.TimeoutException:
             logger.warning(f"Timeout fetching fair value for {security_id}")
             return None
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error fetching fair value for {security_id}: {e}")
-            return None
-        except KeyError as e:
-            logger.error(f"Unexpected response structure for {security_id}: {e}")
             return None
         except Exception as e:
             logger.error(f"Error fetching fair value for {security_id}: {e}")

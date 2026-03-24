@@ -54,6 +54,7 @@ UA_FIREFOX = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/1
 
 CONCURRENCY_LIMIT = 3
 REQUEST_DELAY = 1.0
+ARTICLE_BATCH_SIZE = 10
 
 
 def _build_headers(ua: str | None = None) -> dict:
@@ -359,21 +360,33 @@ class NewsFetcher:
         valid_results = [r for r in all_results if r is not None]
         logger.debug(f"Valid results: {len(valid_results)}")
 
+        pending_batch = []
         for i, parsed in enumerate(valid_results):
             try:
                 parsed["fetched_at"] = now
+                pending_batch.append(parsed)
 
-                stmt = (
-                    sqlite_insert(NewsArticle)
-                    .values(**parsed)
-                    .on_conflict_do_nothing(index_elements=["url"])
-                )
-                await db.execute(stmt)
-                stored_count += 1
-                if i % 10 == 0:
-                    logger.debug(f"Stored {i + 1}/{len(valid_results)} articles")
+                if len(pending_batch) >= ARTICLE_BATCH_SIZE:
+                    stmt = (
+                        sqlite_insert(NewsArticle)
+                        .values(pending_batch)
+                        .on_conflict_do_nothing(index_elements=["url"])
+                    )
+                    await db.execute(stmt)
+                    stored_count += len(pending_batch)
+                    logger.debug(f"Stored batch of {len(pending_batch)} ({i + 1}/{len(valid_results)} total)")
+                    pending_batch = []
             except Exception:
                 logger.exception(f"Error storing article {i}: {parsed.get('url')}")
+
+        if pending_batch:
+            stmt = (
+                sqlite_insert(NewsArticle)
+                .values(pending_batch)
+                .on_conflict_do_nothing(index_elements=["url"])
+            )
+            await db.execute(stmt)
+            stored_count += len(pending_batch)
 
         await db.commit()
         logger.info("Stored %d new articles", stored_count)
@@ -675,21 +688,35 @@ class NewsFetcher:
             fetch_results = await asyncio.gather(*tasks)
             valid = [r for r in fetch_results if r is not None]
 
+            pending_batch = []
             for parsed in valid:
                 try:
                     parsed["fetched_at"] = now
                     parsed["company_symbol"] = symbol_upper
-                    stmt = (
-                        sqlite_insert(NewsArticle)
-                        .values(**parsed)
-                        .on_conflict_do_nothing(index_elements=["url"])
-                    )
-                    await db.execute(stmt)
-                    total += 1
+                    pending_batch.append(parsed)
+
+                    if len(pending_batch) >= ARTICLE_BATCH_SIZE:
+                        stmt = (
+                            sqlite_insert(NewsArticle)
+                            .values(pending_batch)
+                            .on_conflict_do_nothing(index_elements=["url"])
+                        )
+                        await db.execute(stmt)
+                        total += len(pending_batch)
+                        pending_batch = []
                 except Exception:
                     logger.exception(
                         "fetch_company_news: error storing %s", parsed.get("url")
                     )
+
+            if pending_batch:
+                stmt = (
+                    sqlite_insert(NewsArticle)
+                    .values(pending_batch)
+                    .on_conflict_do_nothing(index_elements=["url"])
+                )
+                await db.execute(stmt)
+                total += len(pending_batch)
 
         # 5. Tag already-stored articles that came from the global crawl
         if tag_urls:

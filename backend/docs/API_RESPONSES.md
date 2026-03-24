@@ -1,6 +1,6 @@
 BLM Analytics API Documentation
 Base URL: http://127.0.0.1:4455
-Generated: /mnt/drive3/500GB/p1/Projects/blm_terminal/backend/docs/api_responses.py
+Generated: D:\500GB\p1\Projects\blm_terminal\backend\docs\api_responses.py
 
 ============================================================
   GET /health
@@ -14,7 +14,7 @@ Status: 200
   GET /api/stockuniverse
 ============================================================
 Status: 200
-Response: List of 2255 items
+Response: List of 2278 items
 Sample item (first):
 {
   "symbol": "20MICRONS",
@@ -30,7 +30,15 @@ Sample item (first):
     "basicIndustry": "Industrial Minerals"
   },
   "lastUpdateTime": "2026-03-10T14:31:25",
-  "screenerTradesId": null
+  "screenerTradesId": null,
+  "mcUrl": "https://www.moneycontrol.com/india/stockpricequote/miningminerals/20microns/2M",
+  "reviewStatus": "fuzzy",
+  "matchConfidence": 1.0,
+  "mcMatchSource": "name",
+  "mcCompanyName": "20 Microns",
+  "morningstarId": null,
+  "fairValue": null,
+  "fairValueUpdatedAt": null
 }
 
 ============================================================
@@ -51,7 +59,15 @@ Status: 200
     "basicIndustry": "Refineries & Marketing"
   },
   "lastUpdateTime": "2026-03-10T16:00:00",
-  "screenerTradesId": "2726"
+  "screenerTradesId": "2726",
+  "mcUrl": "https://www.moneycontrol.com/india/stockpricequote/cement-major/rainindustries/RC12",
+  "reviewStatus": "ambiguous",
+  "matchConfidence": 0.8235294117647058,
+  "mcMatchSource": "name",
+  "mcCompanyName": "Rain Industries",
+  "morningstarId": null,
+  "fairValue": null,
+  "fairValueUpdatedAt": null
 }
 
 ============================================================
@@ -74,20 +90,29 @@ Sample item (first):
     "basicIndustry": "Telecom - Cellular & Fixed line services"
   },
   "lastUpdateTime": "2026-03-10T16:00:00",
-  "screenerTradesId": null
+  "screenerTradesId": null,
+  "mcUrl": "https://www.moneycontrol.com/india/stockpricequote/telecommunications-service/reliancecommunications/RC13",
+  "reviewStatus": "ambiguous",
+  "matchConfidence": 0.7222222222222221,
+  "mcMatchSource": "name",
+  "mcCompanyName": "Reliance Comm",
+  "morningstarId": null,
+  "fairValue": null,
+  "fairValueUpdatedAt": null
 }
 
 ============================================================
   GET /api/watchlist
 ============================================================
 Status: 200
-Response: List of 23 items
+Response: List of 21 items
 Sample item (first):
 {
-  "id": 3,
-  "symbol": "IRCTC",
+  "id": 6,
+  "watchlist_id": 1,
+  "symbol": "IRFC",
   "exchange": "NSE",
-  "created_at": "2026-03-10T12:24:41.870000"
+  "created_at": "2026-03-10T12:36:24.478000"
 }
 
 ============================================================
@@ -96,6 +121,7 @@ Sample item (first):
 Status: 201
 {
   "id": 25,
+  "watchlist_id": 1,
   "symbol": "TCS",
   "exchange": "NSE",
   "created_at": "2026-03-14T17:11:30"
@@ -110,6 +136,73 @@ Status: 200
 }
 
 ============================================================
+  GET /api/watchlists
+============================================================
+Status: 200
+Response: List of 2 items
+Sample item (first):
+{
+  "id": 1,
+  "name": "Default",
+  "created_at": "2026-03-19T08:04:29",
+  "item_count": 20
+}
+
+============================================================
+  POST /api/watchlists
+============================================================
+Status: 422
+"{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"name\"],\"msg\":\"Value error, must contain only letters and hyphens\",\"input\":\"Test Watchlist\",\"ctx\":{\"error\":{}}}]}"
+
+============================================================
+  GET /api/watchlists/{watchlist_id}/items
+============================================================
+Status: 200
+Response: List of 20 items
+Sample item (first):
+{
+  "id": 7,
+  "watchlist_id": 1,
+  "symbol": "WEBELSOLAR",
+  "exchange": "NSE",
+  "created_at": "2026-03-10T12:36:58.393000"
+}
+
+============================================================
+  POST /api/watchlists/{watchlist_id}/items
+============================================================
+Status: 201
+{
+  "id": 54,
+  "watchlist_id": 1,
+  "symbol": "INFY",
+  "exchange": "NSE",
+  "created_at": "2026-03-24T19:18:44"
+}
+
+============================================================
+  DELETE /api/watchlists/1/items/54
+============================================================
+Status: 200
+{
+  "ok": true
+}
+
+============================================================
+  GET /api/notifications?watchlist_id=1
+============================================================
+Status: 200
+Response: List of 0 items
+
+============================================================
+  DELETE /api/notifications?watchlist_id=1&all=true
+============================================================
+Status: 200
+{
+  "ok": true
+}
+
+============================================================
   GET /api/corporatefilings/{symbol}
 ============================================================
 Status: 200
@@ -117,66 +210,66 @@ Response: CSV text (4145 chars)
 
 Full CSV content (first 5000 chars):
 ```
-"QUARTER ENDED"|"31-DEC-2024"|"30-SEP-2024"|"30-JUN-2024"|"31-MAR-2024"|"31-DEC-2023"
-"PARTICULARS"|"UNAUDITED"|"UNAUDITED"|"UNAUDITED"|"AUDITED"|"UNAUDITED"
-"Part 1"|""|""|""|""|""
-"Revenue from operations"|""|""|""|""|""
-"Revenue from operations"|"12826000"|"13405400"|"13433100"|"15101400"|"13057900"
-"Other income"|"321400"|"380100"|"350200"|"349700"|"296900"
-"Total income"|"13147400"|"13785500"|"13783300"|"15451100"|"13354800"
-"Expenses"|""|""|""|""|""
-"(a) Cost of materials consumed"|"9156100"|"9683600"|"9967900"|"9625900"|"9402100"
-"(b) Purchases of stock-in-trade"|"390400"|"338300"|"396700"|"334700"|"378900"
-"(c) Changes in inventories of finished goods, work-in-progress and stock-in-trade"|"237100"|"266200"|"296300"|"361300"|"298200"
-"(d) Employee benefits expense"|"218100"|"207700"|"215600"|"194600"|"186200"
-"(e) Finance costs"|"237100"|"266200"|"296300"|"361300"|"298200"
-"(f) Depreciation and amortisation expense"|"445900"|"435000"|"470800"|"485600"|"456700"
-"(g) Other expenses"|"1948600"|"1905600"|"1909000"|"2085500"|"1662900"
-"Total Expenses"|"11987700"|"12764100"|"12768700"|"13946000"|"12057000"
-"Profit / (Loss) before exceptional items and tax"|"-"|"-"|"-"|"-"|"-"
-"Exceptional items"|"0"|"0"|"0"|"0"|"0"
-"Profit / (Loss) before tax"|"1159700"|"1021400"|"1014600"|"1505100"|"1297800"
-"Tax Expenses"|""|""|""|""|""
-"Current Tax"|"248300"|"211300"|"245700"|"321200"|"248700"
-"Deferred Tax"|"39300"|"38800"|"7800"|"55600"|"56700"
-"Total Tax expense"|"287600"|"250100"|"253500"|"376800"|"305400"
-"Net movement in regulatory deferral account balances related to profit or loss and the related deferred tax movement"|"-"|"-"|"-"|"-"|"-"
-"Profit (Loss) for the period from continuing operations"|"872100"|"771300"|"761100"|"1128300"|"992400"
-"Profit / (loss) from discontinued operations"|"0"|"0"|"0"|"0"|"0"
-"Tax expense of discontinued operations"|"0"|"0"|"0"|"0"|"0"
-"Profit / (loss) from Discontinued operations (after tax)"|"0"|"0"|"0"|"0"|"0"
-"Profit / (loss) for the period"|"-"|"-"|"-"|"-"|"-"
-"Share of profit / (loss) of associates"|"0"|"0"|"0"|"0"|"0"
-"Consolidated Net Profit / Loss for the period"|"872100"|"771300"|"761100"|"1128300"|"992400"
-"Other comprehensive income"|"-"|"-"|"-"|"-"|"-"
-"Total comprehensive income"|"-"|"-"|"-"|"-"|"-"
-"Total profit or loss, attributable to"|""|""|""|""|""
-"Profit or loss, attributable to owners of parent"|"-"|"-"|"-"|"-"|"-"
-"Total profit or loss, attributable to non-controlling interests"|"-"|"-"|"-"|"-"|"-"
-"Total Comprehensive income for the period attributable to"|""|""|""|""|""
-"Comprehensive income for the period attributable to owners of parent"|"-"|"-"|"-"|"-"|"-"
-"Total comprehensive income for the period attributable to owners of parent non-controlling interests"|"-"|"-"|"-"|"-"|"-"
-"Details of equity share capital"|""|""|""|""|""
-"Paid-up equity share capital"|"1353200"|"676600"|"676600"|"676600"|"676600"
-"Face Value(in Rs.)"|"10"|"10"|"10"|"10"|"10"
-"Details of debt securities"|""|""|""|""|""
-"Paid-up debt capital"|"-"|"-"|"-"|"-"|"-"
-"Face value of debt securities (in Rs.)"|"-"|"-"|"-"|"-"|"-"
-"Reserve excluding Revaluation Reserves as per balance sheet of previous accounting year"|"-"|"-"|"-"|"-"|"-"
-"Debenture redemption reserve"|"-"|"-"|"-"|"-"|"-"
-"Earnings per share"|""|""|""|""|""
-"Earnings per equity share for continuing operations"|""|""|""|""|""
-"Basic EPS for continuing operations"|"-"|"-"|"-"|"-"|"-"
-"Diluted EPS for continuing operations"|"-"|"-"|"-"|"-"|"-"
-"Earnings per equity share for discontinued operations"|""|""|""|""|""
-"Basic EPS for continued and discontinued operations"|"-"|"-"|"-"|"-"|"-"
-"Diluted EPS for discontinued operations"|"-"|"-"|"-"|"-"|"-"
-"Earnings per equity share"|""|""|""|""|""
-"Basic EPS for continued and discontinued operations"|"6.44"|"11.4"|"11.25"|"16.68"|"14.67"
-"Diluted EPS for continued and discontinued operations"|"6.44"|"11.4"|"11.25"|"16.68"|"14.67"
-"Debt equity ratio (in %)"|"-"|"-"|"-"|"-"|"-"
-"Debt service coverage ratio (in %)"|"-"|"-"|"-"|"-"|"-"
-"Interest service coverage ratio (in %)"|"-"|"-"|"-"|"-"|"-"
+"QUARTER ENDED"|"31-DEC-2024"|"30-SEP-2024"|"30-JUN-2024"|"31-MAR-2024"|"31-DEC-2023"
+"PARTICULARS"|"UNAUDITED"|"UNAUDITED"|"UNAUDITED"|"AUDITED"|"UNAUDITED"
+"Part 1"|""|""|""|""|""
+"Revenue from operations"|""|""|""|""|""
+"Revenue from operations"|"12826000"|"13405400"|"13433100"|"15101400"|"13057900"
+"Other income"|"321400"|"380100"|"350200"|"349700"|"296900"
+"Total income"|"13147400"|"13785500"|"13783300"|"15451100"|"13354800"
+"Expenses"|""|""|""|""|""
+"(a) Cost of materials consumed"|"9156100"|"9683600"|"9967900"|"9625900"|"9402100"
+"(b) Purchases of stock-in-trade"|"390400"|"338300"|"396700"|"334700"|"378900"
+"(c) Changes in inventories of finished goods, work-in-progress and stock-in-trade"|"237100"|"266200"|"296300"|"361300"|"298200"
+"(d) Employee benefits expense"|"218100"|"207700"|"215600"|"194600"|"186200"
+"(e) Finance costs"|"237100"|"266200"|"296300"|"361300"|"298200"
+"(f) Depreciation and amortisation expense"|"445900"|"435000"|"470800"|"485600"|"456700"
+"(g) Other expenses"|"1948600"|"1905600"|"1909000"|"2085500"|"1662900"
+"Total Expenses"|"11987700"|"12764100"|"12768700"|"13946000"|"12057000"
+"Profit / (Loss) before exceptional items and tax"|"-"|"-"|"-"|"-"|"-"
+"Exceptional items"|"0"|"0"|"0"|"0"|"0"
+"Profit / (Loss) before tax"|"1159700"|"1021400"|"1014600"|"1505100"|"1297800"
+"Tax Expenses"|""|""|""|""|""
+"Current Tax"|"248300"|"211300"|"245700"|"321200"|"248700"
+"Deferred Tax"|"39300"|"38800"|"7800"|"55600"|"56700"
+"Total Tax expense"|"287600"|"250100"|"253500"|"376800"|"305400"
+"Net movement in regulatory deferral account balances related to profit or loss and the related deferred tax movement"|"-"|"-"|"-"|"-"|"-"
+"Profit (Loss) for the period from continuing operations"|"872100"|"771300"|"761100"|"1128300"|"992400"
+"Profit / (loss) from discontinued operations"|"0"|"0"|"0"|"0"|"0"
+"Tax expense of discontinued operations"|"0"|"0"|"0"|"0"|"0"
+"Profit / (loss) from Discontinued operations (after tax)"|"0"|"0"|"0"|"0"|"0"
+"Profit / (loss) for the period"|"-"|"-"|"-"|"-"|"-"
+"Share of profit / (loss) of associates"|"0"|"0"|"0"|"0"|"0"
+"Consolidated Net Profit / Loss for the period"|"872100"|"771300"|"761100"|"1128300"|"992400"
+"Other comprehensive income"|"-"|"-"|"-"|"-"|"-"
+"Total comprehensive income"|"-"|"-"|"-"|"-"|"-"
+"Total profit or loss, attributable to"|""|""|""|""|""
+"Profit or loss, attributable to owners of parent"|"-"|"-"|"-"|"-"|"-"
+"Total profit or loss, attributable to non-controlling interests"|"-"|"-"|"-"|"-"|"-"
+"Total Comprehensive income for the period attributable to"|""|""|""|""|""
+"Comprehensive income for the period attributable to owners of parent"|"-"|"-"|"-"|"-"|"-"
+"Total comprehensive income for the period attributable to owners of parent non-controlling interests"|"-"|"-"|"-"|"-"|"-"
+"Details of equity share capital"|""|""|""|""|""
+"Paid-up equity share capital"|"1353200"|"676600"|"676600"|"676600"|"676600"
+"Face Value(in Rs.)"|"10"|"10"|"10"|"10"|"10"
+"Details of debt securities"|""|""|""|""|""
+"Paid-up debt capital"|"-"|"-"|"-"|"-"|"-"
+"Face value of debt securities (in Rs.)"|"-"|"-"|"-"|"-"|"-"
+"Reserve excluding Revaluation Reserves as per balance sheet of previous accounting year"|"-"|"-"|"-"|"-"|"-"
+"Debenture redemption reserve"|"-"|"-"|"-"|"-"|"-"
+"Earnings per share"|""|""|""|""|""
+"Earnings per equity share for continuing operations"|""|""|""|""|""
+"Basic EPS for continuing operations"|"-"|"-"|"-"|"-"|"-"
+"Diluted EPS for continuing operations"|"-"|"-"|"-"|"-"|"-"
+"Earnings per equity share for discontinued operations"|""|""|""|""|""
+"Basic EPS for continued and discontinued operations"|"-"|"-"|"-"|"-"|"-"
+"Diluted EPS for discontinued operations"|"-"|"-"|"-"|"-"|"-"
+"Earnings per equity share"|""|""|""|""|""
+"Basic EPS for continued and discontinued operations"|"6.44"|"11.4"|"11.25"|"16.68"|"14.67"
+"Diluted EPS for continued and discontinued operations"|"6.44"|"11.4"|"11.25"|"16.68"|"14.67"
+"Debt equity ratio (in %)"|"-"|"-"|"-"|"-"|"-"
+"Debt service coverage ratio (in %)"|"-"|"-"|"-"|"-"|"-"
+"Interest service coverage ratio (in %)"|"-"|"-"|"-"|"-"|"-"
 
 ```
 
@@ -187,33 +280,129 @@ Status: 200
 Response: List of 5 items
 Sample item (first):
 {
-  "symbol": "SYNGENE",
+  "symbol": "SAMMAANCAP",
   "identifier": "",
   "series": "EQ",
-  "open": "405.9",
-  "dayHigh": "428",
-  "dayLow": "405",
-  "lastPrice": "420.6",
-  "previousClose": "404.1",
-  "change": 16.5,
-  "pChange": 4.08,
-  "totalTradedVolume": 9786652,
-  "totalTradedValue": 4136328467.8,
-  "yearHigh": "760",
-  "yearLow": "387.05",
-  "nearWKH": 44.6578947368421,
-  "nearWKL": -8.668130732463508,
-  "perChange365d": -36.83,
-  "perChange30d": -5.71,
-  "date365dAgo": "13-Mar-2025",
-  "date30dAgo": "12-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/SYNGENEEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/SYNGENE-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/SYNGENE-EQ.svg",
+  "open": "135.9",
+  "dayHigh": "139.72",
+  "dayLow": "129.65",
+  "lastPrice": "139.15",
+  "previousClose": "130",
+  "change": 9.15,
+  "pChange": 7.04,
+  "totalTradedVolume": 27486426,
+  "totalTradedValue": 3738153936.0,
+  "yearHigh": "192.95",
+  "yearLow": "97.61",
+  "nearWKH": 27.882871210158065,
+  "nearWKL": -42.55711504968754,
+  "perChange365d": 16.39,
+  "perChange30d": -10.08,
+  "date365dAgo": "24-Mar-2025",
+  "date30dAgo": "20-Feb-2026",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/SAMMAANCAPEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/SAMMAANCAP-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/SAMMAANCAP-EQ.svg",
   "meta": {
-    "symbol": "SYNGENE",
-    "companyName": "Syngene International Limited",
-    "industry": "Healthcare Research Analytics & Technology",
+    "symbol": "SAMMAANCAP",
+    "companyName": "Sammaan Capital Limited",
+    "industry": "Housing Finance Company",
+    "activeSeries": [
+      "EQ",
+      "T0"
+    ],
+    "debtSeries": [],
+    "isFNOSec": true,
+    "isCASec": false,
+    "isSLBSec": true,
+    "isDebtSec": true,
+    "isSuspended": false,
+    "tempSuspendedSeries": [
+      "BG",
+      "BJ",
+      "BK",
+      "BN",
+      "BP",
+      "BY",
+      "N1",
+      "N2",
+      "N3",
+      "N4",
+      "N5",
+      "N6",
+      "N7",
+      "NG",
+      "NH",
+      "NI",
+      "NJ",
+      "NK",
+      "NL",
+      "NX",
+      "NY",
+      "NZ",
+      "W1",
+      "Y1",
+      "Y2",
+      "Y3",
+      "YD",
+      "YG",
+      "YH",
+      "YI",
+      "YJ",
+      "YK",
+      "BE",
+      "K1"
+    ],
+    "isETFSec": false,
+    "isDelisted": false,
+    "isin": "INE148I01020",
+    "slb_isin": "INE148I01020",
+    "listingDate": "2013-07-23",
+    "isMunicipalBond": false,
+    "isHybridSymbol": false,
+    "segment": "EQUITY",
+    "quotepreopenstatus": {
+      "equityTime": "24-Mar-2026 16:00:00",
+      "preOpenTime": "24-Mar-2026 09:07:56",
+      "QuotePreOpenFlag": false
+    }
+  }
+}
+
+============================================================
+  GET /api/market/top-losers
+============================================================
+Status: 200
+Response: List of 5 items
+Sample item (first):
+{
+  "symbol": "GMRAIRPORT",
+  "identifier": "",
+  "series": "EQ",
+  "open": "88",
+  "dayHigh": "90.34",
+  "dayLow": "86.95",
+  "lastPrice": "89",
+  "previousClose": "84.77",
+  "change": 4.23,
+  "pChange": 4.99,
+  "totalTradedVolume": 15094837,
+  "totalTradedValue": 1338006351.68,
+  "yearHigh": "110.36",
+  "yearLow": "74.96",
+  "nearWKH": 19.35483870967742,
+  "nearWKL": -18.72998932764142,
+  "perChange365d": 14.25,
+  "perChange30d": -10.76,
+  "date365dAgo": "24-Mar-2025",
+  "date30dAgo": "20-Feb-2026",
+  "chartTodayPath": "https://nsearchives.nseindia.com/today/GMRAIRPORTEQN.svg",
+  "chart30dPath": "https://nsearchives.nseindia.com/30d/GMRAIRPORT-EQ.svg",
+  "chart365dPath": "https://nsearchives.nseindia.com/365d/GMRAIRPORT-EQ.svg",
+  "meta": {
+    "symbol": "GMRAIRPORT",
+    "companyName": "GMR AIRPORTS LIMITED",
+    "industry": "Airport & Airport services",
     "activeSeries": [
       "EQ",
       "T0"
@@ -227,75 +416,15 @@ Sample item (first):
     "tempSuspendedSeries": [],
     "isETFSec": false,
     "isDelisted": false,
-    "isin": "INE398R01022",
-    "slb_isin": "INE398R01022",
-    "listingDate": "2015-08-11",
+    "isin": "INE776C01039",
+    "slb_isin": "INE776C01039",
+    "listingDate": "2006-08-21",
     "isMunicipalBond": false,
     "isHybridSymbol": false,
     "segment": "EQUITY",
     "quotepreopenstatus": {
-      "equityTime": "13-Mar-2026 16:00:00",
-      "preOpenTime": "13-Mar-2026 09:07:56",
-      "QuotePreOpenFlag": false
-    }
-  }
-}
-
-============================================================
-  GET /api/market/top-losers
-============================================================
-Status: 200
-Response: List of 5 items
-Sample item (first):
-{
-  "symbol": "LT",
-  "identifier": "",
-  "series": "EQ",
-  "open": "3696",
-  "dayHigh": "3697",
-  "dayLow": "3424.5",
-  "lastPrice": "3445",
-  "previousClose": "3719.5",
-  "change": -274.5,
-  "pChange": -7.38,
-  "totalTradedVolume": 10778730,
-  "totalTradedValue": 37845953414.1,
-  "yearHigh": "4440",
-  "yearLow": "2965.3",
-  "nearWKH": 22.40990990990991,
-  "nearWKL": -16.177115300306877,
-  "perChange365d": 7.9,
-  "perChange30d": -17.54,
-  "date365dAgo": "13-Mar-2025",
-  "date30dAgo": "11-Feb-2026",
-  "chartTodayPath": "https://nsearchives.nseindia.com/today/LTEQN.svg",
-  "chart30dPath": "https://nsearchives.nseindia.com/30d/LT-EQ.svg",
-  "chart365dPath": "https://nsearchives.nseindia.com/365d/LT-EQ.svg",
-  "meta": {
-    "symbol": "LT",
-    "companyName": "Larsen & Toubro Limited",
-    "industry": "Civil Construction",
-    "activeSeries": [
-      "EQ"
-    ],
-    "debtSeries": [],
-    "isFNOSec": true,
-    "isCASec": false,
-    "isSLBSec": true,
-    "isDebtSec": true,
-    "isSuspended": false,
-    "tempSuspendedSeries": [],
-    "isETFSec": false,
-    "isDelisted": false,
-    "isin": "INE018A01030",
-    "slb_isin": "INE018A01030",
-    "listingDate": "2004-06-23",
-    "isMunicipalBond": false,
-    "isHybridSymbol": false,
-    "segment": "EQUITY",
-    "quotepreopenstatus": {
-      "equityTime": "13-Mar-2026 16:00:00",
-      "preOpenTime": "13-Mar-2026 09:07:56",
+      "equityTime": "24-Mar-2026 16:00:00",
+      "preOpenTime": "24-Mar-2026 09:07:56",
       "QuotePreOpenFlag": false
     }
   }
@@ -317,15 +446,15 @@ Response: List of 0 items
   GET /api/market/high-short-interest
 ============================================================
 Status: 200
-Response: List of 115 items
+Response: List of 125 items
 Sample item (first):
 {
-  "date": "12-Mar-2026",
-  "symbol": "AAVAS",
-  "name": "AAVAS FINANCIERS LIMITED",
+  "date": "23-Mar-2026",
+  "symbol": "ADANIENT",
+  "name": "ADANI ENTERPRISES LIMITED",
   "clientName": null,
   "buySell": null,
-  "qty": "1",
+  "qty": "6895",
   "watp": null,
   "remarks": null
 }
@@ -335,15 +464,15 @@ Sample item (first):
 ============================================================
 Status: 200
 {
-  "oneDayPercent": -12.28,
-  "oneWeekPercent": -1.62,
-  "oneMonthPercent": -2.64,
-  "threeMonthPercent": -11.2,
-  "sixMonthPercent": -0.92,
-  "oneYearPercent": 10.75,
-  "twoYearPercent": -3.5,
-  "threeYearPercent": 21.0,
-  "fiveYearPercent": 29.31
+  "oneDayPercent": -10.26,
+  "oneWeekPercent": 1.17,
+  "oneMonthPercent": -1.04,
+  "threeMonthPercent": -9.25,
+  "sixMonthPercent": 2.24,
+  "oneYearPercent": 8.59,
+  "twoYearPercent": -2.82,
+  "threeYearPercent": 28.35,
+  "fiveYearPercent": 38.13
 }
 
 ============================================================
@@ -374,7 +503,7 @@ Status: 200
         "sellQuantity4": 0,
         "sellPrice5": 0,
         "sellQuantity5": 0,
-        "lastPrice": 1382.1,
+        "lastPrice": 1414,
         "totalBuyQuantity": 0,
         "totalSellQuantity": 0,
         "perBuyQty": 0,
@@ -387,15 +516,15 @@ Status: 200
         "symbol": "RELIANCE",
         "series": "EQ",
         "marketType": "N",
-        "open": 1385.2,
-        "dayHigh": 1400.8,
-        "dayLow": 1378.4,
-        "previousClose": 1392.2,
-        "averagePrice": 1388.24,
-        "change": -10.1,
-        "pChange": -0.73,
-        "basePrice": 1392.2,
-        "closePrice": 1380.7,
+        "open": 1420,
+        "dayHigh": 1422.4,
+        "dayLow": 1406.6,
+        "previousClose": 1407.8,
+        "averagePrice": 1413.2,
+        "change": 6.2,
+        "pChange": 0.44,
+        "basePrice": 1407.8,
+        "closePrice": 1411.8,
         "indicativeClose": 0,
         "ic_change": 0,
         "ic_pchange": 0,
@@ -407,29 +536,29 @@ Status: 200
         "ieq": 0
       },
       "tradeInfo": {
-        "totalTradedVolume": 17265090,
-        "totalTradedValue": 23968088541.6,
+        "totalTradedVolume": 18620893,
+        "totalTradedValue": 26315045987.6,
         "series": "EQ",
-        "lastPrice": 1382.1,
+        "lastPrice": 1414,
         "issuedSize": 13532472634,
-        "basePrice": 1392.2,
-        "ffmc": 9305923221791.44,
+        "basePrice": 1407.8,
+        "ffmc": 9520711551706.17,
         "faceValue": 10,
         "impactCost": 0.01,
-        "deliveryToTradedQuantity": 47.97,
+        "deliveryToTradedQuantity": 50.52,
         "applicableMargin": 12.5,
         "marketLot": null,
-        "quantitytraded": 17265090,
-        "deliveryquantity": 8282491,
-        "totalMarketCap": 18703230427451.4,
-        "secwisedelposdate": "13-Mar-2026 00:00:00"
+        "quantitytraded": 18620893,
+        "deliveryquantity": 9406770,
+        "totalMarketCap": 19134916304476,
+        "secwisedelposdate": "24-Mar-2026 00:00:00"
       },
       "priceInfo": {
         "yearHightDt": "05-Jan-2026 00:00:00",
         "yearLowDt": "07-Apr-2025 00:00:00",
         "yearHigh": 1611.8,
         "yearLow": 1114.85,
-        "priceBand": "1242.70-1518.70",
+        "priceBand": "1270.70-1552.90",
         "cmDailyVolatility": "1.31",
         "cmAnnualVolatility": "25.03",
         "tickSize": 0.1,
@@ -441,14 +570,14 @@ Status: 200
         "secStatus": "Listed",
         "listingDate": "29-Nov-1995 00:00:00",
         "pdSectorInd": "NIFTY 500                                         ",
-        "pdSectorPe": "19.34",
-        "pdSymbolPe": "19.34",
+        "pdSectorPe": "19.55",
+        "pdSymbolPe": "19.55",
         "isSuspended": "Active",
         "basicIndustry": "Refineries & Marketing",
         "index": "Nifty 50",
-        "deliveryQuantity": "8282491",
-        "deliveryTotradedQuantity": "47.97",
-        "securityvar": "8.19",
+        "deliveryQuantity": "9406770",
+        "deliveryTotradedQuantity": "50.52",
+        "securityvar": "8.15",
         "indexvar": "0",
         "extremelossMargin": "3.5",
         "varMargin": "9",
@@ -507,7 +636,7 @@ Status: 200
         "nameOfComplianceOfficer": null,
         "sddcompliance": null
       },
-      "lastUpdateTime": "13-Mar-2026 16:00:00"
+      "lastUpdateTime": "24-Mar-2026 16:00:00"
     }
   ]
 }
@@ -517,19 +646,19 @@ Status: 200
 ============================================================
 Status: 200
 Top-level keys: ['data', 'low', 'timestamp']
-data: List of 509 items
+data: List of 413 items
 Sample item (first):
 {
-  "symbol": "20MICRONS",
+  "symbol": "21STCENMGM",
   "series": "EQ",
-  "comapnyName": "20 Microns Limited",
-  "new52WHL": 156.35,
-  "prev52WHL": 160,
-  "prevHLDate": "09-Mar-2026",
-  "ltp": 157.94,
-  "prevClose": "163.09",
-  "change": -5.15,
-  "pChange": -3.1577656508676193
+  "comapnyName": "21st Century Management Services Limited",
+  "new52WHL": 30.65,
+  "prev52WHL": 31.27,
+  "prevHLDate": "23-Mar-2026",
+  "ltp": 30.7,
+  "prevClose": "31.27",
+  "change": -0.57,
+  "pChange": -1.8228333866325552
 }
 
 ============================================================
@@ -537,19 +666,19 @@ Sample item (first):
 ============================================================
 Status: 200
 Top-level keys: ['high', 'data', 'timestamp']
-data: List of 18 items
+data: List of 14 items
 Sample item (first):
 {
-  "symbol": "ABB",
+  "symbol": "AETHER",
   "series": "EQ",
-  "comapnyName": "ABB India Limited",
-  "new52WHL": 6554,
-  "prev52WHL": 6429.5,
-  "prevHLDate": "12-Mar-2026",
-  "ltp": 6389,
-  "prevClose": "6409",
-  "change": -20,
-  "pChange": -0.31206116398814165
+  "comapnyName": "Aether Industries Limited",
+  "new52WHL": 1250,
+  "prev52WHL": 1180,
+  "prevHLDate": "20-Mar-2026",
+  "ltp": 1179,
+  "prevClose": "1085.05",
+  "change": 93.95,
+  "pChange": 8.658587161881941
 }
 
 ============================================================
@@ -560,16 +689,58 @@ Top-level keys: ['data', 'timestamp']
 data: List of 25 items
 Sample item (first):
 {
-  "symbol": "ZYDUSWELL",
-  "companyName": "Zydus Wellness Limited",
-  "volume": 48286539,
-  "week1AvgVolume": 9723723,
-  "week1volChange": 4.965848781051275,
-  "week2AvgVolume": 5452051,
-  "week2volChange": 8.856581149286386,
-  "ltp": 412.05,
-  "pChange": 5.95,
-  "turnover": 205971.06075
+  "symbol": "MANGLMCEM",
+  "companyName": "Mangalam Cement Limited",
+  "volume": 1062426,
+  "week1AvgVolume": 73463,
+  "week1volChange": 14.462055728734192,
+  "week2AvgVolume": 64167,
+  "week2volChange": 16.55720230024779,
+  "ltp": 828.75,
+  "pChange": 2.58,
+  "turnover": 676.02508
+}
+
+============================================================
+  GET /api/market/largedeal-snapshot
+============================================================
+Status: 200
+Top-level keys: ['as_on_date', 'BULK_DEALS_DATA', 'BULK_DEALS', 'SHORT_DEALS', 'BLOCK_DEALS', 'SHORT_DEALS_DATA', 'BLOCK_DEALS_DATA']
+BULK_DEALS_DATA: 173 items
+Sample BULK_DEALS_DATA item (first):
+{
+  "date": "24-Mar-2026",
+  "symbol": "AGIIL",
+  "name": "Agi Infra Limited",
+  "clientName": "ARIHANT CAPITAL MARKETS LIMITED",
+  "buySell": "BUY",
+  "qty": "865468",
+  "watp": "305.29",
+  "remarks": "-"
+}
+BLOCK_DEALS_DATA: 7 items
+Sample BLOCK_DEALS_DATA item (first):
+{
+  "date": "24-Mar-2026",
+  "symbol": "JINDALPOLY",
+  "name": "Jindal Poly Films Limited",
+  "clientName": "MONET SECURITIES PRIVATE LTD",
+  "buySell": "BUY",
+  "qty": "354500",
+  "watp": "888",
+  "remarks": null
+}
+SHORT_DEALS_DATA: 125 items
+Sample SHORT_DEALS_DATA item (first):
+{
+  "date": "23-Mar-2026",
+  "symbol": "ADANIENT",
+  "name": "ADANI ENTERPRISES LIMITED",
+  "clientName": null,
+  "buySell": null,
+  "qty": "6895",
+  "watp": null,
+  "remarks": null
 }
 
 ============================================================
@@ -593,11 +764,11 @@ Status: 200
   "name": "Reliance Industries Ltd",
   "screener_warehouse_id": "6598251",
   "ratios": {
-    "market_cap": "18,68,898 Cr.",
-    "price": "1,381",
-    "pe": "24.4",
+    "market_cap": "19,11,261 Cr.",
+    "price": "1,412",
+    "pe": "24.9",
     "book_value": "648",
-    "dividend_yield": "0.40%",
+    "dividend_yield": "0.39%",
     "roce": "9.69%",
     "roe": "8.40 %",
     "face_value": "10.0",
@@ -618,21 +789,21 @@ Status: 200
     "profit_growth": "10.9%",
     "opm": "17.4%",
     "profit_after_tax": "76,747Cr.",
-    "mar_cap": "18,68,898Cr.",
+    "mar_cap": "19,11,261Cr.",
     "sales_qtr": "2,64,905Cr.",
-    "price_to_earning": "24.4",
-    "price_to_book_value": "2.13",
-    "industry_pe": "14.1",
-    "current_price": "1,381",
-    "price_to_sales": "1.82",
-    "peg_ratio": "4.53",
+    "price_to_earning": "24.9",
+    "price_to_book_value": "2.18",
+    "industry_pe": "13.9",
+    "current_price": "1,412",
+    "price_to_sales": "1.87",
+    "peg_ratio": "4.64",
     "pat_qtr": "18,645Cr.",
     "qtr_sales_var": "10.4%",
     "qtr_profit_var": "0.57%",
     "pledged_percentage": "0.00%",
     "debt": "3,74,593Cr.",
     "eps": "61.5",
-    "evebitda": "10.7",
+    "evebitda": "10.9",
     "sales_last_year": "9,62,820Cr.",
     "op_ann": "1,65,598Cr.",
     "ebidt_last_year": "1,82,019Cr.",
@@ -642,15 +813,15 @@ Status: 200
     "interest_last_year": "24,269Cr.",
     "tax_last_year": "25,230Cr.",
     "pat_ann": "68,732Cr.",
-    "rsi": "43.2",
-    "macd": "-12.9",
-    "market_cap_to_sales": "1.82",
+    "rsi": "51.0",
+    "macd": "-5.05",
+    "market_cap_to_sales": "1.87",
     "debt_to_profit": "4.61",
     "graham": "947",
-    "altman_z_score": "2.83",
+    "altman_z_score": "2.86",
     "chg_in_fii_hold": "0.44%",
     "chg_in_dii_hold": "-0.15%",
-    "earnings_yield": "6.70%"
+    "earnings_yield": "6.57%"
   },
   "quarters": [
     {
@@ -772,18 +943,18 @@ Status: 200
   GET /api/news/global
 ============================================================
 Status: 200
-Response: List of 172 items
+Response: List of 894 items
 Sample item (first):
 {
-  "url": "https://www.moneycontrol.com/news/brand-connect/the-digital-leapfrog-why-the-next-era-of-economic-agency-for-women-is-on-chain-13860050.html",
+  "url": "https://www.moneycontrol.com/news/business/markets/sebi-proposes-gift-cards-for-mutual-funds-to-boost-retail-participation-13869333.html",
   "source": "moneycontrol_global",
-  "title": "The Digital Leapfrog: Why the Next Era of Economic Agency for Women is On-Chain",
-  "text": "For decades, financial inclusion was measured in small wins: a bank account opened, a microloan disbursed, a woman added to the ledger. Those wins mattered. But in 2026, the question has fundamentally changed. We are no longer asking whether women can access the financial system. We are asking whether the financial system, now being rebuilt from the ground up on blockchain infrastructure will be designed with them in mind.\n\nThe answer is not inevitable. It is a choice. And it is one that the digital assets industry must make deliberately, or risk hard-coding the same exclusions into a new architecture.\n\nAs we hit the midpoint of this decade, the narrative of financial inclusion has shifted. In the age of digital assets and Web3, we have the tools to bypass the systemic bottlenecks that have historically sidelined women.\n\nThe Remittance Revolution\n\nIn the traditional world, the \"pink tax\" is literal. Consider remittances - an $800 billion industry where the stakes are anything but abstract. Women represent a significant share of global remittance senders, often sustaining households and entire local economies from abroad. Yet the traditional system has consistently worked against them: high fees, predatory exchange rates, and the physical risk of carrying cash to brick-and-mortar transfer points. Yet, they face disproportionate hurdles: higher fees, predatory exchange rates, and the physical safety risks of carrying cash to brick-and-mortar transfer points.\n\nBy utilizing stablecoins and peer-to-peer networks, a Filipina domestic worker in Dubai or a software consultant in Singapore can send value home instantly, for a fraction of the legacy cost. This isn't \"disruption\"as a taking point; it is the liberation of billions of dollars in household wealth that was previously swallowed by intermediaries. This is \"crypto-utility\" in its purest form: putting more value back into the hands of the women who earned it. If crypto has a killer use case, this is it.\n\nBeyond \"Boutique\" Inclusion\n\nThe critique of traditional micro-finance was often its scale - it was \"boutique,\" limited by local geography and high interest rates. Digital finance removes the borders.\n\nIn the Web3 era, a female entrepreneur in Vietnam or Sub-Saharan Africa no longer needs a traditional bank credit score; she can now overcome conventional credit biases by leveraging decentralized finance (DeFi).\n\nBridging the \"Confidence Gap\"\n\nDespite the technical parity of the blockchain, a social hurdle remains. Data suggests that while women are more risk-aware investors, they are also more likely to stay on the sidelines if their understanding is limited.\n\nTo move from \"participation\" to \"power,\" we must address three critical frontiers:\n\nEducation as an Equity Tool: Financial literacy is the ultimate gateway. Programs like the Binance Academy are not \"nice-to-haves\" - they are essential infrastructure.\n\nSafety as a Feature: We must champion rigorous regulatory compliance. By working within the \"guardrails\" set by bodies like ADGM in Dubai, we provide the institutional-grade stability that female participants demand before moving their family\u2019s future onto the chain. For a woman managing a family's life savings, \"security\"isn'ta buzzword - it\u2019s the prerequisite for entry.\n\nDismantling \"Algorithm Bias\": Traditional finance often relies on legacy data that reflects decades of gender-based economic disparity. Digital finance offers a \"clean slate,\" but only if we are intentional. We must ensure that the AI and algorithmic models powering the next generation of credit and lending are audited for the very biases they were meant to solve.\n\nThe \"Last Mile\" of Mobile Access: In many parts of the world, women are still less likely than men to own a smartphone or have reliable internet. True inclusion in digital finance requires us to partner with government and infrastructure providers to ensure that the \"borderless\" economydoesn't stop at the doorstep of those without the latest hardware.\n\nVisible Leadership: You cannot be what you cannot see. We are committed to ensuring that the architects of the new financial internet reflect the diversity of the people using it. At Binance, women nowrepresent40% of the leadership team.\n\nThe 2026 Mandate\n\nDigital assets are becoming the plumbing of the global economy. The decisions being made right now about who participates, who leads, and what assumptions get coded into the underlying protocols will shape financial outcomes for a generation.\n\nThe evidence on what happens when women are financially empowered is unambiguous: they reinvest at higher rates into families and communities, driving GDP growth and social stability. Female investors also tend to bring a longer time horizon and utility-focused discipline to markets that have been chronically short-termist. This industry needs that perspective urgently.\n\nThe 20th-century bank had an invisible ceiling. The open ledger of the 21st century doesn't have to.\n\nThe question for every platform, protocol, and policymaker is no longer whether women will join this economy. It is whether what we are building is worthy of their participation.\n\nMoneycontrol Journalists are not involved in creation of this article",
+  "title": "SEBI proposes \u2018gift cards\u2019 for mutual funds to boost retail participation",
+  "text": "SEBI proposes \u2018gift cards\u2019 for mutual funds to boost retail participationThe idea, originally suggested by the Association of Mutual Funds in India (AMFI), aims to tap into gifting culture to drive financial inclusion.Moneycontrol NewsMarch 24, 2026/ 16:45 ISTSEBI proposes \u2018Gift Cards\u2019 for Mutual funds to boost retail participationSEBI proposes prepaid gift cards for mutual fund investmentsGift cards capped at Rs 10,000, valid for one year onlyGift card, e-wallet, cash investments capped at Rs 50k/yearDid our AI summary help?Market regulator Securities and Exchange Board of India (SEBI) has proposed an interesting mechanism to widen retail participation in mutual funds by allowing investments through prepaid \u2018gift cards\u2019, marking a potential shift in how first-time investors are onboarded into financial markets.In a consultation paper released on Tuesday, SEBI outlined a framework for introducing Gift Prepaid Payment Instruments (Gift PPIs), which would enable individuals to purchase a prepaid card and gift it to others for investing in mutual fund schemes. The proposal, if implemented, could transform mutual fund investing into a more accessible and socially shareable financial activity.Story continues below AdvertisementRemove AdThe idea, originally suggested by the Association of Mutual Funds in India (AMFI), aims to tap into gifting culture to drive financial inclusion. Under the proposed structure, a purchaser can buy a Gift PPI through banking channels or UPI, transfer it to a recipient, who can then redeem it on an asset management company\u2019s (AMC) platform to invest in mutual fund units.SEBI noted that such an instrument could help bring new investors, particularly those unfamiliar with traditional investment processes, into the mutual fund ecosystem.However, the regulator has proposed a detailed set of safeguards to prevent misuse and ensure compliance with existing norms. The Gift PPIs will remain governed by the Reserve Bank of India (RBI) guidelines for prepaid instruments, while the actual investment in mutual funds will fall under SEBI regulations.Related StoriesSEBI panel backs phased entry of FPIs into commodity derivatives, favours cash-settlement modelSEBI says disclosure norms under constant review; Framework being strengthenedAlso read:SEBI panel backs phased entry of FPIs into commodity derivatives, favours cash-settlement modelAs per RBI rules, the maximum value of a Gift PPI will be capped at Rs 10,000, and the instrument cannot be reloaded or used for cash withdrawal. SEBI has further proposed that such gift cards should be funded only through bank transfers or UPI, tightening the audit trail and reducing the risk of anonymous transactions.A key feature of the proposal is the emphasis on ownership verification. Before using the gift card, the recipient must formally claim ownership, which will then be verified against the mutual fund folio. Any mismatch will lead to rejection of the transaction and refund of funds. This is aimed at maintaining compliance with the strict \u201cno third-party payment\u201d rule applicable to mutual fund investments.Story continues below AdvertisementRemove AdThe proposal also seeks to maintain existing limits on small-ticket investments. Investments through Gift PPIs, along with e-wallets and cash, will be capped at Rs 50,000 per investor per mutual fund in a financial year.To simplify the user experience, SEBI has suggested that the full value of the gift card must be invested at once, preventing residual balances from remaining unutilized. Additionally, each Gift PPI will have a validity of one year, after which unused funds will be refunded to the purchaser\u2019s bank account.Recognizing that many recipients could be first-time investors, SEBI has proposed two pathways for investment decisions. The gift purchaser may suggest a mutual fund scheme, though the recommendation will not be binding. Alternatively, the recipient may seek assistance from a distributor, in which case the investment would be routed through the regular plan.Importantly, SEBI has clarified that no incentives such as cashback or promotional rewards can be linked to such investments, maintaining a level playing field and avoiding mis-selling.The regulator has invited public comments on key aspects of the proposal, including the role of distributors, refund mechanisms, and adequacy of safeguards. Feedback can be submitted until April 14, 2026.Also read:SC dismisses Avadhut Sathe Trading Academy plea but allows Rs 2.25-crore withdrawal for expensesMoneycontrol Newsfirst published: Mar 24, 2026 04:45 pmDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdWatchPauseIran-US War Update: \u201cNo War\u201d Starmer Rejects Iran Conflict, Announces \u00a353M Support PlanUS-Iran War Update: \u201cWe Didn\u2019t Start This\u201d Germany Rejects Trump\u2019s Push for Action Against IranReliance Foundation Chairperson Nita Ambani Visits KISS to Receive Humanitarian AwardThe Truth Behind Sensex Always Being Higher Than NiftySushil Kedia on Market Technicals: Nifty Down 14% \u2014 Buy Signal Ahead?Watch moreSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email address*SubscribeTrending newsIndian founder in UK says Ozempic helped lose 30kg in 8 months, but 'at a cost\u2019. Lists side effects'Just learn cooking': Swiggy hikes platform fee by 17% to Rs 17.58 after Zomato. Internet reactsZeroGPT flags Jawahar Lal Nehru\u2019s independence speech 'Tryst with Destiny' as AI-generatedAthiya Shetty and KL Rahul celebrate daughter Evaarah\u2019s first birthday with love-filled celebrationDhurandhar 2: Do you know Chaudhary Aslam was a Sanjay Dutt fan? He was known as \u2018Baba Cop\u2019 after KhalnayakIndia's 1st Transgender English Professor: Meet Dr N Jency \u2014  first trans woman to earn a PhD in Tamil Nadu3 feet tall doctor once offered Rs 5 lakh to join a circus \u2014 story of Dr Ganesh Bariya, mocked for his height but never gave upHe watched his country disappear from space: Meet astronaut Sergei Krikalev, who returned to a country that no longer existedRam Navami 2026 date: Is Shri Ram Janmotsav on March 26 or 27? Check correct date, puja timings and significanceTravel trends shift as Middle East disruptions push Indian travellers towards Asia and domestic destinations: ReportUS-Iran war impact: Amazon AWS outage hits Bahrain cloud region for second time this monthFather builds piano learning app for daughter using Claude; says, \u201cShe\u2019s now using it and...\u201dKidney disease is called silent killer for a reason, 3 early symptoms that go unnoticed and prevention tipsHigh blood pressure: Hidden region in brain that controls how you breathe out can cause hypertensionToo much protein in daily diet is not good for your gut health, warns NHS surgeon",
   "authors": null,
-  "top_image": "https://images.moneycontrol.com/static-mcnews/2026/03/20260313191851_feature1.jpg",
-  "publish_date": "2026-03-14T00:57:22",
-  "fetched_at": "2026-03-13T19:59:33.712501",
-  "created_at": "2026-03-13T20:00:43",
+  "top_image": "https://images.moneycontrol.com/static-mcnews/2025/10/20251031065616_SEBI2.jpg",
+  "publish_date": null,
+  "fetched_at": "2026-03-24T18:15:38.667906",
+  "created_at": "2026-03-24T18:15:45",
   "company_symbol": null
 }
 
@@ -791,36 +962,17 @@ Sample item (first):
   GET /api/news/company/{symbol}
 ============================================================
 Status: 200
-Response: List of 5 items
+Response: List of 10 items
 Sample item (first):
 {
   "url": "https://www.moneycontrol.com/news/business/stocks/buy-reliance-industries-target-of-rs-1750-motilal-oswal-2-13858981.html",
   "source": "moneycontrol_company",
   "title": "Buy Reliance Industries; target of Rs 1750: Motilal Oswal",
-  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy JSW Infrastructure; target of Rs 360: Motilal OswalBuy VA Tech Wabag; target of Rs 1900: Motilal OswalBuy Hindustan Copper; target of Rs 650: Anand RathiDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email addressSubscribeTrending newsBengaluru student offers Rs 15,000 to hire \u2018fake parent\u2019 for PTM, leaves internet in splits'Rs 25 crore in FD': Man shares how uncle turned Rs 60,000 land into Rs 14.5 lakh monthly income\u2018Why are you roasting CBSE\u2019: YouTube shares QR code for students after Class 12 maths paper controversyBadshah receives death threat note from Lawrence Bishnoi's gang after Panipat firing: 'Next time, will put a bullet through your forehead'Oscars 2026: When and where to watch the 98th Academy Awards in India1st IITian Chief Minister of India: 25 Years, 4 Terms, 0 Corruption \u2014 the Manohar Parrikar storyIndian billionaire who donated Rs 6000 crore to his employees: He runs Rs 1.5 lakh crore company but owns no phone or luxury carScientists discover a massive 26 kg viper in Greece that weighs three times more than a king cobraKaradaiyan Nombu 2026 date and time: When will Savitri vratham be observed? Know manjal saradu muhurtham, rituals and significancePrajakta Koli calls Bruges a real-life fairytale place: 8 magical spots to explore in Belgium\u2019s UNESCO city10 mistakes to avoid when buying a new Induction cooktop\u201cIG is a drug\u201d: US jury set to deliberate in landmark social media addiction trial against Meta and YouTube8 best exercises for people over 40 to keep joints healthy4 best cookware suitable for induction cooking, plus 6 that won\u2019t work5 Feng Shui paintings to attract wealth and good luck into your home",
+  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy Tata Power; target of Rs 455: Motilal OswalBuy HDFC AMC; target of Rs 2700: Motilal OswalBuy Aurobindo Pharma; target of Rs 1500: Motilal OswalDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdWatchPauseIran-US War Update: \u201cNo War\u201d Starmer Rejects Iran Conflict, Announces \u00a353M Support PlanUS-Iran War Update: \u201cWe Didn\u2019t Start This\u201d Germany Rejects Trump\u2019s Push for Action Against IranReliance Foundation Chairperson Nita Ambani Visits KISS to Receive Humanitarian AwardThe Truth Behind Sensex Always Being Higher Than NiftySushil Kedia on Market Technicals: Nifty Down 14% \u2014 Buy Signal Ahead?Watch moreSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email address*SubscribeTrending newsIndian founder in UK says Ozempic helped lose 30kg in 8 months, but 'at a cost\u2019. Lists side effects'Just learn cooking': Swiggy hikes platform fee by 17% to Rs 17.58 after Zomato. Internet reactsZeroGPT flags Jawahar Lal Nehru\u2019s independence speech 'Tryst with Destiny' as AI-generatedAthiya Shetty and KL Rahul celebrate daughter Evaarah\u2019s first birthday with love-filled celebrationDhurandhar 2: Do you know Chaudhary Aslam was a Sanjay Dutt fan? He was known as \u2018Baba Cop\u2019 after KhalnayakIndia's 1st Transgender English Professor: Meet Dr N Jency \u2014  first trans woman to earn a PhD in Tamil Nadu3 feet tall doctor once offered Rs 5 lakh to join a circus \u2014 story of Dr Ganesh Bariya, mocked for his height but never gave upHe watched his country disappear from space: Meet astronaut Sergei Krikalev, who returned to a country that no longer existedRam Navami 2026 date: Is Shri Ram Janmotsav on March 26 or 27? Check correct date, puja timings and significanceTravel trends shift as Middle East disruptions push Indian travellers towards Asia and domestic destinations: ReportUS-Iran war impact: Amazon AWS outage hits Bahrain cloud region for second time this monthFather builds piano learning app for daughter using Claude; says, \u201cShe\u2019s now using it and...\u201dKidney disease is called silent killer for a reason, 3 early symptoms that go unnoticed and prevention tipsHigh blood pressure: Hidden region in brain that controls how you breathe out can cause hypertensionToo much protein in daily diet is not good for your gut health, warns NHS surgeon",
   "authors": null,
   "top_image": "https://images.moneycontrol.com/static-mcnews/2025/11/20251118070809_Buy_1280x720_3.png",
   "publish_date": null,
-  "fetched_at": "2026-03-14T18:22:00.544493",
-  "created_at": "2026-03-13T22:19:14",
-  "company_symbol": "RELIANCE"
-}
-
-============================================================
-  POST /api/news/company
-============================================================
-Status: 200
-Response: List of 5 items
-Sample item (first):
-{
-  "url": "https://www.moneycontrol.com/news/business/stocks/buy-reliance-industries-target-of-rs-1750-motilal-oswal-2-13858981.html",
-  "source": "moneycontrol_company",
-  "title": "Buy Reliance Industries; target of Rs 1750: Motilal Oswal",
-  "text": "Buy Reliance Industries; target of Rs 1750: Motilal OswalMotilal Oswal is bullish on Reliance Industries recommended buy rating on the stock with a target price of Rs 1750 in its research report dated March 12, 2026.Broker ResearchMarch 13, 2026/ 09:34 ISTBuyRIRIWatchlistPortfolioMessageFollowNSE/BSE SelectNSE LIVEBSE LIVETradeDay HighDay LowVolume (NSE)More\u00d7Add to Watchlist\u00d7Motilal Oswal's research report onReliance IndustriesBlockade of the Strait of Hormuz (SoH) (~20% of global oil/LNG supply), ~3-4mb/d of refining capacity disruptions, refined product export restrictions in China, and decade-high crude freight rates have lifted gasoil/gasoline/jet fuel cracks to USD42/16/58 per bbl in Mar\u201926\u2019TD, 147%/40%/124% above LTA. PE and PX prices also rose 10-15% MoM in Mar\u201926\u2019TD. We believe that even if tensions ease soon, supply chain normalization may lag, keeping product cracks elevated and supporting Reliance Industries\u2019 (RIL) refiningpetchem margins.Story continues below AdvertisementRemove AdOutlookWe assign INR174/sh to the New Energy business, INR30/share equity value to RCPL, and INR26/sh to RIL\u2019s stake in JioStar. We reiterate our BUY rating with a TP of INR1,750.For all recommendations report,click hereRelated StoriesBuy JSW Infrastructure; target of Rs 360: Motilal OswalBuy VA Tech Wabag; target of Rs 1900: Motilal OswalBuy Hindustan Copper; target of Rs 650: Anand RathiDisclaimer:\u00a0The views and investment tips expressed by investment experts/broking houses/rating agencies on moneycontrol.com are their own, and not that of the website or its management. Moneycontrol.com advises users to check with certified experts before taking any investment decisions.Reliance Industries - 1303026 - motiBroker Researchfirst published: Mar 13, 2026 09:33 amDiscover the latestBusiness News,Sensex, andNiftyupdates. ObtainPersonal Financeinsights, tax queries, and expert opinions onMoneycontrolor download theMoneycontrol Appto stay updated!AdvertisementRemove AdSubscribe toTech NewslettersAl Edge NewsletterOn SaturdaysFind the best of Al News in one place, specially curated for you every\n        weekend.MC Tech 3 NewsletterDaily-WeekdaysStay on top of the latest tech trends and biggest startup news.Email addressSubscribeTrending newsBengaluru student offers Rs 15,000 to hire \u2018fake parent\u2019 for PTM, leaves internet in splits'Rs 25 crore in FD': Man shares how uncle turned Rs 60,000 land into Rs 14.5 lakh monthly income\u2018Why are you roasting CBSE\u2019: YouTube shares QR code for students after Class 12 maths paper controversyBadshah receives death threat note from Lawrence Bishnoi's gang after Panipat firing: 'Next time, will put a bullet through your forehead'Oscars 2026: When and where to watch the 98th Academy Awards in India1st IITian Chief Minister of India: 25 Years, 4 Terms, 0 Corruption \u2014 the Manohar Parrikar storyIndian billionaire who donated Rs 6000 crore to his employees: He runs Rs 1.5 lakh crore company but owns no phone or luxury carScientists discover a massive 26 kg viper in Greece that weighs three times more than a king cobraKaradaiyan Nombu 2026 date and time: When will Savitri vratham be observed? Know manjal saradu muhurtham, rituals and significancePrajakta Koli calls Bruges a real-life fairytale place: 8 magical spots to explore in Belgium\u2019s UNESCO city10 mistakes to avoid when buying a new Induction cooktop\u201cIG is a drug\u201d: US jury set to deliberate in landmark social media addiction trial against Meta and YouTube8 best exercises for people over 40 to keep joints healthy4 best cookware suitable for induction cooking, plus 6 that won\u2019t work5 Feng Shui paintings to attract wealth and good luck into your home",
-  "authors": null,
-  "top_image": "https://images.moneycontrol.com/static-mcnews/2025/11/20251118070809_Buy_1280x720_3.png",
-  "publish_date": null,
-  "fetched_at": "2026-03-14T18:49:01.210923",
+  "fetched_at": "2026-03-24T17:52:56.978454",
   "created_at": "2026-03-13T22:19:14",
   "company_symbol": "RELIANCE"
 }
@@ -829,21 +981,21 @@ Sample item (first):
   GET /api/markets/industries
 ============================================================
 Status: 200
-Response: List of 189 items
+Response: List of 190 items
 Sample item (first):
 {
   "category_type": "industry",
   "slug": "abrasives",
   "name": "Abrasives",
   "url": "https://www.moneycontrol.com/markets/industry-analysis/abrasives/",
-  "market_cap": null,
-  "pe": null,
-  "advance": null,
-  "decline": 6,
-  "sentiment": null,
-  "earnings_yoy": null,
-  "last_updated": "2026-03-14T18:44:20.240996",
-  "created_at": "2026-03-14T18:16:06"
+  "market_cap": 31396.0,
+  "pe": 42.53,
+  "advance": 4,
+  "decline": 1,
+  "sentiment": "Bearish",
+  "earnings_yoy": 0.164,
+  "last_updated": "2026-03-24T08:01:06.698343",
+  "created_at": "2026-03-14T19:47:09"
 }
 
 ============================================================
@@ -857,14 +1009,14 @@ Sample item (first):
   "slug": "agri",
   "name": "Agri",
   "url": "https://www.moneycontrol.com/markets/sector-analysis/agri/",
-  "market_cap": null,
-  "pe": null,
-  "advance": null,
-  "decline": 135,
-  "sentiment": null,
-  "earnings_yoy": null,
-  "last_updated": "2026-03-14T18:46:25.069066",
-  "created_at": "2026-03-14T18:18:38"
+  "market_cap": 307702.0,
+  "pe": 26.08,
+  "advance": 86,
+  "decline": 62,
+  "sentiment": "Bearish",
+  "earnings_yoy": 0.3,
+  "last_updated": "2026-03-24T07:51:28.063279",
+  "created_at": "2026-03-14T19:49:11"
 }
 
 ============================================================
@@ -878,10 +1030,10 @@ Sample item (first):
   "symbol": "HDF01",
   "company_name": "HDFC Bank",
   "exchange": "NSE",
-  "curr_price": 817.0,
-  "per_change": -1.89,
-  "market_cap": 1257391.0,
-  "ttm_pe": 16.88,
+  "curr_price": 764.9,
+  "per_change": 2.79,
+  "market_cap": 1177332.0,
+  "ttm_pe": 15.8,
   "net_profit": 20691.0,
   "net_profit_yoy": 12.82,
   "tech_trend": "Very Bearish",
@@ -896,7 +1048,7 @@ Sample item (first):
       "slug": "banks"
     }
   ],
-  "last_updated": "2026-03-14T18:45:50.169840",
+  "last_updated": "2026-03-24T18:40:43.701701",
   "created_at": "2026-03-14T18:13:30"
 }
 
@@ -911,10 +1063,10 @@ Sample item (first):
   "symbol": "HDF01",
   "company_name": "HDFC Bank",
   "exchange": "NSE",
-  "curr_price": 817.0,
-  "per_change": -1.89,
-  "market_cap": 1257391.0,
-  "ttm_pe": 16.88,
+  "curr_price": 764.9,
+  "per_change": 2.79,
+  "market_cap": 1177332.0,
+  "ttm_pe": 15.8,
   "net_profit": 20691.0,
   "net_profit_yoy": 12.82,
   "tech_trend": "Very Bearish",
@@ -929,8 +1081,30 @@ Sample item (first):
       "slug": "banks"
     }
   ],
-  "last_updated": "2026-03-14T18:45:50.169840",
+  "last_updated": "2026-03-24T18:40:43.701701",
   "created_at": "2026-03-14T18:13:30"
+}
+
+============================================================
+  GET /api/morningstar/fairvalue/{symbol}
+============================================================
+Status: 200
+{
+  "symbol": "TCS",
+  "morningstarId": "792760B1-C368-4050-A8D7-BBAD450E2522",
+  "fairValue": null,
+  "updatedAt": null
+}
+
+============================================================
+  GET /api/morningstar/search
+============================================================
+Status: 200
+Response: List of 1 items
+Sample item (first):
+{
+  "symbol": "RELIANCE",
+  "morningstarId": "5D9AA6FB-DD57-4A9F-B5FD-287A1B5015B2"
 }
 
 ============================================================
