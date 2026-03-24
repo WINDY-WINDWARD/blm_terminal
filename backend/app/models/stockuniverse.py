@@ -33,6 +33,11 @@ class StockUniverse(Base):
     match_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     mc_match_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     mc_company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    morningstar_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    fair_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fair_value_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

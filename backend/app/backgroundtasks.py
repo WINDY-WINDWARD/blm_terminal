@@ -15,6 +15,10 @@ from app.database import _SyncSessionLocal, AsyncSessionLocal
 from app.config import settings
 from app.services.news_fetcher import news_fetcher
 from app.services.mc_market_fetcher import market_data_fetcher
+from app.services.morningstar_client import (
+    REQUEST_DELAY,
+    DB_BATCH_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -997,3 +1001,219 @@ async def start_cache_cleanup(interval: float = 600.0) -> asyncio.Task:
     task = asyncio.create_task(_noop(), name="cache-cleanup-noop")
     logger.info("Cache cleanup: using cachetools.TTLCache (auto-eviction, no manual cleanup needed)")
     return task
+
+
+# ---------------------------------------------------------------------------
+# Morningstar Fair Value Sync
+# ---------------------------------------------------------------------------
+
+_watchlist_sync_lock: asyncio.Lock | None = None
+_full_sync_lock: asyncio.Lock | None = None
+
+
+def _get_watchlist_lock() -> asyncio.Lock:
+    global _watchlist_sync_lock
+    if _watchlist_sync_lock is None:
+        _watchlist_sync_lock = asyncio.Lock()
+    return _watchlist_sync_lock
+
+
+def _get_full_lock() -> asyncio.Lock:
+    global _full_sync_lock
+    if _full_sync_lock is None:
+        _full_sync_lock = asyncio.Lock()
+    return _full_sync_lock
+
+
+async def sync_watchlist_fair_values():
+    """Fetch fair values for all watchlist stocks every 3 hours."""
+    from app.models.watchlist import WatchlistItem
+    from app.services.morningstar_client import morningstar_client
+    from sqlalchemy import select, update
+    from datetime import timezone
+
+    lock = _get_watchlist_lock()
+    if lock.locked():
+        logger.warning("Watchlist sync already running, skipping this cycle")
+        return
+
+    async with lock:
+        logger.info("Starting watchlist fair value sync")
+
+        async with AsyncSessionLocal() as db:
+            stmt = select(WatchlistItem.symbol).distinct()
+            result = await db.execute(stmt)
+            symbols = [row[0] for row in result.fetchall()]
+
+        updated = 0
+        failed = 0
+
+        async with AsyncSessionLocal() as db:
+            for i, symbol in enumerate(symbols, 1):
+                try:
+                    result = await morningstar_client.get_fair_value_by_symbol(symbol, db)
+                    if result.get("fairValue"):
+                        stmt = (
+                            update(stockuniverse.StockUniverse)
+                            .where(stockuniverse.StockUniverse.symbol == symbol)
+                            .values(
+                                morningstar_id=result.get("morningstarId"),
+                                fair_value=result.get("fairValue"),
+                                fair_value_updated_at=datetime.now(timezone.utc),
+                            )
+                        )
+                        await db.execute(stmt)
+                        updated += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to fetch fair value for {symbol}: {e}")
+                    failed += 1
+
+                if i % DB_BATCH_SIZE == 0:
+                    await db.commit()
+                    logger.debug(f"Watchlist sync progress: {i}/{len(symbols)}")
+
+                await asyncio.sleep(REQUEST_DELAY)
+
+            await db.commit()
+
+        logger.info(f"Watchlist fair value sync complete: {updated} updated, {failed} failed")
+        await _update_sync_timestamp("last_watchlist_fairvalue_sync")
+
+
+async def sync_all_fair_values():
+    """Fetch fair values for all stocks in stock_universe."""
+    from app.services.morningstar_client import morningstar_client
+    from sqlalchemy import select, update
+    from datetime import timezone
+
+    if _full_sync_lock.locked():
+        logger.warning("Full sync already running, skipping this cycle")
+        return
+
+    async with _full_sync_lock:
+        logger.info("Starting full universe fair value sync")
+
+        async with AsyncSessionLocal() as db:
+            stmt = select(stockuniverse.StockUniverse.symbol)
+            result = await db.execute(stmt)
+            all_symbols = [row[0] for row in result.fetchall()]
+
+        logger.info("Step 1: Populating missing Morningstar IDs")
+        batch_counter = 0
+
+        for symbol in all_symbols:
+            try:
+                ms_id = await morningstar_client.resolve_symbol_to_id(symbol)
+                if ms_id:
+                    async with AsyncSessionLocal() as db:
+                        stmt = (
+                            update(stockuniverse.StockUniverse)
+                            .where(stockuniverse.StockUniverse.symbol == symbol)
+                            .where(stockuniverse.StockUniverse.morningstar_id.is_(None))
+                            .values(morningstar_id=ms_id)
+                        )
+                        await db.execute(stmt)
+                        batch_counter += 1
+
+                        if batch_counter % DB_BATCH_SIZE == 0:
+                            await db.commit()
+                            logger.info(f"ID sync progress: {batch_counter}/{len(all_symbols)}")
+            except Exception as e:
+                logger.debug(f"Failed to resolve ID for {symbol}: {e}")
+
+            await asyncio.sleep(REQUEST_DELAY)
+
+        logger.info("Step 2: Fetching fair values")
+        batch_counter = 0
+
+        for symbol in all_symbols:
+            try:
+                result = await morningstar_client.get_fair_value_by_symbol(symbol)
+                if result.get("fairValue"):
+                    async with AsyncSessionLocal() as db:
+                        stmt = (
+                            update(stockuniverse.StockUniverse)
+                            .where(stockuniverse.StockUniverse.symbol == symbol)
+                            .values(
+                                morningstar_id=result.get("morningstarId"),
+                                fair_value=result.get("fairValue"),
+                                fair_value_updated_at=datetime.now(timezone.utc),
+                            )
+                        )
+                        await db.execute(stmt)
+                        batch_counter += 1
+
+                        if batch_counter % DB_BATCH_SIZE == 0:
+                            await db.commit()
+                            logger.info(f"Fair value progress: {batch_counter}/{len(all_symbols)}")
+            except Exception as e:
+                logger.debug(f"Failed to fetch fair value for {symbol}: {e}")
+
+            await asyncio.sleep(REQUEST_DELAY)
+
+        logger.info("Full universe fair value sync complete")
+        await _update_sync_timestamp("last_full_fairvalue_sync")
+
+
+async def _update_sync_timestamp(key: str):
+    """Update system_config with current timestamp using upsert."""
+    from app.models.system_config import SystemConfig
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    async with AsyncSessionLocal() as db:
+        stmt = sqlite_insert(SystemConfig).values(
+            key=key,
+            value=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["key"],
+            set_={
+                "value": stmt.excluded.value,
+                "updated_at": stmt.excluded.updated_at,
+            }
+        )
+        await db.execute(stmt)
+        await db.commit()
+
+
+async def _should_trigger_full_sync() -> bool:
+    """Check if full sync should run at startup."""
+    from sqlalchemy import select, func
+
+    async with AsyncSessionLocal() as db:
+        stmt = select(func.max(stockuniverse.StockUniverse.fair_value_updated_at))
+        result = await db.execute(stmt)
+        last_update = result.scalar()
+
+        if last_update is None:
+            return True
+
+        from datetime import timedelta
+        now_naive = datetime.utcnow()
+        if now_naive - last_update > timedelta(hours=24):
+            return True
+
+        return False
+
+
+async def _run_watchlist_scheduler():
+    """Run every 3 hours."""
+    while True:
+        await asyncio.sleep(3 * 60 * 60)
+        await sync_watchlist_fair_values()
+
+
+async def _run_nightly_scheduler():
+    """Run at 2 AM IST daily."""
+    while True:
+        now = datetime.now(timezone.utc)
+        target = now.replace(hour=20, minute=30, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+
+        seconds_until_target = (target - now).total_seconds()
+        await asyncio.sleep(seconds_until_target)
+        await sync_all_fair_values()

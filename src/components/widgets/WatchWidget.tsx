@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { 
@@ -153,9 +153,10 @@ interface WatchRowProps {
   onRowClick: (item: WatchlistItem) => void;
   onRemove: (id: number) => void;
   removing: boolean;
+  flash: 'up' | 'down' | null;
 }
 
-function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing }: WatchRowProps) {
+function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing, flash }: WatchRowProps) {
   const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, isLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
   const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
@@ -164,7 +165,11 @@ function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing }
   const renderCell = (col: string) => {
     switch (col) {
       case 'ltp':
-        return isLoading ? dash : ltp != null ? ltp.toFixed(2) : dash;
+        return isLoading ? dash : ltp != null ? (
+          <span className={flash === 'up' ? 'animate-flash-green' : flash === 'down' ? 'animate-flash-red' : ''}>
+            {ltp.toFixed(2)}
+          </span>
+        ) : dash;
       case 'chg':
         return isLoading
           ? dash
@@ -296,6 +301,8 @@ export function WatchWidget() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const debounceRef = React.useRef<NodeJS.Timeout | null>(null);
+  const prevPricesRef = useRef<Map<string, number>>(new Map());
+  const [flashStates, setFlashStates] = useState<Map<string, 'up' | 'down'>>(new Map());
 
   // Fetch watchlists on mount
   useQuery({
@@ -372,6 +379,34 @@ export function WatchWidget() {
       isLoading: (quote?.isLoading ?? false) || (ranges?.isLoading ?? false),
     };
   });
+
+  // Detect price changes on REST refetch and trigger flash
+  useEffect(() => {
+    symbolQueries.forEach((query, idx) => {
+      if (query.data?.ltp !== undefined && query.dataUpdatedAt) {
+        const item = watchlist[idx];
+        if (!item) return;
+        const key = item.symbol;
+        const prevPrice = prevPricesRef.current.get(key);
+        if (prevPrice !== undefined && query.data.ltp !== prevPrice) {
+          const direction = query.data.ltp > prevPrice ? 'up' : 'down';
+          setFlashStates((prev) => {
+            const next = new Map(prev);
+            next.set(key, direction);
+            return next;
+          });
+          setTimeout(() => {
+            setFlashStates((prev) => {
+              const next = new Map(prev);
+              next.delete(key);
+              return next;
+            });
+          }, 400);
+        }
+        prevPricesRef.current.set(key, query.data.ltp);
+      }
+    });
+  }, [symbolQueries, watchlist]);
 
   const handleHeaderClick = (column: SortColumn) => {
     const colConfig = SORTABLE_COLUMNS[column];
@@ -555,6 +590,28 @@ export function WatchWidget() {
     const unsub = wsService.onTick((data: TickData) => {
       const key = `${data.symbol}.${data.exchange}`;
       setTickData((prev) => ({ ...prev, [key]: data }));
+
+      const prevPrice = prevPricesRef.current.get(key);
+      if (prevPrice !== undefined && data.ltp !== undefined && data.ltp !== prevPrice) {
+        const direction = data.ltp > prevPrice ? 'up' : 'down';
+        const key2 = `${data.symbol}`;
+        setFlashStates((prev) => {
+          const next = new Map(prev);
+          next.set(key2, direction);
+          return next;
+        });
+        prevPricesRef.current.set(key, data.ltp);
+        setTimeout(() => {
+          setFlashStates((prev) => {
+            const next = new Map(prev);
+            next.delete(key2);
+            return next;
+          });
+        }, 400);
+      }
+      if (data.ltp !== undefined) {
+        prevPricesRef.current.set(key, data.ltp);
+      }
     });
     return unsub;
   }, [setTickData]);
@@ -751,6 +808,7 @@ export function WatchWidget() {
                     onRowClick={handleRowClick}
                     onRemove={(id) => removeMutation.mutate(id)}
                     removing={removeMutation.isPending && removeMutation.variables === rowData.item.id}
+                    flash={flashStates.get(rowData.item.symbol) ?? null}
                   />
                 ))}
                 {watchlist.length === 0 && (

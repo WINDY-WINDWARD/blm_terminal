@@ -21,6 +21,9 @@ class StockUniverse(BaseModel):
     matchConfidence: float | None = None
     mcMatchSource: str | None = None
     mcCompanyName: str | None = None
+    morningstarId: str | None = None
+    fairValue: float | None = None
+    fairValueUpdatedAt: datetime | None = None
 
     @field_validator("sectorPE", "symbolPE", mode="before")
     @classmethod

@@ -23,6 +23,7 @@ from app.routers import (
     filings_router,
     markets_router,
     market_router,
+    morningstar_router,
     news_router,
     notifications_router,
     screener_router,
@@ -34,7 +35,16 @@ from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
 from app.services.news_fetcher import news_fetcher
-from app.backgroundtasks import start_all_workers, stop_all_workers
+from app.services.morningstar_client import init_client, close_client
+from app.backgroundtasks import (
+    start_all_workers,
+    stop_all_workers,
+    _should_trigger_full_sync,
+    sync_all_fair_values,
+    sync_watchlist_fair_values,
+    _run_watchlist_scheduler,
+    _run_nightly_scheduler,
+)
 from app import mcp_server
 
 logger = logging.getLogger(__name__)
@@ -282,6 +292,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await screener_client.init()
     await news_fetcher.init()
 
+    # Initialize Morningstar client and start fair value sync
+    await init_client()
+    if await _should_trigger_full_sync():
+        logger.info("Triggering immediate full fair value sync (DB cold or stale)")
+        asyncio.create_task(sync_all_fair_values())
+        asyncio.create_task(sync_watchlist_fair_values())
+
+    # Start schedulers
+    asyncio.create_task(_run_watchlist_scheduler())
+    asyncio.create_task(_run_nightly_scheduler())
+
     if ai_summarizer.is_configured:
         logger.info(
             "AI summarizer configured — provider=%s model=%s",
@@ -312,6 +333,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await nse_client.close()
         await screener_client.close()
         await news_fetcher.close()
+        await close_client()
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +396,7 @@ async def log_requests(request: Request, call_next) -> Response:  # type: ignore
 app.include_router(ai_summarizer_router, prefix="/api")
 app.include_router(filings_router, prefix="/api")
 app.include_router(markets_router, prefix="/api")
+app.include_router(morningstar_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
