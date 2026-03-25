@@ -2,6 +2,7 @@
 
 from app.routers.ai_summarizer import router as ai_summarizer_router
 from app.routers.corporatefilings import router as filings_router
+from app.routers.jobs import router as jobs_router
 from app.routers.markets import router as markets_router
 from app.routers.morningstar import router as morningstar_router
 from app.routers.nonpersistence import router as market_router
@@ -14,6 +15,7 @@ from app.routers.watchlist import router as watchlist_router
 __all__ = [
     "ai_summarizer_router",
     "filings_router",
+    "jobs_router",
     "markets_router",
     "morningstar_router",
     "market_router",

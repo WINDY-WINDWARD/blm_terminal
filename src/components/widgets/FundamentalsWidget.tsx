@@ -209,6 +209,18 @@ export function FundamentalsWidget() {
     enabled: !!symbol,
   });
 
+  const { data: msFairValue } = useQuery<number | null>({
+    queryKey: ['morningstar/fairvalue', symbol],
+    queryFn: async () => {
+      const res = await fetch(`/api/py/morningstar/fairvalue/${encodeURIComponent(symbol)}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.fairValue as number | null;
+    },
+    staleTime: 300_000,
+    enabled: !!symbol,
+  });
+
   // ── Loading ────────────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -468,6 +480,20 @@ export function FundamentalsWidget() {
                   className="pb-1 text-[9px] text-white/40 font-mono"
                 >
                   = {lynch.epsGrowth ?? '?'}% growth × ₹{lynch.latestEps ?? '?'} EPS{lynch.epsKey ? ` [${lynch.epsKey}]` : ''}
+                </td>
+              </tr>
+
+              {/* Row 3: Morningstar Fair Value */}
+              <tr className="border-b border-terminal-gray/40">
+                <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                  MS Fair Value
+                </td>
+                <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                  {msFairValue != null ? (
+                    <span className="text-terminal-amber">₹{msFairValue.toFixed(2)}</span>
+                  ) : (
+                    <span className="text-white/40 font-normal">—</span>
+                  )}
                 </td>
               </tr>
             </tbody>

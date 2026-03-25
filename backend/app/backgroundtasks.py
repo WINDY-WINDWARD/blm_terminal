@@ -16,6 +16,7 @@ from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
 from app.models.notification import Notification
 from app.models.system_config import SystemConfig
+from app.models.job import Job
 from app.database import _SyncSessionLocal, AsyncSessionLocal
 from app.config import settings
 from app.services.news_fetcher import news_fetcher
@@ -26,8 +27,103 @@ from app.services.morningstar_client import (
     morningstar_client,
 )
 from app.services.screener_client import screener_client
+from app.jobs.registry import JobRegistry, JobDefinition
+from app.jobs.runner import sync_all_jobs_to_db, report_progress, update_job_status, update_job_status_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _is_job_enabled(job_key: str) -> bool:
+    """Check if a job is enabled in the database."""
+    try:
+        with _SyncSessionLocal() as db:
+            stmt = select(Job).where(Job.job_key == job_key)
+            result = db.execute(stmt)
+            job = result.scalar_one_or_none()
+            return job.is_enabled if job else True
+    except Exception as e:
+        logger.warning(f"Failed to check is_enabled for {job_key}, defaulting to enabled: {e}")
+        return True
+
+
+def register_all_jobs() -> None:
+    """Register all background jobs with the job registry."""
+    jobs = [
+        JobDefinition(
+            job_key="job.stock_universe",
+            name="stock_universe",
+            description="Sync stock metadata from NSE",
+            category="data_sync",
+            schedule_type="cron",
+            cron_expression="0 0 * * *",
+            callable=stock_universe_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.news",
+            name="news",
+            description="Crawl global news from MoneyControl",
+            category="data_sync",
+            schedule_type="interval",
+            interval_seconds=300,
+            callable=news_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.watchlist_news",
+            name="watchlist_news",
+            description="Fetch news for watchlist symbols",
+            category="notifications",
+            schedule_type="interval",
+            interval_seconds=300,
+            callable=watchlist_news_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.market_data",
+            name="market_data",
+            description="Fetch sector/industry data from MoneyControl",
+            category="data_sync",
+            schedule_type="interval",
+            interval_seconds=300,
+            callable=market_data_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.notifications",
+            name="notifications",
+            description="Generate watchlist stock alerts",
+            category="notifications",
+            schedule_type="interval",
+            interval_seconds=300,
+            callable=watchlist_notification_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.watchlist_fair_value",
+            name="watchlist_fair_value",
+            description="Fetch Morningstar fair values for watchlist",
+            category="analytics",
+            schedule_type="interval",
+            interval_seconds=10800,
+            callable=sync_watchlist_fair_values,
+            is_async=True,
+        ),
+        JobDefinition(
+            job_key="job.full_fair_value",
+            name="full_fair_value",
+            description="Fetch Morningstar fair values for all stocks",
+            category="analytics",
+            schedule_type="cron",
+            cron_expression="30 20 * * *",
+            callable=sync_all_fair_values,
+            is_async=True,
+        ),
+    ]
+
+    for job in jobs:
+        JobRegistry.register(job)
+        logger.info(f"Registered job: {job.job_key}")
 
 _nse_client = NSEClient()
 
@@ -216,16 +312,34 @@ def _stock_universe_sync() -> None:
 def stock_universe_worker() -> None:
     """Daemon thread target for stock universe refresh."""
     logger.info("stock_universe_worker: started")
+    
+    if not _is_job_enabled("job.stock_universe"):
+        logger.info("stock_universe_worker: disabled, waiting...")
+        update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.stock_universe", "idle", progress=0, message="Stopped")
+        logger.info("stock_universe_worker: stopped")
+        return
+    
+    update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting...")
     _stock_universe_sync()
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_midnight()
         logger.debug("stock_universe_worker: sleeping %.0fs until midnight", wait_secs)
+        update_job_status_sync("job.stock_universe", "waiting", progress=100, message=f"Sleeping until midnight ({wait_secs/3600:.1f}h)")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.stock_universe"):
+                update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.stock_universe", "running", progress=0, message="Syncing stock universe...")
             _stock_universe_sync()
 
+    update_job_status_sync("job.stock_universe", "idle", progress=0, message="Stopped")
     logger.info("stock_universe_worker: stopped")
 
 
@@ -243,44 +357,68 @@ def _news_sync() -> None:
     """Crawl and persist global news. Runs synchronously in a worker thread."""
     try:
         logger.info("news_sync: starting")
+        update_job_status_sync("job.news", "running", progress=10, message="Starting news crawl...")
         stored = _run_async(_crawl_news_async(pages=6))
         if stored > 0:
             logger.info("news_sync: initial crawl stored %d articles", stored)
+        update_job_status_sync("job.news", "waiting", progress=100, message="Waiting for next cycle")
         logger.info("news_sync: complete")
     except Exception:
         logger.exception("news_sync: unhandled exception; will retry next cycle")
+        update_job_status_sync("job.news", "failed", message="Error occurred")
 
 
 def _news_periodic_sync(current_interval: int) -> int:
     """Single periodic news crawl (page 1 only). Returns updated interval."""
     try:
+        update_job_status_sync("job.news", "running", progress=50, message="Crawling news...")
         stored = _run_async(_crawl_news_async(pages=1))
         if stored == 0:
             new_interval = min(current_interval * 2, NEWS_CRAWL_MAX_INTERVAL)
             logger.warning("news_sync: crawl returned 0 articles — backing off to %d s", new_interval)
+            update_job_status_sync("job.news", "waiting", progress=0, message=f"Backing off {new_interval}s")
             return new_interval
         else:
             if current_interval > NEWS_CRAWL_INTERVAL:
                 logger.info("news_sync: crawl succeeded (%d articles) — resetting interval", stored)
+            update_job_status_sync("job.news", "waiting", progress=100, message="Waiting for next cycle")
             return NEWS_CRAWL_INTERVAL
     except Exception:
         logger.exception("news_sync: periodic crawl exception — keeping interval")
+        update_job_status_sync("job.news", "failed", message="Error in periodic crawl")
         return current_interval
 
 
 def news_worker() -> None:
     """Daemon thread target for news crawling."""
     logger.info("news_worker: started")
+    
+    if not _is_job_enabled("job.news"):
+        logger.info("news_worker: disabled, waiting...")
+        update_job_status_sync("job.news", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
+        logger.info("news_worker: stopped")
+        return
+    
+    update_job_status_sync("job.news", "running", progress=10, message="Starting news crawl...")
     _news_sync()
 
     current_interval = NEWS_CRAWL_INTERVAL
     while not _shutdown_event.is_set():
         logger.info("news_worker: next run in %d s (backoff: %s)", current_interval, current_interval > NEWS_CRAWL_INTERVAL)
+        update_job_status_sync("job.news", "waiting", progress=0, message=f"Sleeping {current_interval}s")
         if _sleep_interruptible(current_interval):
             break
         if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.news"):
+                update_job_status_sync("job.news", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
             current_interval = _news_periodic_sync(current_interval)
 
+    update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
     try:
         _run_async(news_fetcher.close())
     except Exception:
@@ -354,14 +492,32 @@ def _watchlist_news_sync() -> None:
 def watchlist_news_worker() -> None:
     """Daemon thread target for watchlist news fetching."""
     logger.info("watchlist_news_worker: started")
+    
+    if not _is_job_enabled("job.watchlist_news"):
+        logger.info("watchlist_news_worker: disabled, waiting...")
+        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
+        logger.info("watchlist_news_worker: stopped")
+        return
+    
+    update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting...")
     _watchlist_news_sync()
 
     while not _shutdown_event.is_set():
+        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message=f"Sleeping {WATCHLIST_NEWS_INTERVAL}s")
         if _sleep_interruptible(WATCHLIST_NEWS_INTERVAL):
             break
         if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.watchlist_news"):
+                update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.watchlist_news", "running", progress=50, message="Fetching watchlist news...")
             _watchlist_news_sync()
 
+    update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
     logger.info("watchlist_news_worker: stopped")
 
 
@@ -447,22 +603,41 @@ def _market_data_sync() -> None:
 def market_data_worker() -> None:
     """Daemon thread target for market data fetching."""
     logger.info("market_data_worker: started")
+    
+    if not _is_job_enabled("job.market_data"):
+        logger.info("market_data_worker: disabled, waiting...")
+        update_job_status_sync("job.market_data", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
+        logger.info("market_data_worker: stopped")
+        return
+    
+    update_job_status_sync("job.market_data", "running", progress=0, message="Starting...")
     _market_data_sync()
 
     while not _shutdown_event.is_set():
         if _is_market_open():
             wait = 5 * 60
             logger.info("market_data_worker: market is open, next run in %d s", wait)
+            update_job_status_sync("job.market_data", "waiting", progress=100, message=f"Market open, next run in {wait}s")
             if _sleep_interruptible(wait):
                 break
             if not _shutdown_event.is_set() and _is_market_open():
+                if not _is_job_enabled("job.market_data"):
+                    update_job_status_sync("job.market_data", "waiting", progress=0, message="Disabled")
+                    _sleep_interruptible(60)
+                    continue
+                update_job_status_sync("job.market_data", "running", progress=50, message="Fetching market data...")
                 _market_data_sync()
         else:
             wait = _seconds_until_market_open()
             logger.info("market_data_worker: market is closed, next run in %.0f s (%.1f hours)", wait, wait / 3600)
+            update_job_status_sync("job.market_data", "waiting", progress=0, message=f"Market closed, opens in {wait/3600:.1f}h")
             if _sleep_interruptible(wait):
                 break
 
+    update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
     try:
         _run_async(market_data_fetcher.close())
     except Exception:
@@ -470,8 +645,11 @@ def market_data_worker() -> None:
     logger.info("market_data_worker: stopped")
 
 
-def start_all_workers() -> list[threading.Thread]:
-    """Spawn all background worker threads and return them."""
+async def start_all_workers() -> list[threading.Thread]:
+    """Register jobs and spawn all background worker threads."""
+    register_all_jobs()
+    await sync_all_jobs_to_db()
+
     targets = [
         stock_universe_worker,
         news_worker,
@@ -673,7 +851,7 @@ def _bulk_upsert_notifications(rows: list[dict]) -> None:
         stmt = (
             sqlite_insert(Notification)
             .values(rows)
-            .on_conflict_do_nothing(constraint="uq_notification_daily")
+            .on_conflict_do_nothing(index_elements=["symbol", "date"])
         )
         session.execute(stmt)
         session.commit()
@@ -951,16 +1129,36 @@ async def _fetch_insider_trades_async(symbol: str) -> list[dict]:
 def watchlist_notification_worker() -> None:
     """Daemon thread: monitors watchlist stocks for significant market events."""
     logger.info("watchlist_notification_worker: started")
+    
+    if not _is_job_enabled("job.notifications"):
+        logger.info("watchlist_notification_worker: disabled, waiting...")
+        update_job_status_sync("job.notifications", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
+        logger.info("watchlist_notification_worker: stopped")
+        return
+    
+    update_job_status_sync("job.notifications", "running", progress=0, message="Starting...")
     _sleep_interruptible(30)  # wait for app startup before first cycle
 
     while not _shutdown_event.is_set():
+        if not _is_job_enabled("job.notifications"):
+            update_job_status_sync("job.notifications", "waiting", progress=0, message="Disabled")
+            _sleep_interruptible(60)
+            continue
         if _is_market_open():
+            update_job_status_sync("job.notifications", "running", progress=50, message="Checking market events...")
             _notification_cycle_full()
+            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"Sleeping {NOTIFICATION_CHECK_INTERVAL}s")
             _sleep_interruptible(NOTIFICATION_CHECK_INTERVAL)
         else:
+            update_job_status_sync("job.notifications", "waiting", progress=0, message="Market closed, checking after-hours...")
             _notification_cycle_reduced()
+            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"Sleeping {AFTER_HOURS_INTERVAL}s")
             _sleep_interruptible(AFTER_HOURS_INTERVAL)
 
+    update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
     logger.info("watchlist_notification_worker: stopped")
 
 
@@ -1119,59 +1317,83 @@ async def _batch_resolve_morningstar_ids(symbols: list[str]) -> int:
 
 async def sync_watchlist_fair_values():
     """Fetch fair values for all watchlist stocks every 3 hours."""
+    if not _is_job_enabled("job.watchlist_fair_value"):
+        logger.info("watchlist_fair_value sync disabled, skipping")
+        return
+    
     lock = _get_watchlist_lock()
     if lock.locked():
         logger.warning("Watchlist sync already running, skipping this cycle")
         return
 
     async with lock:
-        logger.info("Starting watchlist fair value sync")
+        try:
+            logger.info("Starting watchlist fair value sync")
+            await update_job_status("job.watchlist_fair_value", "running", progress=0, message="Starting watchlist fair value sync...")
 
-        async with AsyncSessionLocal() as db:
-            stmt = select(WatchlistItem.symbol).distinct()
-            result = await db.execute(stmt)
-            symbols = [row[0] for row in result.fetchall()]
+            async with AsyncSessionLocal() as db:
+                stmt = select(WatchlistItem.symbol).distinct()
+                result = await db.execute(stmt)
+                symbols = [row[0] for row in result.fetchall()]
 
-        if not symbols:
-            logger.info("No symbols in watchlist to sync")
+            if not symbols:
+                logger.info("No symbols in watchlist to sync")
+                await _update_sync_timestamp("last_watchlist_fairvalue_sync")
+                await update_job_status("job.watchlist_fair_value", "idle", progress=100, message="No symbols to sync")
+                return
+
+            updated, failed = await _batch_update_fair_values(symbols)
+
+            logger.info(f"Watchlist fair value sync complete: {updated} updated, {failed} failed")
             await _update_sync_timestamp("last_watchlist_fairvalue_sync")
-            return
-
-        updated, failed = await _batch_update_fair_values(symbols)
-
-        logger.info(f"Watchlist fair value sync complete: {updated} updated, {failed} failed")
-        await _update_sync_timestamp("last_watchlist_fairvalue_sync")
+            await update_job_status("job.watchlist_fair_value", "idle", progress=100, message=f"Completed: {updated} updated, {failed} failed")
+        except Exception as e:
+            logger.exception("Watchlist fair value sync failed")
+            await update_job_status("job.watchlist_fair_value", "failed", error=str(e)[:512])
 
 
 async def sync_all_fair_values():
     """Fetch fair values for all stocks in stock_universe."""
+    if not _is_job_enabled("job.full_fair_value"):
+        logger.info("full_fair_value sync disabled, skipping")
+        return
+    
     lock = _get_full_lock()
     if lock.locked():
         logger.warning("Full sync already running, skipping this cycle")
         return
 
     async with lock:
-        logger.info("Starting full universe fair value sync")
+        try:
+            logger.info("Starting full universe fair value sync")
+            await update_job_status("job.full_fair_value", "running", progress=0, message="Starting full fair value sync...")
 
-        async with AsyncSessionLocal() as db:
-            stmt = select(stockuniverse.StockUniverse.symbol)
-            result = await db.execute(stmt)
-            all_symbols = [row[0] for row in result.fetchall()]
+            async with AsyncSessionLocal() as db:
+                stmt = select(stockuniverse.StockUniverse.symbol)
+                result = await db.execute(stmt)
+                all_symbols = [row[0] for row in result.fetchall()]
 
-        if not all_symbols:
-            logger.info("No symbols in stock universe to sync")
+            if not all_symbols:
+                logger.info("No symbols in stock universe to sync")
+                await _update_sync_timestamp("last_full_fairvalue_sync")
+                await update_job_status("job.full_fair_value", "idle", progress=100, message="No symbols to sync")
+                return
+
+            logger.info("Step 1: Populating missing Morningstar IDs")
+            await update_job_status("job.full_fair_value", "running", progress=25, message="Resolving Morningstar IDs...")
+            resolved_count = await _batch_resolve_morningstar_ids(all_symbols)
+            logger.info(f"Step 1 complete: {resolved_count} IDs populated")
+
+            logger.info("Step 2: Fetching fair values")
+            await update_job_status("job.full_fair_value", "running", progress=50, message="Fetching fair values...")
+            updated, failed = await _batch_update_fair_values(all_symbols, update_morningstar_id=True)
+            
+            logger.info(f"Full universe fair value sync complete: {updated} updated, {failed} failed")
             await _update_sync_timestamp("last_full_fairvalue_sync")
-            return
-
-        logger.info("Step 1: Populating missing Morningstar IDs")
-        resolved_count = await _batch_resolve_morningstar_ids(all_symbols)
-        logger.info(f"Step 1 complete: {resolved_count} IDs populated")
-
-        logger.info("Step 2: Fetching fair values")
-        updated, failed = await _batch_update_fair_values(all_symbols, update_morningstar_id=True)
-        
-        logger.info(f"Full universe fair value sync complete: {updated} updated, {failed} failed")
-        await _update_sync_timestamp("last_full_fairvalue_sync")
+            await update_job_status("job.full_fair_value", "idle", progress=100, message=f"Completed: {updated} updated, {failed} failed")
+        except Exception as e:
+            logger.exception("Full fair value sync failed")
+            await update_job_status("job.full_fair_value", "failed", error=str(e)[:512])
 
 
 async def _update_sync_timestamp(key: str):

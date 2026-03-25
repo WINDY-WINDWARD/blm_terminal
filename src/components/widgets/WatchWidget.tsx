@@ -63,6 +63,7 @@ interface WatchRowData {
   fiveYear: number | null;
   yearHigh: number | null;
   yearLow: number | null;
+  fairValue: number | null;
   isLoading: boolean;
 }
 
@@ -80,7 +81,8 @@ type SortColumn =
   | '3y'
   | '5y'
   | '52wh'
-  | '52wl';
+  | '52wl'
+  | 'msfv';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -106,6 +108,7 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   '5y': { key: '5y', label: '5Y%', textAlign: 'right', defaultSort: 'desc' },
   '52wh': { key: '52wh', label: '52W HIGH', textAlign: 'right', defaultSort: 'desc' },
   '52wl': { key: '52wl', label: '52W LOW', textAlign: 'right', defaultSort: 'desc' },
+  msfv: { key: 'msfv', label: 'MS FV', textAlign: 'right', defaultSort: 'desc' },
 };
 
 function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
@@ -157,7 +160,7 @@ interface WatchRowProps {
 }
 
 function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing, flash }: WatchRowProps) {
-  const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, isLoading } = rowData;
+  const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, isLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
   const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
   const dash = <span className="text-white/60">—</span>;
@@ -200,6 +203,10 @@ function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing, 
         return isLoading ? dash : formatPrice(yearHigh);
       case '52wl':
         return isLoading ? dash : formatPrice(yearLow);
+      case 'msfv':
+        return isLoading ? dash : fairValue != null ? (
+          <span className="text-terminal-amber">₹{fairValue.toFixed(2)}</span>
+        ) : dash;
       default:
         return null;
     }
@@ -357,10 +364,25 @@ export function WatchWidget() {
     })),
   });
 
+  const fairValueQueries = useQueries({
+    queries: watchlist.map((item) => ({
+      queryKey: ['morningstar/fairvalue', item.symbol],
+      queryFn: async () => {
+        const res = await fetch(`/api/py/morningstar/fairvalue/${encodeURIComponent(item.symbol)}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.fairValue as number | null;
+      },
+      staleTime: 300_000,
+      enabled: !!item.symbol,
+    })),
+  });
+
   // Build derived row data
   const rowDataList: WatchRowData[] = watchlist.map((item, idx) => {
     const quote = symbolQueries[idx];
     const ranges = rangeQueries[idx];
+    const fairValue = fairValueQueries[idx];
 
     return {
       item,
@@ -376,7 +398,8 @@ export function WatchWidget() {
       fiveYear: ranges?.data?.fiveYearPercent ?? null,
       yearHigh: quote?.data?.yearHigh ?? null,
       yearLow: quote?.data?.yearLow ?? null,
-      isLoading: (quote?.isLoading ?? false) || (ranges?.isLoading ?? false),
+      fairValue: fairValue?.data ?? null,
+      isLoading: (quote?.isLoading ?? false) || (ranges?.isLoading ?? false) || (fairValue?.isLoading ?? false),
     };
   });
 
@@ -484,6 +507,10 @@ export function WatchWidget() {
         case '52wl':
           aVal = a.yearLow;
           bVal = b.yearLow;
+          break;
+        case 'msfv':
+          aVal = a.fairValue;
+          bVal = b.fairValue;
           break;
         default:
           return 0;

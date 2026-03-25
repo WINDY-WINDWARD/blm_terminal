@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
+import Link from 'next/link';
 import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom, watchlistsAtom, activeWatchlistIdAtom, type Watchlist } from '@/store/terminalStore';
 
 const WATCHLIST_COLUMNS = [
@@ -276,6 +277,19 @@ export function SettingsWidget() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Links */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Links
+        </div>
+        <Link
+          href="/jobs"
+          className="text-white hover:text-terminal-amber text-[10px] transition-colors"
+        >
+          → Jobs (background tasks)
+        </Link>
       </div>
 
       {/* Tips */}

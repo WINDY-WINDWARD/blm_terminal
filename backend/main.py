@@ -29,6 +29,7 @@ from app.routers import (
     screener_router,
     stockuniverse_router,
     watchlist_router,
+    jobs_router,
 )
 from app.backgroundtasks import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
@@ -288,7 +289,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
-    start_all_workers()
+    await start_all_workers()
     await screener_client.init()
     await news_fetcher.init()
 
@@ -403,6 +404,7 @@ app.include_router(screener_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
+app.include_router(jobs_router, prefix="/api")
 
 import os as _os
 if _os.environ.get("ENV") != "production":
