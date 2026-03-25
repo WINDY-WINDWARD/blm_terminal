@@ -74,7 +74,7 @@ If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows,
 - The `REMOTE_PATH` must be `/api/mcp/mcp` (FastMCP's default `/mcp` nested under `/api/mcp`)
 - Restart Claude Desktop after editing the config
 
-## Available Tools (28)
+## Available Tools (29)
 
 ### Market Data (12)
 - `health_check` - Service health status
@@ -95,6 +95,9 @@ If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows,
 - `screener_company` - Get fundamentals (P/E, ROCE, ROE, etc.)
 - `screener_trades` - Insider trades, bulk/block deals
 - `get_company_quarterly_results` - Full quarterly results
+
+### Morningstar (1)
+- `morningstar_search` - Resolve symbol to Morningstar ID
 
 ### Stock Universe (3)
 - `list_stock_universe` - All stocks in DB

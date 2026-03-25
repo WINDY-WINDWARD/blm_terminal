@@ -17,7 +17,7 @@ This README explains how to run the backend locally and lists all available endp
 - `main.py` — FastAPI app entrypoint + Alembic migration runner
 - `app/config.py` — runtime settings (loaded from `.env`)
 - `app/database.py` — async SQLAlchemy engine, `Base`, and `get_db()` dependency
-- `app/models/` — ORM models (`corporatefilings.py`, `news.py`, `stockuniverse.py`, `watchlist.py`)
+- `app/models/` — ORM models (`corporatefilings.py`, `news.py`, `stockuniverse.py`, `watchlist.py`, `notification.py`)
 - `app/schemas/` — Pydantic v2 request/response schemas (one file per domain)
 - `app/routers/` — API routers:
   - `corporatefilings.py` — NSE quarterly results CSV cache
@@ -27,14 +27,16 @@ This README explains how to run the backend locally and lists all available endp
   - `news.py` — news fetching and caching
   - `screener.py` — Screener.in fundamentals proxy
   - `ai_summarizer.py` — OpenAI-backed summarizer
+  - `notifications.py` — watchlist price alerts (read, dismiss)
+  - `morningstar.py` — Morningstar fair value proxy
 - `app/services/` — outbound HTTP clients:
   - `nse_client.py` — NSE session bootstrap + HTTP helpers
   - `screener_client.py` — Screener.in scraper
   - `news_fetcher.py` — news aggregation
   - `moneycontrol_client.py` — MoneyControl data
-  - `ai_summarizer.py` — OpenAI integration
+  - `morningstar_client.py` — Morningstar India fair values (uses `rookiepy` for browser cookies)
 - `app/mcp_server.py` — MCP tool definitions (streamable HTTP, mounted at `/api/mcp`)
-- `app/backgroundtasks.py` — nightly stock universe sync + news scheduler
+- `app/backgroundtasks.py` — scheduled tasks: fair value sync, notification worker, stock universe sync
 - `alembic/` — Alembic migration environment (`env.py`, `versions/`)
 - `alembic.ini` — Alembic configuration
 - `.env.example` — example environment variables
@@ -170,8 +172,40 @@ curl http://localhost:4455/api/stockuniverse/search/INF
 - `GET    /api/watchlist` — return all watchlist items
 - `POST   /api/watchlist` — add a symbol (`{"symbol": "RELIANCE", "exchange": "NSE"}`)
 - `DELETE /api/watchlist/{id}` — remove by ID
+- `GET    /api/watchlists` — list all watchlists (multiple watchlists support)
+- `POST   /api/watchlists` — create a new watchlist (`{"name": "My Watchlist"}`)
+- `GET    /api/watchlists/{id}` — get a specific watchlist with its items
+- `PUT    /api/watchlists/{id}` — rename a watchlist
+- `DELETE /api/watchlists/{id}` — delete a watchlist and its items
 
-6) News
+6) Notifications (watchlist price alerts)
+
+Notifications are triggered when watchlist stocks hit 52-week highs/lows, volume breakouts, top gainers/losers, bulk/block/short deals, or insider trades.
+
+- `GET /api/notifications?watchlist_id={id}` — get unread notifications for a watchlist (newest first)
+- `DELETE /api/notifications/{notif_id}?watchlist_id={id}` — mark a notification as read (soft delete)
+- `DELETE /api/notifications?watchlist_id={id}&all=true` — mark all notifications as read for a watchlist
+- `DELETE /api/notifications?watchlist_id={id}` — delete all notifications for a watchlist
+
+**Trigger types** (11 total):
+| Trigger | Description |
+|---------|-------------|
+| `52w_high_breakout` | Stock hit new 52-week high |
+| `52w_low_breakout` | Stock hit new 52-week low |
+| `volume_breakout` | Volume spike vs weekly average |
+| `top_gainer` | Stock among top gainers |
+| `top_loser` | Stock among top losers |
+| `bulk_deal` | Bulk deal executed |
+| `block_deal` | Block deal executed |
+| `short_deal` | Short deal executed |
+| `insider_buy` | Insider purchase detected |
+| `insider_sell` | Insider sale detected |
+| `insider_unknown` | Unknown insider activity |
+
+**Dev endpoint** (triggers notification cycle manually):
+- `POST /api/notifications/trigger` — runs the full notification cycle (for testing)
+
+7) News
 
 - `GET /api/news/global` — latest cached global news items (MoneyControl)
 - `GET /api/news/company/{symbol}` — news for a specific company symbol
@@ -221,8 +255,25 @@ curl http://localhost:4455/api/stockuniverse/search/INF
 - `GET /api/screener/search?q=reliance` — search Screener.in for companies
 - `GET /api/screener/company/{slug}` — company fundamentals (requires Screener auth)
 - `GET /api/screener/trades/{slug}` — insider trades (requires Screener auth)
+- `GET /api/screener/quarters/{slug}` — quarterly results (requires Screener auth)
 
-8) Proxy via Next.js (developer convenience)
+8) Morningstar (fair values)
+
+- `GET /api/morningstar/fairvalue/{symbol}` — get fair value for a symbol from Morningstar India
+- `GET /api/morningstar/search?q={symbol}` — resolve a symbol to its Morningstar ID
+
+**Examples:**
+```bash
+# Get fair value for TCS
+curl http://localhost:4455/api/morningstar/fairvalue/TCS
+
+# Search for Morningstar ID
+curl http://localhost:4455/api/morningstar/search?q=reliance
+```
+
+The fair values are cached in the `stockuniverse` table. A background task syncs fair values nightly for all symbols in the watchlist and periodically for the entire stock universe.
+
+9) Proxy via Next.js (developer convenience)
 
 - If you run the Next.js dev server, the repo contains `src/app/api/py/[...path]/route.ts` which maps e.g.
   - `GET /api/py/market/top-gainers` → `http://localhost:4455/api/market/top-gainers`
@@ -243,7 +294,7 @@ The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides pr
 **Path:** `/api/mcp`  
 **Startup:** The MCP server shares the same lifespan as the FastAPI app — migrations, cache cleanup, stock-universe scheduler, and screener session initialization all run once at startup.
 
-### Available MCP Tools
+### Available MCP Tools (29)
 
 | Tool | Description |
 |---|---|
@@ -263,6 +314,8 @@ The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides pr
 | `screener_search` | Search screener.in for companies |
 | `screener_company` | Company fundamentals from screener.in (requires auth) |
 | `screener_trades` | Insider trades from screener.in (requires auth) |
+| `get_company_quarterly_results` | Full quarterly results from screener.in (requires auth) |
+| `morningstar_search` | Search Morningstar to resolve symbol to Morningstar ID |
 | `list_stock_universe` | All stock universe records |
 | `get_stock_universe` | Single stock universe record by symbol |
 | `search_stock_universe` | Search stock universe by prefix |
@@ -295,6 +348,45 @@ curl -X POST http://localhost:4455/api/mcp \
 - NSE requires careful HTTP headers and cookies. The `nse_client` module bootstraps a session by first visiting the NSE homepage and reuses cookies. Avoid heavy parallel scraping.
 - The backend uses an async SQLAlchemy engine with `aiosqlite`; the DB file must be writable by the process.
 - For production, run behind a reverse proxy, persist the DB or use a managed DB, and secure the server with proper access controls.
+
+---
+
+## Background Tasks
+
+The backend runs several scheduled tasks defined in `app/backgroundtasks.py`:
+
+### 1. Morningstar Fair Value Sync
+
+Two async tasks sync fair values from Morningstar India:
+
+- **`sync_watchlist_fair_values()`** — Runs at startup and periodically. Fetches fair values for all symbols in watchlists.
+- **`sync_all_fair_values()`** — Runs once daily. Fetches fair values for the entire stock universe and resolves missing Morningstar IDs.
+
+Both tasks use `rookiepy` to obtain browser cookies for Morningstar's authenticated API.
+
+**Dev trigger:**
+```python
+from app.backgroundtasks import sync_watchlist_fair_values, sync_all_fair_values
+# Call directly in a Python shell
+```
+
+### 2. Notification Worker
+
+The notification worker monitors watchlist stocks for triggering events:
+
+- **`notification_cycle_full()`** — Full check (all 11 trigger types) — runs hourly during market hours
+- **`notification_cycle_reduced()`** — Reduced check (volume, 52w) — runs outside market hours
+
+Triggers include: 52-week high/low breakouts, volume breakouts, top gainers/losers, bulk/block/short deals, insider trades.
+
+- **Dev endpoint:** `POST /api/notifications/trigger` — manually triggers the notification cycle
+- **Read notifications:** `GET /api/notifications?watchlist_id={id}`
+- **Dismiss:** `DELETE /api/notifications/{notif_id}?watchlist_id={id}` or `DELETE /api/notifications?watchlist_id={id}&all=true`
+- **Cleanup:** Read notifications older than 30 days are hard-deleted automatically
+
+### 3. Stock Universe Sync
+
+Runs periodically to populate the stock universe with NSE symbols and metadata.
 
 ---
 

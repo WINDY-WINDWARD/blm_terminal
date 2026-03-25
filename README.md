@@ -36,10 +36,12 @@ BLM Terminal is a full-stack trading dashboard that sits in front of an [OpenAlg
 | **Real-time data** | Native WebSocket client for live tick streaming via OpenAlgo |
 | **Charts** | Lightweight candlestick charts (`lightweight-charts`) with OHLCV history |
 | **Order management** | Place, view, and track orders and positions in a single panel |
-| **Watchlist** | Persistent, editable watchlist backed by the Python analytics backend (SQLite) |
+| **Watchlist** | Persistent, editable watchlist backed by the Python analytics backend (SQLite), with multiple watchlist support |
+| **Notifications** | Real-time price alerts for watchlist stocks (52-week highs/lows, volume breakouts, top movers, deals, insider trades) |
+| **Morningstar** | Fair value data from Morningstar India, synced nightly to the stock universe |
 | **Market movers** | Top gainers / losers fetched from the Python analytics backend |
 | **Fundamentals & Deals** | NSE corporate filings, bulk/block deal data via the FastAPI service |
-| **Data warehouse** | Standalone FastAPI + SQLite backend — runs independently; archives OHLCV and filing data with configurable TTL caching |
+| **Data warehouse** | Standalone FastAPI + SQLite backend — runs independently; archives OHLCV, fair values, and filing data with configurable TTL caching |
 | **Security** | All broker credentials stay server-side; compatible with SELinux contexts and Cloudflare tunnels |
 | **Home-lab friendly** | Docker Compose support with Portainer-ready configuration |
 
@@ -53,12 +55,13 @@ Browser
         ├── /api/openalgo/*   → rate-limit → cache → OpenAlgo API (port 8800)
         ├── /api/py/*         → Python FastAPI backend (port 4455)
         ├── /api/settings     → Prisma → SQLite (TopMoverSymbol, UserSettings)
-        └── /api/watchlist    → Python FastAPI backend (watchlist in backend DB)
+        ├── /api/watchlist    → Python FastAPI backend (multiple watchlists in backend DB)
+        └── /api/notifications → Watchlist price alerts
 
 Python FastAPI Backend (port 4455)          ← standalone, no Next.js dependency
   ├── NSE HTTP client (cached, polite delay)
-  ├── Screener, MoneyControl, News, AI Summarizer services
-  ├── MCP server at /api/mcp (streamable HTTP)
+  ├── Screener, MoneyControl, News, AI Summarizer, Morningstar services
+  ├── MCP server at /api/mcp (streamable HTTP) — same port 4455
   ├── Alembic migrations (auto-applied on startup)
   └── SQLite data warehouse (data.db)
 ```
@@ -168,7 +171,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile          # Python FastAPI image
     ports:
-      - "8000:8000"
+      - "4455:4455"
     env_file: ./backend/.env
     volumes:
       - backend_data:/app/data        # persist SQLite warehouse
@@ -237,20 +240,21 @@ src/
 backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatch build)
 ├── app/
 │   ├── routers/              # corporatefilings, market, news, screener, watchlist,
-│   │                         # stockuniverse, ai_summarizer, nonpersistence
+│   │                         # stockuniverse, ai_summarizer, notifications, morningstar
 │   ├── services/             # nse_client, screener_client, news_fetcher,
-│   │                         # moneycontrol_client, ai_summarizer
+│   │                         # moneycontrol_client, ai_summarizer, morningstar_client
 │   ├── models/               # SQLAlchemy ORM models (corporatefilings, news,
-│   │                         # stockuniverse, watchlist)
-│   └── schemas/              # Pydantic v2 request/response schemas
+│   │                         # stockuniverse, watchlist, notifications)
+│   ├── schemas/             # Pydantic v2 request/response schemas
+│   └── backgroundtasks.py   # Fair value sync, notification worker (scheduled tasks)
 ├── alembic/                  # DB migrations (auto-applied on startup)
 └── main.py                   # FastAPI entrypoint + migration runner
 prisma/
 └── schema.prisma             # Models: TopMoverSymbol, UserSettings
-                              # (watchlist lives in the Python backend DB)
+                              # (watchlist & notifications live in the Python backend DB)
 blm-mcp-bundle/              # Claude Desktop MCP plugin
 ├── server/index.js           # Node.js proxy (stdio → HTTP)
-├── manifest.json             # Plugin manifest with 28 tools
+├── manifest.json             # Plugin manifest with 29 tools
 ├── build.js                  # Cross-platform build script
 └── README.md                # Usage instructions
 ```
@@ -259,7 +263,7 @@ blm-mcp-bundle/              # Claude Desktop MCP plugin
 
 ## Claude Desktop Integration
 
-BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 28 backend tools directly to Claude. This allows Claude to query NSE market data, screener.in fundamentals, watchlists, and news without needing the Next.js frontend.
+BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 29 backend tools directly to Claude. This allows Claude to query NSE market data, screener.in fundamentals, watchlists, news, and Morningstar fair values without needing the Next.js frontend.
 
 ### Quick Start
 
