@@ -1,7 +1,7 @@
 """add_morningstar_id_and_fair_value_to_stock_universe
 
 Revision ID: x123456789abc
-Revises: 981b120a07df
+Revises: m1234567890ae
 Create Date: 2026-03-25 20:30:00.000000
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy.exc as sqla_exc
 
 revision: str = "x123456789abc"
-down_revision: Union[str, Sequence[str], None] = "981b120a07df"
+down_revision: Union[str, Sequence[str], None] = "m1234567890ae"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
