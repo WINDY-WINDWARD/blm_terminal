@@ -215,7 +215,8 @@ export function FundamentalsWidget() {
       const res = await fetch(`/api/py/morningstar/fairvalue/${encodeURIComponent(symbol)}`);
       if (!res.ok) return null;
       const data = await res.json();
-      return data.fairValue as number | null;
+      const fv = data?.fairValue;
+      return typeof fv === 'number' ? fv : typeof fv === 'string' ? parseFloat(fv) : null;
     },
     staleTime: 300_000,
     enabled: !!symbol,

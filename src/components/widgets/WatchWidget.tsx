@@ -371,7 +371,8 @@ export function WatchWidget() {
         const res = await fetch(`/api/py/morningstar/fairvalue/${encodeURIComponent(item.symbol)}`);
         if (!res.ok) return null;
         const data = await res.json();
-        return data.fairValue as number | null;
+        const fv = data?.fairValue;
+        return typeof fv === 'number' ? fv : typeof fv === 'string' ? parseFloat(fv) : null;
       },
       staleTime: 300_000,
       enabled: !!item.symbol,

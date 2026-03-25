@@ -9,6 +9,7 @@ import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom, wa
 const WATCHLIST_COLUMNS = [
   { key: 'ltp', label: 'LTP' },
   { key: 'chg', label: 'CHG%' },
+  { key: 'msfv', label: 'MS FV' },
   { key: '1w', label: '1W%' },
   { key: '1m', label: '1M%' },
   { key: '3m', label: '3M%' },
