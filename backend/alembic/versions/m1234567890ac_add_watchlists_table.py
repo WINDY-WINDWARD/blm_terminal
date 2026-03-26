@@ -40,7 +40,7 @@ def upgrade() -> None:
             sa.Column(
                 "watchlist_id",
                 sa.Integer(),
-                sa.ForeignKey("watchlists.id", ondelete="CASCADE"),
+                sa.ForeignKey("watchlists.id", ondelete="CASCADE", name="fk_watchlist_items_watchlist"),
                 nullable=True,
             ),
         )
