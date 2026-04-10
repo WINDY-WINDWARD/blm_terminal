@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.services.nse_client import NSEClient
+from app.services import ticker_warehouse
 from app.models import stockuniverse
 from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
@@ -109,15 +111,35 @@ def register_all_jobs() -> None:
             callable=sync_watchlist_fair_values,
             is_async=True,
         ),
-        JobDefinition(
+JobDefinition(
             job_key="job.full_fair_value",
             name="full_fair_value",
             description="Fetch Morningstar fair values for all stocks",
             category="analytics",
             schedule_type="cron",
-            cron_expression="30 20 * * *",
+            cron_expression="30 20 * *",
             callable=sync_all_fair_values,
             is_async=True,
+        ),
+        JobDefinition(
+            job_key="job.ticker_backfill",
+            name="ticker_backfill",
+            description="Backfill 1-year OHLCV daily history for all NSE stocks (watchlist-first)",
+            category="data_warehouse",
+            schedule_type="interval",
+            interval_seconds=0,
+            callable=ticker_backfill_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_daily_update",
+            name="ticker_daily_update",
+            description="Post-close bhavcopy download + nightly catch-up for all NSE stocks",
+            category="data_warehouse",
+            schedule_type="cron",
+            cron_expression="30 10,14 * * 1-5",
+            callable=ticker_daily_update_worker,
+            is_async=False,
         ),
     ]
 
@@ -341,6 +363,134 @@ def stock_universe_worker() -> None:
 
     update_job_status_sync("job.stock_universe", "idle", progress=0, message="Stopped")
     logger.info("stock_universe_worker: stopped")
+
+
+def _ticker_backfill_sync() -> None:
+    """Perform the ticker backfill synchronization."""
+    symbols = ticker_warehouse.get_symbols_needing_backfill()
+    total = len(symbols)
+    if total == 0:
+        logger.info("ticker_backfill_sync: no symbols need backfill")
+        update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="All symbols up to date")
+        return
+
+    logger.info(f"ticker_backfill_sync: {total} symbols need backfill")
+
+    for i, symbol in enumerate(symbols):
+        if _shutdown_event.is_set():
+            break
+
+        if i % 10 == 0:
+            progress = int((i / total) * 100)
+            update_job_status_sync(
+                "job.ticker_backfill",
+                "running",
+                progress=progress,
+                message=f"Backfilling {symbol} ({i+1}/{total})",
+            )
+
+        try:
+            ticker_warehouse.backfill_symbol(symbol, days=365)
+        except Exception as e:
+            logger.warning(f"ticker_backfill_sync: failed for {symbol}: {e}")
+
+        time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
+
+    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
+    logger.info("ticker_backfill_sync: complete")
+
+
+def ticker_backfill_worker() -> None:
+    """Daemon thread target for ticker backfill."""
+    logger.info("ticker_backfill_worker: started")
+
+    if not _is_job_enabled("job.ticker_backfill"):
+        logger.info("ticker_backfill_worker: disabled, waiting...")
+        update_job_status_sync("job.ticker_backfill", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.ticker_backfill", "idle", progress=0, message="Stopped")
+        logger.info("ticker_backfill_worker: stopped")
+        return
+
+    _ticker_backfill_sync()
+
+    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
+    logger.info("ticker_backfill_worker: finished initial backfill, sleeping...")
+
+    while not _shutdown_event.is_set():
+        _sleep_interruptible(3600)
+
+    update_job_status_sync("job.ticker_backfill", "idle", progress=0, message="Stopped")
+    logger.info("ticker_backfill_worker: stopped")
+
+
+def _ticker_daily_update_sync() -> None:
+    """Perform the daily ticker update via bhavcopy."""
+    today = date.today()
+    date_str = today.strftime("%d-%m-%Y")
+
+    logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str}")
+
+    try:
+        rows = ticker_warehouse.bulk_update_via_bhavcopy(date_str)
+        if rows > 0:
+            logger.info(f"ticker_daily_update_sync: inserted {rows} rows via bhavcopy")
+            update_job_status_sync(
+                "job.ticker_daily_update",
+                "waiting",
+                progress=100,
+                message=f"Updated {rows} symbols",
+            )
+            return
+    except Exception as e:
+        logger.warning(f"ticker_daily_update_sync: bhavcopy failed: {e}")
+
+    logger.warning("ticker_daily_update_sync: falling back to watchlist symbols")
+    watchlist_symbols = ticker_warehouse.get_watchlist_symbols()
+    for symbol in watchlist_symbols:
+        if _shutdown_event.is_set():
+            break
+
+        try:
+            ticker_warehouse.update_symbol_today(symbol, today)
+        except Exception as e:
+            logger.warning(f"ticker_daily_update_sync: failed for {symbol}: {e}")
+
+        time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
+
+    update_job_status_sync(
+        "job.ticker_daily_update",
+        "waiting",
+        progress=100,
+        message="Updated via fallback",
+    )
+    logger.info("ticker_daily_update_sync: complete (fallback mode)")
+
+
+def ticker_daily_update_worker() -> None:
+    """Daemon thread target for ticker daily updates."""
+    logger.info("ticker_daily_update_worker: started")
+
+    if not _is_job_enabled("job.ticker_daily_update"):
+        logger.info("ticker_daily_update_worker: disabled, waiting...")
+        update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
+        logger.info("ticker_daily_update_worker: stopped")
+        return
+
+    update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
+    _ticker_daily_update_sync()
+
+    logger.info("ticker_daily_update_worker: sleeping until next cycle")
+
+    while not _shutdown_event.is_set():
+        _sleep_interruptible(3600)
+
+    update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
+    logger.info("ticker_daily_update_worker: stopped")
 
 
 NEWS_CRAWL_INTERVAL = 5 * 60
@@ -656,6 +806,8 @@ async def start_all_workers() -> list[threading.Thread]:
         watchlist_news_worker,
         market_data_worker,
         watchlist_notification_worker,
+        ticker_backfill_worker,
+        ticker_daily_update_worker,
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
