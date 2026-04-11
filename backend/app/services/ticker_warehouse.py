@@ -11,10 +11,12 @@ This module is used by background workers and the ticker router.
 import logging
 import time
 from datetime import date, datetime, timedelta
+from io import StringIO
 from typing import Generator, Optional
 
-import nsepython
 import pandas as pd
+import requests
+import nsepython
 from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -23,12 +25,14 @@ from app.models.ticker import TickerDaily
 from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
 from app.database import _SyncSessionLocal
-from app.services.nse_rate_limiter import throttled_nse_call
 
 logger = logging.getLogger(__name__)
 
+NSE_HISTORICAL_URL = "https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData"
+
 TICKER_SERIES_FILTER = "EQ"
 DEFAULT_BACKFILL_DAYS = 365
+MIN_EXPECTED_ROWS = 200  # ~1 year of trading days
 REQUEST_DELAY_SECONDS = 2.0
 
 
@@ -37,51 +41,101 @@ def _get_session() -> Generator[Session, None, None]:
     return _SyncSessionLocal()
 
 
+_session = requests.Session()
+_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/csv",
+})
+
+
 def _nse_equity_history_sync(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Fetch equity history synchronously via nsepython."""
-    return nsepython.equity_history(symbol, "EQ", start_date, end_date)
-
-
-async def _nse_equity_history_async(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Fetch equity history with rate limiting."""
-    return await throttled_nse_call(
-        f"equity_history:{symbol}",
-        _nse_equity_history_sync,
-        symbol,
-        start_date,
-        end_date,
-    )
-
-
-def _nse_bhavcopy_sync(date_str: str) -> pd.DataFrame:
-    """Fetch bhavcopy CSV synchronously."""
-    return nsepython.get_bhavcopy(date_str)
+    """Fetch equity history via the new NSE historical CSV API."""
+    try:
+        params = {
+            "symbol": symbol,
+            "type": "priceVolume",
+            "series": "ALL",
+            "from": start_date,
+            "to": end_date,
+            "csv": "true",
+        }
+        resp = _session.get(NSE_HISTORICAL_URL, params=params, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(StringIO(resp.text))
+        if df.empty:
+            return pd.DataFrame()
+        new_cols = []
+        for col in df.columns:
+            col = col.strip()
+            col = col.replace("ï»¿", "").replace('"', "")
+            new_cols.append(col)
+        df.columns = new_cols
+        rename = {}
+        for col in df.columns:
+            lower = col.lower()
+            if "symbol" in lower:
+                rename[col] = "CH_SYMBOL"
+            elif "series" in lower:
+                rename[col] = "CH_SERIES"
+            elif lower.startswith("date"):
+                rename[col] = "CH_TIMESTAMP"
+            elif "open price" in lower:
+                rename[col] = "CH_OPENING_PRICE"
+            elif "high price" in lower:
+                rename[col] = "CH_TRADE_HIGH_PRICE"
+            elif "low price" in lower:
+                rename[col] = "CH_TRADE_LOW_PRICE"
+            elif "close price" in lower:
+                rename[col] = "CH_CLOSING_PRICE"
+            elif "traded quantity" in lower:
+                rename[col] = "CH_TOT_TRADED_QTY"
+            elif "turnover" in lower:
+                rename[col] = "CH_TOT_TRADED_VAL"
+        df = df.rename(columns=rename)
+        df = df[df.get("CH_SERIES", "") == "EQ"].copy() if "CH_SERIES" in df.columns else df
+        return df
+    except Exception as e:
+        logger.warning(f"_nse_equity_history_sync: failed for {symbol}: {e}")
+        return pd.DataFrame()
 
 
 def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
     """
     Backfill OHLCV data for a single symbol.
 
-    Fetches `days` trading days of history via equity_history() API
-    and upserts into ticker_daily table.
+    Fetches `days` trading days of history via equity_history() API.
+    The API has a ~11 month limit, so we split into 2 requests if needed.
 
     Returns:
         Number of rows inserted/updated.
     """
     today = date.today()
-    start_date = (today - timedelta(days=days + 50)).strftime("%d-%m-%Y")
+    start_dt = today - timedelta(days=days + 50)
+    start_date = start_dt.strftime("%d-%m-%Y")
     end_date = today.strftime("%d-%m-%Y")
 
     logger.info(f"backfill_symbol: fetching {symbol} from {start_date} to {end_date}")
 
-    try:
-        df = _nse_equity_history_sync(symbol, start_date, end_date)
-    except Exception as e:
-        logger.warning(f"backfill_symbol: equity_history failed for {symbol}: {e}")
-        return 0
+    df = _nse_equity_history_sync(symbol, start_date, end_date)
+
+    if df.empty:
+        mid_date = (today - timedelta(days=180)).strftime("%d-%m-%Y")
+        logger.info(f"backfill_symbol: trying split at {mid_date}")
+        df1 = _nse_equity_history_sync(symbol, start_date, mid_date)
+        df2 = _nse_equity_history_sync(symbol, mid_date, end_date)
+        if not df1.empty and not df2.empty:
+            df = pd.concat([df1, df2], ignore_index=True)
+        elif not df2.empty:
+            df = df2
+        else:
+            df = df1
 
     if df.empty:
         logger.warning(f"backfill_symbol: empty result for {symbol}")
+        return 0
+
+    if "CH_SERIES" not in df.columns:
+        logger.warning(f"backfill_symbol: invalid response for {symbol}")
         return 0
 
     df = df.rename(
@@ -96,12 +150,30 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
         }
     )
 
+    required_cols = ["date", "open", "high", "low", "close", "volume", "value"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        logger.warning(f"backfill_symbol: missing columns {missing} for {symbol}")
+        return 0
+
     df["symbol"] = symbol
     df["series"] = TICKER_SERIES_FILTER
     df["source"] = "equity_history"
     df["created_at"] = datetime.now()
 
     df["date"] = pd.to_datetime(df["date"], format="%d-%b-%Y").dt.date
+
+    def clean_numeric(val):
+        if pd.isna(val):
+            return 0.0
+        if isinstance(val, (int, float)):
+            return float(val)
+        return float(str(val).replace(",", ""))
+
+    numeric_cols = ["open", "high", "low", "close", "volume", "value"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(clean_numeric)
 
     rows = df[
         ["symbol", "date", "series", "open", "high", "low", "close", "volume", "value", "source", "created_at"]
@@ -370,8 +442,7 @@ def get_warehouse_status() -> dict:
         total_rows = db.execute(select(func.count(TickerDaily.id))).scalar() or 0
         symbols_covered = db.execute(
             select(func.count(func.distinct(TickerDaily.symbol)))
-            .scalar() or 0
-        )
+        ).scalar() or 0
 
         latest_row = db.execute(
             select(TickerDaily).order_by(TickerDaily.date.desc()).limit(1)
@@ -427,37 +498,49 @@ def get_warehouse_status() -> dict:
 
 def get_symbols_needing_backfill() -> list[str]:
     """
-    Get symbols that need backfilling, prioritized.
+    Get symbols that need backfilling, prioritized by count threshold.
+
+    A symbol needs backfill if it has fewer than MIN_EXPECTED_ROWS rows.
+    Watchlist symbols are returned first, then the rest of universe.
 
     Returns:
-        List of symbols, watchlist symbols first, then universe.
+        List of symbols needing backfill.
     """
     with _get_session() as db:
-        watchlist_symbols = db.execute(
-            select(func.distinct(WatchlistItem.symbol))
-        ).scalars().all()
+        watchlist_symbols = set(
+            db.execute(select(func.distinct(WatchlistItem.symbol))).scalars().all()
+        )
 
-        universe_symbols = db.execute(
-            select(StockUniverse.symbol)
-        ).scalars().all()
+        universe_symbols = db.execute(select(StockUniverse.symbol)).scalars().all()
+
+        if not universe_symbols:
+            return []
+
+        rows = (
+            db.execute(
+                select(TickerDaily.symbol, func.count(TickerDaily.id).label("cnt"))
+                .where(TickerDaily.symbol.in_(universe_symbols))
+                .group_by(TickerDaily.symbol)
+            )
+            .fetchall()
+        )
+
+    counts_by_symbol = {row[0]: row[1] for row in rows}
 
     priority_symbols = []
     other_symbols = []
 
     for sym in universe_symbols:
-        with _get_session() as db:
-            latest = db.execute(
-                select(func.max(TickerDaily.date)).where(
-                    TickerDaily.symbol == sym
-                )
-            ).scalar()
+        row_count = counts_by_symbol.get(sym, 0)
+        needs_backfill = row_count < MIN_EXPECTED_ROWS
+
+        if not needs_backfill:
+            continue
 
         if sym in watchlist_symbols:
-            if latest is None or latest < date.today() - timedelta(days=1):
-                priority_symbols.append(sym)
+            priority_symbols.append(sym)
         else:
-            if latest is None or latest < date.today() - timedelta(days=1):
-                other_symbols.append(sym)
+            other_symbols.append(sym)
 
     return priority_symbols + other_symbols
 
