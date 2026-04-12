@@ -33,7 +33,7 @@ NSE_HISTORICAL_URL = "https://www.nseindia.com/api/historicalOR/generateSecurity
 TICKER_SERIES_FILTER = "EQ"
 DEFAULT_BACKFILL_DAYS = 365
 MIN_EXPECTED_ROWS = 200  # ~1 year of trading days
-REQUEST_DELAY_SECONDS = 2.0
+REQUEST_DELAY_SECONDS = 3.0
 
 
 def _get_session() -> Generator[Session, None, None]:
@@ -43,60 +43,90 @@ def _get_session() -> Generator[Session, None, None]:
 
 _session = requests.Session()
 _session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/csv",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/csv,application/csv,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/",
+    "Origin": "https://www.nseindia.com",
 })
 
 
-def _nse_equity_history_sync(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """Fetch equity history via the new NSE historical CSV API."""
+def _refresh_nse_session() -> None:
+    """Re-initialize NSE session by fetching homepage to get fresh cookies."""
     try:
-        params = {
-            "symbol": symbol,
-            "type": "priceVolume",
-            "series": "ALL",
-            "from": start_date,
-            "to": end_date,
-            "csv": "true",
-        }
-        resp = _session.get(NSE_HISTORICAL_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        df = pd.read_csv(StringIO(resp.text))
-        if df.empty:
-            return pd.DataFrame()
-        new_cols = []
-        for col in df.columns:
-            col = col.strip()
-            col = col.replace("ï»¿", "").replace('"', "")
-            new_cols.append(col)
-        df.columns = new_cols
-        rename = {}
-        for col in df.columns:
-            lower = col.lower()
-            if "symbol" in lower:
-                rename[col] = "CH_SYMBOL"
-            elif "series" in lower:
-                rename[col] = "CH_SERIES"
-            elif lower.startswith("date"):
-                rename[col] = "CH_TIMESTAMP"
-            elif "open price" in lower:
-                rename[col] = "CH_OPENING_PRICE"
-            elif "high price" in lower:
-                rename[col] = "CH_TRADE_HIGH_PRICE"
-            elif "low price" in lower:
-                rename[col] = "CH_TRADE_LOW_PRICE"
-            elif "close price" in lower:
-                rename[col] = "CH_CLOSING_PRICE"
-            elif "traded quantity" in lower:
-                rename[col] = "CH_TOT_TRADED_QTY"
-            elif "turnover" in lower:
-                rename[col] = "CH_TOT_TRADED_VAL"
-        df = df.rename(columns=rename)
-        df = df[df.get("CH_SERIES", "") == "EQ"].copy() if "CH_SERIES" in df.columns else df
-        return df
+        _session.get("https://www.nseindia.com/", timeout=15)
+        time.sleep(2)
     except Exception as e:
-        logger.warning(f"_nse_equity_history_sync: failed for {symbol}: {e}")
-        return pd.DataFrame()
+        logger.debug(f"_refresh_nse_session: failed to refresh session: {e}")
+
+
+def _nse_equity_history_sync(symbol: str, start_date: str, end_date: str, _attempt: int = 1) -> pd.DataFrame:
+    """Fetch equity history via the new NSE historical CSV API.
+
+    Includes retry with exponential backoff and session refresh on failure.
+    """
+    timeouts = (30, 45, 60)
+    max_attempts = 3
+
+    for attempt in range(_attempt, max_attempts + 1):
+        try:
+            params = {
+                "symbol": symbol,
+                "type": "priceVolume",
+                "series": "ALL",
+                "from": start_date,
+                "to": end_date,
+                "csv": "true",
+            }
+            timeout = timeouts[attempt - 1]
+            resp = _session.get(NSE_HISTORICAL_URL, params=params, timeout=timeout)
+            resp.raise_for_status()
+            df = pd.read_csv(StringIO(resp.text))
+            if df.empty:
+                return pd.DataFrame()
+            new_cols = []
+            for col in df.columns:
+                col = col.strip()
+                col = col.replace("ï»¿", "").replace('"', "")
+                new_cols.append(col)
+            df.columns = new_cols
+            rename = {}
+            for col in df.columns:
+                lower = col.lower()
+                if "symbol" in lower:
+                    rename[col] = "CH_SYMBOL"
+                elif "series" in lower:
+                    rename[col] = "CH_SERIES"
+                elif lower.startswith("date"):
+                    rename[col] = "CH_TIMESTAMP"
+                elif "open price" in lower:
+                    rename[col] = "CH_OPENING_PRICE"
+                elif "high price" in lower:
+                    rename[col] = "CH_TRADE_HIGH_PRICE"
+                elif "low price" in lower:
+                    rename[col] = "CH_TRADE_LOW_PRICE"
+                elif "close price" in lower:
+                    rename[col] = "CH_CLOSING_PRICE"
+                elif "traded quantity" in lower:
+                    rename[col] = "CH_TOT_TRADED_QTY"
+                elif "turnover" in lower:
+                    rename[col] = "CH_TOT_TRADED_VAL"
+            df = df.rename(columns=rename)
+            df = df[df.get("CH_SERIES", "") == "EQ"].copy() if "CH_SERIES" in df.columns else df
+            return df
+        except Exception as e:
+            logger.warning(f"_nse_equity_history_sync: attempt {attempt}/{max_attempts} failed for {symbol}: {e}")
+            if attempt < max_attempts:
+                backoff = 5 * (2 ** (attempt - 1))
+                logger.info(f"_nse_equity_history_sync: backing off {backoff}s before retry")
+                _refresh_nse_session()
+                time.sleep(backoff)
+                continue
+            else:
+                logger.warning(f"_nse_equity_history_sync: all attempts failed for {symbol}")
+                return pd.DataFrame()
+
+    return pd.DataFrame()
 
 
 def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
@@ -122,6 +152,7 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
         mid_date = (today - timedelta(days=180)).strftime("%d-%m-%Y")
         logger.info(f"backfill_symbol: trying split at {mid_date}")
         df1 = _nse_equity_history_sync(symbol, start_date, mid_date)
+        time.sleep(REQUEST_DELAY_SECONDS)
         df2 = _nse_equity_history_sync(symbol, mid_date, end_date)
         if not df1.empty and not df2.empty:
             df = pd.concat([df1, df2], ignore_index=True)

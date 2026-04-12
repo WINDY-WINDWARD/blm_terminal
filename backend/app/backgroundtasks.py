@@ -389,6 +389,10 @@ def _ticker_backfill_sync() -> None:
                 message=f"Backfilling {symbol} ({i+1}/{total})",
             )
 
+        if i > 0 and i % 50 == 0:
+            logger.info(f"ticker_backfill_sync: refreshing session after {i} symbols")
+            ticker_warehouse._refresh_nse_session()
+
         try:
             ticker_warehouse.backfill_symbol(symbol, days=365)
         except Exception as e:
