@@ -17,3 +17,16 @@ class NotificationOut(BaseModel):
     triggered_at: datetime
     triggered_date: date
     is_read: bool
+
+
+class GlobalNotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    symbol: str
+    exchange: str
+    trigger_type: str
+    message: str
+    triggered_at: datetime
+    triggered_date: date
+    is_read: bool

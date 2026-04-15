@@ -24,6 +24,7 @@ const VALID_WIDGETS = [
   'NEWS',
   'ANALYSIS',
   'NOTIF',
+  'SCAN',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {

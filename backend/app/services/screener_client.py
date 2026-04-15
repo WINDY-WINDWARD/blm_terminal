@@ -541,7 +541,7 @@ class ScreenerClient:
 
     async def init(self) -> None:
         """Load browser cookies (Chrome → Firefox) and create the shared httpx client."""
-        self._cookies = _get_browser_cookies()
+        self._cookies = await asyncio.to_thread(_get_browser_cookies)
 
         self._http = httpx.AsyncClient(
             base_url=BASE_URL,

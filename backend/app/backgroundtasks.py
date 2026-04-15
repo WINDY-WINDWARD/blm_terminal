@@ -17,7 +17,7 @@ from app.services import indicators
 from app.models import stockuniverse
 from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
-from app.models.notification import Notification
+from app.models.notification import Notification, GlobalNotification
 from app.models.system_config import SystemConfig
 from app.models.job import Job
 from app.database import _SyncSessionLocal, AsyncSessionLocal
@@ -150,6 +150,16 @@ JobDefinition(
             schedule_type="cron",
             cron_expression="0 11 * * 1-5",
             callable=ticker_indicators_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.global_scan",
+            name="global_scan",
+            description="Scan all NSE stocks for technical & market alerts",
+            category="notifications",
+            schedule_type="interval",
+            interval_seconds=1800,
+            callable=global_scan_worker,
             is_async=False,
         ),
     ]
@@ -438,9 +448,6 @@ def ticker_backfill_worker() -> None:
         return
 
     _ticker_backfill_sync()
-
-    logger.info("ticker_backfill_worker: initial backfill done, triggering indicator computation")
-    _ticker_indicators_sync()
 
     update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
     logger.info("ticker_backfill_worker: finished initial backfill, sleeping...")
@@ -954,6 +961,7 @@ async def start_all_workers() -> list[threading.Thread]:
         watchlist_news_worker,
         market_data_worker,
         watchlist_notification_worker,
+        global_scan_worker,
         ticker_backfill_worker,
         ticker_daily_update_worker,
         ticker_indicators_worker,
@@ -1152,7 +1160,9 @@ def _bulk_upsert_notifications(rows: list[dict]) -> None:
         stmt = (
             sqlite_insert(Notification)
             .values(rows)
-            .on_conflict_do_nothing(constraint="uq_notification_daily")
+            .on_conflict_do_nothing(
+                index_elements=["watchlist_id", "symbol", "trigger_type", "triggered_date"]
+            )
         )
         session.execute(stmt)
         session.commit()
@@ -1184,6 +1194,40 @@ def _run_cleanup_if_due() -> None:
                 cutoff.date(),
             )
     _cleanup_last_run = now
+
+
+# ---------------------------------------------------------------------------
+# Global notification helpers (for market-wide scan)
+# ---------------------------------------------------------------------------
+
+def _get_global_seen_today() -> set[tuple[str, str]]:
+    """Return {(symbol, trigger_type)} for all unread global notifications today."""
+    today = datetime.now().date()
+    with _SyncSessionLocal() as session:
+        rows = session.execute(
+            select(GlobalNotification.symbol, GlobalNotification.trigger_type)
+            .where(
+                GlobalNotification.triggered_date == today,
+                GlobalNotification.is_read == False,
+            )
+        )
+        return {(r[0], r[1]) for r in rows}
+
+
+def _bulk_upsert_global_notifications(rows: list[dict]) -> None:
+    """Insert global notification rows, skipping duplicates via UniqueConstraint."""
+    if not rows:
+        return
+    with _SyncSessionLocal() as session:
+        stmt = (
+            sqlite_insert(GlobalNotification)
+            .values(rows)
+            .on_conflict_do_nothing(
+                index_elements=["symbol", "trigger_type", "triggered_date"]
+            )
+        )
+        session.execute(stmt)
+        session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -1263,13 +1307,25 @@ def _ticker_indicator_notification_cycle() -> None:
             return
 
         all_symbols = list({s for wl_symbols in symbols_by_watchlist.values() for s in wl_symbols})
+        total_symbols = len(all_symbols)
+        logger.info("ticker_indicator_notification_cycle: starting for %d symbols in %d watchlists",
+                    total_symbols, len(symbols_by_watchlist))
 
         seen_today = _get_seen_today()
         pending: list[dict] = []
+        processed = 0
+        alerts_generated = 0
 
         for symbol in all_symbols:
             if _shutdown_event.is_set():
+                logger.info("ticker_indicator_notification_cycle: shutdown requested, stopping at %d/%d symbols",
+                            processed, total_symbols)
                 return
+
+            processed += 1
+            if processed % 20 == 0 or processed == 1:
+                logger.info("ticker_indicator_notification_cycle: progress %d/%d symbols (%.0f%%)",
+                            processed, total_symbols, processed / total_symbols * 100)
 
             try:
                 with _SyncSessionLocal() as db:
@@ -1413,6 +1469,7 @@ def _ticker_indicator_notification_cycle() -> None:
                             "triggered_date": today_date,
                             "is_read":        False,
                         })
+                        alerts_generated += 1
 
             except Exception:
                 logger.exception(f"ticker_indicator_notification_cycle: failed for {symbol}")
@@ -1420,10 +1477,11 @@ def _ticker_indicator_notification_cycle() -> None:
         if pending:
             _bulk_upsert_notifications(pending)
             logger.info(
-                "ticker_indicator_notification_cycle: upserted %d notifications", len(pending)
+                "ticker_indicator_notification_cycle: processed %d symbols, generated %d notifications, upserted %d",
+                processed, alerts_generated, len(pending)
             )
         else:
-            logger.info("ticker_indicator_notification_cycle: no new notifications")
+            logger.info("ticker_indicator_notification_cycle: processed %d symbols, no new notifications", processed)
 
     except Exception:
         logger.exception("ticker_indicator_notification_cycle: unhandled exception")
@@ -1704,6 +1762,300 @@ def watchlist_notification_worker() -> None:
 
     update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
     logger.info("watchlist_notification_worker: stopped")
+
+
+# ---------------------------------------------------------------------------
+# Global scan worker — monitors all NSE stocks for technical & market alerts
+# ---------------------------------------------------------------------------
+
+GLOBAL_SCAN_BATCH_SIZE = 100
+GLOBAL_SCAN_DELAY = 1.0
+
+
+def _global_scan_cycle() -> None:
+    """Generate alerts for all NSE stocks with indicator data.
+
+    Scans all symbols in ticker_daily (not just watchlist), evaluates:
+    - 15 technical indicators (same as watchlist indicator cycle)
+    - 5 live NSE triggers (52W high/low, volume breakout, top gainer/loser)
+    - 3 deal triggers (bulk/block/short deals)
+
+    Excludes insider trades (too many per-symbol HTTP calls for 2000+ symbols).
+    """
+    from app.models.ticker import TickerDaily
+    from app.models.stockuniverse import StockUniverse
+    from app.services import returns as returns_service
+    from app.services import momentum as momentum_service
+
+    try:
+        logger.info("global_scan_cycle: starting")
+        now = datetime.now()
+        today_date = now.date()
+
+        cfg = get_notif_config()
+        rsi_oversold_thr = float(cfg["notif.rsi_oversold_threshold"])
+        rsi_overbought_thr = float(cfg["notif.rsi_overbought_threshold"])
+        vol_spike_ratio = float(cfg["notif.volatility_spike_ratio"])
+        atr_exp_thr = float(cfg["notif.atr_expansion_threshold"])
+        momentum_thr = float(cfg["notif.momentum_surge_threshold"])
+        return_1w_thr = float(cfg["notif.return_1w_spike_threshold"])
+        streak_thr = int(cfg["notif.streak_days_threshold"])
+        near52w_thr = float(cfg["notif.near_52w_threshold"])
+
+        with _SyncSessionLocal() as db:
+            result = db.execute(
+                select(TickerDaily.symbol)
+                .where(TickerDaily.indicators_updated_at.isnot(None))
+                .distinct()
+            )
+            all_symbols = [row[0] for row in result.fetchall()]
+
+        total_symbols = len(all_symbols)
+        if total_symbols == 0:
+            logger.info("global_scan_cycle: no symbols with indicator data, skipping")
+            return
+
+        logger.info("global_scan_cycle: starting for %d symbols", total_symbols)
+
+        seen_today = _get_global_seen_today()
+        pending: list[dict] = []
+
+        high52_raw = _safe_fetch_52week_high()
+        low52_raw = _safe_fetch_52week_low()
+        vol_raw = _safe_fetch_volume_gainers()
+        gainers_df = _safe_fetch_top_gainers()
+        losers_df = _safe_fetch_top_losers()
+        deals_raw = _safe_fetch_largedeal_snapshot()
+
+        high52_data = _parse_52week_data(high52_raw)
+        low52_data = _parse_52week_data(low52_raw)
+        vol_data = _parse_volume_gainers(vol_raw)
+        deals = _parse_largedeal_snapshot(deals_raw)
+
+        processed = 0
+        alerts_generated = 0
+
+        for i in range(0, total_symbols, GLOBAL_SCAN_BATCH_SIZE):
+            if _shutdown_event.is_set():
+                logger.info("global_scan_cycle: shutdown requested, stopping at %d/%d symbols",
+                            processed, total_symbols)
+                return
+
+            batch = all_symbols[i:i + GLOBAL_SCAN_BATCH_SIZE]
+            for symbol in batch:
+                processed += 1
+
+                if processed % 200 == 0 or processed == 1:
+                    logger.info("global_scan_cycle: progress %d/%d symbols (%.0f%%)",
+                                processed, total_symbols, processed / total_symbols * 100)
+
+                try:
+                    with _SyncSessionLocal() as db:
+                        rows = list(
+                            db.execute(
+                                select(TickerDaily)
+                                .where(TickerDaily.symbol == symbol)
+                                .order_by(TickerDaily.date.desc())
+                                .limit(10)
+                            ).scalars()
+                        )
+                        su_row = db.execute(
+                            select(StockUniverse).where(StockUniverse.symbol == symbol)
+                        ).scalar_one_or_none()
+
+                    if not rows or len(rows) < 2:
+                        continue
+
+                    rows_asc = list(reversed(rows))
+                    latest = rows_asc[-1]
+                    prev = rows_asc[-2]
+
+                    up_streak = 0
+                    dn_streak = 0
+                    for r in reversed(rows_asc):
+                        if r.close is None or r.open is None:
+                            break
+                        if r.close > r.open:
+                            if dn_streak > 0:
+                                break
+                            up_streak += 1
+                        elif r.close < r.open:
+                            if up_streak > 0:
+                                break
+                            dn_streak += 1
+                        else:
+                            break
+
+                    pct_from_52w_high: float | None = None
+                    pct_from_52w_low: float | None = None
+                    if su_row and su_row.high_52w and su_row.low_52w and latest.close:
+                        if su_row.high_52w > 0:
+                            pct_from_52w_high = (latest.close - su_row.high_52w) / su_row.high_52w * 100
+                        if su_row.low_52w > 0:
+                            pct_from_52w_low = (latest.close - su_row.low_52w) / su_row.low_52w * 100
+
+                    returns = returns_service.get_returns(symbol)
+                    return_1w = returns.get("1w") if returns else None
+
+                    momentum_data = momentum_service.get_momentum_score(symbol)
+                    momentum_score = momentum_data.get("score") if momentum_data else None
+
+                    alerts: list[tuple[str, str]] = []
+
+                    if latest.rsi_14 is not None:
+                        if latest.rsi_14 < rsi_oversold_thr:
+                            alerts.append(("rsi_oversold",
+                                f"{symbol} RSI oversold: {latest.rsi_14:.1f} < {rsi_oversold_thr}"))
+                        elif latest.rsi_14 > rsi_overbought_thr:
+                            alerts.append(("rsi_overbought",
+                                f"{symbol} RSI overbought: {latest.rsi_14:.1f} > {rsi_overbought_thr}"))
+
+                    if latest.macd_histogram is not None and prev.macd_histogram is not None:
+                        if prev.macd_histogram < 0 and latest.macd_histogram >= 0:
+                            alerts.append(("macd_bullish_cross",
+                                f"{symbol} MACD bullish crossover"))
+                        elif prev.macd_histogram > 0 and latest.macd_histogram <= 0:
+                            alerts.append(("macd_bearish_cross",
+                                f"{symbol} MACD bearish crossover"))
+
+                    if latest.bb_squeeze == "Y":
+                        alerts.append(("bb_squeeze_alert",
+                            f"{symbol} Bollinger Band squeeze (bb_width={latest.bb_width})"))
+                    if latest.close is not None and latest.bb_upper is not None and latest.close > latest.bb_upper:
+                        alerts.append(("bb_upper_break",
+                            f"{symbol} broke above BB upper"))
+                    if latest.close is not None and latest.bb_lower is not None and latest.close < latest.bb_lower:
+                        alerts.append(("bb_lower_break",
+                            f"{symbol} broke below BB lower"))
+
+                    if (latest.hv_20 is not None and latest.hv_60 is not None
+                            and latest.hv_60 > 0
+                            and latest.hv_20 > latest.hv_60 * vol_spike_ratio):
+                        alerts.append(("volatility_spike",
+                            f"{symbol} HV20 > {vol_spike_ratio}x HV60"))
+                    if latest.atr_percent is not None and latest.atr_percent > atr_exp_thr:
+                        alerts.append(("atr_expansion",
+                            f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
+
+                    if momentum_score is not None and momentum_score > momentum_thr:
+                        alerts.append(("momentum_surge",
+                            f"{symbol} momentum {momentum_score:.1f} > {momentum_thr}"))
+                    if return_1w is not None and return_1w > return_1w_thr:
+                        alerts.append(("return_1w_spike",
+                            f"{symbol} 1W return {return_1w:+.1f}%"))
+
+                    if up_streak >= streak_thr:
+                        alerts.append(("streak_up_5d", f"{symbol} up {up_streak} days"))
+                    if dn_streak >= streak_thr:
+                        alerts.append(("streak_down_5d", f"{symbol} down {dn_streak} days"))
+
+                    if pct_from_52w_high is not None and -near52w_thr <= pct_from_52w_high <= 0:
+                        alerts.append(("near_52w_high",
+                            f"{symbol} within {near52w_thr}% of 52W high"))
+                    if pct_from_52w_low is not None and 0 <= pct_from_52w_low <= near52w_thr:
+                        alerts.append(("near_52w_low",
+                            f"{symbol} within {near52w_thr}% of 52W low"))
+
+                    if high52_data and symbol in high52_data:
+                        row = high52_data[symbol]
+                        price = row.get("ltp") or row.get("new52WHL") or "—"
+                        alerts.append(("52w_high_breakout", f"{symbol} 52W HIGH @ ₹{price}"))
+
+                    if low52_data and symbol in low52_data:
+                        row = low52_data[symbol]
+                        price = row.get("ltp") or row.get("new52WHL") or "—"
+                        alerts.append(("52w_low_breakout", f"{symbol} 52W LOW @ ₹{price}"))
+
+                    if vol_data and symbol in vol_data:
+                        ratio = vol_data[symbol].get("week1volChange", 0)
+                        alerts.append(("volume_breakout", f"{symbol} vol {ratio:+.0f}x"))
+
+                    if gainers_df is not None:
+                        for row in gainers_df.itertuples():
+                            if row.symbol == symbol:
+                                pchg = getattr(row, "pChange", 0) or 0
+                                alerts.append(("top_gainer", f"{symbol} +{pchg:.1f}%"))
+                                break
+
+                    if losers_df is not None:
+                        for row in losers_df.itertuples():
+                            if row.symbol == symbol:
+                                pchg = getattr(row, "pChange", 0) or 0
+                                alerts.append(("top_loser", f"{symbol} {pchg:.1f}%"))
+                                break
+
+                    if deals and symbol in deals:
+                        for deal in deals[symbol]:
+                            if _is_recent(deal.date, DAILY_NOTIFICATION_WINDOW_DAYS):
+                                alerts.append((
+                                    f"{deal.deal_type}_deal",
+                                    f"{symbol} {deal.deal_type} {deal.qty:,} @ ₹{deal.watp}"
+                                ))
+
+                    for trigger_type, message in alerts:
+                        key = (symbol, trigger_type)
+                        if key in seen_today:
+                            continue
+                        seen_today.add(key)
+                        pending.append({
+                            "symbol": symbol,
+                            "exchange": "NSE",
+                            "trigger_type": trigger_type,
+                            "message": message,
+                            "triggered_at": now,
+                            "triggered_date": today_date,
+                            "is_read": False,
+                        })
+                        alerts_generated += 1
+
+                except Exception:
+                    logger.exception(f"global_scan_cycle: failed for {symbol}")
+
+            if i + GLOBAL_SCAN_BATCH_SIZE < total_symbols:
+                if _sleep_interruptible(GLOBAL_SCAN_DELAY):
+                    break
+
+        if pending:
+            _bulk_upsert_global_notifications(pending)
+            logger.info(
+                "global_scan_cycle: processed %d symbols, generated %d alerts, upserted %d",
+                processed, alerts_generated, len(pending)
+            )
+        else:
+            logger.info("global_scan_cycle: processed %d symbols, no new alerts", processed)
+
+    except Exception:
+        logger.exception("global_scan_cycle: unhandled exception")
+
+
+def global_scan_worker() -> None:
+    """Daemon thread: scans all NSE stocks every 30 minutes."""
+    logger.info("global_scan_worker: started")
+
+    if not _is_job_enabled("job.global_scan"):
+        logger.info("global_scan_worker: disabled, waiting...")
+        update_job_status_sync("job.global_scan", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
+        logger.info("global_scan_worker: stopped")
+        return
+
+    update_job_status_sync("job.global_scan", "running", progress=0, message="Starting...")
+    _sleep_interruptible(60)
+
+    while not _shutdown_event.is_set():
+        if not _is_job_enabled("job.global_scan"):
+            update_job_status_sync("job.global_scan", "waiting", progress=0, message="Disabled")
+            _sleep_interruptible(60)
+            continue
+        update_job_status_sync("job.global_scan", "running", progress=50, message="Scanning all NSE stocks...")
+        _global_scan_cycle()
+        update_job_status_sync("job.global_scan", "waiting", progress=100, message="Sleeping 30min")
+        _sleep_interruptible(1800)
+
+    update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
+    logger.info("global_scan_worker: stopped")
 
 
 def stop_all_workers(timeout: float = 35.0) -> None:

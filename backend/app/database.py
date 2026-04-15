@@ -52,12 +52,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 from sqlalchemy import create_engine
 from sqlalchemy import event as _sa_event
 from sqlalchemy.orm import sessionmaker as _sync_sessionmaker
-from sqlalchemy.pool import StaticPool as _SyncStaticPool
+from sqlalchemy.pool import NullPool as _SyncNullPool
 
 _sync_engine = create_engine(
     f"sqlite:///{settings.db_path}",
     connect_args={"check_same_thread": False},
-    poolclass=_SyncStaticPool,
+    poolclass=_SyncNullPool,
 )
 
 

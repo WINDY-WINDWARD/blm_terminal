@@ -9,8 +9,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.notification import Notification
-from app.schemas.notification import NotificationOut
+from app.models.notification import Notification, GlobalNotification
+from app.schemas.notification import NotificationOut, GlobalNotificationOut
 
 router = APIRouter()
 
@@ -71,6 +71,69 @@ async def dismiss_all_notifications(
     stmt = (
         update(Notification)
         .where(Notification.watchlist_id == watchlist_id, Notification.is_read == False)
+        .values(is_read=True)
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Global notifications (SCAN widget) — no watchlist_id
+# ---------------------------------------------------------------------------
+
+
+@router.get("/notifications/global", response_model=list[GlobalNotificationOut], tags=["notifications"])
+async def list_global_notifications(
+    limit: Annotated[int | None, Query()] = None,
+    trigger_type: Annotated[str | None, Query()] = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[GlobalNotificationOut]:
+    """Return unread global notifications (all NSE stocks), newest first."""
+    stmt = (
+        select(GlobalNotification)
+        .where(GlobalNotification.is_read == False)
+        .order_by(GlobalNotification.triggered_at.desc())
+    )
+    if trigger_type is not None:
+        stmt = stmt.where(GlobalNotification.trigger_type == trigger_type)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    res = await db.execute(stmt)
+    return [GlobalNotificationOut.model_validate(n) for n in res.scalars().all()]
+
+
+@router.delete("/notifications/global/{notif_id}", tags=["notifications"])
+async def dismiss_global_notification(
+    notif_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Soft-delete a single global notification (set is_read=True)."""
+    notif = await db.get(GlobalNotification, notif_id)
+    if notif is None:
+        raise HTTPException(status_code=404, detail=f"Global notification {notif_id} not found")
+    notif.is_read = True
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/notifications/global", tags=["notifications"])
+async def dismiss_all_global_notifications(
+    all: Annotated[bool, Query(alias="all")],
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Soft-delete all unread global notifications.
+
+    Requires ?all=true query param.
+    """
+    if not all:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing ?all=true query param",
+        )
+    stmt = (
+        update(GlobalNotification)
+        .where(GlobalNotification.is_read == False)
         .values(is_read=True)
     )
     await db.execute(stmt)

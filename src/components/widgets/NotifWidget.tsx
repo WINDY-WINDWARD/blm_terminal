@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAtomValue, useAtom } from 'jotai';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import ReactDOM from 'react-dom';
 import { activeExchangeAtom, activeSymbolAtom, watchlistsAtom, type Watchlist } from '@/store/terminalStore';
 
 interface Notification {
@@ -89,6 +90,63 @@ function getBadgeLabel(triggerType: string): string {
   return triggerType.toUpperCase();
 }
 
+function getTooltipDescription(triggerType: string): string {
+  switch (triggerType) {
+    case '52w_high_breakout':
+      return 'Price broke above its 52-week high — strong bullish signal';
+    case '52w_low_breakout':
+      return 'Price broke below its 52-week low — strong bearish signal';
+    case 'volume_breakout':
+      return 'Volume surged 3x+ above 20-day average — unusual activity';
+    case 'top_gainer':
+      return 'Among top gainers in the watchlist today';
+    case 'top_loser':
+      return 'Among top losers in the watchlist today';
+    case 'bulk_deal':
+      return 'Large bulk deal detected on NSE — significant institutional activity';
+    case 'block_deal':
+      return 'Block deal detected on NSE — large block transaction';
+    case 'short_deal':
+      return 'Short deal detected on NSE — short selling activity';
+    case 'insider_buy':
+      return 'Promoter/institution bought shares — insider buying signal';
+    case 'insider_sell':
+      return 'Promoter/institution sold shares — insider selling signal';
+    case 'rsi_oversold':
+      return 'RSI(14) below 30 — oversold condition, potential bounce';
+    case 'rsi_overbought':
+      return 'RSI(14) above 70 — overbought condition, potential pullback';
+    case 'macd_bullish_cross':
+      return 'MACD line crossed above signal line — bullish momentum shift';
+    case 'macd_bearish_cross':
+      return 'MACD line crossed below signal line — bearish momentum shift';
+    case 'bb_squeeze_alert':
+      return 'Bollinger Bands squeezed — low volatility, potential breakout coming';
+    case 'bb_upper_break':
+      return 'Price closed above upper Bollinger Band — overbought signal';
+    case 'bb_lower_break':
+      return 'Price closed below lower Bollinger Band — oversold signal';
+    case 'volatility_spike':
+      return 'HV20 is 1.5x+ higher than HV60 — volatility spike detected';
+    case 'atr_expansion':
+      return 'Daily price range expanded significantly — volatility increasing, wider stop-loss needed';
+    case 'momentum_surge':
+      return 'Momentum score above 70 — strong bullish momentum';
+    case 'return_1w_spike':
+      return '1-week return above 10% — short-term momentum surge';
+    case 'streak_up_5d':
+      return '5+ consecutive up days — strong upward streak';
+    case 'streak_down_5d':
+      return '5+ consecutive down days — strong downward streak';
+    case 'near_52w_high':
+      return 'Within 3% of 52-week high — approaching resistance';
+    case 'near_52w_low':
+      return 'Within 3% of 52-week low — approaching support';
+    default:
+      return triggerType;
+  }
+}
+
 function formatTime(iso: string): string {
   const d = new Date(iso);
   const hh = d.getHours().toString().padStart(2, '0');
@@ -105,6 +163,8 @@ export function NotifWidget() {
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
+
+  const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
 
   const { data, isLoading, isError, error, refetch } = useQuery<Notification[]>({
     queryKey: ['notifications', selectedWatchlistId],
@@ -251,7 +311,9 @@ export function NotifWidget() {
               <div
                 key={n.id}
                 onClick={() => handleRowClick(n)}
-                className="flex items-center gap-2 px-2 py-[4px] bg-zinc-900 hover:bg-zinc-800 cursor-pointer group border border-terminal-gray/20 rounded-sm"
+                onMouseEnter={(e) => setHoveredNotif({ id: n.id, rect: e.currentTarget.getBoundingClientRect() })}
+                onMouseLeave={() => setHoveredNotif(null)}
+                className="relative flex items-center gap-2 px-2 py-[4px] bg-zinc-900 hover:bg-zinc-800 cursor-pointer group border border-terminal-gray/20 rounded-sm"
               >
                 <span className={`shrink-0 text-[8px] font-bold px-1 py-px rounded ${getBadgeColor(n.trigger_type)}`}>
                   {getBadgeLabel(n.trigger_type)}
@@ -278,6 +340,30 @@ export function NotifWidget() {
           </div>
         )}
       </div>
+
+      {hoveredNotif && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          className="fixed z-[99999] pointer-events-none"
+          style={{
+            left: hoveredNotif.rect.left,
+            top: hoveredNotif.rect.top - 4,
+            transform: 'translateY(-100%)',
+          }}
+        >
+          <div className="bg-zinc-800 border border-terminal-amber/60 rounded-md shadow-2xl p-3 max-w-80 mb-1">
+            <div className="text-terminal-amber text-[10px] font-bold mb-1">
+              {getBadgeLabel(filteredNotifications.find(n => n.id === hoveredNotif.id)?.trigger_type ?? '')}
+            </div>
+            <div className="text-white/80 text-[9px] mb-1 leading-snug">
+              {getTooltipDescription(filteredNotifications.find(n => n.id === hoveredNotif.id)?.trigger_type ?? '')}
+            </div>
+            <div className="text-white/50 text-[8px] truncate">
+              {filteredNotifications.find(n => n.id === hoveredNotif.id)?.message}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
