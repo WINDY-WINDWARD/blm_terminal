@@ -288,7 +288,7 @@ def _stock_universe_sync() -> None:
         stock_list: list[str] = _nse_client.get_stock_list()
         logger.info("stock_universe_sync: %d symbols to process", len(stock_list))
 
-        stale_delta = timedelta(days=30)
+        stale_delta = timedelta(hours=12)
 
         with _SyncSessionLocal() as session:
             for symbol in stock_list:
@@ -307,10 +307,10 @@ def _stock_universe_sync() -> None:
                         now = datetime.now()
                         if (now - last_time) < stale_delta:
                             logger.debug(
-                                "Skipping %s — last update was %s (within %d days)",
+                                "Skipping %s — last update was %s (within %d hours)",
                                 symbol,
                                 last_time,
-                                stale_delta.days,
+                                stale_delta.total_seconds() / 3600,
                             )
                             continue
                     except Exception:
@@ -473,14 +473,52 @@ def ticker_backfill_worker() -> None:
 def _ticker_daily_update_sync() -> None:
     """Perform the daily ticker update via bhavcopy.
 
+    Only runs during post-market hours (after 15:30 IST) on trading days.
+    Checks for existing data before attempting fetches to avoid redundant calls.
     After candles are inserted, triggers _ticker_indicator_notification_cycle()
     and _ticker_scores_sync() so that indicator-based alerts are evaluated
-    on the freshest data. The per-candle indicator values themselves are updated
-    inline by ticker_warehouse (via compute_indicators_for_latest_candle), so
-    no full backfill is needed here.
+    on the freshest data.
     """
+    import pytz
+    from sqlalchemy import func
+    from app.models.ticker import TickerDaily
+
+    now_utc = datetime.now(pytz.utc)
+    now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+
+    if now_ist.weekday() >= 5:
+        logger.info("ticker_daily_update_sync: weekend, skipping")
+        return
+
+    market_start = now_ist.replace(
+        hour=settings.market_start_hour,
+        minute=settings.market_start_minute,
+        second=0,
+        microsecond=0,
+    )
+    market_end = now_ist.replace(
+        hour=settings.market_end_hour,
+        minute=settings.market_end_minute,
+        second=0,
+        microsecond=0,
+    )
+
+    if now_ist < market_start:
+        logger.info(f"ticker_daily_update_sync: pre-market ({now_ist.strftime('%H:%M:%S %Z')}), skipping")
+        return
+
+    if now_ist <= market_end:
+        logger.info(f"ticker_daily_update_sync: market hours ({now_ist.strftime('%H:%M:%S %Z')}), waiting for post-market")
+        return
+
     today = date.today()
     date_str = today.strftime("%d-%m-%Y")
+
+    with _SyncSessionLocal() as db:
+        row = db.query(func.count(TickerDaily.symbol)).filter(TickerDaily.date == today).scalar()
+        if row and row > 2000:
+            logger.info(f"ticker_daily_update_sync: data already present ({row} symbols), skipping")
+            return
 
     logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str}")
 
@@ -500,28 +538,7 @@ def _ticker_daily_update_sync() -> None:
     except Exception as e:
         logger.warning(f"ticker_daily_update_sync: bhavcopy failed: {e}")
 
-    logger.warning("ticker_daily_update_sync: falling back to watchlist symbols")
-    watchlist_symbols = ticker_warehouse.get_watchlist_symbols()
-    for symbol in watchlist_symbols:
-        if _shutdown_event.is_set():
-            break
-
-        try:
-            ticker_warehouse.update_symbol_today(symbol, today)
-        except Exception as e:
-            logger.warning(f"ticker_daily_update_sync: failed for {symbol}: {e}")
-
-        time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
-
-    update_job_status_sync(
-        "job.ticker_daily_update",
-        "waiting",
-        progress=100,
-        message="Updated via fallback",
-    )
-    _ticker_indicator_notification_cycle()
-    _ticker_scores_sync()
-    logger.info("ticker_daily_update_sync: complete (fallback mode)")
+    logger.info("ticker_daily_update_sync: bhavcopy failed, likely NSE holiday, skipping fallback")
 
 
 def ticker_daily_update_worker() -> None:
