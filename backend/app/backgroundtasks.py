@@ -4,7 +4,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, timezone
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 import pytz
@@ -15,6 +15,7 @@ from app.services.nse_client import NSEClient
 from app.services import ticker_warehouse
 from app.services import indicators
 from app.models import stockuniverse
+from app.models.ticker import TickerScore
 from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
 from app.models.notification import Notification, GlobalNotification
@@ -160,6 +161,16 @@ JobDefinition(
             schedule_type="interval",
             interval_seconds=1800,
             callable=global_scan_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_scores",
+            name="ticker_scores",
+            description="Compute and cache returns + momentum for all symbols (once per day)",
+            category="data_warehouse",
+            schedule_type="interval",
+            interval_seconds=86400,
+            callable=ticker_scores_worker,
             is_async=False,
         ),
     ]
@@ -463,10 +474,10 @@ def _ticker_daily_update_sync() -> None:
     """Perform the daily ticker update via bhavcopy.
 
     After candles are inserted, triggers _ticker_indicator_notification_cycle()
-    so that indicator-based alerts are evaluated on the freshest data.
-    The per-candle indicator values themselves are updated inline by
-    ticker_warehouse (via compute_indicators_for_latest_candle), so no full
-    backfill is needed here.
+    and _ticker_scores_sync() so that indicator-based alerts are evaluated
+    on the freshest data. The per-candle indicator values themselves are updated
+    inline by ticker_warehouse (via compute_indicators_for_latest_candle), so
+    no full backfill is needed here.
     """
     today = date.today()
     date_str = today.strftime("%d-%m-%Y")
@@ -484,6 +495,7 @@ def _ticker_daily_update_sync() -> None:
                 message=f"Updated {rows} symbols",
             )
             _ticker_indicator_notification_cycle()
+            _ticker_scores_sync()
             return
     except Exception as e:
         logger.warning(f"ticker_daily_update_sync: bhavcopy failed: {e}")
@@ -508,6 +520,7 @@ def _ticker_daily_update_sync() -> None:
         message="Updated via fallback",
     )
     _ticker_indicator_notification_cycle()
+    _ticker_scores_sync()
     logger.info("ticker_daily_update_sync: complete (fallback mode)")
 
 
@@ -621,6 +634,205 @@ def _ticker_indicators_sync() -> None:
     logger.info("ticker_indicators_sync: complete")
 
     _ticker_indicator_notification_cycle()
+
+
+def _ticker_scores_sync() -> None:
+    """Compute and cache multi-period returns + momentum scores for all symbols.
+
+    Single bulk query loads last 252 candles for ALL symbols using a window function,
+    then computes all returns in-memory. Upserts to ticker_scores table.
+    Triggered by _ticker_daily_update_sync() after bhavcopy/fallback.
+    """
+    from app.models.ticker import TickerDaily, TickerScore
+
+    try:
+        logger.info("ticker_scores_sync: starting")
+        now = datetime.now()
+        today_date = now.date()
+
+        with _SyncSessionLocal() as db:
+            stmt = db.execute(
+                select(TickerDaily.symbol, func.count(TickerDaily.id).label("cnt"))
+                .group_by(TickerDaily.symbol)
+                .having(func.count(TickerDaily.id) >= 60)
+            )
+            symbols_with_data = [row[0] for row in stmt.fetchall()]
+
+        universe_size = len(symbols_with_data)
+        if universe_size == 0:
+            logger.warning("ticker_scores_sync: no symbols with 60+ days of data, skipping")
+            return
+
+        logger.info("ticker_scores_sync: loading last 252 candles for %d symbols", universe_size)
+
+        with _SyncSessionLocal() as db:
+            raw = db.execute(
+                select(TickerDaily)
+                .where(TickerDaily.symbol.in_(symbols_with_data))
+                .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+            )
+            all_rows = list(raw.scalars().all())
+
+        if not all_rows:
+            logger.warning("ticker_scores_sync: no ticker_daily rows found")
+            return
+
+        df = pd.DataFrame([
+            {
+                "symbol": r.symbol,
+                "date": r.date,
+                "close": r.close,
+                "volume": r.volume,
+            }
+            for r in all_rows
+        ])
+
+        TRADING_DAYS = {"1d": 1, "1w": 5, "1m": 20, "3m": 60, "6m": 120, "1y": 252}
+
+        def calc_return(group_df: pd.DataFrame, days: int) -> Optional[float]:
+            if len(group_df) < days + 1:
+                return None
+            sorted_df = group_df.sort_values("date")
+            start_price = sorted_df.iloc[-days - 1]["close"]
+            end_price = sorted_df.iloc[-1]["close"]
+            if start_price is None or end_price is None or start_price == 0:
+                return None
+            return ((end_price - start_price) / start_price) * 100
+
+        results: list[dict] = []
+        symbols = df["symbol"].unique()
+        total = len(symbols)
+
+        for idx, symbol in enumerate(symbols):
+            if _shutdown_event.is_set():
+                logger.info("ticker_scores_sync: shutdown requested, stopping at %d/%d", idx, total)
+                break
+
+            if idx > 0 and idx % 500 == 0:
+                logger.info("ticker_scores_sync: progress %d/%d symbols", idx, total)
+
+            sym_df = df[df["symbol"] == symbol].sort_values("date")
+
+            ret_1d = calc_return(sym_df, TRADING_DAYS["1d"])
+            ret_1w = calc_return(sym_df, TRADING_DAYS["1w"])
+            ret_1m = calc_return(sym_df, TRADING_DAYS["1m"])
+            ret_3m = calc_return(sym_df, TRADING_DAYS["3m"])
+            ret_6m = calc_return(sym_df, TRADING_DAYS["6m"])
+            ret_1y = calc_return(sym_df, TRADING_DAYS["1y"])
+
+            if len(sym_df) >= 21:
+                vol_20 = sym_df.tail(21)["volume"].iloc[:-1].mean()
+                current_vol = sym_df.iloc[-1]["volume"]
+                volume_ratio_20d = current_vol / vol_20 if vol_20 and vol_20 > 0 else None
+            else:
+                volume_ratio_20d = None
+
+            results.append({
+                "symbol": symbol,
+                "compute_date": today_date,
+                "computed_at": now,
+                "return_1d": ret_1d,
+                "return_1w": ret_1w,
+                "return_1m": ret_1m,
+                "return_3m": ret_3m,
+                "return_6m": ret_6m,
+                "return_1y": ret_1y,
+                "volume_ratio_20d": volume_ratio_20d,
+            })
+
+        logger.info("ticker_scores_sync: computed returns for %d symbols, computing momentum", len(results))
+
+        valid_3m = {r["symbol"]: r["return_3m"] for r in results if r["return_3m"] is not None}
+        valid_6m = {r["symbol"]: r["return_6m"] for r in results if r["return_6m"] is not None}
+        valid_vol = {r["symbol"]: r["volume_ratio_20d"] for r in results if r["volume_ratio_20d"] is not None}
+
+        values_3m = list(valid_3m.values())
+        values_6m = list(valid_6m.values())
+        values_vol = list(valid_vol.values())
+
+        def percentile_rank(value: Optional[float], all_vals: list[float]) -> float:
+            if value is None or not all_vals:
+                return 50.0
+            sorted_vals = sorted(all_vals)
+            rank = sum(1 for v in sorted_vals if v < value)
+            return (rank / len(sorted_vals)) * 100
+
+        scores: list[tuple[str, float]] = []
+        for r in results:
+            sym = r["symbol"]
+            r_3m = r["return_3m"]
+            r_6m = r["return_6m"]
+            r_vol = r["volume_ratio_20d"]
+
+            rank_3m = percentile_rank(r_3m, values_3m)
+            rank_6m = percentile_rank(r_6m, values_6m)
+            rank_vol = percentile_rank(r_vol, values_vol)
+
+            score = 0.30 * rank_3m + 0.30 * rank_6m + 0.20 * rank_vol
+            r["momentum_score"] = round(score, 1)
+            scores.append((sym, score))
+
+        scores.sort(key=lambda x: x[1], reverse=True)
+        rank_map = {sym: idx + 1 for idx, (sym, _) in enumerate(scores)}
+
+        for r in results:
+            r["momentum_rank"] = rank_map.get(r["symbol"])
+            r["universe_size"] = universe_size
+
+        logger.info("ticker_scores_sync: upserting %d rows to ticker_scores", len(results))
+
+        with _SyncSessionLocal() as db:
+            insert_stmt = sqlite_insert(TickerScore).values(results)
+            insert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=["symbol"],
+                set_={
+                    "compute_date": insert_stmt.excluded.compute_date,
+                    "computed_at": insert_stmt.excluded.computed_at,
+                    "return_1d": insert_stmt.excluded.return_1d,
+                    "return_1w": insert_stmt.excluded.return_1w,
+                    "return_1m": insert_stmt.excluded.return_1m,
+                    "return_3m": insert_stmt.excluded.return_3m,
+                    "return_6m": insert_stmt.excluded.return_6m,
+                    "return_1y": insert_stmt.excluded.return_1y,
+                    "momentum_score": insert_stmt.excluded.momentum_score,
+                    "momentum_rank": insert_stmt.excluded.momentum_rank,
+                    "universe_size": insert_stmt.excluded.universe_size,
+                    "volume_ratio_20d": insert_stmt.excluded.volume_ratio_20d,
+                },
+            )
+            db.execute(insert_stmt)
+            db.commit()
+
+        logger.info("ticker_scores_sync: complete, cached %d symbols", len(results))
+        update_job_status_sync("job.ticker_scores", "waiting", progress=100, message=f"Cached {len(results)} symbols")
+
+    except Exception:
+        logger.exception("ticker_scores_sync: unhandled exception")
+
+
+def ticker_scores_worker() -> None:
+    """Daemon thread: runs once at startup to populate ticker_scores cache."""
+    logger.info("ticker_scores_worker: started")
+
+    if not _is_job_enabled("job.ticker_scores"):
+        logger.info("ticker_scores_worker: disabled, waiting...")
+        update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
+        logger.info("ticker_scores_worker: stopped")
+        return
+
+    update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
+    _ticker_scores_sync()
+
+    logger.info("ticker_scores_worker: sleeping forever (triggered by _ticker_daily_update_sync)")
+
+    while not _shutdown_event.is_set():
+        _sleep_interruptible(86400)
+
+    update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
+    logger.info("ticker_scores_worker: stopped")
 
 
 def ticker_indicators_worker() -> None:
@@ -965,6 +1177,7 @@ async def start_all_workers() -> list[threading.Thread]:
         ticker_backfill_worker,
         ticker_daily_update_worker,
         ticker_indicators_worker,
+        ticker_scores_worker,
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -1776,16 +1989,13 @@ def _global_scan_cycle() -> None:
     """Generate alerts for all NSE stocks with indicator data.
 
     Scans all symbols in ticker_daily (not just watchlist), evaluates:
-    - 15 technical indicators (same as watchlist indicator cycle)
-    - 5 live NSE triggers (52W high/low, volume breakout, top gainer/loser)
-    - 3 deal triggers (bulk/block/short deals)
-
-    Excludes insider trades (too many per-symbol HTTP calls for 2000+ symbols).
+    - Technical indicators (RSI, MACD, Bollinger, ATR, volatility, streaks, 52W proximity)
+    - Live NSE triggers (52W high/low, volume breakout, top gainer/loser)
+    - Deal triggers (bulk/block/short deals)
+    - Momentum triggers (momentum_surge, return_1w_spike) from ticker_scores cache
     """
     from app.models.ticker import TickerDaily
     from app.models.stockuniverse import StockUniverse
-    from app.services import returns as returns_service
-    from app.services import momentum as momentum_service
 
     try:
         logger.info("global_scan_cycle: starting")
@@ -1816,6 +2026,19 @@ def _global_scan_cycle() -> None:
             return
 
         logger.info("global_scan_cycle: starting for %d symbols", total_symbols)
+
+        scores_cache: dict[str, TickerScore] = {}
+        try:
+            with _SyncSessionLocal() as db:
+                rows = db.execute(
+                    select(TickerScore)
+                    .where(TickerScore.compute_date == today_date)
+                )
+                for row in rows.scalars():
+                    scores_cache[row.symbol] = row
+            logger.info("global_scan_cycle: loaded %d ticker_scores from cache", len(scores_cache))
+        except Exception as e:
+            logger.warning("global_scan_cycle: failed to load ticker_scores: %s", e)
 
         seen_today = _get_global_seen_today()
         pending: list[dict] = []
@@ -1894,12 +2117,6 @@ def _global_scan_cycle() -> None:
                         if su_row.low_52w > 0:
                             pct_from_52w_low = (latest.close - su_row.low_52w) / su_row.low_52w * 100
 
-                    returns = returns_service.get_returns(symbol)
-                    return_1w = returns.get("1w") if returns else None
-
-                    momentum_data = momentum_service.get_momentum_score(symbol)
-                    momentum_score = momentum_data.get("score") if momentum_data else None
-
                     alerts: list[tuple[str, str]] = []
 
                     if latest.rsi_14 is not None:
@@ -1937,13 +2154,6 @@ def _global_scan_cycle() -> None:
                         alerts.append(("atr_expansion",
                             f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
 
-                    if momentum_score is not None and momentum_score > momentum_thr:
-                        alerts.append(("momentum_surge",
-                            f"{symbol} momentum {momentum_score:.1f} > {momentum_thr}"))
-                    if return_1w is not None and return_1w > return_1w_thr:
-                        alerts.append(("return_1w_spike",
-                            f"{symbol} 1W return {return_1w:+.1f}%"))
-
                     if up_streak >= streak_thr:
                         alerts.append(("streak_up_5d", f"{symbol} up {up_streak} days"))
                     if dn_streak >= streak_thr:
@@ -1955,6 +2165,15 @@ def _global_scan_cycle() -> None:
                     if pct_from_52w_low is not None and 0 <= pct_from_52w_low <= near52w_thr:
                         alerts.append(("near_52w_low",
                             f"{symbol} within {near52w_thr}% of 52W low"))
+
+                    ts = scores_cache.get(symbol)
+                    if ts:
+                        if ts.momentum_score is not None and ts.momentum_score > momentum_thr:
+                            alerts.append(("momentum_surge",
+                                f"{symbol} momentum {ts.momentum_score:.1f} > {momentum_thr}"))
+                        if ts.return_1w is not None and ts.return_1w > return_1w_thr:
+                            alerts.append(("return_1w_spike",
+                                f"{symbol} 1w return {ts.return_1w:+.1f}% > {return_1w_thr}%"))
 
                     if high52_data and symbol in high52_data:
                         row = high52_data[symbol]

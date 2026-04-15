@@ -65,3 +65,34 @@ class TickerDaily(Base):
     __table_args__ = (
         UniqueConstraint("symbol", "date", "series", name="uq_ticker_symbol_date_series"),
     )
+
+
+class TickerScore(Base):
+    """Pre-computed returns and momentum scores for all NSE symbols.
+
+    Computed once per day via _ticker_scores_sync(). Used by _global_scan_cycle()
+    to evaluate momentum_surge and return_1w_spike triggers without O(N²) queries.
+    """
+
+    __tablename__ = "ticker_scores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    compute_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+    return_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    return_1w: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    return_1m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    return_3m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    return_6m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    return_1y: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    momentum_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    momentum_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    universe_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    volume_ratio_20d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("symbol", name="uq_ticker_scores_symbol"),
+    )
