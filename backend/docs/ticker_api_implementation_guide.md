@@ -12,7 +12,7 @@
 3. [Endpoints](#3-endpoints)
    - [3.1 Multi-Period Returns](#31-multi-period-returns)
    - [3.2 Universe & Sector Returns](#32-universe--sector-returns)
-   - [3.3 52-Week & All-Time Position](#33-52-week--all-time-position)
+   - [3.3 52-Week Position](#33-52-week-position)
    - [3.4 Momentum Score](#34-momentum-score)
    - [3.5 Technical Indicators](#35-technical-indicators)
    - [3.6 Streak Tracking](#36-streak-tracking)
@@ -28,13 +28,15 @@
 This document describes the ticker analytics endpoints implemented on top of the `ticker_daily` data warehouse. The endpoints provide:
 
 - Multi-period return calculations (1D, 1W, 1M, 3M, 6M, 1Y)
-- 52-week and all-time high/low positions
+- 52-week high/low positions (from NSE pre-calculated data, updated nightly)
 - Composite momentum scoring with leaderboard
 - Technical indicators (RSI, MACD, Bollinger Bands, ATR, VWMA, Historical Volatility, OBV, Sharpe)
-- Streak tracking (consecutive up/down days, volume streaks, days since highs)
+- Streak tracking (consecutive up/down days, volume streaks, days since 52W high)
 - Full-featured screener with 30+ filter options
 
 **All endpoints use date-based lookups**, not row offsets — this ensures correctness for symbols with trading halts or recent IPOs.
+
+**52W Data:** The 52-week high/low values are fetched from NSE's `nse_eq()` endpoint (`priceInfo.weekHighLow`) and stored in `stock_universe`. The `stock_universe_worker` job runs nightly at midnight to keep this data current.
 
 ---
 
@@ -222,11 +224,13 @@ GET /api/ticker/sector-returns?period=1m
 
 ---
 
-### 3.3 52-Week & All-Time Position
+### 3.3 52-Week Position
+
+> **Note:** The ATH (All-Time High) endpoint was removed. 52W high/low is now fetched from NSE pre-calculated data and stored in `stock_universe`. See `stock_universe.high_52w`, `stock_universe.low_52w` columns.
 
 #### GET `/position/52w/{symbol}`
 
-Get 52-week high/low position.
+Get 52-week high/low position from NSE pre-calculated data.
 
 **Request:**
 ```
@@ -237,49 +241,26 @@ GET /api/ticker/position/52w/RELIANCE
 ```json
 {
   "symbol": "RELIANCE",
-  "high_52w": 1592.3,
-  "low_52w": 1165.7,
+  "high_52w": 1611.8,
+  "low_52w": 1227.6,
+  "high_52w_date": "2026-01-05",
+  "low_52w_date": "2025-04-17",
   "current_close": 1350.2,
-  "pct_from_52w_high": -15.20,
-  "pct_from_52w_low": 15.83,
+  "pct_from_52w_high": -16.24,
+  "pct_from_52w_low": 9.99,
   "is_52w_high": false,
   "is_52w_low": false
 }
 ```
 
 **Fields:**
-- `pct_from_52w_high`: Negative = below 52W high (e.g., -15% = 15% below high)
-- `pct_from_52w_low`: Positive = above 52W low (e.g., 16% = 16% above low)
+- `high_52w`, `low_52w`: 52-week high/low price from NSE
+- `high_52w_date`, `low_52w_date`: Dates when the 52W high/low occurred
+- `pct_from_52w_high`: Negative = below 52W high (e.g., -16% = 16% below high)
+- `pct_from_52w_low`: Positive = above 52W low (e.g., 10% = 10% above low)
 - `is_52w_high`: Boolean — is current close at or above 52W high?
 
----
-
-#### GET `/position/ath/{symbol}`
-
-Get all-time high/low position using all available history.
-
-**Request:**
-```
-GET /api/ticker/position/ath/RELIANCE
-```
-
-**Response:**
-```json
-{
-  "symbol": "RELIANCE",
-  "ath": 1592.3,
-  "atl": 1161.9,
-  "current_close": 1350.2,
-  "ath_drawdown": -15.20,
-  "is_ath": false,
-  "is_atl": false
-}
-```
-
-**Fields:**
-- `ath`: All-time high price
-- `atl`: All-time low price  
-- `ath_drawdown`: Negative % = below ATH (e.g., -15% = 15% below ATH)
+**Data Source:** Values are fetched from NSE's `priceInfo.weekHighLow` in the `nse_eq()` endpoint and stored in `stock_universe` during the nightly `stock_universe_worker` job.
 
 ---
 
@@ -449,8 +430,7 @@ GET /api/ticker/streaks/RELIANCE
   "consecutive_up_days": 0,
   "consecutive_down_days": 0,
   "consecutive_volume_up_days": 0,
-  "days_since_52w_high": 100,
-  "days_since_ath": 100
+  "days_since_52w_high": 100
 }
 ```
 
@@ -458,8 +438,9 @@ GET /api/ticker/streaks/RELIANCE
 - `consecutive_up_days`: Days with close > previous close
 - `consecutive_down_days`: Days with close < previous close
 - `consecutive_volume_up_days`: Days with volume > 20-day avg
-- `days_since_52w_high`: Calendar days since 52W high (null if never)
-- `days_since_ath`: Calendar days since all-time high (null if never)
+- `days_since_52w_high`: Calendar days since 52W high (from NSE data in `stock_universe`)
+
+**Note:** The `days_since_ath` field was removed — 52W high date is now read from `stock_universe.high_52w_date`.
 
 ---
 
@@ -484,8 +465,6 @@ Run the full-featured screener with filters, sorting, and pagination.
 | pct_from_52w_low_min/max | float | % from 52W low |
 | is_52w_high | bool | Filter for 52W high |
 | is_52w_low | bool | Filter for 52W low |
-| is_ath | bool | Filter for all-time high |
-| ath_drawdown_min/max | float | ATH drawdown % |
 | atr_pct_min/max | float | ATR % (volatility) |
 | rsi_min/max | float | RSI (14) |
 | bb_squeeze | bool | Bollinger squeeze |
@@ -553,13 +532,14 @@ GET /api/ticker/screener?is_52w_high=true&sort_by=change_today&order=desc&limit=
         "latest_date": "2026-04-12"
       },
       "pos_52w": {
-        "52w_high": 2502.1,
-        "52w_low": 1094.9,
+        "high_52w": 2502.1,
+        "low_52w": 1094.9,
+        "high_52w_date": "2026-01-15",
+        "low_52w_date": "2025-04-10",
         "pct_from_52w_high": -45.60,
         "pct_from_52w_low": 24.31,
         "is_52w_high": false
       },
-      "pos_ath": {...},
       "volume_ratio": 1.23,
       "indicators": {
         "rsi_14": 52.33,

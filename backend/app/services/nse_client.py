@@ -5,6 +5,7 @@ NSE India Client using nsepython library for fetching and caching data from NSE 
 import asyncio
 import logging
 import time
+from datetime import datetime
 import requests
 import nsepython
 from app.schemas.stockuniverse import StockUniverse
@@ -13,6 +14,17 @@ from app.services.helpers.json_to_csv import dict_to_csv_text
 import pandas
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_nse_date(date_str: str | None) -> datetime | None:
+    """Parse NSE date format like '05-Jan-2026' to datetime."""
+    if not date_str or date_str == '-':
+        return None
+    try:
+        return datetime.strptime(date_str, "%d-%b-%Y")
+    except ValueError:
+        logger.debug("Failed to parse date: %s", date_str)
+        return None
 
 
 class NSEClient:
@@ -51,6 +63,9 @@ class NSEClient:
         except Exception:
             logger.exception("NSE: metadata fetch failed for %s", symbol)
             raise
+
+        week_high_low = temp.get("priceInfo", {}).get("weekHighLow", {})
+
         tempdict = {
             "symbol": temp["info"]["symbol"],
             "companyName": temp["info"]["companyName"],
@@ -60,6 +75,10 @@ class NSEClient:
             "symbolPE": temp["metadata"]["pdSymbolPe"],
             "industryInfo": temp["industryInfo"],
             "lastUpdateTime": temp["metadata"]["lastUpdateTime"],
+            "high_52w": week_high_low.get("max"),
+            "low_52w": week_high_low.get("min"),
+            "high_52w_date": _parse_nse_date(week_high_low.get("maxDate")),
+            "low_52w_date": _parse_nse_date(week_high_low.get("minDate")),
         }
         logger.debug("NSE: metadata fetched for %s", symbol)
         return StockUniverse(**tempdict)

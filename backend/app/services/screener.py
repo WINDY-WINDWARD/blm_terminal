@@ -12,7 +12,6 @@ from app.models.stockuniverse import StockUniverse
 from app.database import _SyncSessionLocal
 from app.services import returns as returns_service
 from app.services import momentum as momentum_service
-from app.services import indicators as indicators_service
 
 
 SCREENER_CACHE_TTL = 300
@@ -57,12 +56,30 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
 
     returns = returns_service.get_returns(symbol)
     pos_52w = returns_service.get_52w_position(symbol)
-    pos_ath = returns_service.get_ath_position(symbol)
 
     avg_vol_20 = sum(volumes[-21:-1]) / 20 if len(volumes) > 20 else 0
     volume_ratio = volumes[-1] / avg_vol_20 if avg_vol_20 > 0 else 0
 
-    ind = indicators_service.get_indicators(symbol)
+    # Read indicators directly from the latest ticker_daily row (no extra DB round-trip)
+    latest_row = rows_sorted[-1]
+    ind = {
+        "rsi_14":         latest_row.rsi_14,
+        "macd":           latest_row.macd,
+        "macd_signal":    latest_row.macd_signal,
+        "macd_histogram": latest_row.macd_histogram,
+        "bb_middle":      latest_row.bb_middle,
+        "bb_upper":       latest_row.bb_upper,
+        "bb_lower":       latest_row.bb_lower,
+        "bb_width":       latest_row.bb_width,
+        "bb_squeeze":     latest_row.bb_squeeze == "Y" if latest_row.bb_squeeze else False,
+        "atr_14":         latest_row.atr_14,
+        "atr_percent":    latest_row.atr_percent,
+        "vwma_20":        latest_row.vwma_20,
+        "hv_20":          latest_row.hv_20,
+        "hv_60":          latest_row.hv_60,
+        "sharpe_60":      latest_row.sharpe_60,
+        "sharpe_126":     latest_row.sharpe_126,
+    }
 
     with _SyncSessionLocal() as db:
         stock = db.execute(
@@ -88,7 +105,6 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
         "change_today": today_change,
         "returns": returns,
         "pos_52w": pos_52w,
-        "pos_ath": pos_ath,
         "volume_ratio": volume_ratio,
         "indicators": ind,
         "sector": sector,
@@ -212,22 +228,6 @@ def _apply_filters(symbol_data: list[dict], filters: dict) -> list[dict]:
             if not filters["is_52w_low"] and pos_52w.get("is_52w_low"):
                 continue
 
-        if "is_ath" in filters:
-            if filters["is_ath"] and not pos_ath.get("is_ath"):
-                continue
-            if not filters["is_ath"] and pos_ath.get("is_ath"):
-                continue
-
-        if "ath_drawdown_min" in filters:
-            dd = pos_ath.get("ath_drawdown", 0)
-            if dd < filters["ath_drawdown_min"]:
-                continue
-
-        if "ath_drawdown_max" in filters:
-            dd = pos_ath.get("ath_drawdown", 0)
-            if dd > filters["ath_drawdown_max"]:
-                continue
-
         if "atr_pct_max" in filters:
             atr_pct = ind.get("atr_percent")
             if atr_pct is None or atr_pct > filters["atr_pct_max"]:
@@ -320,7 +320,6 @@ def _sort_results(results: list[dict], sort_by: str, order: str) -> list[dict]:
         "volume_ratio": lambda x: safe_get(x.get("volume_ratio")),
         "pct_from_52w_high": lambda x: safe_get(x.get("pos_52w", {}).get("pct_from_52w_high")),
         "pct_from_52w_low": lambda x: safe_get(x.get("pos_52w", {}).get("pct_from_52w_low")),
-        "ath_drawdown": lambda x: safe_get(x.get("pos_ath", {}).get("ath_drawdown")),
         "atr_percent": lambda x: safe_get(x.get("indicators", {}).get("atr_percent")),
         "rsi": lambda x: safe_get(x.get("indicators", {}).get("rsi_14")),
         "momentum_score": lambda x: safe_get(x.get("momentum_score")),

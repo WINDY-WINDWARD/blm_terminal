@@ -38,6 +38,17 @@ class StockUniverse(Base):
     fair_value_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
+    high_52w: Mapped[float | None] = mapped_column(Float, nullable=True)
+    low_52w: Mapped[float | None] = mapped_column(Float, nullable=True)
+    high_52w_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    low_52w_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    high_52w_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

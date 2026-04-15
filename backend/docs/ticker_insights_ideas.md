@@ -33,6 +33,9 @@
    - `industry_info` (JSON: macro, sector, industry, basicIndustry)
    - `symbol_pe` (PE ratio, available for ~678 symbols)
    - `fair_value` (currently empty — planned Morningstar data)
+   - `high_52w`, `low_52w` (52-week high/low from NSE — populated nightly)
+   - `high_52w_date`, `low_52w_date` (dates when 52W high/low occurred)
+   - `high_52w_updated_at` (timestamp of last 52W data refresh)
 
 2. **market_category_stocks**
    - `symbol`, `company_name`, `exchange`

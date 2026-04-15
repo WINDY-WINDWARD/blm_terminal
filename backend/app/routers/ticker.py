@@ -257,22 +257,13 @@ class Position52wResponse(BaseModel):
     symbol: str
     high_52w: float | None
     low_52w: float | None
+    high_52w_date: date | None
+    low_52w_date: date | None
     current_close: float | None
     pct_from_52w_high: float | None
     pct_from_52w_low: float | None
     is_52w_high: bool
     is_52w_low: bool
-
-
-class PositionAthResponse(BaseModel):
-    """All-time position response."""
-    symbol: str
-    ath: float | None
-    atl: float | None
-    current_close: float | None
-    ath_drawdown: float | None
-    is_ath: bool
-    is_atl: bool
 
 
 @router.get("/position/52w/{symbol}", response_model=Position52wResponse)
@@ -281,28 +272,15 @@ async def get_52w_position(symbol: str) -> Position52wResponse:
     data = returns_service.get_52w_position(symbol.upper())
     return Position52wResponse(
         symbol=data["symbol"],
-        high_52w=data.get("52w_high"),
-        low_52w=data.get("52w_low"),
+        high_52w=data.get("high_52w"),
+        low_52w=data.get("low_52w"),
+        high_52w_date=data.get("high_52w_date"),
+        low_52w_date=data.get("low_52w_date"),
         current_close=data.get("current_close"),
         pct_from_52w_high=data.get("pct_from_52w_high"),
         pct_from_52w_low=data.get("pct_from_52w_low"),
         is_52w_high=data.get("is_52w_high", False),
         is_52w_low=data.get("is_52w_low", False),
-    )
-
-
-@router.get("/position/ath/{symbol}", response_model=PositionAthResponse)
-async def get_ath_position(symbol: str) -> PositionAthResponse:
-    """Get all-time high/low position for a symbol."""
-    data = returns_service.get_ath_position(symbol.upper())
-    return PositionAthResponse(
-        symbol=data["symbol"],
-        ath=data.get("ath"),
-        atl=data.get("atl"),
-        current_close=data.get("current_close"),
-        ath_drawdown=data.get("ath_drawdown"),
-        is_ath=data.get("is_ath", False),
-        is_atl=data.get("is_atl", False),
     )
 
 
@@ -361,7 +339,6 @@ class StreakResponse(BaseModel):
     consecutive_down_days: int
     consecutive_volume_up_days: int
     days_since_52w_high: int | None
-    days_since_ath: int | None
 
 
 @router.get("/streaks/{symbol}", response_model=StreakResponse)
@@ -374,7 +351,6 @@ async def get_streaks(symbol: str) -> StreakResponse:
         consecutive_down_days=data.get("consecutive_down_days", 0),
         consecutive_volume_up_days=data.get("consecutive_volume_up_days", 0),
         days_since_52w_high=data.get("days_since_52w_high"),
-        days_since_ath=data.get("days_since_ath"),
     )
 
 
@@ -408,9 +384,6 @@ async def get_screener(
     pct_from_52w_low_max: Optional[float] = Query(None, description="Max % from 52W low"),
     is_52w_high: Optional[bool] = Query(None, description="Filter for 52W high"),
     is_52w_low: Optional[bool] = Query(None, description="Filter for 52W low"),
-    is_ath: Optional[bool] = Query(None, description="Filter for all-time high"),
-    ath_drawdown_min: Optional[float] = Query(None, description="Min ATH drawdown %"),
-    ath_drawdown_max: Optional[float] = Query(None, description="Max ATH drawdown %"),
     atr_pct_max: Optional[float] = Query(None, description="Max ATR % (volatility)"),
     atr_pct_min: Optional[float] = Query(None, description="Min ATR %"),
     rsi_min: Optional[float] = Query(None, description="Min RSI (14)"),
@@ -469,12 +442,6 @@ async def get_screener(
         filters["is_52w_high"] = is_52w_high
     if is_52w_low is not None:
         filters["is_52w_low"] = is_52w_low
-    if is_ath is not None:
-        filters["is_ath"] = is_ath
-    if ath_drawdown_min is not None:
-        filters["ath_drawdown_min"] = ath_drawdown_min
-    if ath_drawdown_max is not None:
-        filters["ath_drawdown_max"] = ath_drawdown_max
     if atr_pct_max is not None:
         filters["atr_pct_max"] = atr_pct_max
     if atr_pct_min is not None:

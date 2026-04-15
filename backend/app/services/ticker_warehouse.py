@@ -25,6 +25,7 @@ from app.models.ticker import TickerDaily
 from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
 from app.database import _SyncSessionLocal
+from app.services.indicators import compute_indicators_for_latest_candle
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,14 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
         db.commit()
 
     logger.info(f"backfill_symbol: upserted {len(rows)} rows for {symbol}")
+
+    # Compute indicators for the latest candle now that data is stored.
+    # Full per-candle backfill is handled separately by _ticker_indicators_sync.
+    try:
+        compute_indicators_for_latest_candle(symbol)
+    except Exception as e:
+        logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
+
     return len(rows)
 
 
@@ -303,6 +312,15 @@ def bulk_update_via_bhavcopy(date_str: str) -> int:
         db.commit()
 
     logger.info(f"bulk_update_via_bhavcopy: upserted {len(rows)} rows for {date_str}")
+
+    # Update indicators for each symbol that received a fresh candle.
+    inserted_symbols = df["symbol"].unique().tolist()
+    for sym in inserted_symbols:
+        try:
+            compute_indicators_for_latest_candle(sym)
+        except Exception as e:
+            logger.warning(f"bulk_update_via_bhavcopy: indicator update failed for {sym}: {e}")
+
     return len(rows)
 
 
@@ -384,6 +402,12 @@ def update_symbol_today(symbol: str, target_date: Optional[date] = None) -> int:
         db.commit()
 
     logger.info(f"update_symbol_today: upserted 1 row for {symbol}")
+
+    try:
+        compute_indicators_for_latest_candle(symbol)
+    except Exception as e:
+        logger.warning(f"update_symbol_today: indicator computation failed for {symbol}: {e}")
+
     return 1
 
 

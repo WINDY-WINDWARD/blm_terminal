@@ -7,6 +7,7 @@ import pandas as pd
 from sqlalchemy import and_, select
 
 from app.models.ticker import TickerDaily
+from app.models.stockuniverse import StockUniverse
 from app.database import _SyncSessionLocal
 
 
@@ -210,62 +211,71 @@ def get_sector_returns(period: str = "1m") -> list[dict]:
 
 def get_52w_position(symbol: str) -> dict:
     """
-    Calculate 52-week high/low position for a symbol.
+    Get 52-week high/low position for a symbol using pre-calculated data from stock_universe.
 
     Returns:
-        Dict with 52w_high, 52w_low, current_close, pct_from_52w_high, pct_from_52w_low, is_52w_high, is_52w_low
+        Dict with high_52w, low_52w, high_52w_date, low_52w_date, current_close, 
+        pct_from_52w_high, pct_from_52w_low, is_52w_high, is_52w_low
     """
     with _SyncSessionLocal() as db:
+        stock = db.get(StockUniverse, symbol.upper())
+        
+        if not stock:
+            return {
+                "symbol": symbol.upper(),
+                "high_52w": None,
+                "low_52w": None,
+                "high_52w_date": None,
+                "low_52w_date": None,
+                "current_close": None,
+                "pct_from_52w_high": None,
+                "pct_from_52w_low": None,
+                "is_52w_high": False,
+                "is_52w_low": False,
+            }
+        
+        high_52w = stock.high_52w
+        low_52w = stock.low_52w
+        high_52w_date = stock.high_52w_date
+        low_52w_date = stock.low_52w_date
+        
         stmt = (
-            select(TickerDaily)
-            .where(TickerDaily.symbol == symbol)
+            select(TickerDaily.close)
+            .where(TickerDaily.symbol == symbol.upper())
             .order_by(TickerDaily.date.desc())
-            .limit(252)
+            .limit(1)
         )
-        rows = db.execute(stmt).scalars().all()
-
-    if not rows:
+        row = db.execute(stmt).scalar_one_or_none()
+        current_close = row
+    
+    if current_close is None:
         return {
-            "symbol": symbol,
-            "52w_high": None,
-            "52w_low": None,
+            "symbol": symbol.upper(),
+            "high_52w": high_52w,
+            "low_52w": low_52w,
+            "high_52w_date": high_52w_date,
+            "low_52w_date": low_52w_date,
             "current_close": None,
             "pct_from_52w_high": None,
             "pct_from_52w_low": None,
             "is_52w_high": False,
             "is_52w_low": False,
         }
-
-    rows_sorted = sorted(rows, key=lambda r: r.date)
-    closes = [r.close for r in rows_sorted if r.close is not None]
-    if not closes:
-        return {
-            "symbol": symbol,
-            "52w_high": None,
-            "52w_low": None,
-            "current_close": None,
-            "pct_from_52w_high": None,
-            "pct_from_52w_low": None,
-            "is_52w_high": False,
-            "is_52w_low": False,
-        }
-
-    current_close = closes[-1]
-    high_52w = max(closes)
-    low_52w = min(closes)
-
+    
     pct_from_high = ((current_close - high_52w) / high_52w) * 100 if high_52w else None
     pct_from_low = ((current_close - low_52w) / low_52w) * 100 if low_52w else None
 
     return {
-        "symbol": symbol,
-        "52w_high": high_52w,
-        "52w_low": low_52w,
+        "symbol": symbol.upper(),
+        "high_52w": high_52w,
+        "low_52w": low_52w,
+        "high_52w_date": high_52w_date,
+        "low_52w_date": low_52w_date,
         "current_close": current_close,
-        "pct_from_52w_high": pct_from_high,
-        "pct_from_52w_low": pct_from_low,
-        "is_52w_high": current_close >= high_52w,
-        "is_52w_low": current_close <= low_52w,
+        "pct_from_52w_high": round(pct_from_high, 2) if pct_from_high else None,
+        "pct_from_52w_low": round(pct_from_low, 2) if pct_from_low else None,
+        "is_52w_high": current_close >= high_52w if high_52w else False,
+        "is_52w_low": current_close <= low_52w if low_52w else False,
     }
 
 
@@ -275,24 +285,26 @@ def get_streak_tracking(symbol: str) -> dict:
 
     Returns:
         Dict with consecutive_up_days, consecutive_down_days, consecutive_volume_up_days,
-        days_since_52w_high, days_since_ath
+        days_since_52w_high (from stock_universe)
     """
     with _SyncSessionLocal() as db:
+        stock = db.get(StockUniverse, symbol.upper())
+        high_52w_date = stock.high_52w_date if stock else None
+        
         stmt = (
             select(TickerDaily)
-            .where(TickerDaily.symbol == symbol)
+            .where(TickerDaily.symbol == symbol.upper())
             .order_by(TickerDaily.date.desc())
         )
         rows = list(db.execute(stmt).scalars().all())
 
     if not rows:
         return {
-            "symbol": symbol,
+            "symbol": symbol.upper(),
             "consecutive_up_days": 0,
             "consecutive_down_days": 0,
             "consecutive_volume_up_days": 0,
             "days_since_52w_high": None,
-            "days_since_ath": None,
         }
 
     rows_sorted = sorted(rows, key=lambda r: r.date)
@@ -301,12 +313,11 @@ def get_streak_tracking(symbol: str) -> dict:
 
     if len(closes) < 2 or len(volumes) < 21:
         return {
-            "symbol": symbol,
+            "symbol": symbol.upper(),
             "consecutive_up_days": 0,
             "consecutive_down_days": 0,
             "consecutive_volume_up_days": 0,
             "days_since_52w_high": None,
-            "days_since_ath": None,
         }
 
     up_days = 0
@@ -331,33 +342,15 @@ def get_streak_tracking(symbol: str) -> dict:
         else:
             break
 
-    today = rows_sorted[-1].date
-
-    high_52w_date = None
-    for i in range(len(closes) - 1, -1, -1):
-        if closes[i] == max(closes[:252]):
-            high_52w_date = rows_sorted[i].date
-            break
-
     days_since_52w_high = None
     if high_52w_date:
+        today = rows_sorted[-1].date
         days_since_52w_high = (today - high_52w_date).days
 
-    ath_date = None
-    for i in range(len(closes) - 1, -1, -1):
-        if closes[i] == max(closes):
-            ath_date = rows_sorted[i].date
-            break
-
-    days_since_ath = None
-    if ath_date:
-        days_since_ath = (today - ath_date).days
-
     return {
-        "symbol": symbol,
+        "symbol": symbol.upper(),
         "consecutive_up_days": up_days,
         "consecutive_down_days": down_days,
         "consecutive_volume_up_days": volume_up_days,
         "days_since_52w_high": days_since_52w_high,
-        "days_since_ath": days_since_ath,
     }

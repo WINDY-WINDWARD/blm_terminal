@@ -17,15 +17,19 @@ interface Notification {
   is_read: boolean;
 }
 
-type NotifTab = 'all' | 'breakout' | 'volume' | 'movers' | 'deals' | 'insider';
+type NotifTab = 'all' | 'breakout' | 'volume' | 'movers' | 'deals' | 'insider' | 'technical' | 'momentum' | 'volatility' | 'streaks';
 
 const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   all: [],
-  breakout: ['52w_high_breakout', '52w_low_breakout'],
+  breakout: ['52w_high_breakout', '52w_low_breakout', 'near_52w_high', 'near_52w_low'],
   volume: ['volume_breakout'],
   movers: ['top_gainer', 'top_loser'],
-  deals: ['bulk_deal', 'block_deal'],
+  deals: ['bulk_deal', 'block_deal', 'short_deal'],
   insider: ['insider_buy', 'insider_sell'],
+  technical: ['rsi_oversold', 'rsi_overbought', 'macd_bullish_cross', 'macd_bearish_cross', 'bb_squeeze_alert', 'bb_upper_break', 'bb_lower_break'],
+  momentum: ['momentum_surge', 'return_1w_spike'],
+  volatility: ['volatility_spike', 'atr_expansion'],
+  streaks: ['streak_up_5d', 'streak_down_5d'],
 };
 
 function getBadgeColor(triggerType: string): string {
@@ -35,8 +39,24 @@ function getBadgeColor(triggerType: string): string {
   if (triggerType === 'top_loser') return 'bg-terminal-red text-white';
   if (triggerType === 'bulk_deal') return 'bg-orange-600 text-white';
   if (triggerType === 'block_deal') return 'bg-orange-700 text-white';
+  if (triggerType === 'short_deal') return 'bg-orange-500 text-white';
   if (triggerType === 'insider_buy') return 'bg-purple-600 text-white';
   if (triggerType === 'insider_sell') return 'bg-purple-700 text-white';
+  if (triggerType === 'rsi_oversold') return 'bg-blue-600 text-white';
+  if (triggerType === 'rsi_overbought') return 'bg-rose-600 text-white';
+  if (triggerType === 'macd_bullish_cross') return 'bg-emerald-600 text-white';
+  if (triggerType === 'macd_bearish_cross') return 'bg-red-700 text-white';
+  if (triggerType === 'bb_squeeze_alert') return 'bg-yellow-600 text-black';
+  if (triggerType === 'bb_upper_break') return 'bg-green-600 text-white';
+  if (triggerType === 'bb_lower_break') return 'bg-red-600 text-white';
+  if (triggerType === 'volatility_spike') return 'bg-fuchsia-600 text-white';
+  if (triggerType === 'atr_expansion') return 'bg-pink-600 text-white';
+  if (triggerType === 'momentum_surge') return 'bg-sky-500 text-white';
+  if (triggerType === 'return_1w_spike') return 'bg-teal-600 text-white';
+  if (triggerType === 'streak_up_5d') return 'bg-lime-600 text-white';
+  if (triggerType === 'streak_down_5d') return 'bg-red-800 text-white';
+  if (triggerType === 'near_52w_high') return 'bg-amber-500 text-black';
+  if (triggerType === 'near_52w_low') return 'bg-amber-700 text-white';
   return 'bg-terminal-gray text-white';
 }
 
@@ -48,8 +68,24 @@ function getBadgeLabel(triggerType: string): string {
   if (triggerType === 'top_loser') return 'LOSER';
   if (triggerType === 'bulk_deal') return 'BULK';
   if (triggerType === 'block_deal') return 'BLOCK';
+  if (triggerType === 'short_deal') return 'SHORT';
   if (triggerType === 'insider_buy') return 'INS BUY';
   if (triggerType === 'insider_sell') return 'INS SELL';
+  if (triggerType === 'rsi_oversold') return 'RSI LOW';
+  if (triggerType === 'rsi_overbought') return 'RSI HIGH';
+  if (triggerType === 'macd_bullish_cross') return 'MACD +';
+  if (triggerType === 'macd_bearish_cross') return 'MACD -';
+  if (triggerType === 'bb_squeeze_alert') return 'BB SQZ';
+  if (triggerType === 'bb_upper_break') return 'BB UP';
+  if (triggerType === 'bb_lower_break') return 'BB DN';
+  if (triggerType === 'volatility_spike') return 'VOL SPK';
+  if (triggerType === 'atr_expansion') return 'ATR EXP';
+  if (triggerType === 'momentum_surge') return 'MOM';
+  if (triggerType === 'return_1w_spike') return '1W RET';
+  if (triggerType === 'streak_up_5d') return 'STREAK+';
+  if (triggerType === 'streak_down_5d') return 'STREAK-';
+  if (triggerType === 'near_52w_high') return '~52W HI';
+  if (triggerType === 'near_52w_low') return '~52W LO';
   return triggerType.toUpperCase();
 }
 
@@ -126,11 +162,15 @@ export function NotifWidget() {
 
   const tabs: { id: NotifTab; label: string }[] = [
     { id: 'all', label: 'ALL' },
-    { id: 'breakout', label: 'BREAKOUT' },
+    { id: 'breakout', label: '52W' },
     { id: 'volume', label: 'VOLUME' },
     { id: 'movers', label: 'MOVERS' },
     { id: 'deals', label: 'DEALS' },
     { id: 'insider', label: 'INSIDER' },
+    { id: 'technical', label: 'TECHNICAL' },
+    { id: 'momentum', label: 'MOMENTUM' },
+    { id: 'volatility', label: 'VOLATILITY' },
+    { id: 'streaks', label: 'STREAKS' },
   ];
 
   if (isLoading) {

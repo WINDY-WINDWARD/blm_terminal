@@ -13,6 +13,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.services.nse_client import NSEClient
 from app.services import ticker_warehouse
+from app.services import indicators
 from app.models import stockuniverse
 from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
@@ -139,6 +140,16 @@ JobDefinition(
             schedule_type="cron",
             cron_expression="30 10,14 * * 1-5",
             callable=ticker_daily_update_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_indicators",
+            name="ticker_indicators",
+            description="Compute and store technical indicators for all symbols",
+            category="data_warehouse",
+            schedule_type="cron",
+            cron_expression="0 11 * * 1-5",
+            callable=ticker_indicators_worker,
             is_async=False,
         ),
     ]
@@ -306,6 +317,10 @@ def _stock_universe_sync() -> None:
                         symbol_pe=metadata.symbolPE,
                         industry_info=metadata.industryInfo,
                         last_update_time=metadata.lastUpdateTime,
+                        high_52w=metadata.high_52w,
+                        low_52w=metadata.low_52w,
+                        high_52w_date=metadata.high_52w_date,
+                        low_52w_date=metadata.low_52w_date,
                     )
                     .on_conflict_do_update(
                         index_elements=["symbol"],
@@ -317,6 +332,11 @@ def _stock_universe_sync() -> None:
                             "symbol_pe": metadata.symbolPE,
                             "industry_info": metadata.industryInfo,
                             "last_update_time": metadata.lastUpdateTime,
+                            "high_52w": metadata.high_52w,
+                            "low_52w": metadata.low_52w,
+                            "high_52w_date": metadata.high_52w_date,
+                            "low_52w_date": metadata.low_52w_date,
+                            "high_52w_updated_at": func.now(),
                             "updated_at": func.now(),
                         },
                     )
@@ -419,6 +439,9 @@ def ticker_backfill_worker() -> None:
 
     _ticker_backfill_sync()
 
+    logger.info("ticker_backfill_worker: initial backfill done, triggering indicator computation")
+    _ticker_indicators_sync()
+
     update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
     logger.info("ticker_backfill_worker: finished initial backfill, sleeping...")
 
@@ -430,7 +453,14 @@ def ticker_backfill_worker() -> None:
 
 
 def _ticker_daily_update_sync() -> None:
-    """Perform the daily ticker update via bhavcopy."""
+    """Perform the daily ticker update via bhavcopy.
+
+    After candles are inserted, triggers _ticker_indicator_notification_cycle()
+    so that indicator-based alerts are evaluated on the freshest data.
+    The per-candle indicator values themselves are updated inline by
+    ticker_warehouse (via compute_indicators_for_latest_candle), so no full
+    backfill is needed here.
+    """
     today = date.today()
     date_str = today.strftime("%d-%m-%Y")
 
@@ -446,6 +476,7 @@ def _ticker_daily_update_sync() -> None:
                 progress=100,
                 message=f"Updated {rows} symbols",
             )
+            _ticker_indicator_notification_cycle()
             return
     except Exception as e:
         logger.warning(f"ticker_daily_update_sync: bhavcopy failed: {e}")
@@ -469,6 +500,7 @@ def _ticker_daily_update_sync() -> None:
         progress=100,
         message="Updated via fallback",
     )
+    _ticker_indicator_notification_cycle()
     logger.info("ticker_daily_update_sync: complete (fallback mode)")
 
 
@@ -484,7 +516,7 @@ def ticker_daily_update_worker() -> None:
         update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
         logger.info("ticker_daily_update_worker: stopped")
         return
-
+    
     update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
     _ticker_daily_update_sync()
 
@@ -495,6 +527,118 @@ def ticker_daily_update_worker() -> None:
 
     update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
     logger.info("ticker_daily_update_worker: stopped")
+
+
+def _ticker_indicators_sync() -> None:
+    """Startup backfill: compute and store per-candle indicators for symbols that
+    have uncomputed or stale indicator data.
+
+    A symbol is considered stale when its latest ticker_daily row has a date
+    strictly newer than its indicators_updated_at timestamp (i.e. a new candle
+    arrived but indicators haven't been recomputed for the full history yet).
+
+    Processes in batches of 100 with a 1 s inter-batch delay and prints
+    progress to stdout.  Triggers _ticker_indicator_notification_cycle() after
+    completing.
+    """
+    from app.models.ticker import TickerDaily
+
+    with _SyncSessionLocal() as db:
+        # Symbols with any row where indicators_updated_at IS NULL (never backfilled)
+        null_result = db.execute(
+            select(TickerDaily.symbol)
+            .where(TickerDaily.indicators_updated_at.is_(None))
+            .distinct()
+        )
+        null_symbols = {row[0] for row in null_result.fetchall()}
+
+        # Symbols where latest candle date > indicators_updated_at (stale after new candle)
+        latest_subq = (
+            select(
+                TickerDaily.symbol,
+                func.max(TickerDaily.date).label("max_date"),
+                func.max(TickerDaily.indicators_updated_at).label("max_ind_at"),
+            )
+            .group_by(TickerDaily.symbol)
+            .subquery()
+        )
+        stale_result = db.execute(
+            select(latest_subq.c.symbol)
+            .where(
+                latest_subq.c.max_ind_at.isnot(None),
+                func.date(latest_subq.c.max_date) > func.date(latest_subq.c.max_ind_at),
+            )
+        )
+        stale_symbols = {row[0] for row in stale_result.fetchall()}
+
+    symbols = list(null_symbols | stale_symbols)
+
+    total = len(symbols)
+    if total == 0:
+        logger.info("ticker_indicators_sync: all symbols already have per-candle indicators")
+        update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="All symbols up to date")
+        _ticker_indicator_notification_cycle()
+        return
+
+    logger.info(f"ticker_indicators_sync: backfilling indicators for {total} symbols")
+
+    BATCH_SIZE = 100
+    for i in range(0, total, BATCH_SIZE):
+        if _shutdown_event.is_set():
+            logger.info("ticker_indicators_sync: shutdown requested, aborting")
+            break
+
+        batch = symbols[i:i + BATCH_SIZE]
+        for j, symbol in enumerate(batch):
+            global_idx = i + j + 1
+            print(f"\rticker_indicators_sync: [{global_idx}/{total}] {symbol}   ", end="", flush=True)
+            try:
+                indicators.compute_indicators_for_all_rows(symbol)
+            except Exception as e:
+                logger.warning(f"ticker_indicators_sync: failed for {symbol}: {e}")
+
+        progress = int(((i + len(batch)) / total) * 100)
+        update_job_status_sync(
+            "job.ticker_indicators",
+            "running",
+            progress=progress,
+            message=f"Backfilled {i + len(batch)}/{total} symbols",
+        )
+
+        if i + BATCH_SIZE < total:
+            if _sleep_interruptible(1.0):
+                break
+
+    print()  # newline after in-place progress output
+    update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="Indicator backfill complete")
+    logger.info("ticker_indicators_sync: complete")
+
+    _ticker_indicator_notification_cycle()
+
+
+def ticker_indicators_worker() -> None:
+    """Daemon thread target for computing technical indicators."""
+    logger.info("ticker_indicators_worker: started")
+
+    if not _is_job_enabled("job.ticker_indicators"):
+        logger.info("ticker_indicators_worker: disabled, waiting...")
+        update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
+        logger.info("ticker_indicators_worker: stopped")
+        return
+
+    update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting indicator computation...")
+    _ticker_indicators_sync()
+
+    logger.info("ticker_indicators_worker: sleeping until next cycle")
+
+    while not _shutdown_event.is_set():
+        _sleep_interruptible(3600)
+
+    update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
+    logger.info("ticker_indicators_worker: stopped")
 
 
 NEWS_CRAWL_INTERVAL = 5 * 60
@@ -812,6 +956,7 @@ async def start_all_workers() -> list[threading.Thread]:
         watchlist_notification_worker,
         ticker_backfill_worker,
         ticker_daily_update_worker,
+        ticker_indicators_worker,
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -1007,7 +1152,7 @@ def _bulk_upsert_notifications(rows: list[dict]) -> None:
         stmt = (
             sqlite_insert(Notification)
             .values(rows)
-            .on_conflict_do_nothing(index_elements=["symbol", "date"])
+            .on_conflict_do_nothing(constraint="uq_notification_daily")
         )
         session.execute(stmt)
         session.commit()
@@ -1039,6 +1184,249 @@ def _run_cleanup_if_due() -> None:
                 cutoff.date(),
             )
     _cleanup_last_run = now
+
+
+# ---------------------------------------------------------------------------
+# Configurable notification thresholds (read from system_config)
+# ---------------------------------------------------------------------------
+
+def get_notif_config() -> dict:
+    """Read notif.* threshold values from system_config with hardcoded fallbacks."""
+    DEFAULTS: dict = {
+        "notif.rsi_oversold_threshold":    30.0,
+        "notif.rsi_overbought_threshold":  70.0,
+        "notif.volatility_spike_ratio":     1.5,
+        "notif.atr_expansion_threshold":    4.0,
+        "notif.momentum_surge_threshold":  70.0,
+        "notif.return_1w_spike_threshold": 10.0,
+        "notif.streak_days_threshold":      5.0,
+        "notif.near_52w_threshold":         3.0,
+    }
+    try:
+        with _SyncSessionLocal() as db:
+            rows = db.execute(
+                select(SystemConfig.key, SystemConfig.value)
+                .where(SystemConfig.key.like("notif.%"))
+            ).fetchall()
+            db_vals: dict = {row[0]: row[1] for row in rows}
+    except Exception:
+        logger.warning("get_notif_config: failed to read system_config, using defaults")
+        db_vals = {}
+
+    config: dict = {}
+    for key, default in DEFAULTS.items():
+        raw = db_vals.get(key)
+        if raw is not None:
+            try:
+                config[key] = type(default)(raw)
+            except (ValueError, TypeError):
+                config[key] = default
+        else:
+            config[key] = default
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Indicator-based notification cycle (15 technical triggers)
+# ---------------------------------------------------------------------------
+
+def _ticker_indicator_notification_cycle() -> None:
+    """Generate indicator-based notifications for all watchlist symbols.
+
+    Evaluates all 15 technical trigger types (RSI, MACD, Bollinger, ATR,
+    volatility, momentum, returns, streaks, 52W proximity) against the latest
+    stored ticker_daily indicator columns.
+    """
+    from app.models.ticker import TickerDaily
+    from app.models.stockuniverse import StockUniverse
+    from app.services import returns as returns_service
+    from app.services import momentum as momentum_service
+
+    try:
+        logger.info("ticker_indicator_notification_cycle: starting")
+        now = datetime.now()
+        today_date = now.date()
+
+        cfg = get_notif_config()
+        rsi_oversold_thr   = float(cfg["notif.rsi_oversold_threshold"])
+        rsi_overbought_thr = float(cfg["notif.rsi_overbought_threshold"])
+        vol_spike_ratio    = float(cfg["notif.volatility_spike_ratio"])
+        atr_exp_thr        = float(cfg["notif.atr_expansion_threshold"])
+        momentum_thr       = float(cfg["notif.momentum_surge_threshold"])
+        return_1w_thr      = float(cfg["notif.return_1w_spike_threshold"])
+        streak_thr         = int(cfg["notif.streak_days_threshold"])
+        near52w_thr        = float(cfg["notif.near_52w_threshold"])
+
+        symbols_by_watchlist = _get_watchlist_symbols()
+        if not symbols_by_watchlist:
+            logger.debug("ticker_indicator_notification_cycle: watchlist is empty, skipping")
+            return
+
+        all_symbols = list({s for wl_symbols in symbols_by_watchlist.values() for s in wl_symbols})
+
+        seen_today = _get_seen_today()
+        pending: list[dict] = []
+
+        for symbol in all_symbols:
+            if _shutdown_event.is_set():
+                return
+
+            try:
+                with _SyncSessionLocal() as db:
+                    # Last 10 candles for streak + indicator comparison
+                    rows = list(
+                        db.execute(
+                            select(TickerDaily)
+                            .where(TickerDaily.symbol == symbol)
+                            .order_by(TickerDaily.date.desc())
+                            .limit(10)
+                        ).scalars()
+                    )
+                    su_row = db.execute(
+                        select(StockUniverse).where(StockUniverse.symbol == symbol)
+                    ).scalar_one_or_none()
+
+                if not rows or len(rows) < 2:
+                    continue
+
+                rows_asc = list(reversed(rows))  # oldest → newest
+                latest = rows_asc[-1]
+                prev   = rows_asc[-2]
+
+                # --- consecutive day streak (close vs open) ---
+                up_streak = 0
+                dn_streak = 0
+                for r in reversed(rows_asc):
+                    if r.close is None or r.open is None:
+                        break
+                    if r.close > r.open:
+                        if dn_streak > 0:
+                            break
+                        up_streak += 1
+                    elif r.close < r.open:
+                        if up_streak > 0:
+                            break
+                        dn_streak += 1
+                    else:
+                        break  # flat day breaks streak
+
+                # --- 52W proximity ---
+                pct_from_52w_high: float | None = None
+                pct_from_52w_low:  float | None = None
+                if su_row and su_row.high_52w and su_row.low_52w and latest.close:
+                    if su_row.high_52w > 0:
+                        pct_from_52w_high = (latest.close - su_row.high_52w) / su_row.high_52w * 100
+                    if su_row.low_52w > 0:
+                        pct_from_52w_low  = (latest.close - su_row.low_52w) / su_row.low_52w  * 100
+
+                # --- returns and momentum (service calls) ---
+                returns = returns_service.get_returns(symbol)
+                return_1w = returns.get("1w") if returns else None
+
+                momentum_data  = momentum_service.get_momentum_score(symbol)
+                momentum_score = momentum_data.get("score") if momentum_data else None
+
+                # --- build alerts per watchlist that contains this symbol ---
+                for wl_id, wl_symbols in symbols_by_watchlist.items():
+                    if symbol not in wl_symbols:
+                        continue
+
+                    alerts: list[tuple[str, str]] = []
+
+                    # RSI
+                    if latest.rsi_14 is not None:
+                        if latest.rsi_14 < rsi_oversold_thr:
+                            alerts.append(("rsi_oversold",
+                                f"{symbol} RSI oversold: {latest.rsi_14:.1f} < {rsi_oversold_thr}"))
+                        elif latest.rsi_14 > rsi_overbought_thr:
+                            alerts.append(("rsi_overbought",
+                                f"{symbol} RSI overbought: {latest.rsi_14:.1f} > {rsi_overbought_thr}"))
+
+                    # MACD crossover (requires 2 rows with stored histograms)
+                    if latest.macd_histogram is not None and prev.macd_histogram is not None:
+                        if prev.macd_histogram < 0 and latest.macd_histogram >= 0:
+                            alerts.append(("macd_bullish_cross",
+                                f"{symbol} MACD bullish crossover "
+                                f"({prev.macd_histogram:.4f} → {latest.macd_histogram:.4f})"))
+                        elif prev.macd_histogram > 0 and latest.macd_histogram <= 0:
+                            alerts.append(("macd_bearish_cross",
+                                f"{symbol} MACD bearish crossover "
+                                f"({prev.macd_histogram:.4f} → {latest.macd_histogram:.4f})"))
+
+                    # Bollinger Bands
+                    if latest.bb_squeeze == "Y":
+                        alerts.append(("bb_squeeze_alert",
+                            f"{symbol} Bollinger Band squeeze detected (bb_width={latest.bb_width})"))
+                    if latest.close is not None and latest.bb_upper is not None and latest.close > latest.bb_upper:
+                        alerts.append(("bb_upper_break",
+                            f"{symbol} close ₹{latest.close} broke above BB upper ₹{latest.bb_upper}"))
+                    if latest.close is not None and latest.bb_lower is not None and latest.close < latest.bb_lower:
+                        alerts.append(("bb_lower_break",
+                            f"{symbol} close ₹{latest.close} broke below BB lower ₹{latest.bb_lower}"))
+
+                    # Volatility
+                    if (latest.hv_20 is not None and latest.hv_60 is not None
+                            and latest.hv_60 > 0
+                            and latest.hv_20 > latest.hv_60 * vol_spike_ratio):
+                        alerts.append(("volatility_spike",
+                            f"{symbol} HV20 {latest.hv_20:.1f}% > {vol_spike_ratio}× HV60 {latest.hv_60:.1f}%"))
+                    if latest.atr_percent is not None and latest.atr_percent > atr_exp_thr:
+                        alerts.append(("atr_expansion",
+                            f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
+
+                    # Momentum / returns
+                    if momentum_score is not None and momentum_score > momentum_thr:
+                        alerts.append(("momentum_surge",
+                            f"{symbol} momentum score {momentum_score:.1f} > {momentum_thr}"))
+                    if return_1w is not None and return_1w > return_1w_thr:
+                        alerts.append(("return_1w_spike",
+                            f"{symbol} 1W return {return_1w:+.1f}% > {return_1w_thr}%"))
+
+                    # Streaks
+                    if up_streak >= streak_thr:
+                        alerts.append(("streak_up_5d",
+                            f"{symbol} up {up_streak} consecutive days"))
+                    if dn_streak >= streak_thr:
+                        alerts.append(("streak_down_5d",
+                            f"{symbol} down {dn_streak} consecutive days"))
+
+                    # 52W proximity
+                    if pct_from_52w_high is not None and -near52w_thr <= pct_from_52w_high <= 0:
+                        alerts.append(("near_52w_high",
+                            f"{symbol} within {near52w_thr}% of 52W high ({pct_from_52w_high:+.1f}%)"))
+                    if pct_from_52w_low is not None and 0 <= pct_from_52w_low <= near52w_thr:
+                        alerts.append(("near_52w_low",
+                            f"{symbol} within {near52w_thr}% of 52W low ({pct_from_52w_low:+.1f}%)"))
+
+                    for trigger_type, message in alerts:
+                        key = (wl_id, symbol, trigger_type)
+                        if key in seen_today:
+                            continue
+                        seen_today.add(key)
+                        pending.append({
+                            "watchlist_id":   wl_id,
+                            "symbol":         symbol,
+                            "exchange":       "NSE",
+                            "trigger_type":   trigger_type,
+                            "message":        message,
+                            "triggered_at":   now,
+                            "triggered_date": today_date,
+                            "is_read":        False,
+                        })
+
+            except Exception:
+                logger.exception(f"ticker_indicator_notification_cycle: failed for {symbol}")
+
+        if pending:
+            _bulk_upsert_notifications(pending)
+            logger.info(
+                "ticker_indicator_notification_cycle: upserted %d notifications", len(pending)
+            )
+        else:
+            logger.info("ticker_indicator_notification_cycle: no new notifications")
+
+    except Exception:
+        logger.exception("ticker_indicator_notification_cycle: unhandled exception")
 
 
 def _build_alerts(

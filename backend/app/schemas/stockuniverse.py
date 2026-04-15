@@ -24,6 +24,10 @@ class StockUniverse(BaseModel):
     morningstarId: str | None = None
     fairValue: float | None = None
     fairValueUpdatedAt: datetime | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+    high_52w_date: datetime | None = None
+    low_52w_date: datetime | None = None
 
     @field_validator("sectorPE", "symbolPE", mode="before")
     @classmethod
