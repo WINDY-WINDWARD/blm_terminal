@@ -289,8 +289,10 @@ def _stock_universe_sync() -> None:
         logger.info("stock_universe_sync: %d symbols to process", len(stock_list))
 
         stale_delta = timedelta(hours=12)
+        batch_size = 50
 
         with _SyncSessionLocal() as session:
+            batch: list = []
             for symbol in stock_list:
                 if _shutdown_event.is_set():
                     logger.info("stock_universe_sync: shutdown requested mid-run, aborting")
@@ -307,7 +309,7 @@ def _stock_universe_sync() -> None:
                         now = datetime.now()
                         if (now - last_time) < stale_delta:
                             logger.debug(
-                                "Skipping %s — last update was %s (within %d hours)",
+                                "Skipping %s — last update was %s (within %.0f hours)",
                                 symbol,
                                 last_time,
                                 stale_delta.total_seconds() / 3600,
@@ -321,55 +323,68 @@ def _stock_universe_sync() -> None:
 
                 try:
                     metadata = _nse_client.get_stock_metadata(symbol)
+                    batch.append(metadata)
+                    if len(batch) >= batch_size:
+                        _bulk_insert_stock_universe(session, batch)
+                        batch.clear()
+                        if _sleep_interruptible(0.5):
+                            return
                 except Exception:
                     logger.exception("Failed to fetch metadata for %s, skipping", symbol)
                     if _sleep_interruptible(1.0):
                         return
                     continue
 
-                stmt = (
-                    sqlite_insert(stockuniverse.StockUniverse)
-                    .values(
-                        symbol=metadata.symbol,
-                        company_name=metadata.companyName,
-                        segment=metadata.segment,
-                        industry=metadata.industry,
-                        sector_pe=metadata.sectorPE,
-                        symbol_pe=metadata.symbolPE,
-                        industry_info=metadata.industryInfo,
-                        last_update_time=metadata.lastUpdateTime,
-                        high_52w=metadata.high_52w,
-                        low_52w=metadata.low_52w,
-                        high_52w_date=metadata.high_52w_date,
-                        low_52w_date=metadata.low_52w_date,
-                    )
-                    .on_conflict_do_update(
-                        index_elements=["symbol"],
-                        set_={
-                            "company_name": metadata.companyName,
-                            "segment": metadata.segment,
-                            "industry": metadata.industry,
-                            "sector_pe": metadata.sectorPE,
-                            "symbol_pe": metadata.symbolPE,
-                            "industry_info": metadata.industryInfo,
-                            "last_update_time": metadata.lastUpdateTime,
-                            "high_52w": metadata.high_52w,
-                            "low_52w": metadata.low_52w,
-                            "high_52w_date": metadata.high_52w_date,
-                            "low_52w_date": metadata.low_52w_date,
-                            "high_52w_updated_at": func.now(),
-                            "updated_at": func.now(),
-                        },
-                    )
-                )
-                session.execute(stmt)
-                if _sleep_interruptible(1.0):
-                    return
+            if batch:
+                _bulk_insert_stock_universe(session, batch)
 
             session.commit()
         logger.info("stock_universe_sync: complete")
     except Exception:
         logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
+
+
+def _bulk_insert_stock_universe(session, batch: list) -> None:
+    """Bulk insert or update a batch of stock universe records."""
+    if not batch:
+        return
+    for metadata in batch:
+        stmt = (
+            sqlite_insert(stockuniverse.StockUniverse)
+            .values(
+                symbol=metadata.symbol,
+                company_name=metadata.companyName,
+                segment=metadata.segment,
+                industry=metadata.industry,
+                sector_pe=metadata.sectorPE,
+                symbol_pe=metadata.symbolPE,
+                industry_info=metadata.industryInfo,
+                last_update_time=metadata.lastUpdateTime,
+                high_52w=metadata.high_52w,
+                low_52w=metadata.low_52w,
+                high_52w_date=metadata.high_52w_date,
+                low_52w_date=metadata.low_52w_date,
+            )
+            .on_conflict_do_update(
+                index_elements=["symbol"],
+                set_={
+                    "company_name": metadata.companyName,
+                    "segment": metadata.segment,
+                    "industry": metadata.industry,
+                    "sector_pe": metadata.sectorPE,
+                    "symbol_pe": metadata.symbolPE,
+                    "industry_info": metadata.industryInfo,
+                    "last_update_time": metadata.lastUpdateTime,
+                    "high_52w": metadata.high_52w,
+                    "low_52w": metadata.low_52w,
+                    "high_52w_date": metadata.high_52w_date,
+                    "low_52w_date": metadata.low_52w_date,
+                    "high_52w_updated_at": func.now(),
+                    "updated_at": func.now(),
+                },
+            )
+        )
+        session.execute(stmt)
 
 
 def stock_universe_worker() -> None:
