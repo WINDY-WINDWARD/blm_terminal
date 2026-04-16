@@ -27,6 +27,7 @@ from app.routers import (
     news_router,
     notifications_router,
     screener_router,
+    system_config_router,
     stockuniverse_router,
     watchlist_router,
     jobs_router,
@@ -250,10 +251,9 @@ def _configure_logging() -> None:
         uv_logger.addHandler(console_handler)
         uv_logger.addHandler(file_handler)
 
-    # Application namespaces — always DEBUG so detailed app logs are never
-    # silenced by a higher root level set via LOG_LEVEL.
+    # Application namespaces inherit the configured root level.
     for ns in ("app", "app.services", "app.routers"):
-        logging.getLogger(ns).setLevel(logging.DEBUG)
+        logging.getLogger(ns).setLevel(root_level)
 
     # Suppress chatty third-party loggers.
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
@@ -401,6 +401,7 @@ app.include_router(morningstar_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
+app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")

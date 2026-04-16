@@ -17,6 +17,43 @@ import {
   type PanelCount,
 } from '@/store/terminalStore';
 
+const NOTIF_CONFIG_KEYS = [
+  'notif.rsi_oversold_threshold',
+  'notif.rsi_overbought_threshold',
+  'notif.volatility_spike_ratio',
+  'notif.atr_expansion_threshold',
+  'notif.momentum_surge_threshold',
+  'notif.return_1w_spike_threshold',
+  'notif.streak_days_threshold',
+  'notif.near_52w_threshold',
+] as const;
+
+const NOTIF_CONFIG_LABELS: Record<(typeof NOTIF_CONFIG_KEYS)[number], string> = {
+  'notif.rsi_oversold_threshold': 'RSI Oversold',
+  'notif.rsi_overbought_threshold': 'RSI Overbought',
+  'notif.volatility_spike_ratio': 'Volatility Spike Ratio',
+  'notif.atr_expansion_threshold': 'ATR Expansion',
+  'notif.momentum_surge_threshold': 'Momentum Surge',
+  'notif.return_1w_spike_threshold': '1W Return Spike',
+  'notif.streak_days_threshold': 'Streak Days',
+  'notif.near_52w_threshold': 'Near 52W Threshold',
+};
+
+type NotifConfigKey = (typeof NOTIF_CONFIG_KEYS)[number];
+
+type NotifConfigState = Record<NotifConfigKey, string>;
+
+const DEFAULT_NOTIF_CONFIG: NotifConfigState = {
+  'notif.rsi_oversold_threshold': '30',
+  'notif.rsi_overbought_threshold': '70',
+  'notif.volatility_spike_ratio': '1.5',
+  'notif.atr_expansion_threshold': '4',
+  'notif.momentum_surge_threshold': '70',
+  'notif.return_1w_spike_threshold': '10',
+  'notif.streak_days_threshold': '5',
+  'notif.near_52w_threshold': '3',
+};
+
 const WATCHLIST_COLUMNS = [
   { key: 'ltp', label: 'LTP' },
   { key: 'chg', label: 'CHG%' },
@@ -74,6 +111,36 @@ function ColumnCheckboxes({
   );
 }
 
+function ThresholdInputs({
+  values,
+  onChange,
+  disabled,
+}: {
+  values: NotifConfigState;
+  onChange: (key: NotifConfigKey, value: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      {NOTIF_CONFIG_KEYS.map((key) => (
+        <label key={key} className="flex flex-col gap-1">
+          <span className="text-terminal-amber text-[10px] uppercase tracking-widest">
+            {NOTIF_CONFIG_LABELS[key]}
+          </span>
+          <input
+            type="number"
+            step="any"
+            value={values[key]}
+            disabled={disabled}
+            onChange={(e) => onChange(key, e.target.value)}
+            className="bg-black border border-terminal-gray text-white text-xs px-2 py-1 outline-none focus:border-terminal-amber disabled:opacity-60"
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsWidget() {
   const qc = useQueryClient();
   const [wsConnected] = useAtom(wsConnectedAtom);
@@ -84,8 +151,10 @@ export function SettingsWidget() {
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
   const [, setPanelSizes] = useAtom(panelSizesAtom);
+  const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
 
   const [loading, setLoading] = useState(true);
+  const [configLoading, setConfigLoading] = useState(true);
 
   // Keep a ref with the latest columns so the debounced save never reads a stale closure
   const latestCols = useRef({ watchlist: watchlistCols, movers: moversCols });
@@ -94,6 +163,7 @@ export function SettingsWidget() {
   }, [watchlistCols, moversCols]);
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const configSaveTimerRef = useRef<Partial<Record<NotifConfigKey, NodeJS.Timeout>>>({});
 
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -103,6 +173,18 @@ export function SettingsWidget() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ watchlistColumns: watchlist, moversColumns: movers }),
+      }).catch(console.error);
+    }, 300);
+  }, []);
+
+  const scheduleNotifConfigSave = useCallback((key: NotifConfigKey, value: string) => {
+    const existingTimer = configSaveTimerRef.current[key];
+    if (existingTimer) clearTimeout(existingTimer);
+    configSaveTimerRef.current[key] = setTimeout(() => {
+      fetch(`/api/py/system-config/${key}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: Number(value) }),
       }).catch(console.error);
     }, 300);
   }, []);
@@ -122,6 +204,24 @@ export function SettingsWidget() {
       .finally(() => setLoading(false));
   }, [setWatchlistCols, setMoversCols]);
 
+  useEffect(() => {
+    fetch('/api/py/system-config')
+      .then((res) => res.json())
+      .then((data: Partial<Record<NotifConfigKey, number>>) => {
+        setNotifConfig((current) => ({
+          ...current,
+          ...Object.fromEntries(
+            NOTIF_CONFIG_KEYS.map((key) => [
+              key,
+              data[key] !== undefined ? String(data[key]) : current[key],
+            ]),
+          ),
+        }));
+      })
+      .catch(console.error)
+      .finally(() => setConfigLoading(false));
+  }, []);
+
   // Fetch watchlists on mount
   useEffect(() => {
     fetch('/api/watchlists')
@@ -134,8 +234,12 @@ export function SettingsWidget() {
 
   // Cleanup debounce timer on unmount
   useEffect(() => {
+    const timers = configSaveTimerRef.current;
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      Object.values(timers).forEach((timer) => {
+        if (timer) clearTimeout(timer);
+      });
     };
   }, []);
 
@@ -158,6 +262,13 @@ export function SettingsWidget() {
   const handlePanelCountChange = (count: PanelCount) => {
     setPanelCount(count);
     setPanelSizes(null);
+  };
+
+  const handleNotifConfigChange = (key: NotifConfigKey, value: string) => {
+    setNotifConfig((current) => ({ ...current, [key]: value }));
+    if (!configLoading) {
+      scheduleNotifConfigSave(key, value);
+    }
   };
 
   const handleDeleteWatchlist = async (id: number, name: string) => {
@@ -291,6 +402,22 @@ export function SettingsWidget() {
             columns={MOVERS_COLUMNS}
             selected={moversCols}
             onChange={handleMoversChange}
+          />
+        )}
+      </div>
+
+      {/* Notification Thresholds */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Notification Thresholds
+        </div>
+        {configLoading ? (
+          <div className="text-white">Loading...</div>
+        ) : (
+          <ThresholdInputs
+            values={notifConfig}
+            onChange={handleNotifConfigChange}
+            disabled={configLoading}
           />
         )}
       </div>

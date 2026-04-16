@@ -90,6 +90,13 @@ export async function POST(
   return proxyRequest(request, await params)
 }
 
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+): Promise<NextResponse> {
+  return proxyRequest(request, await params)
+}
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
