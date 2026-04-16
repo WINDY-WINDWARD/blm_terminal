@@ -123,10 +123,47 @@ function formatTime(iso: string): string {
 export function ScanWidget() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
 
   const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
+
+  const fetchSuggestions = async (query: string) => {
+    if (!query || query.length < 1) {
+      setSuggestions([]);
+      return;
+    }
+    const res = await fetch(`/api/py/stockuniverse/search/${encodeURIComponent(query)}`);
+    if (!res.ok) {
+      setSuggestions([]);
+      return;
+    }
+    const data = await res.json() as Array<{ symbol: string }>;
+    setSuggestions(data.slice(0, 8).map(d => d.symbol));
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (!value.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      fetchSuggestions(value.trim().toUpperCase()).then(() => setShowSuggestions(true));
+    }, 300);
+  };
+
+  const handleSelectSymbol = (symbol: string) => {
+    setSearchQuery(symbol);
+    setShowSuggestions(false);
+    setSuggestions([]);
+  };
 
   const { data, isLoading, isError, error, refetch } = useQuery<GlobalNotification[]>({
     queryKey: ['global-notifications'],
@@ -170,8 +207,13 @@ export function ScanWidget() {
   };
 
   const filteredNotifications = (data ?? []).filter((n) => {
-    if (activeTab === 'all') return true;
-    return TAB_TRIGGERS[activeTab].includes(n.trigger_type);
+    if (activeTab !== 'all' && !TAB_TRIGGERS[activeTab].includes(n.trigger_type)) {
+      return false;
+    }
+    if (searchQuery.length > 0 && !n.symbol.toUpperCase().includes(searchQuery.toUpperCase())) {
+      return false;
+    }
+    return true;
   });
 
   const tabs: { id: NotifTab; label: string }[] = [
@@ -214,8 +256,32 @@ export function ScanWidget() {
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
       <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-center gap-2 min-w-0">
         <span className="text-terminal-amber font-bold text-[11px] uppercase shrink-0">SCAN</span>
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            onFocus={() => searchQuery.trim() && setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            placeholder="Filter..."
+            className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px w-24 focus:w-32 transition-all outline-none"
+          />
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="absolute top-full left-0 mt-1 w-40 bg-zinc-800 border border-terminal-gray rounded shadow-xl z-50 max-h-48 overflow-auto">
+              {suggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => handleSelectSymbol(s)}
+                  className="w-full text-left px-2 py-1 text-[10px] text-white/80 hover:bg-zinc-700 hover:text-terminal-amber"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <span className="text-white/60 text-[10px] shrink-0">
-          ({(data ?? []).length})
+          ({filteredNotifications.length})
         </span>
         {(data ?? []).length > 0 && (
           <button
