@@ -29,8 +29,9 @@ DEFAULTS = {
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
     for key, value in DEFAULTS.items():
-        op.execute(
+        bind.execute(
             sa.text(
                 "INSERT OR IGNORE INTO system_config (key, value, updated_at) "
                 "VALUES (:key, :value, CURRENT_TIMESTAMP)"
@@ -40,5 +41,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
     for key in DEFAULTS:
-        op.execute(sa.text("DELETE FROM system_config WHERE key = :key"), {"key": key})
+        bind.execute(sa.text("DELETE FROM system_config WHERE key = :key"), {"key": key})
