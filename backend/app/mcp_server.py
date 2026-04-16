@@ -21,6 +21,8 @@ from app.models.corporatefilings import CorporateFiling
 from app.models.marketcategory import MarketCategory, MarketCategoryStock
 from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
+from app.models.notification import GlobalNotification, Notification
+from app.models.watchlist import Watchlist as WatchlistModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.services.nse_client import nse_client
 from app.services.screener_client import _parse_all_quarters, screener_client
@@ -79,7 +81,7 @@ from app.services.nse_rate_limiter import throttled_nse_call
 
 @mcp.tool()
 async def health_check() -> dict[str, str]:
-    """Return service health status."""
+    """Check backend service health and connectivity."""
     return {"status": "ok"}
 
 
@@ -99,7 +101,7 @@ async def _mcp_snapshot() -> dict:
 
 @mcp.tool()
 async def get_top_gainers() -> list[dict[str, Any]]:
-    """Return today's top-gaining equities on NSE India."""
+    """Fetch today's top-gaining NSE equities ranked by intraday percentage change."""
     df = await throttled_nse_call(
         "top-gainers",
         _active_client.get_top_gainers,
@@ -110,7 +112,7 @@ async def get_top_gainers() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_top_losers() -> list[dict[str, Any]]:
-    """Return today's top-losing equities on NSE India."""
+    """Fetch today's top-losing NSE equities ranked by intraday percentage change."""
     df = await throttled_nse_call(
         "top-losers",
         _active_client.get_top_losers,
@@ -121,7 +123,11 @@ async def get_top_losers() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
-    """Return Recent bulk deals for a specific stock symbol on NSE India."""
+    """Fetch recent NSE bulk deal records for a given stock symbol.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+    """
     symbol = symbol.upper()
     cache_key = f"mcp_bulk_deals:{symbol}"
     cached = _cache_get(cache_key)
@@ -137,7 +143,11 @@ async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_block_deals(symbol: str) -> list[dict[str, Any]]:
-    """Return Recent block deals for a specific stock symbol on NSE India."""
+    """Fetch recent NSE block deal records for a given stock symbol.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+    """
     symbol = symbol.upper()
     cache_key = f"mcp_block_deals:{symbol}"
     cached = _cache_get(cache_key)
@@ -153,7 +163,7 @@ async def get_block_deals(symbol: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_high_short_interest() -> list[dict[str, Any]]:
-    """Return today's stocks with high short interest on NSE India."""
+    """Fetch today's NSE stocks flagged for high short-selling interest."""
     cache_key = "mcp_high_short_interest"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -167,7 +177,7 @@ async def get_high_short_interest() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_largedeal_snapshot() -> dict[str, Any]:
-    """Returns a snapshot of recent large deals (Insiders + bulk + block) across NSE, with details like symbol, price, quantity, deal type, and timestamp."""
+    """Fetch a combined real-time snapshot of NSE insider, bulk, and block deals across all stocks."""
     cache_key = "mcp_largedeal_snapshot"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -185,9 +195,12 @@ async def get_largedeal_snapshot() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_change_ranges(symbol: str) -> dict[str, float | None]:
-    """Return percentage changes over multiple timeframes for a symbol from NSE.
+    """Fetch NSE percentage price changes across multiple timeframes (1d to 5y) for a symbol.
 
-    Keys: oneDayPercent, oneWeekPercent, oneMonthPercent, threeMonthPercent,
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+
+    Returns keys: oneDayPercent, oneWeekPercent, oneMonthPercent, threeMonthPercent,
     sixMonthPercent, oneYearPercent, twoYearPercent, threeYearPercent, fiveYearPercent.
     """
     symbol = symbol.upper()
@@ -209,9 +222,10 @@ async def get_change_ranges(symbol: str) -> dict[str, float | None]:
 
 @mcp.tool()
 async def get_symbol_data(symbol: str) -> dict[str, Any]:
-    """Return live symbol data from NSE's GetQuoteApi getSymbolData endpoint. used to fetch latest data
-    like ltp, dayHigh, dayLow, 52weekHigh, 52weekLow, etc. also sector and industry info for the symbol.
-    with metadata on the company
+    """Fetch live NSE quote data for a symbol, including LTP, 52-week range, sector, and industry.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
     """
     symbol = symbol.upper()
     cache_key = f"mcp_symbol_data:{symbol}"
@@ -232,7 +246,7 @@ async def get_symbol_data(symbol: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_52week_low_stocks() -> dict[str, Any]:
-    """Return Global List of stocks which have crossed their previous NSE 52-week low and set new 52-week lows."""
+    """Fetch NSE stocks that crossed a new 52-week low today."""
     cache_key = "mcp_52week_low"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -250,7 +264,7 @@ async def get_52week_low_stocks() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_52week_high_stocks() -> dict[str, Any]:
-    """Return Global List of stocks which have crossed their previous NSE 52-week high and set new 52-week highs."""
+    """Fetch NSE stocks that crossed a new 52-week high today."""
     cache_key = "mcp_52week_high"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -268,7 +282,7 @@ async def get_52week_high_stocks() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_volume_gainers() -> dict[str, Any]:
-    """Returns Global List of stocks with highest volume gain compared to average weekly volume, along with percentage gain."""
+    """Fetch NSE stocks with the largest volume surge relative to their weekly average."""
     cache_key = "mcp_volume_gainers"
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -291,7 +305,10 @@ async def get_volume_gainers() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_corporate_filings(symbol: str) -> dict[str, Any]:
-    """Return quarterly financial results for a symbol as CSV.
+    """Fetch NSE quarterly corporate filing results for a symbol as pipe-delimited CSV.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
 
     Returns structured data containing: symbol, media_type, and csv_text.
     """
@@ -353,7 +370,11 @@ async def get_corporate_filings(symbol: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def screener_search(q: str) -> list[dict[str, Any]]:
-    """Search screener.in for matching companies by name or symbol."""
+    """Search screener.in for NSE companies by name or symbol fragment.
+
+    Args:
+        q: Company name or symbol fragment to search (1–80 characters).
+    """
     if not q or len(q) > 80:
         raise ValueError("Query must be between 1 and 80 characters")
 
@@ -369,7 +390,11 @@ async def screener_search(q: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def screener_company(symbol: str, consolidated: bool = True) -> dict[str, Any]:
-    """Fetch parsed fundamentals for a company from screener.in.
+    """Fetch fundamental ratios and quarterly results for an NSE company from screener.in.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "HDFCBANK", "INFY").
+        consolidated: Use consolidated financials (default: True); set False for standalone.
 
     Returns: symbol, name, ratios (P/E, ROCE, ROE, etc.), quarters (last 4).
     Requires screener.in authentication (browser session).
@@ -396,7 +421,11 @@ async def screener_company(symbol: str, consolidated: bool = True) -> dict[str, 
 
 @mcp.tool()
 async def screener_trades(symbol: str, consolidated: bool = True) -> dict[str, Any]:
-    """Fetch insider trades, bulk deals, and block deals for a company from screener.in.
+    """Fetch insider trades, bulk deals, and block deals for an NSE company from screener.in.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "HDFCBANK", "INFY").
+        consolidated: Use consolidated financials (default: True); set False for standalone.
 
     Returns:
       - warehouse_id   : resolved screener trades company ID
@@ -439,7 +468,7 @@ async def screener_trades(symbol: str, consolidated: bool = True) -> dict[str, A
 
 @mcp.tool()
 async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
-    """Return full quarterly results for a company from screener.in (consolidated).
+    """Fetch all available quarterly financial results for an NSE company from screener.in.
 
     Results are structured as year → month → {metric: value}, covering all
     rows in the #quarters table (Sales, Expenses, OPM%, Other Income, Interest,
@@ -510,7 +539,7 @@ async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def list_stock_universe() -> list[dict[str, Any]]:
-    """Return all stock universe records from the database."""
+    """List all tracked NSE stocks with symbol, company name, sector, industry, and PE data."""
     async with AsyncSessionLocal() as db:
         q = select(StockUniverseModel).order_by(StockUniverseModel.symbol)
         res = await db.execute(q)
@@ -533,8 +562,11 @@ async def list_stock_universe() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_stock_universe(symbol: str) -> dict[str, Any]:
-    """PREFER screener_company or get_symbol_data for stock research; this is a fallback for basic symbol/company name/sector search.
-    Return a single stock universe record by symbol from the database."""
+    """Look up NSE stock universe metadata by symbol — prefer screener_company for deeper research.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+    """
     symbol = symbol.upper().strip()
     async with AsyncSessionLocal() as db:
         rec = await db.get(StockUniverseModel, symbol)
@@ -555,7 +587,11 @@ async def get_stock_universe(symbol: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def search_stock_universe(prefix: str) -> list[dict[str, Any]]:
-    """Return stock universe records that match the prefix in symbol or company name."""
+    """Search tracked NSE stocks by symbol or company name prefix.
+
+    Args:
+        prefix: Leading characters of a symbol or company name (e.g. "HDFC", "Tata").
+    """
     prefix = prefix.strip()
     async with AsyncSessionLocal() as db:
         q = (
@@ -591,7 +627,7 @@ async def search_stock_universe(prefix: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def list_watchlist() -> list[dict[str, Any]]:
-    """Return all stocks the user is interested in, ordered by creation time.
+    """List all items in the default watchlist (ID 1), ordered by time added.
 
     Each item contains: id, symbol, exchange, createdAt.
     """
@@ -612,7 +648,7 @@ async def list_watchlist() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_watchlist_symbols() -> list[str]:
-    """Return all symbols in the watchlist (no duplicates)."""
+    """Fetch distinct symbols from the default watchlist as a flat list."""
     async with AsyncSessionLocal() as db:
         q = select(WatchlistItemModel.symbol).distinct().order_by(WatchlistItemModel.symbol)
         res = await db.execute(q)
@@ -622,9 +658,12 @@ async def get_watchlist_symbols() -> list[str]:
 
 @mcp.tool()
 async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
-    """Add a symbol/exchange pair to the watchlist (idempotent).
+    """Add a symbol/exchange pair to the default watchlist; returns the existing entry if already present.
 
-    If the pair already exists the existing row is returned unchanged.
+    Args:
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+        exchange: Exchange identifier (e.g. "NSE", "BSE").
+
     Returns the persisted item: id, symbol, exchange, createdAt.
     """
     symbol = symbol.strip().upper()
@@ -662,7 +701,10 @@ async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def remove_watchlist_item(item_id: int) -> dict[str, Any]:
-    """Remove a watchlist item by its numeric id.
+    """Delete an item from the default watchlist by its numeric ID.
+
+    Args:
+        item_id: Numeric ID of the watchlist item to remove.
 
     Returns {"ok": true, "id": <item_id>} on success.
     Raises ValueError if the item does not exist.
@@ -676,18 +718,185 @@ async def remove_watchlist_item(item_id: int) -> dict[str, Any]:
     return {"ok": True, "id": item_id}
 
 
+@mcp.tool()
+async def list_watchlists() -> list[dict[str, Any]]:
+    """List all user-created watchlists with name and item count.
+
+    Each entry includes: id, name, createdAt, itemCount.
+    """
+    from sqlalchemy import func
+
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(
+                WatchlistModel.id,
+                WatchlistModel.name,
+                WatchlistModel.created_at,
+                func.count(WatchlistItemModel.id).label("item_count"),
+            )
+            .outerjoin(WatchlistItemModel, WatchlistItemModel.watchlist_id == WatchlistModel.id)
+            .group_by(WatchlistModel.id)
+            .order_by(WatchlistModel.id)
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "createdAt": r.created_at.isoformat() if r.created_at else None,
+                "itemCount": r.item_count,
+            }
+            for r in rows
+        ]
+
+
+@mcp.tool()
+async def get_watchlist_items(watchlist_id: int) -> list[dict[str, Any]]:
+    """Fetch all symbol/exchange items in a watchlist by its numeric ID.
+
+    Args:
+        watchlist_id: Numeric watchlist ID — use list_watchlists() to enumerate valid IDs.
+
+    Each item includes: id, watchlistId, symbol, exchange, createdAt.
+    Raises ValueError if the watchlist does not exist.
+    """
+    async with AsyncSessionLocal() as db:
+        watchlist = await db.get(WatchlistModel, watchlist_id)
+        if watchlist is None:
+            raise ValueError(f"Watchlist {watchlist_id} not found")
+
+        stmt = (
+            select(WatchlistItemModel)
+            .where(WatchlistItemModel.watchlist_id == watchlist_id)
+            .order_by(WatchlistItemModel.created_at)
+        )
+        result = await db.execute(stmt)
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id,
+                "watchlistId": r.watchlist_id,
+                "symbol": r.symbol,
+                "exchange": r.exchange,
+                "createdAt": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+
+
 # ---------------------------------------------------------------------------
-# News Endpoints
+# Notifications Endpoints
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-async def get_global_news(days: int = 7, limit: int = 50) -> list[dict[str, Any]]:
-    """Return cached global news articles from MoneyControl.
+async def get_notifications(watchlist_id: int) -> list[dict[str, Any]]:
+    """Fetch unread market-event notifications for a watchlist, newest first.
 
     Args:
-        days: Number of days to look back (default: 7)
-        limit: Maximum number of articles to return (default: 50)
+        watchlist_id: Numeric watchlist ID — use list_watchlists() to enumerate valid IDs.
+
+    Each notification includes: id, watchlistId, symbol, exchange, triggerType,
+    message, triggeredAt, triggeredDate.
+    """
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(Notification)
+            .where(Notification.watchlist_id == watchlist_id)
+            .where(Notification.is_read == False)  # noqa: E712
+            .order_by(Notification.triggered_at.desc())
+        )
+        result = await db.execute(stmt)
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id,
+                "watchlistId": r.watchlist_id,
+                "symbol": r.symbol,
+                "exchange": r.exchange,
+                "triggerType": r.trigger_type,
+                "message": r.message,
+                "triggeredAt": r.triggered_at.isoformat() if r.triggered_at else None,
+                "triggeredDate": r.triggered_date.isoformat() if r.triggered_date else None,
+            }
+            for r in rows
+        ]
+
+
+@mcp.tool()
+async def get_global_notifications(
+    limit: int | None = None,
+    trigger_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch unread global NSE scan alerts across all stocks, with optional type and count filters.
+
+    Args:
+        limit: Cap the number of results returned (default: no limit).
+        trigger_type: Filter by event type (e.g. "52wk_high", "52wk_low", "volume_spike");
+                      omit to return all trigger types.
+
+    Each alert includes: id, symbol, exchange, triggerType, message,
+    triggeredAt, triggeredDate.
+    """
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(GlobalNotification)
+            .where(GlobalNotification.is_read == False)  # noqa: E712
+            .order_by(GlobalNotification.triggered_at.desc())
+        )
+        if trigger_type:
+            stmt = stmt.where(GlobalNotification.trigger_type == trigger_type)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await db.execute(stmt)
+        rows = result.scalars().all()
+        return [
+            {
+                "id": r.id,
+                "symbol": r.symbol,
+                "exchange": r.exchange,
+                "triggerType": r.trigger_type,
+                "message": r.message,
+                "triggeredAt": r.triggered_at.isoformat() if r.triggered_at else None,
+                "triggeredDate": r.triggered_date.isoformat() if r.triggered_date else None,
+            }
+            for r in rows
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Morningstar Endpoints
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_morningstar_fairvalue(symbol: str) -> dict[str, Any]:
+    """Fetch Morningstar fair value estimate and uncertainty rating for an NSE stock symbol.
+
+    Args:
+        symbol: NSE ticker symbol (e.g. "TCS", "RELIANCE").
+
+    Returns: symbol, morningstarId, fairValue, updatedAt.
+    Requires a valid Morningstar browser session (rookiepy).
+    """
+    from app.services.morningstar_client import morningstar_client
+
+    symbol = symbol.upper().strip()
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise ValueError(f"Invalid symbol format: {symbol}")
+
+    async with AsyncSessionLocal() as db:
+        return await morningstar_client.get_fair_value_by_symbol(symbol, db=db)
+
+
+@mcp.tool()
+async def get_global_news(days: int = 7, limit: int = 50) -> list[dict[str, Any]]:
+    """Fetch recent global financial news articles from MoneyControl, filtered by date range.
+
+    Args:
+        days: Number of days to look back (default: 7).
+        limit: Maximum number of articles to return (default: 50).
     """
     from datetime import datetime, timedelta
 
@@ -723,7 +932,7 @@ _COMPANY_NEWS_STALE_SECONDS = 5 * 60  # matches global crawl cadence
 async def get_company_news(
     symbol: str, days: int = 30, limit: int = 50, refresh: bool = False
 ) -> list[dict[str, Any]]:
-    """Return news articles for a specific company symbol from MoneyControl.
+    """Fetch MoneyControl news articles for an NSE company, auto-refreshing stale content.
 
     Automatically fetches fresh articles from MoneyControl when needed:
       - No articles stored yet for the symbol (first call)
@@ -735,10 +944,10 @@ async def get_company_news(
     stored in the DB without attempting a live fetch.
 
     Args:
-        symbol: NSE ticker symbol (e.g., "RELIANCE", "INFY")
-        days: Number of days to look back (default: 30)
-        limit: Maximum number of articles to return (default: 50)
-        refresh: Force a live fetch from MoneyControl even if articles are fresh (default: False)
+        symbol: NSE ticker symbol (e.g. "RELIANCE", "INFY").
+        days: Number of days to look back (default: 30).
+        limit: Maximum number of articles to return (default: 50).
+        refresh: Force a live fetch from MoneyControl even if articles are fresh (default: False).
     """
     from datetime import datetime, timedelta
     from sqlalchemy import func, or_
@@ -815,7 +1024,7 @@ async def get_company_news(
 
 @mcp.tool()
 async def list_industries() -> list[dict[str, Any]]:
-    """Return all industries with their metadata from MoneyControl.
+    """List all NSE industries with market cap, PE ratio, advance/decline counts, and sentiment.
 
     Returns a list of industries sorted by name. Each industry includes:
     - category_type: "industry"
@@ -857,7 +1066,7 @@ async def list_industries() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def list_sectors() -> list[dict[str, Any]]:
-    """Return all sectors with their metadata from MoneyControl.
+    """List all NSE sectors with market cap, PE ratio, advance/decline counts, and sentiment.
 
     Returns a list of sectors sorted by name. Each sector includes:
     - category_type: "sector"
@@ -899,13 +1108,13 @@ async def list_sectors() -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_industry_stocks(slug: str) -> list[dict[str, Any]]:
-    """Return all stocks in a specific industry from MoneyControl.
+    """Fetch all NSE stocks in a given industry by slug, sorted by market cap descending.
 
     Args:
-        slug: Industry slug identifier (e.g., "bank-private", "it-services-consulting")
+        slug: Industry slug identifier (e.g., "bank-private", "it-services-consulting").
+              Use list_industries() to get valid slugs.
 
-    Returns a list of stocks in the industry, sorted by market cap descending.
-    Each stock includes:
+    Returns a list of stocks. Each stock includes:
     - symbol: Stock identifier (e.g., "HDF01")
     - company_name: Company name (e.g., "HDFC Bank")
     - exchange: Exchange (NSE/BSE)
@@ -975,13 +1184,13 @@ async def get_industry_stocks(slug: str) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def get_sector_stocks(slug: str) -> list[dict[str, Any]]:
-    """Return all stocks in a specific sector from MoneyControl.
+    """Fetch all NSE stocks in a given sector by slug, sorted by market cap descending.
 
     Args:
-        slug: Sector slug identifier (e.g., "banks", "finance", "it-services")
+        slug: Sector slug identifier (e.g., "banks", "finance", "it-services").
+              Use list_sectors() to get valid slugs.
 
-    Returns a list of stocks in the sector, sorted by market cap descending.
-    Each stock includes:
+    Returns a list of stocks. Each stock includes:
     - symbol: Stock identifier (e.g., "HDF01")
     - company_name: Company name (e.g., "HDFC Bank")
     - exchange: Exchange (NSE/BSE)
