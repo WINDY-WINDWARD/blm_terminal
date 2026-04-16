@@ -53,23 +53,88 @@ def _is_job_enabled(job_key: str) -> bool:
 def register_all_jobs() -> None:
     """Register all background jobs with the job registry."""
     jobs = [
+        # --- Data warehouse (startup / daily) ---
+        JobDefinition(
+            job_key="job.ticker_backfill",
+            name="ticker_backfill",
+            description="Backfill 1-year OHLCV daily history for all NSE stocks (watchlist-first)",
+            category="data_warehouse",
+            cron_expression="@startup",
+            callable=ticker_backfill_worker,
+            is_async=False,
+        ),
         JobDefinition(
             job_key="job.stock_universe",
             name="stock_universe",
             description="Sync stock metadata from NSE",
             category="data_sync",
-            schedule_type="cron",
             cron_expression="0 0 * * *",
             callable=stock_universe_worker,
             is_async=False,
         ),
         JobDefinition(
+            job_key="job.ticker_indicators",
+            name="ticker_indicators",
+            description="Compute and store technical indicators for all symbols",
+            category="data_warehouse",
+            cron_expression="0 11 * * 1-5",
+            callable=ticker_indicators_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_scores",
+            name="ticker_scores",
+            description="Compute and cache returns + momentum for all symbols (once per day)",
+            category="data_warehouse",
+            cron_expression="0 0 * * *",
+            callable=ticker_scores_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_daily_update",
+            name="ticker_daily_update",
+            description="Post-close bhavcopy download + nightly catch-up for all NSE stocks",
+            category="data_warehouse",
+            cron_expression="30 10,14 * * 1-5",
+            callable=ticker_daily_update_worker,
+            is_async=False,
+        ),
+        # --- Live market data ---
+        JobDefinition(
+            job_key="job.market_data",
+            name="market_data",
+            description="Fetch sector/industry data from MoneyControl",
+            category="data_sync",
+            cron_expression="*/5 * * * *",
+            callable=market_data_worker,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.global_scan",
+            name="global_scan",
+            description="Scan all NSE stocks for technical & market alerts",
+            category="notifications",
+            cron_expression="*/30 * * * *",
+            callable=global_scan_worker,
+            is_async=False,
+        ),
+        # --- Notifications ---
+        JobDefinition(
+            job_key="job.notifications",
+            name="notifications",
+            description="Generate watchlist stock alerts",
+            category="notifications",
+            cron_expression="*/5 * * * *",
+            callable=watchlist_notification_worker,
+            is_async=False,
+        ),
+        # --- News ---
+        JobDefinition(
             job_key="job.news",
             name="news",
             description="Crawl global news from MoneyControl",
             category="data_sync",
-            schedule_type="interval",
-            interval_seconds=300,
+            cron_expression="*/5 * * * *",
             callable=news_worker,
             is_async=False,
         ),
@@ -78,100 +143,28 @@ def register_all_jobs() -> None:
             name="watchlist_news",
             description="Fetch news for watchlist symbols",
             category="notifications",
-            schedule_type="interval",
-            interval_seconds=300,
+            cron_expression="*/5 * * * *",
             callable=watchlist_news_worker,
             is_async=False,
         ),
-        JobDefinition(
-            job_key="job.market_data",
-            name="market_data",
-            description="Fetch sector/industry data from MoneyControl",
-            category="data_sync",
-            schedule_type="interval",
-            interval_seconds=300,
-            callable=market_data_worker,
-            is_async=False,
-        ),
-        JobDefinition(
-            job_key="job.notifications",
-            name="notifications",
-            description="Generate watchlist stock alerts",
-            category="notifications",
-            schedule_type="interval",
-            interval_seconds=300,
-            callable=watchlist_notification_worker,
-            is_async=False,
-        ),
+        # --- Fair value (async) ---
         JobDefinition(
             job_key="job.watchlist_fair_value",
             name="watchlist_fair_value",
             description="Fetch Morningstar fair values for watchlist",
             category="analytics",
-            schedule_type="interval",
-            interval_seconds=10800,
+            cron_expression="0 */3 * * *",
             callable=sync_watchlist_fair_values,
             is_async=True,
         ),
-JobDefinition(
+        JobDefinition(
             job_key="job.full_fair_value",
             name="full_fair_value",
             description="Fetch Morningstar fair values for all stocks",
             category="analytics",
-            schedule_type="cron",
-            cron_expression="30 20 * *",
+            cron_expression="30 20 * * *",
             callable=sync_all_fair_values,
             is_async=True,
-        ),
-        JobDefinition(
-            job_key="job.ticker_backfill",
-            name="ticker_backfill",
-            description="Backfill 1-year OHLCV daily history for all NSE stocks (watchlist-first)",
-            category="data_warehouse",
-            schedule_type="interval",
-            interval_seconds=0,
-            callable=ticker_backfill_worker,
-            is_async=False,
-        ),
-        JobDefinition(
-            job_key="job.ticker_daily_update",
-            name="ticker_daily_update",
-            description="Post-close bhavcopy download + nightly catch-up for all NSE stocks",
-            category="data_warehouse",
-            schedule_type="cron",
-            cron_expression="30 10,14 * * 1-5",
-            callable=ticker_daily_update_worker,
-            is_async=False,
-        ),
-        JobDefinition(
-            job_key="job.ticker_indicators",
-            name="ticker_indicators",
-            description="Compute and store technical indicators for all symbols",
-            category="data_warehouse",
-            schedule_type="cron",
-            cron_expression="0 11 * * 1-5",
-            callable=ticker_indicators_worker,
-            is_async=False,
-        ),
-        JobDefinition(
-            job_key="job.global_scan",
-            name="global_scan",
-            description="Scan all NSE stocks for technical & market alerts",
-            category="notifications",
-            schedule_type="interval",
-            interval_seconds=1800,
-            callable=global_scan_worker,
-            is_async=False,
-        ),
-        JobDefinition(
-            job_key="job.ticker_scores",
-            name="ticker_scores",
-            description="Compute and cache returns + momentum for all symbols (once per day)",
-            category="data_warehouse",
-            schedule_type="interval",
-            interval_seconds=86400,
-            callable=ticker_scores_worker,
-            is_async=False,
         ),
     ]
 
@@ -272,13 +265,18 @@ def _run_async(coro):
         asyncio.set_event_loop(None)
 
 
-def _seconds_until_midnight() -> float:
-    """Return seconds from now until the next 00:00:00 local time."""
+def _seconds_until_next_cron(cron_expr: str) -> float:
+    """Return seconds from now until the next fire time for the given cron expression.
+
+    Returns a large sentinel (24 hours) for @startup — that expression means
+    'run once at startup then idle forever', so callers that mistakenly reach
+    this helper should simply sleep a long time rather than crash.
+    """
+    if cron_expr == "@startup":
+        return 86400.0  # 24 hours — effectively idle
+    from croniter import croniter
     now = datetime.now()
-    tomorrow_midnight = (now + timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return (tomorrow_midnight - now).total_seconds()
+    return (croniter(cron_expr, now).get_next(datetime) - now).total_seconds()
 
 
 def _stock_universe_sync() -> None:
@@ -286,17 +284,25 @@ def _stock_universe_sync() -> None:
     try:
         logger.info("stock_universe_sync: starting")
         stock_list: list[str] = _nse_client.get_stock_list()
-        logger.info("stock_universe_sync: %d symbols to process", len(stock_list))
+        total = len(stock_list)
+        logger.info("stock_universe_sync: %d symbols to process", total)
 
         stale_delta = timedelta(hours=12)
         batch_size = 50
 
         with _SyncSessionLocal() as session:
             batch: list = []
-            for symbol in stock_list:
+            for i, symbol in enumerate(stock_list, 1):
                 if _shutdown_event.is_set():
                     logger.info("stock_universe_sync: shutdown requested mid-run, aborting")
                     return
+
+                if i % 100 == 0:
+                    progress = int((i / total) * 100)
+                    update_job_status_sync(
+                        "job.stock_universe", "running", progress=progress,
+                        message=f"Processing {i}/{total} symbols",
+                    )
 
                 existing = session.get(stockuniverse.StockUniverse, symbol)
                 last_time = None
@@ -390,7 +396,7 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
 def stock_universe_worker() -> None:
     """Daemon thread target for stock universe refresh."""
     logger.info("stock_universe_worker: started")
-    
+
     if not _is_job_enabled("job.stock_universe"):
         logger.info("stock_universe_worker: disabled, waiting...")
         update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Disabled")
@@ -399,14 +405,14 @@ def stock_universe_worker() -> None:
         update_job_status_sync("job.stock_universe", "idle", progress=0, message="Stopped")
         logger.info("stock_universe_worker: stopped")
         return
-    
+
     update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting...")
     _stock_universe_sync()
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_midnight()
-        logger.debug("stock_universe_worker: sleeping %.0fs until midnight", wait_secs)
-        update_job_status_sync("job.stock_universe", "waiting", progress=100, message=f"Sleeping until midnight ({wait_secs/3600:.1f}h)")
+        wait_secs = _seconds_until_next_cron("0 0 * * *")
+        logger.info("stock_universe_worker: sleeping %.0fs until next cron (0 0 * * *)", wait_secs)
+        update_job_status_sync("job.stock_universe", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
@@ -461,7 +467,7 @@ def _ticker_backfill_sync() -> None:
 
 
 def ticker_backfill_worker() -> None:
-    """Daemon thread target for ticker backfill."""
+    """Daemon thread target for ticker backfill. Runs once at startup, then idles."""
     logger.info("ticker_backfill_worker: started")
 
     if not _is_job_enabled("job.ticker_backfill"):
@@ -475,8 +481,8 @@ def ticker_backfill_worker() -> None:
 
     _ticker_backfill_sync()
 
-    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
-    logger.info("ticker_backfill_worker: finished initial backfill, sleeping...")
+    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete — run-once job")
+    logger.info("ticker_backfill_worker: backfill complete, idling until shutdown")
 
     while not _shutdown_event.is_set():
         _sleep_interruptible(3600)
@@ -529,6 +535,7 @@ def _ticker_daily_update_sync() -> None:
     today = date.today()
     date_str = today.strftime("%d-%m-%Y")
 
+    update_job_status_sync("job.ticker_daily_update", "running", progress=10, message="Checking for existing data...")
     with _SyncSessionLocal() as db:
         row = db.query(func.count(TickerDaily.symbol)).filter(TickerDaily.date == today).scalar()
         if row and row > 2000:
@@ -536,6 +543,7 @@ def _ticker_daily_update_sync() -> None:
             return
 
     logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str}")
+    update_job_status_sync("job.ticker_daily_update", "running", progress=30, message=f"Fetching bhavcopy for {date_str}...")
 
     try:
         rows = ticker_warehouse.bulk_update_via_bhavcopy(date_str)
@@ -557,7 +565,7 @@ def _ticker_daily_update_sync() -> None:
 
 
 def ticker_daily_update_worker() -> None:
-    """Daemon thread target for ticker daily updates."""
+    """Daemon thread target for ticker daily updates (cron: 30 10,14 * * 1-5)."""
     logger.info("ticker_daily_update_worker: started")
 
     if not _is_job_enabled("job.ticker_daily_update"):
@@ -568,14 +576,23 @@ def ticker_daily_update_worker() -> None:
         update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
         logger.info("ticker_daily_update_worker: stopped")
         return
-    
+
     update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
     _ticker_daily_update_sync()
 
-    logger.info("ticker_daily_update_worker: sleeping until next cycle")
-
     while not _shutdown_event.is_set():
-        _sleep_interruptible(3600)
+        wait_secs = _seconds_until_next_cron("30 10,14 * * 1-5")
+        logger.info("ticker_daily_update_worker: sleeping %.0fs until next cron (30 10,14 * * 1-5)", wait_secs)
+        update_job_status_sync("job.ticker_daily_update", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.ticker_daily_update"):
+                update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Running daily update...")
+            _ticker_daily_update_sync()
 
     update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
     logger.info("ticker_daily_update_worker: stopped")
@@ -682,6 +699,7 @@ def _ticker_scores_sync() -> None:
         now = datetime.now()
         today_date = now.date()
 
+        update_job_status_sync("job.ticker_scores", "running", progress=5, message="Querying symbols with 60+ days of data...")
         with _SyncSessionLocal() as db:
             stmt = db.execute(
                 select(TickerDaily.symbol, func.count(TickerDaily.id).label("cnt"))
@@ -696,6 +714,7 @@ def _ticker_scores_sync() -> None:
             return
 
         logger.info("ticker_scores_sync: loading last 252 candles for %d symbols", universe_size)
+        update_job_status_sync("job.ticker_scores", "running", progress=10, message=f"Loading candle data for {universe_size} symbols...")
 
         with _SyncSessionLocal() as db:
             raw = db.execute(
@@ -740,8 +759,14 @@ def _ticker_scores_sync() -> None:
                 logger.info("ticker_scores_sync: shutdown requested, stopping at %d/%d", idx, total)
                 break
 
-            if idx > 0 and idx % 500 == 0:
+            if idx > 0 and idx % 100 == 0:
                 logger.info("ticker_scores_sync: progress %d/%d symbols", idx, total)
+                # Scale idx from 10% → 70% across the return-computation loop
+                progress = 10 + int((idx / total) * 60)
+                update_job_status_sync(
+                    "job.ticker_scores", "running", progress=progress,
+                    message=f"Computing returns: {idx}/{total} symbols",
+                )
 
             sym_df = df[df["symbol"] == symbol].sort_values("date")
 
@@ -773,6 +798,7 @@ def _ticker_scores_sync() -> None:
             })
 
         logger.info("ticker_scores_sync: computed returns for %d symbols, computing momentum", len(results))
+        update_job_status_sync("job.ticker_scores", "running", progress=75, message=f"Computing momentum scores for {len(results)} symbols...")
 
         valid_3m = {r["symbol"]: r["return_3m"] for r in results if r["return_3m"] is not None}
         valid_6m = {r["symbol"]: r["return_6m"] for r in results if r["return_6m"] is not None}
@@ -812,6 +838,7 @@ def _ticker_scores_sync() -> None:
             r["universe_size"] = universe_size
 
         logger.info("ticker_scores_sync: upserting %d rows to ticker_scores", len(results))
+        update_job_status_sync("job.ticker_scores", "running", progress=90, message=f"Upserting {len(results)} scores to DB...")
 
         with _SyncSessionLocal() as db:
             insert_stmt = sqlite_insert(TickerScore).values(results)
@@ -843,7 +870,10 @@ def _ticker_scores_sync() -> None:
 
 
 def ticker_scores_worker() -> None:
-    """Daemon thread: runs once at startup to populate ticker_scores cache."""
+    """Daemon thread: computes ticker scores at startup then on cron 0 0 * * * (midnight).
+
+    Also triggered mid-day by _ticker_daily_update_sync() after bhavcopy lands.
+    """
     logger.info("ticker_scores_worker: started")
 
     if not _is_job_enabled("job.ticker_scores"):
@@ -858,17 +888,25 @@ def ticker_scores_worker() -> None:
     update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
     _ticker_scores_sync()
 
-    logger.info("ticker_scores_worker: sleeping forever (triggered by _ticker_daily_update_sync)")
-
     while not _shutdown_event.is_set():
-        _sleep_interruptible(86400)
+        wait_secs = _seconds_until_next_cron("0 0 * * *")
+        logger.info("ticker_scores_worker: sleeping %.0fs until next cron (0 0 * * *)", wait_secs)
+        update_job_status_sync("job.ticker_scores", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.ticker_scores"):
+                update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
+            _ticker_scores_sync()
 
     update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
     logger.info("ticker_scores_worker: stopped")
 
-
 def ticker_indicators_worker() -> None:
-    """Daemon thread target for computing technical indicators."""
+    """Daemon thread target for computing technical indicators (cron: 0 11 * * 1-5)."""
     logger.info("ticker_indicators_worker: started")
 
     if not _is_job_enabled("job.ticker_indicators"):
@@ -883,16 +921,25 @@ def ticker_indicators_worker() -> None:
     update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting indicator computation...")
     _ticker_indicators_sync()
 
-    logger.info("ticker_indicators_worker: sleeping until next cycle")
-
     while not _shutdown_event.is_set():
-        _sleep_interruptible(3600)
+        wait_secs = _seconds_until_next_cron("0 11 * * 1-5")
+        logger.info("ticker_indicators_worker: sleeping %.0fs until next cron (0 11 * * 1-5)", wait_secs)
+        update_job_status_sync("job.ticker_indicators", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.ticker_indicators"):
+                update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Computing indicators...")
+            _ticker_indicators_sync()
 
     update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
     logger.info("ticker_indicators_worker: stopped")
 
 
-NEWS_CRAWL_INTERVAL = 5 * 60
+NEWS_CRON = "*/5 * * * *"
 NEWS_CRAWL_MAX_INTERVAL = 30 * 60
 
 
@@ -917,31 +964,36 @@ def _news_sync() -> None:
         update_job_status_sync("job.news", "failed", message="Error occurred")
 
 
-def _news_periodic_sync(current_interval: int) -> int:
-    """Single periodic news crawl (page 1 only). Returns updated interval."""
+def _news_periodic_sync(backoff_secs: float) -> float:
+    """Single periodic news crawl (page 1 only).
+
+    Returns the next sleep duration: resets to cron interval on success,
+    doubles (up to NEWS_CRAWL_MAX_INTERVAL) on empty result.
+    """
+    base = _seconds_until_next_cron(NEWS_CRON)
     try:
         update_job_status_sync("job.news", "running", progress=50, message="Crawling news...")
         stored = _run_async(_crawl_news_async(pages=1))
         if stored == 0:
-            new_interval = min(current_interval * 2, NEWS_CRAWL_MAX_INTERVAL)
-            logger.warning("news_sync: crawl returned 0 articles — backing off to %d s", new_interval)
-            update_job_status_sync("job.news", "waiting", progress=0, message=f"Backing off {new_interval}s")
+            new_interval = min(backoff_secs * 2, NEWS_CRAWL_MAX_INTERVAL)
+            logger.warning("news_sync: crawl returned 0 articles — backing off to %.0f s", new_interval)
+            update_job_status_sync("job.news", "waiting", progress=0, message=f"Backing off {new_interval:.0f}s")
             return new_interval
         else:
-            if current_interval > NEWS_CRAWL_INTERVAL:
-                logger.info("news_sync: crawl succeeded (%d articles) — resetting interval", stored)
+            if backoff_secs > base:
+                logger.info("news_sync: crawl succeeded (%d articles) — resetting to cron schedule", stored)
             update_job_status_sync("job.news", "waiting", progress=100, message="Waiting for next cycle")
-            return NEWS_CRAWL_INTERVAL
+            return base
     except Exception:
         logger.exception("news_sync: periodic crawl exception — keeping interval")
         update_job_status_sync("job.news", "failed", message="Error in periodic crawl")
-        return current_interval
+        return backoff_secs
 
 
 def news_worker() -> None:
-    """Daemon thread target for news crawling."""
+    """Daemon thread target for news crawling (cron: */5 * * * * with backoff)."""
     logger.info("news_worker: started")
-    
+
     if not _is_job_enabled("job.news"):
         logger.info("news_worker: disabled, waiting...")
         update_job_status_sync("job.news", "waiting", progress=0, message="Disabled")
@@ -950,14 +1002,15 @@ def news_worker() -> None:
         update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
         logger.info("news_worker: stopped")
         return
-    
+
     update_job_status_sync("job.news", "running", progress=10, message="Starting news crawl...")
     _news_sync()
 
-    current_interval = NEWS_CRAWL_INTERVAL
+    current_interval = _seconds_until_next_cron(NEWS_CRON)
     while not _shutdown_event.is_set():
-        logger.info("news_worker: next run in %d s (backoff: %s)", current_interval, current_interval > NEWS_CRAWL_INTERVAL)
-        update_job_status_sync("job.news", "waiting", progress=0, message=f"Sleeping {current_interval}s")
+        is_backoff = current_interval > _seconds_until_next_cron(NEWS_CRON)
+        logger.info("news_worker: next run in %.0f s (backoff: %s)", current_interval, is_backoff)
+        update_job_status_sync("job.news", "waiting", progress=0, message=f"Next run in {current_interval:.0f}s")
         if _sleep_interruptible(current_interval):
             break
         if not _shutdown_event.is_set():
@@ -975,7 +1028,6 @@ def news_worker() -> None:
     logger.info("news_worker: stopped")
 
 
-WATCHLIST_NEWS_INTERVAL = 5 * 60
 WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
 
 
@@ -1001,12 +1053,19 @@ def _watchlist_news_sync() -> None:
             logger.debug("watchlist_news_sync: watchlist is empty, skipping")
             return
 
-        logger.info("watchlist_news_sync: refreshing news for %d symbols: %s", len(symbols), symbols)
+        total = len(symbols)
+        logger.info("watchlist_news_sync: refreshing news for %d symbols: %s", total, symbols)
 
-        for symbol in symbols:
+        for idx, symbol in enumerate(symbols, 1):
             if _shutdown_event.is_set():
                 logger.info("watchlist_news_sync: shutdown requested, aborting")
                 return
+
+            update_job_status_sync(
+                "job.watchlist_news", "running",
+                progress=int((idx / total) * 100),
+                message=f"Fetching news: {symbol} ({idx}/{total})",
+            )
 
             with _SyncSessionLocal() as session:
                 stale_check = session.execute(
@@ -1039,9 +1098,9 @@ def _watchlist_news_sync() -> None:
 
 
 def watchlist_news_worker() -> None:
-    """Daemon thread target for watchlist news fetching."""
+    """Daemon thread target for watchlist news fetching (cron: */5 * * * *)."""
     logger.info("watchlist_news_worker: started")
-    
+
     if not _is_job_enabled("job.watchlist_news"):
         logger.info("watchlist_news_worker: disabled, waiting...")
         update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Disabled")
@@ -1050,13 +1109,14 @@ def watchlist_news_worker() -> None:
         update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
         logger.info("watchlist_news_worker: stopped")
         return
-    
+
     update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting...")
     _watchlist_news_sync()
 
     while not _shutdown_event.is_set():
-        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message=f"Sleeping {WATCHLIST_NEWS_INTERVAL}s")
-        if _sleep_interruptible(WATCHLIST_NEWS_INTERVAL):
+        wait_secs = _seconds_until_next_cron("*/5 * * * *")
+        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message=f"Next run in {wait_secs:.0f}s")
+        if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
             if not _is_job_enabled("job.watchlist_news"):
@@ -1150,9 +1210,9 @@ def _market_data_sync() -> None:
 
 
 def market_data_worker() -> None:
-    """Daemon thread target for market data fetching."""
+    """Daemon thread target for market data fetching (cron: */5 * * * *, market-hours only)."""
     logger.info("market_data_worker: started")
-    
+
     if not _is_job_enabled("job.market_data"):
         logger.info("market_data_worker: disabled, waiting...")
         update_job_status_sync("job.market_data", "waiting", progress=0, message="Disabled")
@@ -1161,15 +1221,15 @@ def market_data_worker() -> None:
         update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
         logger.info("market_data_worker: stopped")
         return
-    
+
     update_job_status_sync("job.market_data", "running", progress=0, message="Starting...")
     _market_data_sync()
 
     while not _shutdown_event.is_set():
         if _is_market_open():
-            wait = 5 * 60
-            logger.info("market_data_worker: market is open, next run in %d s", wait)
-            update_job_status_sync("job.market_data", "waiting", progress=100, message=f"Market open, next run in {wait}s")
+            wait = _seconds_until_next_cron("*/5 * * * *")
+            logger.info("market_data_worker: market is open, next run in %.0f s", wait)
+            update_job_status_sync("job.market_data", "waiting", progress=100, message=f"Market open, next run in {wait:.0f}s")
             if _sleep_interruptible(wait):
                 break
             if not _shutdown_event.is_set() and _is_market_open():
@@ -1195,21 +1255,34 @@ def market_data_worker() -> None:
 
 
 async def start_all_workers() -> list[threading.Thread]:
-    """Register jobs and spawn all background worker threads."""
+    """Register jobs and spawn all background worker threads.
+
+    Order matters — later workers depend on data produced by earlier ones:
+      1. ticker_backfill_worker    — ensures candle history exists (run-once)
+      2. stock_universe_worker     — populates symbol metadata
+      3. ticker_indicators_worker  — backfills indicators after candles exist
+      4. ticker_scores_worker      — needs indicators up to date
+      5. ticker_daily_update_worker — ongoing daily candle + score refresh
+      6. market_data_worker        — live sector/industry data (market-hours)
+      7. global_scan_worker        — needs ticker_scores populated
+      8. watchlist_notification_worker — needs market data + indicators
+      9. news_worker               — independent; crawls global news
+     10. watchlist_news_worker     — independent; per-symbol news
+    """
     register_all_jobs()
     await sync_all_jobs_to_db()
 
     targets = [
-        stock_universe_worker,
-        news_worker,
-        watchlist_news_worker,
-        market_data_worker,
-        watchlist_notification_worker,
-        global_scan_worker,
-        ticker_backfill_worker,
-        ticker_daily_update_worker,
-        ticker_indicators_worker,
-        ticker_scores_worker,
+        ticker_backfill_worker,        # 1 — candle history first
+        stock_universe_worker,         # 2 — symbol metadata
+        ticker_indicators_worker,      # 3 — indicator backfill
+        ticker_scores_worker,          # 4 — momentum scores
+        ticker_daily_update_worker,    # 5 — daily bhavcopy + refresh
+        market_data_worker,            # 6 — live market data
+        global_scan_worker,            # 7 — full-universe scan
+        watchlist_notification_worker, # 8 — watchlist alerts
+        news_worker,                   # 9 — global news
+        watchlist_news_worker,         # 10 — per-symbol news
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -1974,9 +2047,12 @@ async def _fetch_insider_trades_async(symbol: str) -> list[dict]:
 
 
 def watchlist_notification_worker() -> None:
-    """Daemon thread: monitors watchlist stocks for significant market events."""
+    """Daemon thread: monitors watchlist stocks for significant market events.
+
+    Cron: */5 * * * * during market hours; */30 * * * * after hours.
+    """
     logger.info("watchlist_notification_worker: started")
-    
+
     if not _is_job_enabled("job.notifications"):
         logger.info("watchlist_notification_worker: disabled, waiting...")
         update_job_status_sync("job.notifications", "waiting", progress=0, message="Disabled")
@@ -1985,7 +2061,7 @@ def watchlist_notification_worker() -> None:
         update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
         logger.info("watchlist_notification_worker: stopped")
         return
-    
+
     update_job_status_sync("job.notifications", "running", progress=0, message="Starting...")
     _sleep_interruptible(30)  # wait for app startup before first cycle
 
@@ -1997,13 +2073,15 @@ def watchlist_notification_worker() -> None:
         if _is_market_open():
             update_job_status_sync("job.notifications", "running", progress=50, message="Checking market events...")
             _notification_cycle_full()
-            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"Sleeping {NOTIFICATION_CHECK_INTERVAL}s")
-            _sleep_interruptible(NOTIFICATION_CHECK_INTERVAL)
+            wait = _seconds_until_next_cron("*/5 * * * *")
+            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"Next run in {wait:.0f}s")
+            _sleep_interruptible(wait)
         else:
             update_job_status_sync("job.notifications", "waiting", progress=0, message="Market closed, checking after-hours...")
             _notification_cycle_reduced()
-            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"Sleeping {AFTER_HOURS_INTERVAL}s")
-            _sleep_interruptible(AFTER_HOURS_INTERVAL)
+            wait = _seconds_until_next_cron("*/30 * * * *")
+            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"After-hours, next run in {wait:.0f}s")
+            _sleep_interruptible(wait)
 
     update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
     logger.info("watchlist_notification_worker: stopped")
@@ -2263,6 +2341,11 @@ def _global_scan_cycle() -> None:
                     logger.exception(f"global_scan_cycle: failed for {symbol}")
 
             if i + GLOBAL_SCAN_BATCH_SIZE < total_symbols:
+                progress = int((processed / total_symbols) * 100)
+                update_job_status_sync(
+                    "job.global_scan", "running", progress=progress,
+                    message=f"Scanning {processed}/{total_symbols} symbols, {alerts_generated} alerts",
+                )
                 if _sleep_interruptible(GLOBAL_SCAN_DELAY):
                     break
 
@@ -2280,7 +2363,7 @@ def _global_scan_cycle() -> None:
 
 
 def global_scan_worker() -> None:
-    """Daemon thread: scans all NSE stocks every 30 minutes."""
+    """Daemon thread: scans all NSE stocks on cron */30 * * * *."""
     logger.info("global_scan_worker: started")
 
     if not _is_job_enabled("job.global_scan"):
@@ -2293,7 +2376,7 @@ def global_scan_worker() -> None:
         return
 
     update_job_status_sync("job.global_scan", "running", progress=0, message="Starting...")
-    _sleep_interruptible(60)
+    _sleep_interruptible(60)  # allow other workers to initialise before first scan
 
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.global_scan"):
@@ -2302,8 +2385,10 @@ def global_scan_worker() -> None:
             continue
         update_job_status_sync("job.global_scan", "running", progress=50, message="Scanning all NSE stocks...")
         _global_scan_cycle()
-        update_job_status_sync("job.global_scan", "waiting", progress=100, message="Sleeping 30min")
-        _sleep_interruptible(1800)
+        wait = _seconds_until_next_cron("*/30 * * * *")
+        update_job_status_sync("job.global_scan", "waiting", progress=100, message=f"Next scan in {wait:.0f}s")
+        if _sleep_interruptible(wait):
+            break
 
     update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
     logger.info("global_scan_worker: stopped")
@@ -2364,11 +2449,15 @@ async def _batch_update_fair_values(
     symbols: list[str],
     update_morningstar_id: bool = False,
     update_fair_value: bool = True,
+    progress_job_key: str | None = None,
+    progress_start: int = 0,
+    progress_end: int = 100,
 ) -> tuple[int, int]:
     """Batch update fair values for symbols. Returns (updated, failed)."""
     updated = 0
     failed = 0
     pending: list[tuple] = []
+    total = len(symbols)
 
     async with AsyncSessionLocal() as db:
         for i, symbol in enumerate(symbols, 1):
@@ -2401,7 +2490,13 @@ async def _batch_update_fair_values(
                     )
                     await db.execute(stmt)
                 await db.commit()
-                logger.debug(f"Fair value sync progress: {i}/{len(symbols)}")
+                if progress_job_key and total:
+                    pct = progress_start + int((i / total) * (progress_end - progress_start))
+                    await update_job_status(
+                        progress_job_key, "running", progress=pct,
+                        message=f"Fetching fair values: {i}/{total}",
+                    )
+                logger.debug(f"Fair value sync progress: {i}/{total}")
                 pending = []
 
             await asyncio.sleep(REQUEST_DELAY)
@@ -2419,10 +2514,16 @@ async def _batch_update_fair_values(
     return updated, failed
 
 
-async def _batch_resolve_morningstar_ids(symbols: list[str]) -> int:
+async def _batch_resolve_morningstar_ids(
+    symbols: list[str],
+    progress_job_key: str | None = None,
+    progress_start: int = 0,
+    progress_end: int = 100,
+) -> int:
     """Batch resolve Morningstar IDs for symbols. Returns count of resolved IDs."""
     resolved = 0
     pending: list[tuple] = []
+    total = len(symbols)
 
     async with AsyncSessionLocal() as db:
         for i, symbol in enumerate(symbols, 1):
@@ -2444,7 +2545,13 @@ async def _batch_resolve_morningstar_ids(symbols: list[str]) -> int:
                     )
                     await db.execute(stmt)
                 await db.commit()
-                logger.info(f"ID sync progress: {i}/{len(symbols)}")
+                if progress_job_key and total:
+                    pct = progress_start + int((i / total) * (progress_end - progress_start))
+                    await update_job_status(
+                        progress_job_key, "running", progress=pct,
+                        message=f"Resolving Morningstar IDs: {i}/{total}",
+                    )
+                logger.info(f"ID sync progress: {i}/{total}")
                 pending = []
 
             await asyncio.sleep(REQUEST_DELAY)
@@ -2489,7 +2596,12 @@ async def sync_watchlist_fair_values():
                 await update_job_status("job.watchlist_fair_value", "idle", progress=100, message="No symbols to sync")
                 return
 
-            updated, failed = await _batch_update_fair_values(symbols)
+            updated, failed = await _batch_update_fair_values(
+                symbols,
+                progress_job_key="job.watchlist_fair_value",
+                progress_start=5,
+                progress_end=95,
+            )
 
             logger.info(f"Watchlist fair value sync complete: {updated} updated, {failed} failed")
             await _update_sync_timestamp("last_watchlist_fairvalue_sync")
@@ -2527,13 +2639,24 @@ async def sync_all_fair_values():
                 return
 
             logger.info("Step 1: Populating missing Morningstar IDs")
-            await update_job_status("job.full_fair_value", "running", progress=25, message="Resolving Morningstar IDs...")
-            resolved_count = await _batch_resolve_morningstar_ids(all_symbols)
+            await update_job_status("job.full_fair_value", "running", progress=5, message="Resolving Morningstar IDs...")
+            resolved_count = await _batch_resolve_morningstar_ids(
+                all_symbols,
+                progress_job_key="job.full_fair_value",
+                progress_start=5,
+                progress_end=45,
+            )
             logger.info(f"Step 1 complete: {resolved_count} IDs populated")
 
             logger.info("Step 2: Fetching fair values")
             await update_job_status("job.full_fair_value", "running", progress=50, message="Fetching fair values...")
-            updated, failed = await _batch_update_fair_values(all_symbols, update_morningstar_id=True)
+            updated, failed = await _batch_update_fair_values(
+                all_symbols,
+                update_morningstar_id=True,
+                progress_job_key="job.full_fair_value",
+                progress_start=50,
+                progress_end=95,
+            )
             
             logger.info(f"Full universe fair value sync complete: {updated} updated, {failed} failed")
             await _update_sync_timestamp("last_full_fairvalue_sync")
@@ -2580,20 +2703,14 @@ async def _should_trigger_full_sync() -> bool:
 
 
 async def _run_watchlist_scheduler():
-    """Run every 3 hours."""
+    """Run every 3 hours (cron: 0 */3 * * *)."""
     while True:
-        await asyncio.sleep(3 * 60 * 60)
+        await asyncio.sleep(_seconds_until_next_cron("0 */3 * * *"))
         await sync_watchlist_fair_values()
 
 
 async def _run_nightly_scheduler():
-    """Run at 2 AM IST daily."""
+    """Run at 8:30 PM UTC daily (cron: 30 20 * * *)."""
     while True:
-        now = datetime.now(timezone.utc)
-        target = now.replace(hour=20, minute=30, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-
-        seconds_until_target = (target - now).total_seconds()
-        await asyncio.sleep(seconds_until_target)
+        await asyncio.sleep(_seconds_until_next_cron("30 20 * * *"))
         await sync_all_fair_values()

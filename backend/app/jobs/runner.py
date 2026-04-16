@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, update
@@ -52,12 +52,6 @@ async def update_job_status(
         if status in ("idle", "waiting") or last_completed:
             values["last_completed_at"] = last_completed if last_completed else now
         
-        # Auto-calculate next_trigger for waiting/idle status if not provided
-        if status in ("waiting", "idle") and next_trigger is None:
-            job_def = JobRegistry.get(job_key)
-            if job_def and job_def.schedule_type == "interval" and job_def.interval_seconds:
-                next_trigger = now + timedelta(seconds=job_def.interval_seconds)
-        
         if progress is not None:
             values["progress_percent"] = progress
         if message is not None:
@@ -106,12 +100,6 @@ def update_job_status_sync(
             if status in ("idle", "waiting") or last_completed:
                 values["last_completed_at"] = last_completed if last_completed else now
             
-            # Auto-calculate next_trigger for waiting/idle status if not provided
-            if status in ("waiting", "idle") and next_trigger is None:
-                job_def = JobRegistry.get(job_key)
-                if job_def and job_def.schedule_type == "interval" and job_def.interval_seconds:
-                    next_trigger = now + timedelta(seconds=job_def.interval_seconds)
-            
             if progress is not None:
                 values["progress_percent"] = progress
             if message is not None:
@@ -126,21 +114,6 @@ def update_job_status_sync(
             db.commit()
     except Exception as e:
         logger.warning(f"Failed to update job status for {job_key}: {e}")
-
-
-def calculate_next_trigger(
-    schedule_type: str,
-    interval_seconds: int | None,
-    last_triggered: datetime | None,
-) -> datetime | None:
-    """Calculate next trigger time based on schedule type."""
-    if not last_triggered:
-        return None
-
-    if schedule_type == "interval" and interval_seconds:
-        return last_triggered + timedelta(seconds=interval_seconds)
-
-    return None
 
 
 async def sync_job_to_db(job_key: str) -> None:
@@ -159,8 +132,6 @@ async def sync_job_to_db(job_key: str) -> None:
             name=job_def.name,
             description=job_def.description,
             category=job_def.category,
-            schedule_type=job_def.schedule_type,
-            interval_seconds=job_def.interval_seconds,
             cron_expression=job_def.cron_expression,
             is_manual_only=job_def.is_manual_only,
             status="idle",
@@ -237,19 +208,12 @@ async def trigger_job(job_key: str, force: bool = False) -> dict:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, job_def.callable)
 
-        next_trigger = calculate_next_trigger(
-            job_def.schedule_type,
-            job_def.interval_seconds,
-            now,
-        )
-
         await update_job_status(
             job_key,
             "idle",
             progress=100,
             message="Completed",
             last_completed=now,
-            next_trigger=next_trigger,
         )
         logger.info(f"Job {job_key} completed successfully")
 
@@ -291,19 +255,12 @@ async def run_job_async(job_key: str) -> None:
             await loop.run_in_executor(None, job_def.callable)
 
         now = datetime.now(timezone.utc)
-        next_trigger = calculate_next_trigger(
-            job_def.schedule_type,
-            job_def.interval_seconds,
-            now,
-        )
-
         await update_job_status(
             job_key,
             "idle",
             progress=100,
             message="Completed",
             last_completed=now,
-            next_trigger=next_trigger,
         )
         logger.info(f"Job {job_key} completed successfully")
 

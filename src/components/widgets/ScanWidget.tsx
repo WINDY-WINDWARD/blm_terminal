@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useAtom } from 'jotai';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import ReactDOM from 'react-dom';
 import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 
 interface GlobalNotification {
@@ -124,6 +125,8 @@ export function ScanWidget() {
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
+
+  const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
 
   const { data, isLoading, isError, error, refetch } = useQuery<GlobalNotification[]>({
     queryKey: ['global-notifications'],
@@ -252,6 +255,8 @@ export function ScanWidget() {
               <div
                 key={n.id}
                 onClick={() => handleRowClick(n)}
+                onMouseEnter={(e) => setHoveredNotif({ id: n.id, rect: e.currentTarget.getBoundingClientRect() })}
+                onMouseLeave={() => setHoveredNotif(null)}
                 className="relative flex items-center gap-2 px-2 py-[4px] bg-zinc-900 hover:bg-zinc-800 cursor-pointer group border border-terminal-gray/20 rounded-sm"
               >
                 <span className={`shrink-0 text-[8px] font-bold px-1 py-px rounded ${getBadgeColor(n.trigger_type)}`}>
@@ -274,24 +279,35 @@ export function ScanWidget() {
                 >
                   ×
                 </button>
-                <div className="absolute -top-1 left-0 z-[9999] hidden group-hover:block pointer-events-none">
-                  <div className="bg-zinc-800 border border-terminal-amber/60 rounded-md shadow-2xl p-2 max-w-72 -translate-y-full">
-                    <div className="text-terminal-amber text-[10px] font-bold mb-1">
-                      {getBadgeLabel(n.trigger_type)}
-                    </div>
-                    <div className="text-white/80 text-[9px] mb-1 leading-snug">
-                      {getTooltipDescription(n.trigger_type)}
-                    </div>
-                    <div className="text-white/50 text-[8px] truncate">
-                      {n.message}
-                    </div>
-                  </div>
-                </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {hoveredNotif && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          className="fixed z-[99999] pointer-events-none"
+          style={{
+            left: hoveredNotif.rect.left,
+            top: hoveredNotif.rect.top - 4,
+            transform: 'translateY(-100%)',
+          }}
+        >
+          <div className="bg-zinc-800 border border-terminal-amber/60 rounded-md shadow-2xl p-3 max-w-80 mb-1">
+            <div className="text-terminal-amber text-[10px] font-bold mb-1">
+              {getBadgeLabel(filteredNotifications.find(n => n.id === hoveredNotif.id)?.trigger_type ?? '')}
+            </div>
+            <div className="text-white/80 text-[9px] mb-1 leading-snug">
+              {getTooltipDescription(filteredNotifications.find(n => n.id === hoveredNotif.id)?.trigger_type ?? '')}
+            </div>
+            <div className="text-white/50 text-[8px] truncate">
+              {filteredNotifications.find(n => n.id === hoveredNotif.id)?.message}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

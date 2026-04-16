@@ -14,11 +14,9 @@ class JobDefinition:
     name: str
     description: str
     category: str
-    schedule_type: str
-    interval_seconds: int | None = None
-    cron_expression: str | None = None
-    is_manual_only: bool = False
+    cron_expression: str
     callable: Callable[..., Any] | None = None
+    is_manual_only: bool = False
     is_async: bool = False
 
 

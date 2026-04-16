@@ -27,6 +27,7 @@ class JobStatus(BaseModel):
     name: str
     description: Optional[str] = None
     category: Optional[str] = None
+    cron_expression: Optional[str] = None
     status: str
     progress_percent: int = 0
     progress_message: Optional[str] = None

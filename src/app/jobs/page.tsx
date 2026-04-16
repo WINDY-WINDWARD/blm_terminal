@@ -8,6 +8,7 @@ interface Job {
   name: string;
   description: string | null;
   category: string | null;
+  cron_expression: string | null;
   status: string;
   progress_percent: number;
   progress_message: string | null;
@@ -40,6 +41,21 @@ function formatDate(dateStr: string | null): string {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+function formatCron(expr: string | null | undefined): string {
+  if (!expr) return '—';
+  const map: Record<string, string> = {
+    '@startup':          'Run once (startup)',
+    '0 0 * * *':         'Daily midnight',
+    '0 11 * * 1-5':      'Weekdays 11:00',
+    '30 10,14 * * 1-5':  'Weekdays 10:30 & 14:30',
+    '*/5 * * * *':       'Every 5 min',
+    '*/30 * * * *':      'Every 30 min',
+    '0 */3 * * *':       'Every 3 hours',
+    '30 20 * * *':       'Daily 20:30 UTC',
+  };
+  return map[expr] ?? expr;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -247,6 +263,7 @@ export default function JobsPage() {
                   <tr className="border-b border-terminal-gray text-terminal-amber uppercase text-[10px] tracking-widest">
                     <th className="text-left py-2 px-2">Job</th>
                     <th className="text-left py-2 px-2">Category</th>
+                    <th className="text-left py-2 px-2">Schedule</th>
                     <th className="text-left py-2 px-2">Status</th>
                     <th className="text-right py-2 px-2">Progress</th>
                     <th className="text-left py-2 px-2">Last Triggered</th>
@@ -267,12 +284,15 @@ export default function JobsPage() {
                         <div className="text-white/50 text-[10px]">{job.description}</div>
                       </td>
                       <td className="py-2 px-2 text-white/70">{job.category || '—'}</td>
+                      <td className="py-2 px-2 text-white/60 text-[10px] whitespace-nowrap">
+                        {formatCron(job.cron_expression)}
+                      </td>
                       <td className="py-2 px-2">
                         <StatusBadge status={job.status} />
                       </td>
                       <td className="py-2 px-2 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <div className="w-16 h-1.5 bg-terminal-gray rounded overflow-hidden">
+                          <div className="w-24 h-1.5 bg-terminal-gray rounded overflow-hidden">
                             <div
                               className={`h-full transition-all ${
                                 job.status === 'failed'
