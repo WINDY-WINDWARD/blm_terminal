@@ -63,6 +63,21 @@ EXPECTED_TOOLS = {
     "list_stock_universe",
     "get_stock_universe",
     "search_stock_universe",
+    "list_watchlist",
+    "get_watchlist_symbols",
+    "add_watchlist_item",
+    "remove_watchlist_item",
+    "list_watchlists",
+    "get_watchlist_items",
+    "get_notifications",
+    "get_global_notifications",
+    "get_morningstar_fairvalue",
+    "get_global_news",
+    "get_company_news",
+    "list_industries",
+    "list_sectors",
+    "get_industry_stocks",
+    "get_sector_stocks",
 }
 
 
@@ -301,3 +316,579 @@ class TestMCPScreenerQuarterly:
             )
         assert result.isError
         assert len(result.content) > 0
+
+
+# ---------------------------------------------------------------------------
+# Watchlist CRUD tests (existing tools)
+# ---------------------------------------------------------------------------
+
+
+class TestMCPWatchlistTools:
+    """In-process tests for watchlist CRUD tools."""
+
+    async def test_list_watchlist_returns_list(self):
+        """list_watchlist returns a list of items."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("list_watchlist", {})
+        assert not result.isError
+        assert len(result.content) > 0
+
+    async def test_get_watchlist_symbols_returns_strings(self):
+        """get_watchlist_symbols returns a list of symbol strings."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_watchlist_symbols", {})
+        assert not result.isError
+        assert len(result.content) > 0
+
+    async def test_add_watchlist_item_returns_dict(self):
+        """add_watchlist_item returns a dict with id, symbol, exchange."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "add_watchlist_item", {"symbol": "TESTST", "exchange": "NSE"}
+            )
+        assert not result.isError
+        assert len(result.content) > 0
+        data = json.loads(result.content[0].text)
+        assert "id" in data
+        assert data["symbol"] == "TESTST"
+        assert data["exchange"] == "NSE"
+
+    async def test_add_watchlist_item_idempotent(self):
+        """Adding the same item twice returns the same id."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result1 = await client.call_tool(
+                "add_watchlist_item", {"symbol": "IDEMST", "exchange": "NSE"}
+            )
+        data1 = json.loads(result1.content[0].text)
+        id1 = data1["id"]
+
+        async with create_connected_server_and_client_session(mcp) as client:
+            result2 = await client.call_tool(
+                "add_watchlist_item", {"symbol": "IDEMST", "exchange": "NSE"}
+            )
+        data2 = json.loads(result2.content[0].text)
+        id2 = data2["id"]
+
+        assert id1 == id2
+
+    async def test_add_watchlist_item_normalizes_case(self):
+        """add_watchlist_item normalizes symbol to uppercase."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "add_watchlist_item", {"symbol": "lower", "exchange": "nse"}
+            )
+        data = json.loads(result.content[0].text)
+        assert data["symbol"] == "LOWER"
+        assert data["exchange"] == "NSE"
+
+    async def test_add_watchlist_item_missing_exchange_is_error(self):
+        """add_watchlist_item without exchange returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "add_watchlist_item", {"symbol": "TESTST"}
+            )
+        assert result.isError
+
+    async def test_remove_watchlist_item_returns_ok(self):
+        """remove_watchlist_item returns ok=True when item exists."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            add_result = await client.call_tool(
+                "add_watchlist_item", {"symbol": "DELTEST", "exchange": "NSE"}
+            )
+        item = json.loads(add_result.content[0].text)
+        item_id = item["id"]
+
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "remove_watchlist_item", {"item_id": item_id}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert data.get("ok") is True
+
+    async def test_remove_watchlist_item_nonexistent_is_error(self):
+        """remove_watchlist_item with invalid id returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "remove_watchlist_item", {"item_id": 999999}
+            )
+        assert result.isError
+
+
+# ---------------------------------------------------------------------------
+# New watchlist tools: list_watchlists, get_watchlist_items
+# ---------------------------------------------------------------------------
+
+
+class TestMCPNewWatchlistTools:
+    """In-process tests for list_watchlists and get_watchlist_items."""
+
+    async def test_list_watchlists_returns_list(self):
+        """list_watchlists returns a list (possibly empty)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("list_watchlists", {})
+        assert not result.isError
+        assert len(result.content) > 0
+
+    async def test_get_watchlist_items_nonexistent_is_error(self):
+        """get_watchlist_items with nonexistent id returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_watchlist_items", {"watchlist_id": 999999}
+            )
+        assert result.isError
+
+
+# ---------------------------------------------------------------------------
+# Notification tools
+# ---------------------------------------------------------------------------
+
+
+class TestMCPNotificationTools:
+    """In-process tests for notification tools."""
+
+    async def test_get_notifications_returns_list(self):
+        """get_notifications returns a list (possibly empty)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_notifications", {"watchlist_id": 1})
+        assert not result.isError
+        assert len(result.content) > 0
+
+    async def test_get_global_notifications_returns_list(self):
+        """get_global_notifications with limit returns a list (possibly empty)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_global_notifications", {"limit": 5}
+            )
+        assert not result.isError
+        assert len(result.content) > 0
+
+
+# ---------------------------------------------------------------------------
+# Morningstar tool
+# ---------------------------------------------------------------------------
+
+
+class TestMCPMorningstarTool:
+    """In-process tests for get_morningstar_fairvalue."""
+
+    async def test_single_symbol_callable(self):
+        """get_morningstar_fairvalue with single symbol is callable."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_morningstar_fairvalue", {"symbol": "RELIANCE"}
+            )
+        assert len(result.content) > 0
+        assert result.content[0].text
+
+    async def test_neither_param_is_error(self):
+        """Neither symbol nor symbols returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_morningstar_fairvalue", {}
+            )
+        assert result.isError
+
+    async def test_both_params_is_error(self):
+        """Both symbol and symbols returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_morningstar_fairvalue",
+                {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            )
+        assert result.isError
+
+
+# ---------------------------------------------------------------------------
+# Company news tool
+# ---------------------------------------------------------------------------
+
+
+class TestMCPCompanyNews:
+    """In-process tests for get_company_news."""
+
+    async def test_single_symbol_callable(self):
+        """get_company_news with single symbol is callable."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_news", {"symbol": "RELIANCE", "refresh": False}
+            )
+        assert len(result.content) > 0
+        assert result.content[0].text
+
+    async def test_neither_param_is_error(self):
+        """Neither symbol nor symbols returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_company_news", {})
+        assert result.isError
+
+    async def test_both_params_is_error(self):
+        """Both symbol and symbols returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_news",
+                {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            )
+        assert result.isError
+
+
+# ---------------------------------------------------------------------------
+# Global news tool
+# ---------------------------------------------------------------------------
+
+
+class TestMCPGlobalNews:
+    """In-process tests for get_global_news."""
+
+    async def test_returns_list(self):
+        """get_global_news returns a list (possibly empty)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_global_news", {})
+        assert not result.isError
+        assert len(result.content) > 0
+
+
+# ---------------------------------------------------------------------------
+# Industry and sector tools
+# ---------------------------------------------------------------------------
+
+
+class TestMCPIndustrySector:
+    """In-process tests for industry and sector tools."""
+
+    async def test_list_industries_returns_list_with_slug(self):
+        """list_industries returns list with slug field."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("list_industries", {})
+        assert not result.isError
+        assert len(result.content) > 0
+        first = json.loads(result.content[0].text)
+        assert "slug" in first
+
+    async def test_list_sectors_returns_list(self):
+        """list_sectors returns list (possibly empty)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("list_sectors", {})
+        assert not result.isError
+        # Sectors may be empty in test DB - check either content or structuredContent
+        if result.content:
+            data = json.loads(result.content[0].text)
+        else:
+            data = result.structuredContent.get("result", [])
+        assert isinstance(data, list)
+
+    async def test_get_industry_stocks_valid_slug(self):
+        """get_industry_stocks with valid slug returns list (possibly empty)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_industry_stocks", {"slug": "bank-private"}
+            )
+        assert not result.isError
+        assert len(result.content) > 0
+
+    async def test_get_industry_stocks_invalid_slug_is_error(self):
+        """get_industry_stocks with invalid slug returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_industry_stocks", {"slug": "NOTEXIST999"}
+            )
+        assert result.isError
+
+    async def test_get_sector_stocks_invalid_slug_is_error(self):
+        """get_sector_stocks with invalid slug returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_sector_stocks", {"slug": "nonexistent-sector"}
+            )
+        assert result.isError
+
+
+# ---------------------------------------------------------------------------
+# Bulk symbol tests for all 11 symbol-taking tools
+# ---------------------------------------------------------------------------
+
+
+class TestMCPBulkSymbolTools:
+    """In-process tests for bulk symbol parameter on all tools that support it."""
+
+    async def test_get_bulk_deals_bulk_returns_dict(self):
+        """get_bulk_deals with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_bulk_deals", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_bulk_deals_neither_param_is_error(self):
+        """get_bulk_deals with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_bulk_deals", {})
+        assert result.isError
+
+    async def test_get_bulk_deals_both_params_is_error(self):
+        """get_bulk_deals with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_bulk_deals", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_block_deals_bulk_returns_dict(self):
+        """get_block_deals with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_block_deals", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_block_deals_neither_param_is_error(self):
+        """get_block_deals with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_block_deals", {})
+        assert result.isError
+
+    async def test_get_block_deals_both_params_is_error(self):
+        """get_block_deals with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_block_deals", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_change_ranges_bulk_returns_dict(self):
+        """get_change_ranges with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_change_ranges", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_change_ranges_neither_param_is_error(self):
+        """get_change_ranges with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_change_ranges", {})
+        assert result.isError
+
+    async def test_get_change_ranges_both_params_is_error(self):
+        """get_change_ranges with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_change_ranges", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_symbol_data_bulk_returns_dict(self):
+        """get_symbol_data with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_symbol_data", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_symbol_data_neither_param_is_error(self):
+        """get_symbol_data with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_symbol_data", {})
+        assert result.isError
+
+    async def test_get_symbol_data_both_params_is_error(self):
+        """get_symbol_data with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_symbol_data", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_corporate_filings_bulk_returns_dict(self):
+        """get_corporate_filings with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_corporate_filings", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_corporate_filings_neither_param_is_error(self):
+        """get_corporate_filings with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_corporate_filings", {})
+        assert result.isError
+
+    async def test_get_corporate_filings_both_params_is_error(self):
+        """get_corporate_filings with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_corporate_filings", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_screener_company_bulk_returns_dict(self):
+        """screener_company with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "screener_company", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert len(result.content) > 0
+        if not result.isError:
+            data = json.loads(result.content[0].text)
+            assert isinstance(data, dict)
+
+    async def test_screener_company_neither_param_is_error(self):
+        """screener_company with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("screener_company", {})
+        assert result.isError
+
+    async def test_screener_company_both_params_is_error(self):
+        """screener_company with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "screener_company", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_screener_trades_bulk_returns_dict(self):
+        """screener_trades with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "screener_trades", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert len(result.content) > 0
+        if not result.isError:
+            data = json.loads(result.content[0].text)
+            assert isinstance(data, dict)
+
+    async def test_screener_trades_neither_param_is_error(self):
+        """screener_trades with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("screener_trades", {})
+        assert result.isError
+
+    async def test_screener_trades_both_params_is_error(self):
+        """screener_trades with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "screener_trades", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_company_quarterly_results_bulk_returns_dict(self):
+        """get_company_quarterly_results with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_quarterly_results", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert len(result.content) > 0
+        if not result.isError:
+            data = json.loads(result.content[0].text)
+            assert isinstance(data, dict)
+
+    async def test_get_company_quarterly_results_neither_param_is_error(self):
+        """get_company_quarterly_results with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_company_quarterly_results", {})
+        assert result.isError
+
+    async def test_get_company_quarterly_results_both_params_is_error(self):
+        """get_company_quarterly_results with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_quarterly_results",
+                {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            )
+        assert result.isError
+
+    async def test_get_stock_universe_bulk_returns_dict(self):
+        """get_stock_universe with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_stock_universe", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_stock_universe_neither_param_is_error(self):
+        """get_stock_universe with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_stock_universe", {})
+        assert result.isError
+
+    async def test_get_stock_universe_both_params_is_error(self):
+        """get_stock_universe with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_stock_universe", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_company_news_bulk_returns_dict(self):
+        """get_company_news with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_news", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_company_news_neither_param_is_error(self):
+        """get_company_news with neither param returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool("get_company_news", {})
+        assert result.isError
+
+    async def test_get_company_news_both_params_is_error(self):
+        """get_company_news with both params returns isError."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_company_news", {"symbol": "RELIANCE", "symbols": ["TCS"]}
+            )
+        assert result.isError
+
+    async def test_get_morningstar_fairvalue_bulk_returns_dict(self):
+        """get_morningstar_fairvalue with symbols returns dict keyed by symbol."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_morningstar_fairvalue", {"symbols": ["RELIANCE", "TCS"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    async def test_get_morningstar_fairvalue_bulk_values_accepted(self):
+        """Bulk morningstar values may be real data or error dicts (test env)."""
+        async with create_connected_server_and_client_session(mcp) as client:
+            result = await client.call_tool(
+                "get_morningstar_fairvalue", {"symbols": ["RELIANCE", "NOTEXIST999"]}
+            )
+        assert not result.isError
+        data = json.loads(result.content[0].text)
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "NOTEXIST999" in data

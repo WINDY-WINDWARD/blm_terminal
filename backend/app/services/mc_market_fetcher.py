@@ -74,9 +74,28 @@ class MarketDataFetcher:
         return self._client
 
     async def _load_fresh_cookies(self) -> bool:
-        """Load real browser cookies from Firefox profile via rookiepy."""
+        """Load browser cookies from pickle (pre-extracted on Windows) or fallback to rookiepy."""
         if self._cookies_loaded:
             return True
+
+        from app.services.cookie_loader import load_cookies_from_pickle
+
+        pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "moneycontrol")
+        if pickle_cookies:
+            client = await self._get_client()
+            for c in pickle_cookies:
+                raw_domain = c.get("domain")
+                domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                name_str: str = str(c.get("name")) if c.get("name") else ""
+                value_str: str = str(c.get("value")) if c.get("value") else ""
+                client.cookies.set(
+                    name_str, value_str, domain=domain_str if domain_str else ""
+                )
+            self._cookies_loaded = True
+            logger.info("_load_fresh_cookies: loaded %d cookies from pickle", len(pickle_cookies))
+            return True
+
+        # Fall back to browser extraction
         try:
             import rookiepy
 

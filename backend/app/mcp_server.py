@@ -122,43 +122,95 @@ async def get_top_losers() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def get_bulk_deals(symbol: str) -> list[dict[str, Any]]:
-    """Fetch recent NSE bulk deal records for a given stock symbol.
+async def get_bulk_deals(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch recent NSE bulk deal records for one or multiple stock symbols.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
+            Mutually exclusive with symbol.
+
+    Returns a list of deal records in single-symbol mode, or a dict keyed by
+    symbol in bulk mode. Failed symbols return {"error": "<message>"}.
+    The snapshot is fetched only once when symbols is provided.
     """
-    symbol = symbol.upper()
-    cache_key = f"mcp_bulk_deals:{symbol}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
+
+    async def _fetch(sym: str, snapshot: dict) -> list[dict]:
+        sym = sym.upper()
+        cache_key = f"mcp_bulk_deals:{sym}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        rows = snapshot.get("BULK_DEALS_DATA", [])
+        filtered = [r for r in rows if r.get("symbol", "").upper() == sym]
+        _cache_set(cache_key, filtered)
+        return filtered
 
     snapshot = await _mcp_snapshot()
-    rows = snapshot.get("BULK_DEALS_DATA", [])
-    filtered = [r for r in rows if r.get("symbol", "").upper() == symbol]
-    _cache_set(cache_key, filtered)
-    return filtered
+    if symbol is not None:
+        return await _fetch(symbol, snapshot)
+    results = await asyncio.gather(
+        *[_fetch(s, snapshot) for s in symbols],
+        return_exceptions=True,
+    )
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
-async def get_block_deals(symbol: str) -> list[dict[str, Any]]:
-    """Fetch recent NSE block deal records for a given stock symbol.
+async def get_block_deals(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch recent NSE block deal records for one or multiple stock symbols.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
+            Mutually exclusive with symbol.
+
+    Returns a list of deal records in single-symbol mode, or a dict keyed by
+    symbol in bulk mode. Failed symbols return {"error": "<message>"}.
+    The snapshot is fetched only once when symbols is provided.
     """
-    symbol = symbol.upper()
-    cache_key = f"mcp_block_deals:{symbol}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
+
+    async def _fetch(sym: str, snapshot: dict) -> list[dict]:
+        sym = sym.upper()
+        cache_key = f"mcp_block_deals:{sym}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        rows = snapshot.get("BLOCK_DEALS_DATA", [])
+        filtered = [r for r in rows if r.get("symbol", "").upper() == sym]
+        _cache_set(cache_key, filtered)
+        return filtered
 
     snapshot = await _mcp_snapshot()
-    rows = snapshot.get("BLOCK_DEALS_DATA", [])
-    filtered = [r for r in rows if r.get("symbol", "").upper() == symbol]
-    _cache_set(cache_key, filtered)
-    return filtered
+    if symbol is not None:
+        return await _fetch(symbol, snapshot)
+    results = await asyncio.gather(
+        *[_fetch(s, snapshot) for s in symbols],
+        return_exceptions=True,
+    )
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
@@ -194,54 +246,97 @@ async def get_largedeal_snapshot() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_change_ranges(symbol: str) -> dict[str, float | None]:
-    """Fetch NSE percentage price changes across multiple timeframes (1d to 5y) for a symbol.
+async def get_change_ranges(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch NSE percentage price changes across multiple timeframes (1d to 5y) for one or multiple symbols.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
+            Mutually exclusive with symbol.
 
-    Returns keys: oneDayPercent, oneWeekPercent, oneMonthPercent, threeMonthPercent,
-    sixMonthPercent, oneYearPercent, twoYearPercent, threeYearPercent, fiveYearPercent.
+    Returns keys per symbol: oneDayPercent, oneWeekPercent, oneMonthPercent,
+    threeMonthPercent, sixMonthPercent, oneYearPercent, twoYearPercent,
+    threeYearPercent, fiveYearPercent. In bulk mode returns a dict keyed by
+    symbol; failed symbols return {"error": "<message>"}.
     """
-    symbol = symbol.upper()
-    cache_key = f"mcp_change_ranges:{symbol}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
-    data = await throttled_nse_call(
-        f"change-ranges:{symbol}",
-        _active_client.get_change_ranges,
-        symbol,
-        is_async_fn=USE_ASYNC_NSE,
-    )
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return data
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper()
+        cache_key = f"mcp_change_ranges:{sym}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        data = await throttled_nse_call(
+            f"change-ranges:{sym}",
+            _active_client.get_change_ranges,
+            sym,
+            is_async_fn=USE_ASYNC_NSE,
+        )
+        data = _clean_nan(data)
+        _cache_set(cache_key, data)
+        return data
+
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
-async def get_symbol_data(symbol: str) -> dict[str, Any]:
-    """Fetch live NSE quote data for a symbol, including LTP, 52-week range, sector, and industry.
+async def get_symbol_data(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch live NSE quote data for one or multiple symbols, including LTP, 52-week range, sector, and industry.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
-    """
-    symbol = symbol.upper()
-    cache_key = f"mcp_symbol_data:{symbol}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
+            Mutually exclusive with symbol.
 
-    data = await throttled_nse_call(
-        f"symbol-data:{symbol}",
-        _active_client.get_symbol_data,
-        symbol,
-        is_async_fn=USE_ASYNC_NSE,
-    )
-    data = _clean_nan(data)
-    _cache_set(cache_key, data)
-    return data
+    In bulk mode returns a dict keyed by symbol; failed symbols return
+    {"error": "<message>"}.
+    """
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
+
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper()
+        cache_key = f"mcp_symbol_data:{sym}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        data = await throttled_nse_call(
+            f"symbol-data:{sym}",
+            _active_client.get_symbol_data,
+            sym,
+            is_async_fn=USE_ASYNC_NSE,
+        )
+        data = _clean_nan(data)
+        _cache_set(cache_key, data)
+        return data
+
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
@@ -304,62 +399,84 @@ async def get_volume_gainers() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_corporate_filings(symbol: str) -> dict[str, Any]:
-    """Fetch NSE quarterly corporate filing results for a symbol as pipe-delimited CSV.
+async def get_corporate_filings(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch NSE quarterly corporate filing results for one or multiple symbols as pipe-delimited CSV.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
+            Mutually exclusive with symbol.
 
-    Returns structured data containing: symbol, media_type, and csv_text.
+    Returns structured data containing: symbol, media_type, and csv_text in
+    single-symbol mode. In bulk mode returns a dict keyed by symbol; failed
+    symbols return {"error": "<message>"}.
     """
-    symbol = symbol.upper().strip()
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError(f"Invalid symbol format: {symbol}")
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
-    async with AsyncSessionLocal() as db:
-        record = await db.get(CorporateFiling, symbol)
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper().strip()
+        if not _SYMBOL_RE.fullmatch(sym):
+            raise ValueError(f"Invalid symbol format: {sym}")
 
-        from datetime import datetime, timedelta, timezone
+        async with AsyncSessionLocal() as db:
+            record = await db.get(CorporateFiling, sym)
 
-        stale_after = timedelta(days=30)
-        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
-        needs_refresh = record is None or (now - record.last_fetched_at) > stale_after
+            from datetime import datetime, timedelta, timezone
 
-        if needs_refresh:
-            try:
-                csv_text: str = await throttled_nse_call(
-                    f"corporate-filing:{symbol}",
-                    _active_client.get_corporate_filing_comparison,
-                    symbol,
-                    is_async_fn=USE_ASYNC_NSE,
-                )
-            except Exception as exc:
-                logger.exception("NSE fetch failed for %s", symbol)
-                raise RuntimeError(
-                    f"Failed to fetch corporate filings for {symbol} from NSE: {exc}"
-                ) from exc
-
+            stale_after = timedelta(days=30)
             now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
-            if record is None:
-                record = CorporateFiling(
-                    symbol=symbol,
-                    csv_data=csv_text,
-                    last_fetched_at=now,
-                )
-                db.add(record)
+            needs_refresh = record is None or (now - record.last_fetched_at) > stale_after
+
+            if needs_refresh:
+                try:
+                    csv_text: str = await throttled_nse_call(
+                        f"corporate-filing:{sym}",
+                        _active_client.get_corporate_filing_comparison,
+                        sym,
+                        is_async_fn=USE_ASYNC_NSE,
+                    )
+                except Exception as exc:
+                    logger.exception("NSE fetch failed for %s", sym)
+                    raise RuntimeError(
+                        f"Failed to fetch corporate filings for {sym} from NSE: {exc}"
+                    ) from exc
+
+                now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+                if record is None:
+                    record = CorporateFiling(
+                        symbol=sym,
+                        csv_data=csv_text,
+                        last_fetched_at=now,
+                    )
+                    db.add(record)
+                else:
+                    record.csv_data = csv_text
+                    record.last_fetched_at = now
+
+                await db.commit()
+                logger.info("Corporate filings refreshed for %s", sym)
             else:
-                record.csv_data = csv_text
-                record.last_fetched_at = now
+                csv_text = record.csv_data
 
-            await db.commit()
-            logger.info("Corporate filings refreshed for %s", symbol)
-        else:
-            csv_text = record.csv_data
+        return {
+            "symbol": sym,
+            "media_type": "text/csv",
+            "csv_text": csv_text,
+        }
 
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
     return {
-        "symbol": symbol,
-        "media_type": "text/csv",
-        "csv_text": csv_text,
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
     }
 
 
@@ -389,19 +506,29 @@ async def screener_search(q: str) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def screener_company(symbol: str, consolidated: bool = True) -> dict[str, Any]:
-    """Fetch fundamental ratios and quarterly results for an NSE company from screener.in.
+async def screener_company(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+    consolidated: bool = True,
+) -> dict[str, Any]:
+    """Fetch fundamental ratios and quarterly results for one or multiple NSE companies from screener.in.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "HDFCBANK", "INFY").
+        symbol: NSE ticker symbol for a single lookup (e.g. "HDFCBANK", "INFY").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["HDFCBANK", "INFY"]).
+            Mutually exclusive with symbol.
         consolidated: Use consolidated financials (default: True); set False for standalone.
+            Applies uniformly to all symbols in bulk mode.
 
     Returns: symbol, name, ratios (P/E, ROCE, ROE, etc.), quarters (last 4).
+    In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
     Requires screener.in authentication (browser session).
     """
-    symbol = symbol.upper().strip()
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError(f"Invalid symbol format: {symbol}")
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
     if not screener_client.is_authenticated:
         raise RuntimeError(
@@ -409,33 +536,55 @@ async def screener_company(symbol: str, consolidated: bool = True) -> dict[str, 
             "Log in at https://www.screener.in in Chrome, then restart the backend."
         )
 
-    cache_key = f"mcp_screener:company:{symbol}:{'c' if consolidated else 's'}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper().strip()
+        if not _SYMBOL_RE.fullmatch(sym):
+            raise ValueError(f"Invalid symbol format: {sym}")
+        cache_key = f"mcp_screener:company:{sym}:{'c' if consolidated else 's'}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        data = await screener_client.get_company(sym, consolidated=consolidated)
+        _cache_set(cache_key, data)
+        return data
 
-    data = await screener_client.get_company(symbol, consolidated=consolidated)
-    _cache_set(cache_key, data)
-    return data
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
-async def screener_trades(symbol: str, consolidated: bool = True) -> dict[str, Any]:
-    """Fetch insider trades, bulk deals, and block deals for an NSE company from screener.in.
+async def screener_trades(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+    consolidated: bool = True,
+) -> dict[str, Any]:
+    """Fetch insider trades, bulk deals, and block deals for one or multiple NSE companies from screener.in.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "HDFCBANK", "INFY").
+        symbol: NSE ticker symbol for a single lookup (e.g. "HDFCBANK", "INFY").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["HDFCBANK", "INFY"]).
+            Mutually exclusive with symbol.
         consolidated: Use consolidated financials (default: True); set False for standalone.
+            Applies uniformly to all symbols in bulk mode.
 
-    Returns:
+    Returns per symbol:
       - warehouse_id   : resolved screener trades company ID
       - insider_trades : list of insider trade records
       - bulk_deals     : list of bulk deal records
       - block_deals    : list of block deal records
+    In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
+    Requires screener.in authentication (browser session).
     """
-    symbol = symbol.upper().strip()
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError(f"Invalid symbol format: {symbol}")
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
     if not screener_client.is_authenticated:
         raise RuntimeError(
@@ -443,32 +592,44 @@ async def screener_trades(symbol: str, consolidated: bool = True) -> dict[str, A
             "Log in at https://www.screener.in in Chrome, then restart the backend."
         )
 
-    cache_key = f"mcp_screener:trades:{symbol}:{'c' if consolidated else 's'}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper().strip()
+        if not _SYMBOL_RE.fullmatch(sym):
+            raise ValueError(f"Invalid symbol format: {sym}")
+        cache_key = f"mcp_screener:trades:{sym}:{'c' if consolidated else 's'}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        async with AsyncSessionLocal() as db:
+            db_row: StockUniverseModel | None = await db.get(StockUniverseModel, sym)
+            cached_trades_id: str | None = db_row.screener_trades_id if db_row else None
+            if cached_trades_id:
+                data = await screener_client.get_trades(cached_trades_id)
+            else:
+                data, resolved_id = await screener_client.get_trades_by_symbol(
+                    sym, consolidated=consolidated
+                )
+                if db_row is not None:
+                    db_row.screener_trades_id = resolved_id
+                    await db.commit()
+        _cache_set(cache_key, data)
+        return data
 
-    async with AsyncSessionLocal() as db:
-        db_row: StockUniverseModel | None = await db.get(StockUniverseModel, symbol)
-        cached_trades_id: str | None = db_row.screener_trades_id if db_row else None
-
-        if cached_trades_id:
-            data = await screener_client.get_trades(cached_trades_id)
-        else:
-            data, resolved_id = await screener_client.get_trades_by_symbol(
-                symbol, consolidated=consolidated
-            )
-            if db_row is not None:
-                db_row.screener_trades_id = resolved_id
-                await db.commit()
-
-    _cache_set(cache_key, data)
-    return data
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
-async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
-    """Fetch all available quarterly financial results for an NSE company from screener.in.
+async def get_company_quarterly_results(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch all available quarterly financial results for one or multiple NSE companies from screener.in.
 
     Results are structured as year → month → {metric: value}, covering all
     rows in the #quarters table (Sales, Expenses, OPM%, Other Income, Interest,
@@ -478,7 +639,13 @@ async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
     Periods follow the format "Sep 2024"; trailing-twelve-month entries are
     returned under a month key of e.g. "Mar TTM".
 
-    Example output::
+    Args:
+        symbol: NSE ticker symbol for a single lookup (e.g. "HDFCBANK", "INFY").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["HDFCBANK", "INFY"]).
+            Mutually exclusive with symbol.
+
+    Example single-symbol output::
 
         {
             "symbol": "HDFCBANK",
@@ -494,14 +661,15 @@ async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
             }
         }
 
+    In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
     Requires screener.in authentication (browser session).
     """
     from bs4 import BeautifulSoup
 
-    consolidated = True
-    symbol = symbol.upper().strip()
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError(f"Invalid symbol format: {symbol}")
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
     if not screener_client.is_authenticated:
         raise RuntimeError(
@@ -509,27 +677,34 @@ async def get_company_quarterly_results(symbol: str) -> dict[str, Any]:
             "Log in at https://www.screener.in in Chrome, then restart the backend."
         )
 
-    cache_key = f"mcp_screener:quarterly:{symbol}:{'c' if consolidated else 's'}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached  # type: ignore[return-value]
+    consolidated = True
 
-    html = await screener_client.get_company_html(symbol, consolidated=consolidated)
-    soup = BeautifulSoup(html, "lxml")
-    quarterly_results = _parse_all_quarters(soup)
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper().strip()
+        if not _SYMBOL_RE.fullmatch(sym):
+            raise ValueError(f"Invalid symbol format: {sym}")
+        cache_key = f"mcp_screener:quarterly:{sym}:{'c' if consolidated else 's'}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        html = await screener_client.get_company_html(sym, consolidated=consolidated)
+        soup = BeautifulSoup(html, "lxml")
+        quarterly_results = _parse_all_quarters(soup)
+        result: dict[str, Any] = {
+            "symbol": sym,
+            "consolidated": consolidated,
+            "quarterly_results": quarterly_results,
+        }
+        _cache_set(cache_key, result)
+        return result
 
-    result: dict[str, Any] = {
-        "symbol": symbol,
-        "consolidated": consolidated,
-        "quarterly_results": quarterly_results,
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
     }
-
-    # Store with stored-at timestamp; quarterly data warrants the same 15-min
-    # TTL as the HTML cache — use _cache_set (flat 10-min TTL) here since the
-    # HTML cache is the authoritative 15-min layer; parsed quarterly data is
-    # just a view over it.
-    _cache_set(cache_key, result)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -561,17 +736,27 @@ async def list_stock_universe() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def get_stock_universe(symbol: str) -> dict[str, Any]:
+async def get_stock_universe(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
     """Look up NSE stock universe metadata by symbol — prefer screener_company for deeper research.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
+            Mutually exclusive with symbol. Issues a single IN query for efficiency.
+
+    In bulk mode returns a dict keyed by symbol. Symbols not found in the
+    stock universe return {"error": "Symbol '<SYM>' not found in stock universe"}.
     """
-    symbol = symbol.upper().strip()
-    async with AsyncSessionLocal() as db:
-        rec = await db.get(StockUniverseModel, symbol)
-        if rec is None:
-            raise ValueError(f"Symbol '{symbol}' not found in stock universe")
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
+
+    def _row_to_dict(rec: StockUniverseModel) -> dict[str, Any]:
         return {
             "symbol": rec.symbol,
             "companyName": rec.company_name,
@@ -583,6 +768,25 @@ async def get_stock_universe(symbol: str) -> dict[str, Any]:
             "lastUpdateTime": rec.last_update_time,
             "screenerTradesId": rec.screener_trades_id,
         }
+
+    if symbol is not None:
+        sym = symbol.upper().strip()
+        async with AsyncSessionLocal() as db:
+            rec = await db.get(StockUniverseModel, sym)
+            if rec is None:
+                raise ValueError(f"Symbol '{sym}' not found in stock universe")
+            return _row_to_dict(rec)
+
+    # Bulk: single IN query
+    sym_list = [s.upper().strip() for s in symbols]
+    async with AsyncSessionLocal() as db:
+        stmt = select(StockUniverseModel).where(StockUniverseModel.symbol.in_(sym_list))
+        res = await db.execute(stmt)
+        found = {r.symbol: _row_to_dict(r) for r in res.scalars().all()}
+    return {
+        sym: found.get(sym, {"error": f"Symbol '{sym}' not found in stock universe"})
+        for sym in sym_list
+    }
 
 
 @mcp.tool()
@@ -871,23 +1075,43 @@ async def get_global_notifications(
 
 
 @mcp.tool()
-async def get_morningstar_fairvalue(symbol: str) -> dict[str, Any]:
-    """Fetch Morningstar fair value estimate and uncertainty rating for an NSE stock symbol.
+async def get_morningstar_fairvalue(
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch Morningstar fair value estimate and uncertainty rating for one or multiple NSE stock symbols.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "TCS", "RELIANCE").
+        symbol: NSE ticker symbol for a single lookup (e.g. "TCS", "RELIANCE").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["TCS", "RELIANCE"]).
+            Mutually exclusive with symbol.
 
-    Returns: symbol, morningstarId, fairValue, updatedAt.
+    Returns per symbol: symbol, morningstarId, fairValue, updatedAt.
+    In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
     Requires a valid Morningstar browser session (rookiepy).
     """
     from app.services.morningstar_client import morningstar_client
 
-    symbol = symbol.upper().strip()
-    if not _SYMBOL_RE.fullmatch(symbol):
-        raise ValueError(f"Invalid symbol format: {symbol}")
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
-    async with AsyncSessionLocal() as db:
-        return await morningstar_client.get_fair_value_by_symbol(symbol, db=db)
+    async def _fetch(sym: str) -> dict[str, Any]:
+        sym = sym.upper().strip()
+        if not _SYMBOL_RE.fullmatch(sym):
+            raise ValueError(f"Invalid symbol format: {sym}")
+        async with AsyncSessionLocal() as db:
+            return await morningstar_client.get_fair_value_by_symbol(sym, db=db)
+
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 @mcp.tool()
@@ -930,9 +1154,13 @@ _COMPANY_NEWS_STALE_SECONDS = 5 * 60  # matches global crawl cadence
 
 @mcp.tool()
 async def get_company_news(
-    symbol: str, days: int = 30, limit: int = 50, refresh: bool = False
-) -> list[dict[str, Any]]:
-    """Fetch MoneyControl news articles for an NSE company, auto-refreshing stale content.
+    symbol: str | None = None,
+    symbols: list[str] | None = None,
+    days: int = 30,
+    limit: int = 50,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    """Fetch MoneyControl news articles for one or multiple NSE companies, auto-refreshing stale content.
 
     Automatically fetches fresh articles from MoneyControl when needed:
       - No articles stored yet for the symbol (first call)
@@ -944,77 +1172,95 @@ async def get_company_news(
     stored in the DB without attempting a live fetch.
 
     Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "INFY").
-        days: Number of days to look back (default: 30).
-        limit: Maximum number of articles to return (default: 50).
+        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "INFY").
+            Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "INFY"]).
+            Mutually exclusive with symbol.
+        days: Number of days to look back (default: 30). Applies to all symbols.
+        limit: Maximum number of articles to return per symbol (default: 50).
         refresh: Force a live fetch from MoneyControl even if articles are fresh (default: False).
+
+    Returns a list of articles in single-symbol mode. In bulk mode returns a
+    dict keyed by symbol; failed symbols return {"error": "<message>"}.
     """
     from datetime import datetime, timedelta
     from sqlalchemy import func, or_
 
-    symbol = symbol.upper()
-    start_date = datetime.now() - timedelta(days=days)
+    if symbol is None and symbols is None:
+        raise ValueError("Provide either 'symbol' or 'symbols'")
+    if symbol is not None and symbols is not None:
+        raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
-    async def _query_db(db) -> list[dict[str, Any]]:
-        stmt = (
-            select(NewsArticle)
-            .where(NewsArticle.company_symbol == symbol)
-            .where(
-                or_(
-                    NewsArticle.publish_date >= start_date,
-                    NewsArticle.publish_date.is_(None),
+    async def _fetch(sym: str) -> list[dict[str, Any]]:
+        sym = sym.upper()
+        start_date = datetime.now() - timedelta(days=days)
+
+        async def _query_db(db) -> list[dict[str, Any]]:
+            stmt = (
+                select(NewsArticle)
+                .where(NewsArticle.company_symbol == sym)
+                .where(
+                    or_(
+                        NewsArticle.publish_date >= start_date,
+                        NewsArticle.publish_date.is_(None),
+                    )
                 )
+                .order_by(NewsArticle.publish_date.desc().nullslast())
+                .limit(limit)
             )
-            .order_by(NewsArticle.publish_date.desc().nullslast())
-            .limit(limit)
-        )
-        result = await db.execute(stmt)
-        articles = result.scalars().all()
-        return [
-            {
-                "url": a.url,
-                "title": a.title,
-                "text": a.text,
-                "publish_date": a.publish_date.isoformat() if a.publish_date else None,
-                "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
-            }
-            for a in articles
-        ]
+            result = await db.execute(stmt)
+            articles = result.scalars().all()
+            return [
+                {
+                    "url": a.url,
+                    "title": a.title,
+                    "text": a.text,
+                    "publish_date": a.publish_date.isoformat() if a.publish_date else None,
+                    "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
+                }
+                for a in articles
+            ]
 
-    async def _latest_fetched_at(db) -> datetime | None:
-        """Return the most recent fetched_at timestamp for this symbol's articles."""
-        stmt = select(func.max(NewsArticle.fetched_at)).where(
-            NewsArticle.company_symbol == symbol
-        )
-        result = await db.execute(stmt)
-        return result.scalar_one_or_none()
+        async def _latest_fetched_at(db) -> datetime | None:
+            stmt = select(func.max(NewsArticle.fetched_at)).where(
+                NewsArticle.company_symbol == sym
+            )
+            result = await db.execute(stmt)
+            return result.scalar_one_or_none()
 
-    async with AsyncSessionLocal() as db:
-        existing = await _query_db(db)
-        latest_fetched = await _latest_fetched_at(db)
-
-    # Determine staleness: compare the most recent fetched_at to now
-    stale = True
-    if latest_fetched is not None:
-        age_seconds = (datetime.now() - latest_fetched).total_seconds()
-        stale = age_seconds > _COMPANY_NEWS_STALE_SECONDS
-
-    should_fetch = refresh or len(existing) == 0 or stale
-
-    if should_fetch:
-        logger.info(
-            "get_company_news: fetching %s (stale=%s, existing=%d, refresh=%s)",
-            symbol,
-            stale,
-            len(existing),
-            refresh,
-        )
         async with AsyncSessionLocal() as db:
-            await news_fetcher.fetch_company_news(symbol=symbol, db=db)
-        async with AsyncSessionLocal() as db:
-            return await _query_db(db)
+            existing = await _query_db(db)
+            latest_fetched = await _latest_fetched_at(db)
 
-    return existing
+        stale = True
+        if latest_fetched is not None:
+            age_seconds = (datetime.now() - latest_fetched).total_seconds()
+            stale = age_seconds > _COMPANY_NEWS_STALE_SECONDS
+
+        should_fetch = refresh or len(existing) == 0 or stale
+
+        if should_fetch:
+            logger.info(
+                "get_company_news: fetching %s (stale=%s, existing=%d, refresh=%s)",
+                sym,
+                stale,
+                len(existing),
+                refresh,
+            )
+            async with AsyncSessionLocal() as db:
+                await news_fetcher.fetch_company_news(symbol=sym, db=db)
+            async with AsyncSessionLocal() as db:
+                return await _query_db(db)
+
+        return existing
+
+    if symbol is not None:
+        return await _fetch(symbol)
+    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
 
 
 # ---------------------------------------------------------------------------

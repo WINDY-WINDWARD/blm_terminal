@@ -107,23 +107,38 @@ class NewsFetcher:
         )
         self._client_loop = current_loop
 
-        try:
-            import rookiepy
-            raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
-            if raw:
-                for c in raw:
-                    raw_domain = c.get("domain")
-                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                    name_str: str = str(c.get("name")) if c.get("name") else ""
-                    value_str: str = str(c.get("value")) if c.get("value") else ""
-                    self._client.cookies.set(
-                        name_str, value_str, domain=domain_str if domain_str else ""
-                    )
-                self._cookies_loaded = True
-                logger.info("NewsFetcher: loaded %d cookies into persistent httpx client", len(raw))
-        except Exception:
-            logger.warning("NewsFetcher: could not load cookies — proceeding without authentication")
-            self._cookies_loaded = False
+        from app.services.cookie_loader import load_cookies_from_pickle
+
+        pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "moneycontrol")
+        if pickle_cookies:
+            for c in pickle_cookies:
+                raw_domain = c.get("domain")
+                domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                name_str: str = str(c.get("name")) if c.get("name") else ""
+                value_str: str = str(c.get("value")) if c.get("value") else ""
+                self._client.cookies.set(
+                    name_str, value_str, domain=domain_str if domain_str else ""
+                )
+            self._cookies_loaded = True
+            logger.info("NewsFetcher: loaded %d cookies from pickle", len(pickle_cookies))
+        else:
+            try:
+                import rookiepy
+                raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
+                if raw:
+                    for c in raw:
+                        raw_domain = c.get("domain")
+                        domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                        name_str: str = str(c.get("name")) if c.get("name") else ""
+                        value_str: str = str(c.get("value")) if c.get("value") else ""
+                        self._client.cookies.set(
+                            name_str, value_str, domain=domain_str if domain_str else ""
+                        )
+                    self._cookies_loaded = True
+                    logger.info("NewsFetcher: loaded %d cookies into persistent httpx client", len(raw))
+            except Exception:
+                logger.warning("NewsFetcher: could not load cookies — proceeding without authentication")
+                self._cookies_loaded = False
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Return the persistent client, initializing lazily if needed."""

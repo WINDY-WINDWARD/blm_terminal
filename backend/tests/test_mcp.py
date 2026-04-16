@@ -112,6 +112,17 @@ class TestMCPToolDiscovery:
             "get_watchlist_symbols",
             "add_watchlist_item",
             "remove_watchlist_item",
+            "list_watchlists",
+            "get_watchlist_items",
+            "get_notifications",
+            "get_global_notifications",
+            "get_morningstar_fairvalue",
+            "get_global_news",
+            "get_company_news",
+            "list_industries",
+            "list_sectors",
+            "get_industry_stocks",
+            "get_sector_stocks",
         }
         assert expected_tools.issubset(tool_names)
 
@@ -518,3 +529,602 @@ class TestMCPWatchlistTools:
         assert "error" in result or (
             "result" in result and result["result"].get("isError") is True
         )
+
+
+class TestMCPNewWatchlistTools:
+    """Tests for list_watchlists and get_watchlist_items."""
+
+    def test_list_watchlists_returns_array(self):
+        """list_watchlists should return an array in structuredContent."""
+        result = mcp_request("tools/call", {"name": "list_watchlists", "arguments": {}})
+        assert "result" in result
+        data = result["result"]["structuredContent"]["result"]
+        assert isinstance(data, list)
+
+    def test_get_watchlist_items_nonexistent_is_error(self):
+        """get_watchlist_items with nonexistent id should error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_watchlist_items", "arguments": {"watchlist_id": 999999}},
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+
+class TestMCPNotificationTools:
+    """Tests for notification MCP tools."""
+
+    def test_get_notifications_returns_list(self):
+        """get_notifications should return a list (possibly empty)."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_notifications", "arguments": {"watchlist_id": 1}},
+        )
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        assert content[0]["type"] == "text"
+
+    def test_get_global_notifications_returns_list(self):
+        """get_global_notifications with limit should return a list (possibly empty)."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_global_notifications", "arguments": {"limit": 5}},
+        )
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        assert content[0]["type"] == "text"
+
+
+class TestMCPMorningstarTool:
+    """Tests for get_morningstar_fairvalue MCP tool."""
+
+    def test_single_symbol_callable(self):
+        """get_morningstar_fairvalue with single symbol is callable."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_morningstar_fairvalue", "arguments": {"symbol": "RELIANCE"}},
+        )
+        assert "result" in result or "error" in result
+        if "result" in result:
+            content = result["result"]["content"]
+            assert len(content) > 0
+            assert content[0]["type"] == "text"
+            assert content[0]["text"]
+
+    def test_neither_param_is_error(self):
+        """Neither symbol nor symbols returns error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_morningstar_fairvalue", "arguments": {}},
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_both_params_is_error(self):
+        """Both symbol and symbols returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_morningstar_fairvalue",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+
+class TestMCPCompanyNews:
+    """Tests for get_company_news MCP tool."""
+
+    @pytest.mark.slow
+    def test_single_symbol_callable(self):
+        """get_company_news with single symbol is callable."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_news",
+                "arguments": {"symbol": "RELIANCE", "refresh": False},
+            },
+        )
+        assert "result" in result or "error" in result
+        if "result" in result:
+            content = result["result"]["content"]
+            assert len(content) > 0
+            assert content[0]["type"] == "text"
+
+    def test_neither_param_is_error(self):
+        """Neither symbol nor symbols returns error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_company_news", "arguments": {}},
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_both_params_is_error(self):
+        """Both symbol and symbols returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_news",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+
+class TestMCPGlobalNews:
+    """Tests for get_global_news MCP tool."""
+
+    def test_returns_list(self):
+        """get_global_news returns a list (possibly empty)."""
+        result = mcp_request("tools/call", {"name": "get_global_news", "arguments": {}})
+        assert "result" in result
+        assert result["result"].get("isError") is not True
+        content = result["result"]["content"]
+        assert len(content) > 0
+
+
+class TestMCPIndustrySector:
+    """Tests for industry and sector MCP tools."""
+
+    def test_list_industries_returns_list_with_slug(self):
+        """list_industries returns list with slug field."""
+        result = mcp_request(
+            "tools/call", {"name": "list_industries", "arguments": {}}
+        )
+        assert "result" in result
+        content = result["result"]["content"]
+        assert len(content) > 0
+        first_text = content[0]["text"]
+        import json
+
+        first = json.loads(first_text)
+        assert "slug" in first
+
+    def test_list_sectors_returns_list(self):
+        """list_sectors returns list (possibly empty)."""
+        result = mcp_request("tools/call", {"name": "list_sectors", "arguments": {}})
+        assert "result" in result
+        content = result["result"]["content"]
+        # Sectors may be empty in test DB - just verify it's a list
+        data = result["result"]["structuredContent"]["result"]
+        assert isinstance(data, list)
+
+    def test_get_industry_stocks_valid_slug(self):
+        """get_industry_stocks with valid slug returns list (possibly empty)."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_industry_stocks", "arguments": {"slug": "bank-private"}},
+        )
+        assert "result" in result
+        assert result["result"].get("isError") is not True
+        content = result["result"]["content"]
+        assert len(content) > 0
+
+    def test_get_industry_stocks_invalid_slug_is_error(self):
+        """get_industry_stocks with invalid slug returns error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_industry_stocks", "arguments": {"slug": "NOTEXIST999"}},
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_sector_stocks_invalid_slug_is_error(self):
+        """get_sector_stocks with invalid slug returns error."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_sector_stocks", "arguments": {"slug": "nonexistent-sector"}},
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+
+@pytest.mark.slow
+class TestMCPBulkSymbolTools:
+    """Tests for bulk symbol parameter on all tools that support it."""
+
+    def test_get_bulk_deals_bulk_returns_dict(self):
+        """get_bulk_deals with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_bulk_deals", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_bulk_deals_neither_param_is_error(self):
+        """get_bulk_deals with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_bulk_deals", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_bulk_deals_both_params_is_error(self):
+        """get_bulk_deals with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_bulk_deals",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_block_deals_bulk_returns_dict(self):
+        """get_block_deals with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_block_deals", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_block_deals_neither_param_is_error(self):
+        """get_block_deals with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_block_deals", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_block_deals_both_params_is_error(self):
+        """get_block_deals with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_block_deals",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_change_ranges_bulk_returns_dict(self):
+        """get_change_ranges with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_change_ranges", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_change_ranges_neither_param_is_error(self):
+        """get_change_ranges with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_change_ranges", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_change_ranges_both_params_is_error(self):
+        """get_change_ranges with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_change_ranges",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_symbol_data_bulk_returns_dict(self):
+        """get_symbol_data with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_symbol_data", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_symbol_data_neither_param_is_error(self):
+        """get_symbol_data with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_symbol_data", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_symbol_data_both_params_is_error(self):
+        """get_symbol_data with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_symbol_data",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_corporate_filings_bulk_returns_dict(self):
+        """get_corporate_filings with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_corporate_filings", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_corporate_filings_neither_param_is_error(self):
+        """get_corporate_filings with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_corporate_filings", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_corporate_filings_both_params_is_error(self):
+        """get_corporate_filings with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_corporate_filings",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_screener_company_bulk_returns_dict(self):
+        """screener_company with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "screener_company", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result or "error" in result
+        if "result" in result and not result["result"].get("isError"):
+            import json
+
+            data = json.loads(result["result"]["content"][0]["text"])
+            assert isinstance(data, dict)
+
+    def test_screener_company_neither_param_is_error(self):
+        """screener_company with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "screener_company", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_screener_company_both_params_is_error(self):
+        """screener_company with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "screener_company",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_screener_trades_bulk_returns_dict(self):
+        """screener_trades with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "screener_trades", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result or "error" in result
+        if "result" in result and not result["result"].get("isError"):
+            import json
+
+            data = json.loads(result["result"]["content"][0]["text"])
+            assert isinstance(data, dict)
+
+    def test_screener_trades_neither_param_is_error(self):
+        """screener_trades with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "screener_trades", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_screener_trades_both_params_is_error(self):
+        """screener_trades with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "screener_trades",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_company_quarterly_results_bulk_returns_dict(self):
+        """get_company_quarterly_results with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_quarterly_results",
+                "arguments": {"symbols": ["RELIANCE", "TCS"]},
+            },
+        )
+        assert "result" in result or "error" in result
+        if "result" in result and not result["result"].get("isError"):
+            import json
+
+            data = json.loads(result["result"]["content"][0]["text"])
+            assert isinstance(data, dict)
+
+    def test_get_company_quarterly_results_neither_param_is_error(self):
+        """get_company_quarterly_results with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_company_quarterly_results", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_company_quarterly_results_both_params_is_error(self):
+        """get_company_quarterly_results with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_quarterly_results",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_stock_universe_bulk_returns_dict(self):
+        """get_stock_universe with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_stock_universe", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_stock_universe_neither_param_is_error(self):
+        """get_stock_universe with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_stock_universe", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_stock_universe_both_params_is_error(self):
+        """get_stock_universe with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_stock_universe",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_company_news_bulk_returns_dict(self):
+        """get_company_news with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_company_news", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_company_news_neither_param_is_error(self):
+        """get_company_news with neither param returns error."""
+        result = mcp_request(
+            "tools/call", {"name": "get_company_news", "arguments": {}}
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_company_news_both_params_is_error(self):
+        """get_company_news with both params returns error."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_company_news",
+                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
+            },
+        )
+        assert "error" in result or (
+            "result" in result and result["result"].get("isError") is True
+        )
+
+    def test_get_morningstar_fairvalue_bulk_returns_dict(self):
+        """get_morningstar_fairvalue with symbols returns dict keyed by symbol."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_morningstar_fairvalue",
+                "arguments": {"symbols": ["RELIANCE", "TCS"]},
+            },
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "TCS" in data
+
+    def test_get_morningstar_fairvalue_bulk_values_accepted(self):
+        """Bulk morningstar values may be real data or error dicts (test env)."""
+        result = mcp_request(
+            "tools/call",
+            {
+                "name": "get_morningstar_fairvalue",
+                "arguments": {"symbols": ["RELIANCE", "NOTEXIST999"]},
+            },
+        )
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data, dict)
+        assert "RELIANCE" in data
+        assert "NOTEXIST999" in data

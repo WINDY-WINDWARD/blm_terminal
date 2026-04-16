@@ -66,9 +66,23 @@ def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
 def _get_browser_cookies() -> dict[str, str]:
     """
     Try to extract sessionid and csrftoken for screener.in from browser profiles.
+    First tries pickle files (pre-extracted on Windows), then falls back to
+    reading directly from the browser via rookiepy.
     Attempts Chrome first, then Firefox as fallback.
     Returns empty dict if no cookies found.
     """
+    from app.services.cookie_loader import load_cookies_from_pickle
+
+    # Try pickle first
+    pickle_cookies = load_cookies_from_pickle("screener")
+    if pickle_cookies:
+        extracted = _extract_cookies(pickle_cookies)
+        if extracted.get("sessionid"):
+            logger.info("Using screener.in cookies from pickle file")
+            return extracted
+        logger.debug("Pickle has no sessionid, trying browsers")
+
+    # Fall back to browser extraction
     browsers = ["chrome", "firefox"]
 
     for browser_name in browsers:

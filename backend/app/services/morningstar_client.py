@@ -200,7 +200,21 @@ class MorningstarClient:
         return tokens
 
     async def _load_browser_cookies(self) -> dict[str, str]:
-        """Use rookiepy to get morningstar.in cookies."""
+        """Use pickle files (pre-extracted on Windows) or fallback to rookiepy."""
+        from app.services.cookie_loader import load_cookies_from_pickle
+
+        pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "morningstar")
+        if pickle_cookies:
+            cookies = {}
+            for c in pickle_cookies:
+                name = c.get("name")
+                if name:
+                    cookies[name] = c.get("value", "")
+            if cookies:
+                logger.info("Using morningstar.in cookies from pickle file")
+                return cookies
+
+        # Fall back to browser extraction
         browsers = ["chrome", "firefox"]
         for browser_name in browsers:
             try:
