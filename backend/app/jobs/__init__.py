@@ -5,7 +5,6 @@ from app.jobs.runner import (
     trigger_job,
     update_job_status,
     get_job_status,
-    calculate_next_trigger,
     report_progress,
 )
 
@@ -15,6 +14,5 @@ __all__ = [
     "trigger_job",
     "update_job_status",
     "get_job_status",
-    "calculate_next_trigger",
     "report_progress",
 ]
