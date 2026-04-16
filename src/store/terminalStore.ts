@@ -7,10 +7,49 @@ import type { FundsData } from '@/lib/openalgo';
 
 export const activeCommandAtom = atom<string>('');
 
-export const activePanelsAtom = atomWithStorage<{ [id: string]: string }>(
+export type PanelCount = 2 | 4 | 6 | 8;
+
+export interface PanelSplitSizes {
+  rowSizes: number[];
+  colSizes: number[][];
+}
+
+export const PANEL_LAYOUTS: Record<PanelCount, { rows: number; cols: number }> = {
+  2: { rows: 1, cols: 2 },
+  4: { rows: 2, cols: 2 },
+  6: { rows: 2, cols: 3 },
+  8: { rows: 2, cols: 4 },
+};
+
+export function createDefaultPanelSizes(panelCount: PanelCount): PanelSplitSizes {
+  const layout = PANEL_LAYOUTS[panelCount];
+  const rowSizes = Array.from({ length: layout.rows }, () => 100 / layout.rows);
+  const colSizes = Array.from({ length: layout.rows }, () =>
+    Array.from({ length: layout.cols }, () => 100 / layout.cols),
+  );
+
+  return { rowSizes, colSizes };
+}
+
+export const DEFAULT_ACTIVE_PANELS: Record<string, string> = {
+  'panel-1': 'CHART',
+  'panel-2': 'WATCH',
+  'panel-3': 'TOP',
+  'panel-4': 'POS',
+  'panel-5': 'NEWS',
+  'panel-6': 'ANALYSIS',
+  'panel-7': 'DEALS',
+  'panel-8': 'ORDER',
+};
+
+export const activePanelsAtom = atomWithStorage<Record<string, string>>(
   'terminal.activePanels',
-  { 'panel-1': 'CHART', 'panel-2': 'WATCH', 'panel-3': 'TOP', 'panel-4': 'POS' },
+  DEFAULT_ACTIVE_PANELS,
 );
+
+export const panelCountAtom = atomWithStorage<PanelCount>('terminal.panelCount', 4);
+
+export const panelSizesAtom = atomWithStorage<PanelSplitSizes | null>('terminal.panelSizes', null);
 
 export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1');
 

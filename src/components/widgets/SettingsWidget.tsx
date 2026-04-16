@@ -4,7 +4,18 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import Link from 'next/link';
-import { wsConnectedAtom, fundsAtom, watchlistColumnsAtom, moversColumnsAtom, watchlistsAtom, activeWatchlistIdAtom, type Watchlist } from '@/store/terminalStore';
+import {
+  wsConnectedAtom,
+  fundsAtom,
+  watchlistColumnsAtom,
+  moversColumnsAtom,
+  watchlistsAtom,
+  activeWatchlistIdAtom,
+  panelCountAtom,
+  panelSizesAtom,
+  type Watchlist,
+  type PanelCount,
+} from '@/store/terminalStore';
 
 const WATCHLIST_COLUMNS = [
   { key: 'ltp', label: 'LTP' },
@@ -71,6 +82,8 @@ export function SettingsWidget() {
   const [moversCols, setMoversCols] = useAtom(moversColumnsAtom);
   const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
+  const [panelCount, setPanelCount] = useAtom(panelCountAtom);
+  const [, setPanelSizes] = useAtom(panelSizesAtom);
 
   const [loading, setLoading] = useState(true);
 
@@ -142,6 +155,11 @@ export function SettingsWidget() {
     scheduleSave();
   };
 
+  const handlePanelCountChange = (count: PanelCount) => {
+    setPanelCount(count);
+    setPanelSizes(null);
+  };
+
   const handleDeleteWatchlist = async (id: number, name: string) => {
     if (!confirm(`Delete watchlist "${name}"? All items will be deleted.`)) return;
     try {
@@ -169,6 +187,34 @@ export function SettingsWidget() {
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-auto p-3 gap-4">
       <div className="text-terminal-amber font-bold text-sm border-b border-terminal-gray pb-1">
         SETTINGS
+      </div>
+
+      {/* Window Layout */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Window Layout
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[2, 4, 6, 8].map((count) => {
+            const isActive = panelCount === count;
+            return (
+              <button
+                key={count}
+                onClick={() => handlePanelCountChange(count as PanelCount)}
+                className={`min-w-10 border px-2 py-1 text-[10px] font-bold uppercase transition-colors ${
+                  isActive
+                    ? 'border-terminal-amber bg-terminal-amber text-black'
+                    : 'border-terminal-gray text-white hover:border-terminal-amber hover:text-terminal-amber'
+                }`}
+              >
+                {count}
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-white text-[10px]">
+          Layout changes reset panel sizes.
+        </div>
       </div>
 
       {/* Connection Status */}

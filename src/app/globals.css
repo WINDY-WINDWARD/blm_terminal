@@ -61,3 +61,20 @@ input, button {
 @utility animate-flash-red {
   animation: flash-red 400ms ease-out;
 }
+
+.gutter {
+  background: var(--color-terminal-gray);
+  flex-shrink: 0;
+}
+
+.gutter.gutter-horizontal {
+  cursor: col-resize;
+}
+
+.gutter.gutter-vertical {
+  cursor: row-resize;
+}
+
+.gutter:hover {
+  background: var(--color-terminal-amber);
+}

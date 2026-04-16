@@ -6,6 +6,7 @@ import {
   activeCommandAtom,
   activePanelsAtom,
   focusedPanelAtom,
+  panelCountAtom,
   wsConnectedAtom,
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
@@ -30,7 +31,8 @@ const VALID_WIDGETS = [
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);
   const setActivePanels = useSetAtom(activePanelsAtom);
-  const [focusedPanel] = useAtom(focusedPanelAtom);
+  const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
+  const [panelCount] = useAtom(panelCountAtom);
   const setWsConnected = useSetAtom(wsConnectedAtom);
 
   // Connect WebSocket on mount and track connection state
@@ -55,6 +57,13 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  useEffect(() => {
+    const focusedPanelNumber = Number(focusedPanel.split('-')[1]);
+    if (focusedPanelNumber > panelCount) {
+      setFocusedPanel('panel-1');
+    }
+  }, [focusedPanel, panelCount, setFocusedPanel]);
 
   // Command processor: apply widget command to focused panel
   useEffect(() => {
