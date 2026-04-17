@@ -12,10 +12,25 @@ DATABASE_URL = f"sqlite+aiosqlite:///{settings.db_path}"
 
 
 def _set_sqlite_pragma(dbapi_conn, connection_record):
-    """Enable WAL mode and set busy timeout for SQLite."""
+    """Enable WAL mode and tune SQLite for concurrent multi-writer workloads.
+
+    Key choices:
+    - busy_timeout=30000: 30 s retry window — eliminates the startup write-storm
+      "database is locked" failures that occur when all workers launch at once.
+    - synchronous=NORMAL: safe in WAL mode (WAL file is still synced before a
+      checkpoint), ~3x faster than FULL because it avoids per-transaction fsyncs.
+    - cache_size=-65536: 64 MB page cache reduces disk I/O and shortens the time
+      write locks are held, reducing contention between concurrent workers.
+    - temp_store=MEMORY: temp tables and indices live in RAM, not temp files.
+    - mmap_size=268435456: 256 MB memory-mapped I/O for faster sequential reads.
+    """
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA cache_size=-65536")
+    cursor.execute("PRAGMA temp_store=MEMORY")
+    cursor.execute("PRAGMA mmap_size=268435456")
     cursor.close()
 
 
@@ -65,7 +80,11 @@ _sync_engine = create_engine(
 def _set_sync_sqlite_pragmas(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA cache_size=-65536")
+    cursor.execute("PRAGMA temp_store=MEMORY")
+    cursor.execute("PRAGMA mmap_size=268435456")
     cursor.close()
 
 
@@ -73,4 +92,32 @@ _SyncSessionLocal = _sync_sessionmaker(
     bind=_sync_engine,
     autocommit=False,
     autoflush=False,
+)
+
+# ---------------------------------------------------------------------------
+# Thread-safe async engine — used by _run_async() callsites in worker threads.
+#
+# The main `engine` above uses StaticPool (one shared connection), which is
+# correct for uvicorn's single event loop where coroutines are cooperative.
+# However, _run_async() creates a *new* event loop per worker thread — if
+# those loops also used StaticPool they would share the same raw sqlite3
+# connection object across OS threads, which is not thread-safe.
+#
+# This engine uses NullPool: each async session opens a fresh connection and
+# closes it on exit, making it safe to call from any worker thread.
+# ---------------------------------------------------------------------------
+from sqlalchemy.pool import NullPool as _AsyncNullPool
+
+_thread_async_engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    connect_args={"check_same_thread": False},
+    poolclass=_AsyncNullPool,
+)
+event.listen(_thread_async_engine.sync_engine, "connect", _set_sqlite_pragma)
+
+_ThreadAsyncSessionLocal = async_sessionmaker(
+    bind=_thread_async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
 )
