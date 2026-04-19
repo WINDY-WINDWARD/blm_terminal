@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:8000';
+const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
 
 // GET /api/watchlists - list all watchlists
 export async function GET() {

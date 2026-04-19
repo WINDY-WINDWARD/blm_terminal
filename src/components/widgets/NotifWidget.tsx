@@ -18,7 +18,7 @@ interface Notification {
   is_read: boolean;
 }
 
-type NotifTab = 'all' | 'breakout' | 'volume' | 'movers' | 'deals' | 'insider' | 'technical' | 'momentum' | 'volatility' | 'streaks';
+type NotifTab = 'all' | 'breakout' | 'volume' | 'movers' | 'deals' | 'insider' | 'technical' | 'momentum' | 'volatility' | 'streaks' | 'results';
 
 const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   all: [],
@@ -31,6 +31,7 @@ const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   momentum: ['momentum_surge', 'return_1w_spike'],
   volatility: ['volatility_spike', 'atr_expansion'],
   streaks: ['streak_up_5d', 'streak_down_5d'],
+  results: ['results_upcoming'],
 };
 
 function getBadgeColor(triggerType: string): string {
@@ -58,6 +59,7 @@ function getBadgeColor(triggerType: string): string {
   if (triggerType === 'streak_down_5d') return 'bg-red-800 text-white';
   if (triggerType === 'near_52w_high') return 'bg-amber-500 text-black';
   if (triggerType === 'near_52w_low') return 'bg-amber-700 text-white';
+  if (triggerType === 'results_upcoming') return 'bg-emerald-700 text-white';
   return 'bg-terminal-gray text-white';
 }
 
@@ -87,6 +89,7 @@ function getBadgeLabel(triggerType: string): string {
   if (triggerType === 'streak_down_5d') return 'STREAK-';
   if (triggerType === 'near_52w_high') return '~52W HI';
   if (triggerType === 'near_52w_low') return '~52W LO';
+  if (triggerType === 'results_upcoming') return 'RESULTS';
   return triggerType.toUpperCase();
 }
 
@@ -142,6 +145,8 @@ function getTooltipDescription(triggerType: string): string {
       return 'Within 3% of 52-week high — approaching resistance';
     case 'near_52w_low':
       return 'Within 3% of 52-week low — approaching support';
+    case 'results_upcoming':
+      return 'Board meeting scheduled to announce financial results — check for earnings surprise';
     default:
       return triggerType;
   }
@@ -231,6 +236,7 @@ export function NotifWidget() {
     { id: 'momentum', label: 'MOMENTUM' },
     { id: 'volatility', label: 'VOLATILITY' },
     { id: 'streaks', label: 'STREAKS' },
+    { id: 'results', label: 'RESULTS' },
   ];
 
   if (isLoading) {

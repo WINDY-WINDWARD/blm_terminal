@@ -14,6 +14,7 @@ import {
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 import type { TickData } from '@/lib/socket';
+import type { EventCalendarItem } from '@/app/api/event-calendar/route';
 
 interface WatchlistItem {
   id: number;
@@ -67,6 +68,11 @@ interface WatchRowData {
   isLoading: boolean;
 }
 
+interface ResultCellValue {
+  date: string;
+  status: 'upcoming' | 'past';
+}
+
 type SortColumn =
   | 'symbol'
   | 'exchange'
@@ -82,7 +88,8 @@ type SortColumn =
   | '5y'
   | '52wh'
   | '52wl'
-  | 'msfv';
+  | 'msfv'
+  | 'results';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -109,7 +116,14 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   '52wh': { key: '52wh', label: '52W HIGH', textAlign: 'right', defaultSort: 'desc' },
   '52wl': { key: '52wl', label: '52W LOW', textAlign: 'right', defaultSort: 'desc' },
   msfv: { key: 'msfv', label: 'MS FV', textAlign: 'right', defaultSort: 'desc' },
+  results: { key: 'results', label: 'RESULTS', textAlign: 'center', defaultSort: 'asc' },
 };
+
+function formatResultsDate(dateStr: string): string {
+  const match = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (!match) return dateStr;
+  return `${match[1]} ${match[2]}`;
+}
 
 function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
   // Nulls sort last
@@ -153,13 +167,14 @@ interface WatchRowProps {
   rowData: WatchRowData;
   isActive: boolean;
   columns: string[];
+  resultDates: Map<string, ResultCellValue>;
   onRowClick: (item: WatchlistItem) => void;
   onRemove: (id: number) => void;
   removing: boolean;
   flash: 'up' | 'down' | null;
 }
 
-function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing, flash }: WatchRowProps) {
+function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash }: WatchRowProps) {
   const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, isLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
   const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
@@ -207,6 +222,15 @@ function WatchRow({ rowData, isActive, columns, onRowClick, onRemove, removing, 
         return isLoading ? dash : fairValue != null ? (
           <span className="text-terminal-amber">₹{fairValue.toFixed(2)}</span>
         ) : dash;
+      case 'results': {
+        const result = resultDates.get(item.symbol.toUpperCase());
+        if (!result) return dash;
+        return (
+          <span className={result.status === 'upcoming' ? 'text-terminal-green font-semibold' : 'text-terminal-amber font-semibold'}>
+            {formatResultsDate(result.date)}
+          </span>
+        );
+      }
       default:
         return null;
     }
@@ -310,6 +334,47 @@ export function WatchWidget() {
   const debounceRef = React.useRef<NodeJS.Timeout | null>(null);
   const prevPricesRef = useRef<Map<string, number>>(new Map());
   const [flashStates, setFlashStates] = useState<Map<string, 'up' | 'down'>>(new Map());
+
+  const { data: eventCalendar = [] } = useQuery({
+    queryKey: ['event-calendar'],
+    queryFn: async () => {
+      const res = await fetch('/api/event-calendar');
+      if (!res.ok) return [] as EventCalendarItem[];
+      return (await res.json()) as EventCalendarItem[];
+    },
+    staleTime: 900_000,
+    refetchInterval: 900_000,
+  });
+
+  const { data: pastResults = [] } = useQuery({
+    queryKey: ['event-calendar-past'],
+    queryFn: async () => {
+      const res = await fetch('/api/event-calendar/past');
+      if (!res.ok) return [] as EventCalendarItem[];
+      return (await res.json()) as EventCalendarItem[];
+    },
+    staleTime: 900_000,
+    refetchInterval: 900_000,
+  });
+
+  const resultDates = React.useMemo(() => {
+    const map = new Map<string, ResultCellValue>();
+    for (const item of pastResults) {
+      const purpose = item.purpose.toLowerCase();
+      if (!purpose.includes('financial results')) continue;
+      const symbol = item.symbol.toUpperCase();
+      if (!map.has(symbol)) {
+        map.set(symbol, { date: item.date, status: 'past' });
+      }
+    }
+    for (const item of eventCalendar) {
+      const purpose = item.purpose.toLowerCase();
+      if (!purpose.includes('financial results') && !purpose.includes('dividend')) continue;
+      const symbol = item.symbol.toUpperCase();
+      map.set(symbol, { date: item.date, status: 'upcoming' });
+    }
+    return map;
+  }, [eventCalendar, pastResults]);
 
   // Fetch watchlists on mount
   useQuery({
@@ -512,6 +577,10 @@ export function WatchWidget() {
         case 'msfv':
           aVal = a.fairValue;
           bVal = b.fairValue;
+          break;
+        case 'results':
+          aVal = resultDates.get(a.item.symbol.toUpperCase()) ?? null;
+          bVal = resultDates.get(b.item.symbol.toUpperCase()) ?? null;
           break;
         default:
           return 0;
@@ -829,6 +898,7 @@ export function WatchWidget() {
                     key={rowData.item.id}
                     rowData={rowData}
                     columns={watchlistColumns}
+                    resultDates={resultDates}
                     isActive={
                       activeSymbol === rowData.item.symbol &&
                       activeExchange === rowData.item.exchange

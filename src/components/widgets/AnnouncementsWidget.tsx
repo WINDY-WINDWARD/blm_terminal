@@ -4,6 +4,7 @@ import React, { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { watchlistsAtom, Watchlist } from '@/store/terminalStore';
+import type { EventCalendarItem } from '@/app/api/event-calendar/route';
 
 interface Announcement {
   title: string;
@@ -18,7 +19,7 @@ interface WatchlistItem {
   symbol: string;
 }
 
-const SUBJECT_TABS = ['ALL', 'CORP ACTION', 'BOARD', 'RESULTS', 'AGM/EGM'] as const;
+const SUBJECT_TABS = ['RESULTS', 'ALL', 'CORP ACTION', 'BOARD', 'AGM/EGM'] as const;
 type Tab = (typeof SUBJECT_TABS)[number];
 
 const SUBJECT_MAP: Record<string, Tab> = {
@@ -69,6 +70,23 @@ function getBadgeColor(subject: string): string {
   return 'bg-terminal-amber/20 text-terminal-amber border-terminal-amber/30';
 }
 
+function getCalendarBadgeColor(purpose: string): string {
+  const lower = purpose.toLowerCase();
+  if (lower.includes('financial results') || lower.includes('results')) {
+    return 'bg-green-500/20 text-green-400 border-green-500/30';
+  }
+  if (lower.includes('dividend')) {
+    return 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+  }
+  return 'bg-terminal-amber/20 text-terminal-amber border-terminal-amber/30';
+}
+
+/** Returns true if the event calendar entry belongs in the RESULTS tab. */
+function isResultsOrDividend(purpose: string): boolean {
+  const lower = purpose.toLowerCase();
+  return lower.includes('financial results') || lower.includes('dividend');
+}
+
 function formatTime(pubDate: string): string {
   const match = pubDate.match(/(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
   if (!match) return pubDate.slice(0, 5);
@@ -77,6 +95,28 @@ function formatTime(pubDate: string): string {
 
 function normalizeCompanyName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Parse NSE date string "20-Apr-2026" into a Date object.
+ * Returns null if parsing fails.
+ */
+function parseNseDate(dateStr: string): Date | null {
+  const months: Record<string, number> = {
+    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  };
+  const m = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (!m) return null;
+  const month = months[m[2]];
+  if (month === undefined) return null;
+  return new Date(Number(m[3]), month, Number(m[1]));
+}
+
+function formatNseDate(dateStr: string): string {
+  const d = parseNseDate(dateStr);
+  if (!d) return dateStr;
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function TabButton({
@@ -165,12 +205,97 @@ function AnnouncementRow({
   );
 }
 
+function EventCalendarRow({
+  item,
+  isWatched,
+}: {
+  item: EventCalendarItem;
+  isWatched: boolean;
+}) {
+  const handleClick = () => {
+    if (item.attachment) {
+      const isXml = item.attachment.toLowerCase().endsWith('.xml');
+      if (isXml) {
+        window.open(`/filing?url=${encodeURIComponent(item.attachment)}`, '_blank');
+      } else {
+        window.open(item.attachment, '_blank');
+      }
+    }
+  };
+
+  const badgeClass = getCalendarBadgeColor(item.purpose);
+  const purposeShort = item.purpose.length > 40 ? item.purpose.slice(0, 38) + '…' : item.purpose;
+
+  return (
+    <div
+      onClick={item.attachment ? handleClick : undefined}
+      className={`px-2 py-1.5 border-b border-terminal-gray/30 transition-colors ${
+        isWatched ? 'bg-zinc-900/60' : ''
+      } ${item.attachment ? 'hover:bg-zinc-900 cursor-pointer' : 'cursor-default'}`}
+    >
+      <div className="flex items-start gap-2">
+        {/* Date badge */}
+        <span className="text-[10px] text-white/40 font-mono w-16 shrink-0 pt-0.5">
+          {formatNseDate(item.date)}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span
+              className={`text-xs font-mono font-bold shrink-0 ${
+                isWatched ? 'text-terminal-amber' : 'text-white/80'
+              }`}
+            >
+              {item.symbol}
+            </span>
+            {isWatched && (
+              <span className="text-terminal-amber text-[10px] font-bold">★</span>
+            )}
+            <span
+              className={`text-[9px] px-1 py-0.5 rounded border font-mono shrink-0 ${badgeClass}`}
+            >
+              {purposeShort}
+            </span>
+            {item.source === 'sme' && (
+              <span className="text-[8px] px-1 py-0.5 rounded border border-zinc-600 text-zinc-500 font-mono shrink-0">
+                SME
+              </span>
+            )}
+          </div>
+          <div className="text-[10px] text-white/40 font-mono mt-0.5 truncate">
+            {item.company}
+          </div>
+          {item.description && item.description !== item.purpose && (
+            <div className="text-[9px] text-white/30 font-mono mt-0.5 line-clamp-2 leading-snug">
+              {item.description}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Section header divider used in the RESULTS tab. */
+function SectionHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="px-2 py-1 flex items-center gap-2 bg-zinc-900/80 border-b border-terminal-gray/30 sticky top-0 z-10">
+      <span className="text-[9px] font-mono font-bold text-white/50 uppercase tracking-widest">
+        {label}
+      </span>
+      <span className="text-[9px] font-mono text-white/30">({count})</span>
+    </div>
+  );
+}
+
 export function AnnouncementsWidget() {
-  const [activeTab, setActiveTab] = useState<Tab>('ALL');
+  const [activeTab, setActiveTab] = useState<Tab>('RESULTS');
   const [search, setSearch] = useState('');
   const watchlists = useAtomValue(watchlistsAtom);
   const queryClient = useQueryClient();
 
+  // ------------------------------------------------------------------
+  // Watchlist symbols — fetched once, used for highlighting
+  // ------------------------------------------------------------------
   const { data: watchlistSymbols } = useQuery({
     queryKey: ['watchlist-symbols'],
     queryFn: async () => {
@@ -181,7 +306,7 @@ export function AnnouncementsWidget() {
         try {
           const res = await fetch(`/api/watchlist?watchlist_id=${list.id}`);
           const data = (await res.json()) as WatchlistItem[];
-          data.forEach((item) => symbols.add(normalizeCompanyName(item.symbol)));
+          data.forEach((item) => symbols.add(item.symbol.toUpperCase()));
         } catch {
           // skip failed fetches
         }
@@ -194,10 +319,13 @@ export function AnnouncementsWidget() {
     staleTime: 60000,
   });
 
+  // ------------------------------------------------------------------
+  // RSS announcements feed
+  // ------------------------------------------------------------------
   const {
     data: announcementsData,
-    isLoading,
-    isError,
+    isLoading: announcementsLoading,
+    isError: announcementsError,
     dataUpdatedAt,
   } = useQuery<{ items: Announcement[]; lastBuild: string }>({
     queryKey: ['announcements'],
@@ -213,6 +341,43 @@ export function AnnouncementsWidget() {
     staleTime: 290000,
   });
 
+  // ------------------------------------------------------------------
+  // NSE event calendar (upcoming board meetings)
+  // ------------------------------------------------------------------
+  const {
+    data: calendarData,
+    isLoading: calendarLoading,
+  } = useQuery<EventCalendarItem[]>({
+    queryKey: ['event-calendar'],
+    queryFn: async () => {
+      const res = await fetch('/api/event-calendar');
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        throw new Error(err.error || 'Failed to fetch event calendar');
+      }
+      return res.json();
+    },
+    refetchInterval: 900_000, // 15 min
+    staleTime: 890_000,
+  });
+
+  const { data: pastResultsData } = useQuery<EventCalendarItem[]>({
+    queryKey: ['event-calendar-past'],
+    queryFn: async () => {
+      const res = await fetch('/api/event-calendar/past');
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string };
+        throw new Error(err.error || 'Failed to fetch past results');
+      }
+      return res.json();
+    },
+    refetchInterval: 900_000,
+    staleTime: 890_000,
+  });
+
+  // ------------------------------------------------------------------
+  // Filtered lists
+  // ------------------------------------------------------------------
   const filteredItems = useMemo(() => {
     if (!announcementsData?.items) return [];
     const searchLower = search.toLowerCase().trim();
@@ -228,6 +393,50 @@ export function AnnouncementsWidget() {
     });
   }, [announcementsData, activeTab, search]);
 
+  /**
+   * Event calendar items for the RESULTS tab: Financial Results + Dividend,
+   * filtered by search if active.
+   */
+  const calendarResultsItems = useMemo(() => {
+    if (!calendarData) return [];
+    const searchLower = search.toLowerCase().trim();
+    const filtered = calendarData.filter((item) => {
+      if (!isResultsOrDividend(item.purpose)) return false;
+      if (searchLower) {
+        return (
+          item.symbol.toLowerCase().includes(searchLower) ||
+          item.company.toLowerCase().includes(searchLower) ||
+          item.purpose.toLowerCase().includes(searchLower) ||
+          item.description.toLowerCase().includes(searchLower)
+        );
+      }
+      return true;
+    });
+    // Already sorted by date asc from backend; keep that order
+    return filtered;
+  }, [calendarData, search]);
+
+  const pastResultsItems = useMemo(() => {
+    if (!pastResultsData) return [];
+    const searchLower = search.toLowerCase().trim();
+    return pastResultsData.filter((item) => {
+      const purpose = item.purpose.toLowerCase();
+      if (!purpose.includes('financial results')) return false;
+      if (searchLower) {
+        return (
+          item.symbol.toLowerCase().includes(searchLower) ||
+          item.company.toLowerCase().includes(searchLower) ||
+          item.purpose.toLowerCase().includes(searchLower) ||
+          item.description.toLowerCase().includes(searchLower)
+        );
+      }
+      return true;
+    });
+  }, [pastResultsData, search]);
+
+  const isLoading = announcementsLoading;
+  const isError = announcementsError;
+
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString('en-IN', {
         hour: '2-digit',
@@ -237,11 +446,18 @@ export function AnnouncementsWidget() {
 
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ['announcements'] });
+    queryClient.invalidateQueries({ queryKey: ['event-calendar'] });
   };
 
   const handleRetry = () => {
     queryClient.invalidateQueries({ queryKey: ['announcements'] });
   };
+
+  // Count for tab header
+  const totalResultsCount =
+    activeTab === 'RESULTS'
+      ? calendarResultsItems.length + pastResultsItems.length + filteredItems.length
+      : filteredItems.length;
 
   return (
     <div className="h-full flex flex-col bg-terminal-bg font-mono">
@@ -260,15 +476,15 @@ export function AnnouncementsWidget() {
         ))}
         <div className="ml-auto flex items-center gap-2">
           <span className="text-[10px] text-white/40">
-            {filteredItems.length} · {lastUpdated}
+            {totalResultsCount} · {lastUpdated}
           </span>
           <button
             onClick={handleRefresh}
-            disabled={isLoading}
+            disabled={isLoading || calendarLoading}
             className="text-white/50 hover:text-terminal-amber transition-colors disabled:opacity-50"
           >
             <svg
-              className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`}
+              className={`w-3 h-3 ${isLoading || calendarLoading ? 'animate-spin' : ''}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -337,30 +553,108 @@ export function AnnouncementsWidget() {
           <div className="p-4 text-center text-white/40 text-xs">Loading...</div>
         )}
 
-        {!isError && !isLoading && filteredItems.length === 0 && (
-          <div className="p-4 text-center text-white/40 text-xs">
-            No announcements
-          </div>
-        )}
-
-        {!isError && filteredItems.length > 0 && (
+        {/* ---------------------------------------------------------- */}
+        {/* RESULTS tab: show upcoming event calendar + RSS announced   */}
+        {/* ---------------------------------------------------------- */}
+        {!isError && activeTab === 'RESULTS' && (
           <div>
+            {/* UPCOMING RESULTS (event calendar) */}
+            <SectionHeader label="Upcoming" count={calendarResultsItems.length} />
+            {calendarLoading && calendarResultsItems.length === 0 && (
+              <div className="px-2 py-2 text-center text-white/30 text-[10px]">
+                Loading event calendar…
+              </div>
+            )}
+            {!calendarLoading && calendarResultsItems.length === 0 && (
+              <div className="px-2 py-2 text-center text-white/30 text-[10px]">
+                No upcoming board meetings found
+              </div>
+            )}
+            {calendarResultsItems.map((item, idx) => {
+              const isWatched = watchlistSymbols?.has(item.symbol.toUpperCase()) ?? false;
+              return (
+                <EventCalendarRow
+                  key={`cal-${item.symbol}-${item.date}-${idx}`}
+                  item={item}
+                  isWatched={isWatched}
+                />
+              );
+            })}
+
+            {/* ANNOUNCED (past results + RSS feed) */}
+            <SectionHeader label="Announced" count={pastResultsItems.length + filteredItems.length} />
+            {pastResultsItems.map((item, idx) => {
+              const isWatched = watchlistSymbols?.has(item.symbol.toUpperCase()) ?? false;
+              return (
+                <EventCalendarRow
+                  key={`past-${item.symbol}-${item.date}-${idx}`}
+                  item={item}
+                  isWatched={isWatched}
+                />
+              );
+            })}
+            {!isLoading && pastResultsItems.length === 0 && filteredItems.length === 0 && (
+              <div className="px-2 py-2 text-center text-white/30 text-[10px]">
+                No recent announcements
+              </div>
+            )}
             {filteredItems.map((item, idx) => {
-              const normalized = normalizeCompanyName(item.title);
+              const normalizedTitle = normalizeCompanyName(item.title);
               const isWatched =
-                watchlistSymbols?.has(normalized) ||
-                Array.from(watchlistSymbols || []).some(
-                  (s) => normalized.includes(s) || s.includes(normalized)
-                );
+                watchlistSymbols
+                  ? Array.from(watchlistSymbols).some((sym) => {
+                      const normSym = normalizeCompanyName(sym);
+                      return (
+                        normalizedTitle.includes(normSym) || normSym.includes(normalizedTitle)
+                      );
+                    })
+                  : false;
               return (
                 <AnnouncementRow
-                  key={`${item.pubDate}-${idx}`}
+                  key={`rss-${item.pubDate}-${idx}`}
                   announcement={item}
                   isWatched={isWatched}
                 />
               );
             })}
           </div>
+        )}
+
+        {/* ---------------------------------------------------------- */}
+        {/* ALL other tabs: existing RSS behaviour unchanged            */}
+        {/* ---------------------------------------------------------- */}
+        {!isError && activeTab !== 'RESULTS' && (
+          <>
+            {!isLoading && filteredItems.length === 0 && (
+              <div className="p-4 text-center text-white/40 text-xs">
+                No announcements
+              </div>
+            )}
+            {filteredItems.length > 0 && (
+              <div>
+                {filteredItems.map((item, idx) => {
+                  const normalizedTitle = normalizeCompanyName(item.title);
+                  const isWatched =
+                    watchlistSymbols
+                      ? Array.from(watchlistSymbols).some((sym) => {
+                          const normSym = normalizeCompanyName(sym);
+                          return (
+                            normalizedTitle.includes(normSym) ||
+                            normSym.includes(normalizedTitle)
+                          );
+                        })
+                      : false;
+                  return (
+                    <AnnouncementRow
+                      key={`${item.pubDate}-${idx}`}
+                      announcement={item}
+                      isWatched={isWatched}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

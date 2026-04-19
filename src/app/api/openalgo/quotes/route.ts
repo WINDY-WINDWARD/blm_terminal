@@ -20,7 +20,7 @@ interface QuoteData {
   oi?: number;
 }
 
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
 const FALLBACK_TIMEOUT_MS = 8000;
 
 async function fetchFromPythonBackend(symbol: string): Promise<QuoteData> {

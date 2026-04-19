@@ -2,20 +2,21 @@
 Integration tests for the notifications API and background worker.
 
 Requires the backend server running. Set BLM_BASE_URL to override the default
-(http://127.0.0.1:8000).  Dev endpoints (POST /trigger) require ENV != "production".
+(http://127.0.0.1:4455).  Dev endpoints (POST /trigger) require ENV != "production".
 
 Run:
-    BLM_BASE_URL=http://127.0.0.1:8000 pytest tests/test_notifications.py -v
+    BLM_BASE_URL=http://127.0.0.1:4455 pytest tests/test_notifications.py -v
 """
 
 import os
 import time
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 import requests
 
-BASE = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+BASE = os.environ.get("BLM_BASE_URL", "http://127.0.0.1:4455").rstrip("/")
 
 TEST_SYMBOL = "RELIANCE"
 TEST_WATCHLIST_ID = 1
@@ -313,3 +314,59 @@ class TestNotificationsTrigger:
             assert "triggered_at" in data
         elif resp.status_code == 403:
             assert "production" in resp.json().get("detail", "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Results calendar worker
+# ---------------------------------------------------------------------------
+
+
+class TestResultsCalendarWorker:
+    def test_sync_creates_results_notifications(self, monkeypatch):
+        from app import backgroundtasks
+
+        watchlist_id = TEST_WATCHLIST_ID
+        symbol = TEST_SYMBOL
+        meeting_date = date.today() + timedelta(days=3)
+        meeting_date_str = meeting_date.strftime("%d-%b-%Y")
+
+        fake_events = [
+            SimpleNamespace(
+                symbol=symbol,
+                purpose="Financial Results / Other business matters",
+                description="To consider and approve the financial results for the quarter.",
+                date=meeting_date_str,
+            ),
+            SimpleNamespace(
+                symbol="NOTWATCHED",
+                purpose="Financial Results",
+                description="Should be ignored.",
+                date=meeting_date_str,
+            ),
+        ]
+
+        def fake_get_event_calendar_cached():
+            return fake_events
+
+        def fake_get_watchlist_symbols():
+            return {watchlist_id: [symbol]}
+
+        captured: dict[str, object] = {}
+
+        def fake_bulk_upsert(rows):
+            captured["rows"] = rows
+
+        monkeypatch.setattr("app.routers.announcements.get_event_calendar_cached", fake_get_event_calendar_cached)
+        monkeypatch.setattr(backgroundtasks, "_get_watchlist_symbols", fake_get_watchlist_symbols)
+        monkeypatch.setattr(backgroundtasks, "_bulk_upsert_notifications", fake_bulk_upsert)
+        monkeypatch.setattr(backgroundtasks, "update_job_status_sync", lambda *args, **kwargs: None)
+
+        backgroundtasks._results_calendar_sync()
+
+        rows = captured.get("rows")
+        assert isinstance(rows, list)
+        assert len(rows) == 1
+        assert rows[0]["watchlist_id"] == watchlist_id
+        assert rows[0]["symbol"] == symbol
+        assert rows[0]["trigger_type"] == "results_upcoming"
+        assert rows[0]["triggered_date"] == meeting_date

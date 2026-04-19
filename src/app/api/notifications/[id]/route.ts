@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:8000';
+const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
 
 export async function DELETE(
   req: NextRequest,

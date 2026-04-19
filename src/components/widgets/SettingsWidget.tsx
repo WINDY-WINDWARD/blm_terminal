@@ -63,6 +63,7 @@ const WATCHLIST_COLUMNS = [
   { key: '3m', label: '3M%' },
   { key: '6m', label: '6M%' },
   { key: '1y', label: '1Y%' },
+  { key: 'results', label: 'RESULTS' },
   { key: '2y', label: '2Y%' },
   { key: '3y', label: '3Y%' },
   { key: '5y', label: '5Y%' },

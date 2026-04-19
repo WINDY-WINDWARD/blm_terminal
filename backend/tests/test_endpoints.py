@@ -18,6 +18,7 @@ Install requests if needed:
 
 import os
 import time
+from datetime import datetime
 
 import pytest
 import requests
@@ -167,6 +168,63 @@ class TestStockUniverse:
         resp = get("/api/stockuniverse/search/ZZZNOMATCH9999")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# /api/event-calendar
+# ---------------------------------------------------------------------------
+
+
+class TestEventCalendar:
+    def test_returns_200(self):
+        resp = get("/api/event-calendar")
+        assert resp.status_code == 200, resp.text
+
+    def test_returns_list(self):
+        resp = get("/api/event-calendar")
+        data = resp.json()
+        assert isinstance(data, list)
+
+    def test_item_schema(self):
+        resp = get("/api/event-calendar")
+        items = resp.json()
+        if not items:
+            pytest.skip("event calendar returned an empty list")
+
+        required_keys = {"symbol", "company", "purpose", "description", "date", "source", "attachment"}
+        for item in items[:5]:
+            assert required_keys.issubset(item.keys()), (
+                f"Missing keys in item: {set(item.keys())}"
+            )
+            assert isinstance(item["symbol"], str)
+            assert isinstance(item["company"], str)
+            assert isinstance(item["purpose"], str)
+            assert isinstance(item["description"], str)
+            assert isinstance(item["date"], str)
+            assert item["source"] in {"main", "sme"}
+
+    def test_includes_main_or_sme_items(self):
+        resp = get("/api/event-calendar")
+        items = resp.json()
+        if not items:
+            pytest.skip("event calendar returned an empty list")
+
+        sources = {item["source"] for item in items if isinstance(item, dict) and "source" in item}
+        assert sources.issubset({"main", "sme"})
+        assert sources, "Expected at least one event calendar item"
+
+    def test_dates_are_nse_formatted(self):
+        resp = get("/api/event-calendar")
+        items = resp.json()
+        if not items:
+            pytest.skip("event calendar returned an empty list")
+
+        for item in items[:5]:
+            date_str = item["date"]
+            try:
+                datetime.strptime(date_str, "%d-%b-%Y")
+            except ValueError:
+                pytest.fail(f"Invalid NSE date format: {date_str}")
 
 
 # ---------------------------------------------------------------------------

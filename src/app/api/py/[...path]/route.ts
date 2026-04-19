@@ -7,17 +7,17 @@
  *
  * Example:
  *   GET  /api/py/circulars?dept=TRADING
- *   →    http://localhost:8000/api/circulars?dept=TRADING
+ *   →    http://localhost:4455/api/circulars?dept=TRADING
  *
  *   GET  /api/py/earnings?symbol=RELIANCE&exchange=NSE
- *   →    http://localhost:8000/api/earnings?symbol=RELIANCE&exchange=NSE
+ *   →    http://localhost:4455/api/earnings?symbol=RELIANCE&exchange=NSE
  */
 
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
 const PYTHON_BACKEND_URL =
-  process.env.PYTHON_BACKEND_URL ?? 'http://localhost:8000'
+  process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455'
 
 function buildUpstreamUrl(params: { path: string[] }, request: NextRequest): string {
   const apiPath = params.path.join('/')

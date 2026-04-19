@@ -167,6 +167,15 @@ def register_all_jobs() -> None:
             callable=sync_all_fair_values,
             is_async=True,
         ),
+        JobDefinition(
+            job_key="job.results_calendar",
+            name="results_calendar",
+            description="Sync upcoming board meeting results alerts from NSE event calendar",
+            category="notifications",
+            cron_expression="0 8,14 * * 1-5",
+            callable=results_calendar_worker,
+            is_async=False,
+        ),
     ]
 
     for job in jobs:
@@ -1278,6 +1287,186 @@ def market_data_worker() -> None:
     logger.info("market_data_worker: stopped")
 
 
+# ---------------------------------------------------------------------------
+# Results calendar worker — upcoming board meeting alerts for watchlist stocks
+# ---------------------------------------------------------------------------
+
+_RESULTS_CALENDAR_CRON = "0 8,14 * * 1-5"  # 8am + 2pm IST on trading days
+
+
+def _results_calendar_sync() -> None:
+    """Fetch NSE event calendar and create 'results_upcoming' notifications.
+
+    For each board meeting event that mentions "Financial Results" in its
+    purpose and whose symbol is in any watchlist, upserts a Notification row
+    with:
+      - trigger_type = 'results_upcoming'
+      - triggered_date = the board meeting date  (dedup key)
+      - triggered_at   = now (time the alert was generated)
+
+    The existing uq_notification_daily constraint (watchlist_id, symbol,
+    trigger_type, triggered_date) ensures each alert fires only once per
+    meeting date per watchlist — re-running the job produces no duplicates.
+    """
+    try:
+        logger.info("results_calendar_sync: starting")
+        update_job_status_sync(
+            "job.results_calendar", "running", progress=10,
+            message="Fetching event calendar from NSE...",
+        )
+
+        # Import here to avoid circular imports at module level
+        from app.routers.announcements import get_event_calendar_cached
+
+        try:
+            events = get_event_calendar_cached()
+        except Exception:
+            logger.exception("results_calendar_sync: failed to fetch event calendar")
+            update_job_status_sync(
+                "job.results_calendar", "failed",
+                message="Failed to fetch event calendar from NSE",
+            )
+            return
+
+        # Filter to only entries that include "Financial Results" in purpose
+        results_events = [
+            e for e in events
+            if "financial results" in e.purpose.lower()
+        ]
+
+        if not results_events:
+            logger.info("results_calendar_sync: no upcoming financial results events found")
+            update_job_status_sync(
+                "job.results_calendar", "waiting", progress=100,
+                message="No upcoming results events",
+            )
+            return
+
+        logger.info(
+            "results_calendar_sync: %d results events found, cross-referencing watchlists",
+            len(results_events),
+        )
+        update_job_status_sync(
+            "job.results_calendar", "running", progress=40,
+            message=f"Cross-referencing {len(results_events)} events against watchlists...",
+        )
+
+        # Load all watchlist symbols grouped by watchlist_id
+        symbols_by_watchlist = _get_watchlist_symbols()
+        if not symbols_by_watchlist:
+            logger.info("results_calendar_sync: watchlist is empty, skipping")
+            update_job_status_sync(
+                "job.results_calendar", "waiting", progress=100,
+                message="Watchlist empty",
+            )
+            return
+
+        # Build reverse map: symbol → list of watchlist_ids
+        watchlists_by_symbol: dict[str, list[int]] = {}
+        for wl_id, symbols in symbols_by_watchlist.items():
+            for sym in symbols:
+                watchlists_by_symbol.setdefault(sym.upper(), []).append(wl_id)
+
+        now = datetime.now()
+        pending: list[dict] = []
+
+        for event in results_events:
+            sym = event.symbol.upper()
+            if sym not in watchlists_by_symbol:
+                continue
+
+            # Parse the board meeting date string, e.g. "20-Apr-2026"
+            try:
+                meeting_date = datetime.strptime(event.date, "%d-%b-%Y").date()
+            except ValueError:
+                logger.warning(
+                    "results_calendar_sync: unparseable date '%s' for %s, skipping",
+                    event.date, sym,
+                )
+                continue
+
+            # Truncate description to 200 chars for the notification message
+            desc = event.description or event.purpose
+            msg = f"Results on {event.date}: {desc[:180]}"
+            if len(desc) > 180:
+                msg += "…"
+
+            for wl_id in watchlists_by_symbol[sym]:
+                pending.append(
+                    {
+                        "watchlist_id": wl_id,
+                        "symbol": sym,
+                        "exchange": "NSE",
+                        "trigger_type": "results_upcoming",
+                        "message": msg[:256],
+                        "triggered_at": now,
+                        "triggered_date": meeting_date,
+                        "is_read": False,
+                    }
+                )
+
+        if pending:
+            _bulk_upsert_notifications(pending)
+            logger.info(
+                "results_calendar_sync: upserted %d notification rows (%d unique events)",
+                len(pending),
+                len({(r["symbol"], r["triggered_date"]) for r in pending}),
+            )
+        else:
+            logger.info("results_calendar_sync: no watchlist symbols matched upcoming results events")
+
+        update_job_status_sync(
+            "job.results_calendar", "waiting", progress=100,
+            message=f"Done — {len(pending)} notifications upserted",
+        )
+
+    except Exception:
+        logger.exception("results_calendar_sync: unhandled exception; will retry next cycle")
+        update_job_status_sync("job.results_calendar", "failed", message="Unhandled exception")
+
+
+def results_calendar_worker() -> None:
+    """Daemon thread: syncs upcoming results notifications twice daily (8am + 2pm IST)."""
+    logger.info("results_calendar_worker: started")
+
+    if not _is_job_enabled("job.results_calendar"):
+        logger.info("results_calendar_worker: disabled, waiting...")
+        update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
+        logger.info("results_calendar_worker: stopped")
+        return
+
+    # Small startup delay so the main app event loop is stable
+    _sleep_interruptible(15)
+
+    update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
+    _results_calendar_sync()
+
+    while not _shutdown_event.is_set():
+        wait_secs = _seconds_until_next_cron(_RESULTS_CALENDAR_CRON)
+        logger.info(
+            "results_calendar_worker: sleeping %.0f s until next cron (%s)",
+            wait_secs, _RESULTS_CALENDAR_CRON,
+        )
+        update_job_status_sync(
+            "job.results_calendar", "waiting", progress=100,
+            message=f"Next run in {wait_secs / 3600:.1f}h",
+        )
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.results_calendar"):
+                update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            _results_calendar_sync()
+
+    update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
+    logger.info("results_calendar_worker: stopped")
+
+
 async def start_all_workers() -> list[threading.Thread]:
     """Register jobs and spawn all background worker threads.
 
@@ -1292,6 +1481,7 @@ async def start_all_workers() -> list[threading.Thread]:
       8. watchlist_notification_worker — needs market data + indicators
       9. news_worker               — independent; crawls global news
      10. watchlist_news_worker     — independent; per-symbol news
+     11. results_calendar_worker  — upcoming board meeting results alerts
     """
     register_all_jobs()
     await sync_all_jobs_to_db()
@@ -1307,6 +1497,7 @@ async def start_all_workers() -> list[threading.Thread]:
         watchlist_notification_worker, # 8 — watchlist alerts
         news_worker,                   # 9 — global news
         watchlist_news_worker,         # 10 — per-symbol news
+        results_calendar_worker,       # 11 — upcoming results alerts
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
