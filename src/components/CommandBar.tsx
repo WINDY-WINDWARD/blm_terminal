@@ -25,6 +25,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'NEWS', desc: 'Market & company news' },
   { cmd: 'ANALYSIS', desc: 'Sector & industry analysis' },
   { cmd: 'NOTIF', desc: 'Notifications generated' },
+  { cmd: 'ANNC', desc: 'NSE announcements feed' },
   { cmd: 'SCAN', desc: 'Global market scanner' },
 ];
 

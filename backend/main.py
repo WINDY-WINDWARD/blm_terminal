@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text, ev
 from app.config import settings
 from app.routers import (
     ai_summarizer_router,
+    announcements_router,
     filings_router,
     markets_router,
     market_router,
@@ -395,6 +396,7 @@ async def log_requests(request: Request, call_next) -> Response:  # type: ignore
 # ---------------------------------------------------------------------------
 
 app.include_router(ai_summarizer_router, prefix="/api")
+app.include_router(announcements_router, prefix="/api")
 app.include_router(filings_router, prefix="/api")
 app.include_router(markets_router, prefix="/api")
 app.include_router(morningstar_router, prefix="/api")

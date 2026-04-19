@@ -25,6 +25,7 @@ const VALID_WIDGETS = [
   'NEWS',
   'ANALYSIS',
   'NOTIF',
+  'ANNC',
   'SCAN',
 ];
 

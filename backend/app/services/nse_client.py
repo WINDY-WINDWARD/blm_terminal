@@ -60,6 +60,9 @@ class NSEClient:
         logger.debug("NSE: fetching metadata for %s", symbol)
         try:
             temp = nsepython.nse_eq(symbol)
+        except requests.exceptions.RequestException as e:
+            logger.warning("NSE: metadata fetch failed for %s: %s", symbol, e)
+            raise
         except Exception:
             logger.exception("NSE: metadata fetch failed for %s", symbol)
             raise

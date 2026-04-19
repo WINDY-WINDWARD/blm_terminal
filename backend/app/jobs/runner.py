@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -85,35 +86,50 @@ def update_job_status_sync(
     Automatically sets last_triggered_at when status is 'running'
     and last_completed_at when status is 'idle' or 'waiting'.
     Automatically calculates next_trigger_at for interval-based jobs.
-    """
-    try:
-        with _SyncSessionLocal() as db:
-            values: dict = {
-                "status": status,
-                "updated_at": datetime.now(timezone.utc),
-            }
-            
-            # Auto-set timestamps based on status
-            now = datetime.now(timezone.utc)
-            if status == "running" or last_triggered:
-                values["last_triggered_at"] = last_triggered if last_triggered else now
-            if status in ("idle", "waiting") or last_completed:
-                values["last_completed_at"] = last_completed if last_completed else now
-            
-            if progress is not None:
-                values["progress_percent"] = progress
-            if message is not None:
-                values["progress_message"] = message
-            if error is not None:
-                values["last_error"] = error
-            if next_trigger is not None:
-                values["next_trigger_at"] = next_trigger
 
-            stmt = update(Job).where(Job.job_key == job_key).values(**values)
-            db.execute(stmt)
-            db.commit()
-    except Exception as e:
-        logger.warning(f"Failed to update job status for {job_key}: {e}")
+    Retries up to 3 times with brief exponential back-off on SQLite
+    "database is locked" errors that can occur during the startup write-storm
+    when many workers try to persist their initial status simultaneously.
+    """
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with _SyncSessionLocal() as db:
+                values: dict = {
+                    "status": status,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+
+                # Auto-set timestamps based on status
+                now = datetime.now(timezone.utc)
+                if status == "running" or last_triggered:
+                    values["last_triggered_at"] = last_triggered if last_triggered else now
+                if status in ("idle", "waiting") or last_completed:
+                    values["last_completed_at"] = last_completed if last_completed else now
+
+                if progress is not None:
+                    values["progress_percent"] = progress
+                if message is not None:
+                    values["progress_message"] = message
+                if error is not None:
+                    values["last_error"] = error
+                if next_trigger is not None:
+                    values["next_trigger_at"] = next_trigger
+
+                stmt = update(Job).where(Job.job_key == job_key).values(**values)
+                db.execute(stmt)
+                db.commit()
+            return  # success — exit the retry loop
+        except Exception as e:
+            if attempt < max_attempts:
+                wait = 0.5 * attempt  # 0.5 s, 1.0 s back-off
+                logger.debug(
+                    "update_job_status_sync: DB busy for %s (attempt %d/%d), retrying in %.1fs: %s",
+                    job_key, attempt, max_attempts, wait, e,
+                )
+                time.sleep(wait)
+            else:
+                logger.warning("Failed to update job status for %s: %s", job_key, e)
 
 
 async def sync_job_to_db(job_key: str) -> None:

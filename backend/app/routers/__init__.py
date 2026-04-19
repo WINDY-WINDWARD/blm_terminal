@@ -1,6 +1,7 @@
 """FastAPI router registry."""
 
 from app.routers.ai_summarizer import router as ai_summarizer_router
+from app.routers.announcements import router as announcements_router
 from app.routers.corporatefilings import router as filings_router
 from app.routers.jobs import router as jobs_router
 from app.routers.markets import router as markets_router
@@ -15,6 +16,7 @@ from app.routers.watchlist import router as watchlist_router
 
 __all__ = [
     "ai_summarizer_router",
+    "announcements_router",
     "filings_router",
     "jobs_router",
     "markets_router",

@@ -197,7 +197,7 @@ export default function JobsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-terminal-bg text-white font-mono p-4">
+    <div className="h-screen overflow-y-auto bg-terminal-bg text-white font-mono p-4">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-4 border-b border-terminal-gray pb-2">

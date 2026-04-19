@@ -15,8 +15,9 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
     """Enable WAL mode and tune SQLite for concurrent multi-writer workloads.
 
     Key choices:
-    - busy_timeout=30000: 30 s retry window — eliminates the startup write-storm
-      "database is locked" failures that occur when all workers launch at once.
+    - busy_timeout=30000: 30 s retry window — set FIRST so the journal_mode=WAL
+      exclusive-lock acquisition retries instead of immediately failing with
+      "database is locked" when multiple connections open concurrently at startup.
     - synchronous=NORMAL: safe in WAL mode (WAL file is still synced before a
       checkpoint), ~3x faster than FULL because it avoids per-transaction fsyncs.
     - cache_size=-65536: 64 MB page cache reduces disk I/O and shortens the time
@@ -25,8 +26,10 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
     - mmap_size=268435456: 256 MB memory-mapped I/O for faster sequential reads.
     """
     cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout must be set first so that the journal_mode=WAL exclusive
+    # lock acquisition retries rather than immediately raising "database is locked".
     cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.execute("PRAGMA cache_size=-65536")
     cursor.execute("PRAGMA temp_store=MEMORY")
@@ -79,8 +82,9 @@ _sync_engine = create_engine(
 @_sa_event.listens_for(_sync_engine, "connect")
 def _set_sync_sqlite_pragmas(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout first — same reasoning as _set_sqlite_pragma above.
     cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.execute("PRAGMA cache_size=-65536")
     cursor.execute("PRAGMA temp_store=MEMORY")

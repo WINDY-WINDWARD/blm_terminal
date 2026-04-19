@@ -17,6 +17,7 @@ import { NewsWidget } from './widgets/NewsWidget';
 import { AnalysisWidget } from './widgets/AnalysisWidget';
 import { NotifWidget } from './widgets/NotifWidget';
 import { ScanWidget } from './widgets/ScanWidget';
+import { AnnouncementsWidget } from './widgets/AnnouncementsWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -43,6 +44,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'NEWS':     return <NewsWidget />;
       case 'ANALYSIS': return <AnalysisWidget />;
       case 'NOTIF':   return <NotifWidget />;
+      case 'ANNC':    return <AnnouncementsWidget />;
       case 'SCAN':    return <ScanWidget />;
       default:
         return (

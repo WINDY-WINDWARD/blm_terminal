@@ -10,6 +10,7 @@ import pandas as pd
 import pytz
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import OperationalError as _SAOperationalError
 
 from app.services.nse_client import NSEClient
 from app.services import ticker_warehouse
@@ -332,19 +333,28 @@ def _stock_universe_sync() -> None:
                     batch.append(metadata)
                     if len(batch) >= batch_size:
                         _bulk_insert_stock_universe(session, batch)
+                        session.commit()
                         batch.clear()
                         if _sleep_interruptible(0.5):
                             return
+                except _SAOperationalError as e:
+                    logger.warning(
+                        "DB write failed for %s (will retry next cycle): %s", symbol, e
+                    )
+                    session.rollback()
+                    if _sleep_interruptible(1.0):
+                        return
+                    continue
                 except Exception:
-                    logger.exception("Failed to fetch metadata for %s, skipping", symbol)
+                    logger.warning("Failed to fetch NSE metadata for %s, skipping", symbol)
                     if _sleep_interruptible(1.0):
                         return
                     continue
 
             if batch:
                 _bulk_insert_stock_universe(session, batch)
+                session.commit()
 
-            session.commit()
         logger.info("stock_universe_sync: complete")
     except Exception:
         logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
