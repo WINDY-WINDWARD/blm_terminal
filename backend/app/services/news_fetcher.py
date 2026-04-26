@@ -226,8 +226,10 @@ class NewsFetcher:
             # and injects dynamic content (article links on listing pages, body text on
             # article pages). The extra wait is capped at 15 s and swallowed on timeout
             # so heavily-tracked pages that never fire domcontentloaded still succeed.
+            # Timeout is 30 s (down from 60 s): failures are detected faster and the
+            # httpx fallback in _get_page kicks in sooner.
             try:
-                response = await page.goto(url, wait_until="commit", timeout=60_000)
+                response = await page.goto(url, wait_until="commit", timeout=30_000)
             except PlaywrightTimeoutError:
                 raise TimeoutError(f"camoufox: navigation timed out for {url}")
             if response is None or not response.ok:
@@ -246,11 +248,22 @@ class NewsFetcher:
             await page.close()
 
     async def _get_page(self, url: str) -> _PageResult:
-        """Fetch a page. Uses camoufox if enabled, otherwise httpx with 403-retry."""
-        if self._browser is not None:
-            return await self._camoufox_get_page(url)
+        """Fetch a page. Uses camoufox if enabled, otherwise httpx with 403-retry.
 
-        # --- httpx path (default) ---
+        When camoufox is enabled but raises TimeoutError (e.g. MoneyControl throttling
+        or a slow stock-quote page), the request is transparently retried via httpx so
+        that callers always get a result rather than silently returning 0 articles.
+        """
+        if self._browser is not None:
+            try:
+                return await self._camoufox_get_page(url)
+            except TimeoutError:
+                logger.warning(
+                    "camoufox timed out for %s — falling back to httpx", url
+                )
+                # fall through to httpx path below
+
+        # --- httpx path (default / fallback) ---
         try:
             client = await self._get_client()
             response = await client.get(url)

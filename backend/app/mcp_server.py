@@ -125,7 +125,7 @@ async def get_top_losers() -> list[dict[str, Any]]:
 async def get_bulk_deals(
     symbol: str | None = None,
     symbols: list[str] | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     """Fetch recent NSE bulk deal records for one or multiple stock symbols.
 
     Args:
@@ -171,7 +171,7 @@ async def get_bulk_deals(
 async def get_block_deals(
     symbol: str | None = None,
     symbols: list[str] | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]] | dict[str, Any]:
     """Fetch recent NSE block deal records for one or multiple stock symbols.
 
     Args:
@@ -1051,7 +1051,7 @@ async def get_global_news(days: int = 7, limit: int = 50) -> dict[str, Any]:
         }
 
 
-_COMPANY_NEWS_STALE_SECONDS = 5 * 60  # matches global crawl cadence
+_COMPANY_NEWS_STALE_SECONDS = 30 * 60  # 30 min - less aggressive than 5 min
 
 
 @mcp.tool()
@@ -1149,8 +1149,14 @@ async def get_company_news(
                 len(existing),
                 refresh,
             )
-            async with AsyncSessionLocal() as db:
-                await news_fetcher.fetch_company_news(symbol=sym, db=db)
+            try:
+                async with AsyncSessionLocal() as db:
+                    await asyncio.wait_for(
+                        news_fetcher.fetch_company_news(symbol=sym, db=db),
+                        timeout=25.0,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("get_company_news: timeout for %s, returning stale cache", sym)
             async with AsyncSessionLocal() as db:
                 return await _query_db(db)
 

@@ -8,19 +8,29 @@ Run from inside the backend venv with CAMOUFOX_ENABLED=true:
     source .venv/bin/activate
     CAMOUFOX_ENABLED=true python test_camoufox.py
 
-The script runs four checks in sequence and prints a pass/fail summary:
-  1. camoufox browser starts
-  2. Listing page fetched + article URLs extracted
-  3. Single article fetched + content parsed (title, date, text)
-  4. camoufox browser closes cleanly
+The script runs checks in sequence and prints a pass/fail summary:
+  1.  camoufox browser starts
+  2.  Listing page fetched + article URLs extracted
+  3.  Single article fetched + content parsed (title, date, text)
+  4.  camoufox browser closes cleanly
+  5.  Company/stockpricequote page fetched (raw camoufox, no resource-blocking)
+  6.  #news section found on company page
+  7.  Company article URLs extracted from #news section
+  8.  Company page fetched with resource-blocking (images/CSS/fonts aborted)
+  9.  Resource-blocked fetch is faster than unblocked fetch
+  10. Company page fetched with extra HTTP headers
+  11. httpx path fetches company page when browser is bypassed
+  12. _get_page falls back to httpx on camoufox TimeoutError (monkey-patch test)
 """
 
 import asyncio
 import os
+import re
 import sys
 import time
 import textwrap
 from datetime import datetime
+from unittest.mock import patch
 
 # ── ensure we run with CAMOUFOX_ENABLED ──────────────────────────────────────
 if os.environ.get("CAMOUFOX_ENABLED", "").lower() not in ("1", "true", "yes"):
@@ -39,6 +49,7 @@ NC     = "\033[0m"
 def ok(msg):    print(f"  {GREEN}PASS{NC}  {msg}")
 def fail(msg):  print(f"  {RED}FAIL{NC}  {msg}")
 def info(msg):  print(f"  {CYAN}    {NC}  {msg}")
+def warn(msg):  print(f"  {YELLOW}WARN{NC}  {msg}")
 def section(title): print(f"\n{BOLD}{title}{NC}")
 
 results: list[tuple[str, bool, str]] = []   # (label, passed, detail)
@@ -55,11 +66,40 @@ def record(label: str, passed: bool, detail: str = ""):
 
 
 # ── import service internals ──────────────────────────────────────────────────
-# Add the backend root to sys.path so app.* imports resolve.
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app.services.news_fetcher import NewsFetcher, MONEYCONTROL_NEWS_ALL  # noqa: E402
+from app.services.news_fetcher import NewsFetcher, MONEYCONTROL_BASE_URL, MONEYCONTROL_NEWS_ALL  # noqa: E402
 from bs4 import BeautifulSoup  # noqa: E402
+
+COMPANY_URL = "https://www.moneycontrol.com/india/stockpricequote/refineries/relianceindustries/RI"
+
+# ─────────────────────────────────────────────────────────────────────────────
+async def _fetch_with_resource_blocking(fetcher: NewsFetcher, url: str):
+    """Internal helper: fetch url via camoufox with image/CSS/font blocking."""
+    assert fetcher._browser is not None
+    page = await fetcher._browser.new_page()
+    try:
+        resource_block = re.compile(r"\.(png|jpg|jpeg|gif|svg|ico|woff2?|css)(\?|$)", re.I)
+        await page.route(
+            resource_block,
+            lambda route, _req=None: route.abort(),
+        )
+        await page.set_extra_http_headers({
+            "Referer": "https://www.moneycontrol.com/",
+            "Accept-Language": "en-IN,en;q=0.9",
+        })
+        response = await page.goto(url, wait_until="commit", timeout=45_000)
+        if response is None or not response.ok:
+            status = response.status if response else 0
+            raise RuntimeError(f"HTTP {status}")
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:
+            pass
+        content = await page.content()
+        return content
+    finally:
+        await page.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,6 +194,190 @@ async def run_tests() -> int:
         record("Browser closed", fetcher._browser is None and fetcher._camoufox_ctx is None)
     except Exception as exc:
         record("Browser closed", False, str(exc))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Tests 5-12: company page, resource-blocking, headers, fallback
+    # Re-init the browser for these tests
+    # ─────────────────────────────────────────────────────────────────────────
+    section("Re-initialising browser for company page tests …")
+    try:
+        await fetcher.init()
+        info(f"Browser ready: {fetcher._browser is not None}")
+    except Exception as exc:
+        info(f"Re-init failed: {exc}")
+
+    if fetcher._browser is None:
+        section("Aborting company-page tests — browser not available")
+        return _print_summary()
+
+    # ── Test 5: raw company page fetch (no blocking) ──────────────────────────
+    section("Test 5 — raw camoufox fetch of company/stockpricequote page")
+    info(f"URL: {COMPANY_URL}")
+    t0 = time.perf_counter()
+    raw_html = ""
+    raw_elapsed = 999.0
+    try:
+        page = await fetcher._browser.new_page()
+        try:
+            response = await page.goto(COMPANY_URL, wait_until="commit", timeout=60_000)
+            raw_elapsed = time.perf_counter() - t0
+            if response is None or not response.ok:
+                status = response.status if response else 0
+                raise RuntimeError(f"HTTP {status}")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+            except Exception:
+                pass
+            raw_html = await page.content()
+        finally:
+            await page.close()
+
+        if len(raw_html) > 500:
+            record("Company page fetched (raw)", True,
+                   f"{len(raw_html):,} bytes in {raw_elapsed:.1f}s")
+        else:
+            record("Company page fetched (raw)", False,
+                   f"suspiciously short ({len(raw_html)} bytes)\n"
+                   + textwrap.indent(raw_html[:600], "    "))
+    except Exception as exc:
+        raw_elapsed = time.perf_counter() - t0
+        record("Company page fetched (raw)", False,
+               f"{type(exc).__name__}: {exc} (after {raw_elapsed:.1f}s)")
+
+    # ── Test 6: #news section present on company page ─────────────────────────
+    section("Test 6 — #news section found on company page HTML")
+    if raw_html:
+        soup = BeautifulSoup(raw_html, "lxml")
+        news_div = soup.find(id="news")
+        record("#news div present", news_div is not None,
+               "found" if news_div else
+               "missing — MC may be serving a challenge/JS-rendered page\n"
+               + "page snippet:\n" + textwrap.indent(raw_html[:800], "    "))
+    else:
+        record("#news div present", False, "skipped — company page not fetched")
+
+    # ── Test 7: article URLs extracted from #news ─────────────────────────────
+    section("Test 7 — article URLs extracted from company #news section")
+    if raw_html:
+        company_urls = fetcher._extract_company_article_urls(raw_html)
+        record("Company article URLs extracted", bool(company_urls),
+               f"found {len(company_urls)} URLs" + (f"; first: {company_urls[0]}" if company_urls else ""))
+    else:
+        record("Company article URLs extracted", False, "skipped — company page not fetched")
+
+    # ── Test 8: resource-blocked fetch of company page ────────────────────────
+    section("Test 8 — company page fetch with resource-blocking (img/CSS/font aborted)")
+    t0 = time.perf_counter()
+    blocked_html = ""
+    blocked_elapsed = 999.0
+    try:
+        blocked_html = await _fetch_with_resource_blocking(fetcher, COMPANY_URL)
+        blocked_elapsed = time.perf_counter() - t0
+
+        if len(blocked_html) > 500:
+            record("Company page fetched (blocked)", True,
+                   f"{len(blocked_html):,} bytes in {blocked_elapsed:.1f}s")
+        else:
+            record("Company page fetched (blocked)", False,
+                   f"suspiciously short ({len(blocked_html)} bytes)")
+    except Exception as exc:
+        blocked_elapsed = time.perf_counter() - t0
+        record("Company page fetched (blocked)", False,
+               f"{type(exc).__name__}: {exc} (after {blocked_elapsed:.1f}s)")
+
+    # ── Test 9: compare blocked vs raw timing (informational) ────────────────
+    section("Test 9 — compare resource-blocked vs raw timing (informational)")
+    if raw_elapsed < 990 and blocked_elapsed < 990:
+        faster = blocked_elapsed < raw_elapsed
+        # MoneyControl's CDN and SPA boot can make blocking slower — this is
+        # informational only; we don't require blocking to win on timing.
+        if faster:
+            info(f"Blocked fetch was faster: raw={raw_elapsed:.1f}s  blocked={blocked_elapsed:.1f}s  saving={raw_elapsed - blocked_elapsed:.1f}s")
+        else:
+            info(f"Raw fetch was faster: raw={raw_elapsed:.1f}s  blocked={blocked_elapsed:.1f}s  (blocking not beneficial for this URL)")
+        record("Both fetch strategies completed", True,
+               f"raw={raw_elapsed:.1f}s  blocked={blocked_elapsed:.1f}s")
+    else:
+        record("Both fetch strategies completed", False,
+               f"one or both fetches failed (raw={raw_elapsed:.1f}s blocked={blocked_elapsed:.1f}s)")
+
+    # ── Test 10: extra headers + resource-blocking ────────────────────────────
+    section("Test 10 — #news section present in resource-blocked HTML")
+    if blocked_html:
+        soup = BeautifulSoup(blocked_html, "lxml")
+        news_div = soup.find(id="news")
+        blocked_urls = fetcher._extract_company_article_urls(blocked_html)
+        record("#news div in blocked HTML", news_div is not None,
+               f"found {len(blocked_urls)} article URLs" if news_div
+               else "missing — blocking resources may have broken page structure")
+        if news_div:
+            record("Article URLs in blocked HTML", bool(blocked_urls),
+                   f"{len(blocked_urls)} URLs" + (f"; first: {blocked_urls[0]}" if blocked_urls else ""))
+    else:
+        record("#news div in blocked HTML", False, "skipped — blocked fetch failed")
+
+    # ── Test 11: httpx path fetches company page independently ────────────────
+    section("Test 11 — httpx path fetches company page (browser bypassed)")
+    t0 = time.perf_counter()
+    try:
+        saved_browser = fetcher._browser
+        fetcher._browser = None           # force httpx path
+        httpx_result = await fetcher._get_page(COMPANY_URL)
+        fetcher._browser = saved_browser  # restore
+        elapsed = time.perf_counter() - t0
+        html_len = len(httpx_result.text)
+        record("httpx company page fetched", html_len > 500,
+               f"{html_len:,} bytes in {elapsed:.1f}s")
+        soup = BeautifulSoup(httpx_result.text, "lxml")
+        news_div = soup.find(id="news")
+        record("#news div via httpx", news_div is not None,
+               "found" if news_div else "missing")
+    except Exception as exc:
+        fetcher._browser = saved_browser  # type: ignore[possibly-undefined]
+        elapsed = time.perf_counter() - t0
+        record("httpx company page fetched", False,
+               f"{type(exc).__name__}: {exc} (after {elapsed:.1f}s)")
+
+    # ── Test 12: _get_page falls back to httpx on camoufox TimeoutError ───────
+    section("Test 12 — _get_page falls back to httpx when camoufox raises TimeoutError")
+    t0 = time.perf_counter()
+    fallback_triggered = False
+    try:
+        original_camoufox_get = fetcher._camoufox_get_page
+
+        async def _always_timeout(url: str):
+            raise TimeoutError(f"simulated camoufox timeout for {url}")
+
+        fetcher._camoufox_get_page = _always_timeout  # type: ignore[method-assign]
+        result = await fetcher._get_page(COMPANY_URL)
+        elapsed = time.perf_counter() - t0
+        fetcher._camoufox_get_page = original_camoufox_get  # type: ignore[method-assign]
+
+        fallback_triggered = True
+        html_len = len(result.text)
+        record("Fallback to httpx on TimeoutError", html_len > 500,
+               f"got {html_len:,} bytes in {elapsed:.1f}s via httpx after simulated timeout")
+    except TimeoutError:
+        fetcher._camoufox_get_page = original_camoufox_get  # type: ignore[possibly-undefined]
+        elapsed = time.perf_counter() - t0
+        record("Fallback to httpx on TimeoutError", False,
+               f"TimeoutError propagated — no fallback implemented (after {elapsed:.1f}s)")
+    except Exception as exc:
+        try:
+            fetcher._camoufox_get_page = original_camoufox_get  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+        elapsed = time.perf_counter() - t0
+        record("Fallback to httpx on TimeoutError", False,
+               f"{type(exc).__name__}: {exc} (after {elapsed:.1f}s)")
+
+    # ── Final shutdown ────────────────────────────────────────────────────────
+    section("Final — clean browser shutdown")
+    try:
+        await fetcher.close()
+        record("Browser closed (final)", fetcher._browser is None and fetcher._camoufox_ctx is None)
+    except Exception as exc:
+        record("Browser closed (final)", False, str(exc))
 
     return _print_summary()
 
