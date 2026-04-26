@@ -113,16 +113,24 @@ function getTooltipDescription(triggerType: string): string {
   }
 }
 
-function formatTime(iso: string): string {
+function formatDateTime(iso: string): string {
   const d = new Date(iso);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mon = months[d.getMonth()];
+  const dd = d.getDate().toString().padStart(2, '0');
   const hh = d.getHours().toString().padStart(2, '0');
   const mm = d.getMinutes().toString().padStart(2, '0');
-  return `${hh}:${mm}`;
+  return `${mon} ${dd}, ${hh}:${mm}`;
 }
+
+type DaysFilter = 2 | 4 | 6 | 8 | 12;
+type ReadFilter = 'unread' | 'read' | 'all';
 
 export function ScanWidget() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
+  const [daysFilter, setDaysFilter] = useState<DaysFilter>(2);
+  const [readFilter, setReadFilter] = useState<ReadFilter>('unread');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -166,9 +174,9 @@ export function ScanWidget() {
   };
 
   const { data, isLoading, isError, error, refetch } = useQuery<GlobalNotification[]>({
-    queryKey: ['global-notifications'],
+    queryKey: ['global-notifications', daysFilter, readFilter],
     queryFn: async () => {
-      const res = await fetch('/api/py/notifications/global');
+      const res = await fetch(`/api/py/notifications/global?days=${daysFilter}&read_filter=${readFilter}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -280,10 +288,30 @@ export function ScanWidget() {
             </div>
           )}
         </div>
+        <select
+          value={daysFilter}
+          onChange={(e) => setDaysFilter(Number(e.target.value) as DaysFilter)}
+          className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px"
+        >
+          <option value={2}>2D</option>
+          <option value={4}>4D</option>
+          <option value={6}>6D</option>
+          <option value={8}>8D</option>
+          <option value={12}>12D</option>
+        </select>
+        <select
+          value={readFilter}
+          onChange={(e) => setReadFilter(e.target.value as ReadFilter)}
+          className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px"
+        >
+          <option value="unread">UNREAD</option>
+          <option value="read">READ</option>
+          <option value="all">ALL</option>
+        </select>
         <span className="text-white/60 text-[10px] shrink-0">
           ({filteredNotifications.length})
         </span>
-        {(data ?? []).length > 0 && (
+        {(data ?? []).length > 0 && readFilter === 'unread' && (
           <button
             onClick={() => clearAllMutation.mutate()}
             className="ml-auto text-[9px] text-white/50 hover:text-terminal-red transition-colors shrink-0"
@@ -337,7 +365,7 @@ export function ScanWidget() {
                 >
                   {n.message}
                 </span>
-                <span className="text-white/40 text-[9px] shrink-0">{formatTime(n.triggered_at)}</span>
+                <span className="text-white/40 text-[9px] shrink-0">{formatDateTime(n.triggered_at)}</span>
                 <button
                   onClick={(e) => handleDismiss(e, n.id)}
                   className="shrink-0 text-white/30 hover:text-terminal-red text-[11px] w-4 text-center opacity-0 group-hover:opacity-100 transition-opacity"

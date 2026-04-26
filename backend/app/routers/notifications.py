@@ -1,7 +1,7 @@
 """FastAPI router for the notifications API."""
 
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,14 +18,25 @@ router = APIRouter()
 @router.get("/notifications", response_model=list[NotificationOut], tags=["notifications"])
 async def list_notifications(
     watchlist_id: Annotated[int, Query()],
+    days: Annotated[int, Query()] = 2,
+    read_filter: Annotated[str, Query()] = "unread",
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationOut]:
-    """Return unread notifications for a watchlist, newest first."""
-    stmt = (
-        select(Notification)
-        .where(Notification.watchlist_id == watchlist_id, Notification.is_read == False)
-        .order_by(Notification.triggered_at.desc())
+    """Return notifications for a watchlist, newest first.
+
+    - days: number of past days to include (default 2)
+    - read_filter: 'unread' (default), 'read', or 'all'
+    """
+    cutoff_date = date.today() - timedelta(days=days)
+    stmt = select(Notification).where(
+        Notification.watchlist_id == watchlist_id,
+        Notification.triggered_date >= cutoff_date,
     )
+    if read_filter == "unread":
+        stmt = stmt.where(Notification.is_read == False)
+    elif read_filter == "read":
+        stmt = stmt.where(Notification.is_read == True)
+    stmt = stmt.order_by(Notification.triggered_at.desc())
     res = await db.execute(stmt)
     return [NotificationOut.model_validate(n) for n in res.scalars().all()]
 
@@ -85,18 +96,30 @@ async def dismiss_all_notifications(
 
 @router.get("/notifications/global", response_model=list[GlobalNotificationOut], tags=["notifications"])
 async def list_global_notifications(
+    days: Annotated[int, Query()] = 2,
+    read_filter: Annotated[str, Query()] = "unread",
     limit: Annotated[int | None, Query()] = None,
     trigger_type: Annotated[str | None, Query()] = None,
     db: AsyncSession = Depends(get_db),
 ) -> list[GlobalNotificationOut]:
-    """Return unread global notifications (all NSE stocks), newest first."""
-    stmt = (
-        select(GlobalNotification)
-        .where(GlobalNotification.is_read == False)
-        .order_by(GlobalNotification.triggered_at.desc())
+    """Return global notifications (all NSE stocks), newest first.
+
+    - days: number of past days to include (default 2)
+    - read_filter: 'unread' (default), 'read', or 'all'
+    - limit: optional max rows to return
+    - trigger_type: optional filter by trigger type
+    """
+    cutoff_date = date.today() - timedelta(days=days)
+    stmt = select(GlobalNotification).where(
+        GlobalNotification.triggered_date >= cutoff_date,
     )
+    if read_filter == "unread":
+        stmt = stmt.where(GlobalNotification.is_read == False)
+    elif read_filter == "read":
+        stmt = stmt.where(GlobalNotification.is_read == True)
     if trigger_type is not None:
         stmt = stmt.where(GlobalNotification.trigger_type == trigger_type)
+    stmt = stmt.order_by(GlobalNotification.triggered_at.desc())
     if limit is not None:
         stmt = stmt.limit(limit)
     res = await db.execute(stmt)

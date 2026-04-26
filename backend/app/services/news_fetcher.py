@@ -220,10 +220,21 @@ class NewsFetcher:
             page = await self._browser.new_page()
 
         try:
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            # "commit" fires as soon as the HTTP response is received — before JS runs.
+            # After commit we wait for "domcontentloaded" so that React/Next.js hydrates
+            # and injects dynamic content (article links on listing pages, body text on
+            # article pages). The extra wait is capped at 15 s and swallowed on timeout
+            # so heavily-tracked pages that never fire domcontentloaded still succeed.
+            response = await page.goto(url, wait_until="commit", timeout=60_000)
             if response is None or not response.ok:
                 status = response.status if response else 0
                 raise RuntimeError(f"camoufox: HTTP {status} for {url}")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+            except Exception:
+                logger.debug(
+                    "camoufox: domcontentloaded timed out for %s, using partial HTML", url
+                )
             content = await page.content()
             await asyncio.sleep(REQUEST_DELAY)
             return _PageResult(text=content)
@@ -369,7 +380,8 @@ class NewsFetcher:
                     top_image = str(og_image.get("content") or "") or None
 
                 publish_date = None
-                date_meta = soup.find("meta", property="article:published_time")
+                date_meta = soup.find("meta", property="article:published_time") or \
+                            soup.find("meta", property="og:article:published_time")
                 if date_meta:
                     raw_date = date_meta.get("content")
                     if raw_date:
