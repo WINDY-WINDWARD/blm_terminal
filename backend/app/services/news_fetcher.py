@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -225,7 +226,10 @@ class NewsFetcher:
             # and injects dynamic content (article links on listing pages, body text on
             # article pages). The extra wait is capped at 15 s and swallowed on timeout
             # so heavily-tracked pages that never fire domcontentloaded still succeed.
-            response = await page.goto(url, wait_until="commit", timeout=60_000)
+            try:
+                response = await page.goto(url, wait_until="commit", timeout=60_000)
+            except PlaywrightTimeoutError:
+                raise TimeoutError(f"camoufox: navigation timed out for {url}")
             if response is None or not response.ok:
                 status = response.status if response else 0
                 raise RuntimeError(f"camoufox: HTTP {status} for {url}")
@@ -416,6 +420,9 @@ class NewsFetcher:
                     f"Parsed article: {title[:30] if title else 'No title'}..."
                 )
                 return result
+            except TimeoutError as e:
+                logger.warning("Skipping article (navigation timeout): %s", url)
+                return None
             except Exception:
                 logger.exception("Failed to parse article: %s", url)
                 return None

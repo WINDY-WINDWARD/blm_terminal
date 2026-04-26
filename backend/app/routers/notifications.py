@@ -27,7 +27,7 @@ async def list_notifications(
     - days: number of past days to include (default 2)
     - read_filter: 'unread' (default), 'read', or 'all'
     """
-    cutoff_date = date.today() - timedelta(days=days)
+    cutoff_date = date.today() - timedelta(days=days - 1)
     stmt = select(Notification).where(
         Notification.watchlist_id == watchlist_id,
         Notification.triggered_date >= cutoff_date,
@@ -109,7 +109,7 @@ async def list_global_notifications(
     - limit: optional max rows to return
     - trigger_type: optional filter by trigger type
     """
-    cutoff_date = date.today() - timedelta(days=days)
+    cutoff_date = date.today() - timedelta(days=days - 1)
     stmt = select(GlobalNotification).where(
         GlobalNotification.triggered_date >= cutoff_date,
     )
