@@ -1065,8 +1065,11 @@ async def _fetch_company_news_async(symbol: str) -> int:
     Note: We can't easily cancel HTTP requests mid-flight, but we can at least
     check for shutdown between symbols in the caller.
     """
-    async with _ThreadAsyncSessionLocal() as session:
-        return await news_fetcher.fetch_company_news(symbol=symbol, db=session)
+    try:
+        async with _ThreadAsyncSessionLocal() as session:
+            return await news_fetcher.fetch_company_news(symbol=symbol, db=session)
+    finally:
+        await news_fetcher.close()
 
 
 def _watchlist_news_sync() -> None:

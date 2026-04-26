@@ -95,9 +95,17 @@ class NewsFetcher:
         if self._client is not None and self._client_loop is current_loop:
             return
 
+        # Close stale client if there's a loop mismatch before creating a new one
+        if self._client is not None:
+            try:
+                await self._client.aclose()
+            except Exception:
+                logger.debug("NewsFetcher: error closing stale client", exc_info=True)
+            self._client = None
+
         self._client = httpx.AsyncClient(
             headers=self._headers,
-            timeout=httpx.Timeout(30.0, connect=10.0),
+            timeout=httpx.Timeout(30.0, connect=10.0, pool=5.0),
             follow_redirects=True,
             limits=httpx.Limits(
                 max_connections=10,
@@ -664,9 +672,10 @@ class NewsFetcher:
 
         logger.info("fetch_company_news: symbol=%s url=%s", symbol_upper, mc_url)
 
-        # 1. Fetch the stock quote page
+        # 1. Fetch the stock quote page (with concurrency limiting)
         try:
-            response = await self._get_page(mc_url)
+            async with self._get_semaphore():
+                response = await self._get_page(mc_url)
         except Exception:
             logger.exception(
                 "fetch_company_news: failed to fetch company page %s", mc_url

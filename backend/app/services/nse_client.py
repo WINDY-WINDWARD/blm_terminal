@@ -321,7 +321,6 @@ class NSEClient:
             sixMonthPercent, oneYearPercent, twoYearPercent, threeYearPercent, fiveYearPercent
         """
         _NSE_FIELD_MAP = {
-            "oneDayPercent": "yesterday_chng_per",
             "oneWeekPercent": "one_week_chng_per",
             "oneMonthPercent": "one_month_chng_per",
             "threeMonthPercent": "three_month_chng_per",

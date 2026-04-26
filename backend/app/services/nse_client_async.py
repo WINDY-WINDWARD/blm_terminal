@@ -37,7 +37,6 @@ NSE_HEADERS = {
 }
 
 NSE_FIELD_MAP_CHANGE_RANGES: dict[str, str] = {
-    "oneDayPercent": "yesterday_chng_per",
     "oneWeekPercent": "one_week_chng_per",
     "oneMonthPercent": "one_month_chng_per",
     "threeMonthPercent": "three_month_chng_per",

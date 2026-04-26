@@ -25,7 +25,7 @@ from app.models.notification import GlobalNotification, Notification
 from app.models.watchlist import Watchlist as WatchlistModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.services.nse_client import nse_client
-from app.services.screener_client import _parse_all_quarters, screener_client
+from app.services.screener_client import screener_client
 from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
@@ -214,20 +214,6 @@ async def get_block_deals(
 
 
 @mcp.tool()
-async def get_high_short_interest() -> list[dict[str, Any]]:
-    """Fetch today's NSE stocks flagged for high short-selling interest."""
-    cache_key = "mcp_high_short_interest"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    snapshot = await _mcp_snapshot()
-    data = snapshot.get("SHORT_DEALS_DATA", [])
-    _cache_set(cache_key, data)
-    return data
-
-
-@mcp.tool()
 async def get_largedeal_snapshot() -> dict[str, Any]:
     """Fetch a combined real-time snapshot of NSE insider, bulk, and block deals across all stocks."""
     cache_key = "mcp_largedeal_snapshot"
@@ -241,6 +227,7 @@ async def get_largedeal_snapshot() -> dict[str, Any]:
         is_async_fn=USE_ASYNC_NSE,
     )
     data = _clean_nan(data)
+    data.pop("SHORT_DEALS_DATA", None)
     _cache_set(cache_key, data)
     return data
 
@@ -250,7 +237,7 @@ async def get_change_ranges(
     symbol: str | None = None,
     symbols: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Fetch NSE percentage price changes across multiple timeframes (1d to 5y) for one or multiple symbols.
+    """Fetch NSE percentage price changes across multiple timeframes (1w to 5y) for one or multiple symbols.
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
@@ -258,10 +245,10 @@ async def get_change_ranges(
         symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
             Mutually exclusive with symbol.
 
-    Returns keys per symbol: oneDayPercent, oneWeekPercent, oneMonthPercent,
-    threeMonthPercent, sixMonthPercent, oneYearPercent, twoYearPercent,
-    threeYearPercent, fiveYearPercent. In bulk mode returns a dict keyed by
-    symbol; failed symbols return {"error": "<message>"}.
+    Returns keys per symbol: oneWeekPercent, oneMonthPercent, threeMonthPercent,
+    sixMonthPercent, oneYearPercent, twoYearPercent, threeYearPercent,
+    fiveYearPercent. In bulk mode returns a dict keyed by symbol; failed symbols
+    return {"error": "<message>"}.
     """
     if symbol is None and symbols is None:
         raise ValueError("Provide either 'symbol' or 'symbols'")
@@ -297,6 +284,7 @@ async def get_change_ranges(
 async def get_symbol_data(
     symbol: str | None = None,
     symbols: list[str] | None = None,
+    fields: list[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch live NSE quote data for one or multiple symbols, including LTP, 52-week range, sector, and industry.
 
@@ -308,6 +296,9 @@ async def get_symbol_data(
 
     In bulk mode returns a dict keyed by symbol; failed symbols return
     {"error": "<message>"}.
+
+    Optional fields filters the returned symbol payload down to just the listed
+    keys.
     """
     if symbol is None and symbols is None:
         raise ValueError("Provide either 'symbol' or 'symbols'")
@@ -327,6 +318,8 @@ async def get_symbol_data(
             is_async_fn=USE_ASYNC_NSE,
         )
         data = _clean_nan(data)
+        if fields:
+            data = {k: v for k, v in data.items() if k in fields}
         _cache_set(cache_key, data)
         return data
 
@@ -353,6 +346,9 @@ async def get_52week_low_stocks() -> dict[str, Any]:
         is_async_fn=USE_ASYNC_NSE,
     )
     data = _clean_nan(data)
+    for rec in data.get("data", []):
+        if isinstance(rec, dict) and "comapnyName" in rec:
+            rec["companyName"] = rec.pop("comapnyName")
     _cache_set(cache_key, data)
     return data
 
@@ -371,6 +367,9 @@ async def get_52week_high_stocks() -> dict[str, Any]:
         is_async_fn=USE_ASYNC_NSE,
     )
     data = _clean_nan(data)
+    for rec in data.get("data", []):
+        if isinstance(rec, dict) and "comapnyName" in rec:
+            rec["companyName"] = rec.pop("comapnyName")
     _cache_set(cache_key, data)
     return data
 
@@ -624,115 +623,34 @@ async def screener_trades(
     }
 
 
-@mcp.tool()
-async def get_company_quarterly_results(
-    symbol: str | None = None,
-    symbols: list[str] | None = None,
-) -> dict[str, Any]:
-    """Fetch all available quarterly financial results for one or multiple NSE companies from screener.in.
-
-    Results are structured as year → month → {metric: value}, covering all
-    rows in the #quarters table (Sales, Expenses, OPM%, Other Income, Interest,
-    Depreciation, Profit before tax, Tax %, Net Profit, EPS in Rs, etc.) and
-    all available periods — not just the last 4.
-
-    Periods follow the format "Sep 2024"; trailing-twelve-month entries are
-    returned under a month key of e.g. "Mar TTM".
-
-    Args:
-        symbol: NSE ticker symbol for a single lookup (e.g. "HDFCBANK", "INFY").
-            Mutually exclusive with symbols.
-        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["HDFCBANK", "INFY"]).
-            Mutually exclusive with symbol.
-
-    Example single-symbol output::
-
-        {
-            "symbol": "HDFCBANK",
-            "consolidated": true,
-            "quarterly_results": {
-                "2024": {
-                    "Sep": { "Sales": "12345", "Net Profit": "1234", ... },
-                    "Dec": { ... }
-                },
-                "2025": {
-                    "Mar TTM": { ... }
-                }
-            }
-        }
-
-    In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
-    Requires screener.in authentication (browser session).
-    """
-    from bs4 import BeautifulSoup
-
-    if symbol is None and symbols is None:
-        raise ValueError("Provide either 'symbol' or 'symbols'")
-    if symbol is not None and symbols is not None:
-        raise ValueError("Provide either 'symbol' or 'symbols', not both")
-
-    if not screener_client.is_authenticated:
-        raise RuntimeError(
-            "screener.in session not available. "
-            "Log in at https://www.screener.in in Chrome, then restart the backend."
-        )
-
-    consolidated = True
-
-    async def _fetch(sym: str) -> dict[str, Any]:
-        sym = sym.upper().strip()
-        if not _SYMBOL_RE.fullmatch(sym):
-            raise ValueError(f"Invalid symbol format: {sym}")
-        cache_key = f"mcp_screener:quarterly:{sym}:{'c' if consolidated else 's'}"
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            return cached
-        html = await screener_client.get_company_html(sym, consolidated=consolidated)
-        soup = BeautifulSoup(html, "lxml")
-        quarterly_results = _parse_all_quarters(soup)
-        result: dict[str, Any] = {
-            "symbol": sym,
-            "consolidated": consolidated,
-            "quarterly_results": quarterly_results,
-        }
-        _cache_set(cache_key, result)
-        return result
-
-    if symbol is not None:
-        return await _fetch(symbol)
-    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
-    return {
-        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
-        for s, r in zip(symbols, results)
-    }
-
-
 # ---------------------------------------------------------------------------
 # Stock Universe Endpoints
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-async def list_stock_universe() -> list[dict[str, Any]]:
+async def list_stock_universe() -> dict[str, Any]:
     """List all tracked NSE stocks with symbol, company name, sector, industry, and PE data."""
     async with AsyncSessionLocal() as db:
         q = select(StockUniverseModel).order_by(StockUniverseModel.symbol)
         res = await db.execute(q)
         rows = res.scalars().all()
-        return [
-            {
-                "symbol": r.symbol,
-                "companyName": r.company_name,
-                "segment": r.segment,
-                "industry": r.industry,
-                "sectorPE": r.sector_pe,
-                "symbolPE": r.symbol_pe,
-                "industryInfo": r.industry_info or {},
-                "lastUpdateTime": r.last_update_time,
-                "screenerTradesId": r.screener_trades_id,
-            }
-            for r in rows
-        ]
+        return {
+            "data": [
+                {
+                    "symbol": r.symbol,
+                    "companyName": r.company_name,
+                    "segment": r.segment,
+                    "industry": r.industry,
+                    "sectorPE": r.sector_pe,
+                    "symbolPE": r.symbol_pe,
+                    "industryInfo": r.industry_info or {},
+                    "lastUpdateTime": r.last_update_time,
+                    "screenerTradesId": r.screener_trades_id,
+                }
+                for r in rows
+            ]
+        }
 
 
 @mcp.tool()
@@ -790,7 +708,7 @@ async def get_stock_universe(
 
 
 @mcp.tool()
-async def search_stock_universe(prefix: str) -> list[dict[str, Any]]:
+async def search_stock_universe(prefix: str) -> dict[str, Any]:
     """Search tracked NSE stocks by symbol or company name prefix.
 
     Args:
@@ -808,20 +726,22 @@ async def search_stock_universe(prefix: str) -> list[dict[str, Any]]:
         )
         res = await db.execute(q)
         rows = res.scalars().all()
-        return [
-            {
-                "symbol": r.symbol,
-                "companyName": r.company_name,
-                "segment": r.segment,
-                "industry": r.industry,
-                "sectorPE": r.sector_pe,
-                "symbolPE": r.symbol_pe,
-                "industryInfo": r.industry_info or {},
-                "lastUpdateTime": r.last_update_time,
-                "screenerTradesId": r.screener_trades_id,
-            }
-            for r in rows
-        ]
+        return {
+            "data": [
+                {
+                    "symbol": r.symbol,
+                    "companyName": r.company_name,
+                    "segment": r.segment,
+                    "industry": r.industry,
+                    "sectorPE": r.sector_pe,
+                    "symbolPE": r.symbol_pe,
+                    "industryInfo": r.industry_info or {},
+                    "lastUpdateTime": r.last_update_time,
+                    "screenerTradesId": r.screener_trades_id,
+                }
+                for r in rows
+            ]
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +750,7 @@ async def search_stock_universe(prefix: str) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def list_watchlist() -> list[dict[str, Any]]:
+async def list_watchlist() -> dict[str, Any]:
     """List all items in the default watchlist (ID 1), ordered by time added.
 
     Each item contains: id, symbol, exchange, createdAt.
@@ -839,68 +759,27 @@ async def list_watchlist() -> list[dict[str, Any]]:
         q = select(WatchlistItemModel).order_by(WatchlistItemModel.created_at)
         res = await db.execute(q)
         rows = res.scalars().all()
-        return [
-            {
-                "id": r.id,
-                "symbol": r.symbol,
-                "exchange": r.exchange,
-                "createdAt": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows
-        ]
+        return {
+            "data": [
+                {
+                    "id": r.id,
+                    "symbol": r.symbol,
+                    "exchange": r.exchange,
+                    "createdAt": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+        }
 
 
 @mcp.tool()
-async def get_watchlist_symbols() -> list[str]:
+async def get_watchlist_symbols() -> dict[str, Any]:
     """Fetch distinct symbols from the default watchlist as a flat list."""
     async with AsyncSessionLocal() as db:
         q = select(WatchlistItemModel.symbol).distinct().order_by(WatchlistItemModel.symbol)
         res = await db.execute(q)
         rows = res.scalars().all()
-        return [r for r in rows]
-
-
-@mcp.tool()
-async def add_watchlist_item(symbol: str, exchange: str) -> dict[str, Any]:
-    """Add a symbol/exchange pair to the default watchlist; returns the existing entry if already present.
-
-    Args:
-        symbol: NSE ticker symbol (e.g. "RELIANCE", "TCS").
-        exchange: Exchange identifier (e.g. "NSE", "BSE").
-
-    Returns the persisted item: id, symbol, exchange, createdAt.
-    """
-    symbol = symbol.strip().upper()
-    exchange = exchange.strip().upper()
-    if not symbol or not exchange:
-        raise ValueError("symbol and exchange must be non-empty strings")
-
-    async with AsyncSessionLocal() as db:
-        existing = await db.execute(
-            select(WatchlistItemModel).where(
-                WatchlistItemModel.symbol == symbol,
-                WatchlistItemModel.exchange == exchange,
-            )
-        )
-        row = existing.scalar_one_or_none()
-        if row is not None:
-            return {
-                "id": row.id,
-                "symbol": row.symbol,
-                "exchange": row.exchange,
-                "createdAt": row.created_at.isoformat() if row.created_at else None,
-            }
-
-        item = WatchlistItemModel(symbol=symbol, exchange=exchange, watchlist_id=1)
-        db.add(item)
-        await db.commit()
-        await db.refresh(item)
-        return {
-            "id": item.id,
-            "symbol": item.symbol,
-            "exchange": item.exchange,
-            "createdAt": item.created_at.isoformat() if item.created_at else None,
-        }
+        return {"data": [r for r in rows]}
 
 
 @mcp.tool()
@@ -923,7 +802,7 @@ async def remove_watchlist_item(item_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_watchlists() -> list[dict[str, Any]]:
+async def list_watchlists() -> dict[str, Any]:
     """List all user-created watchlists with name and item count.
 
     Each entry includes: id, name, createdAt, itemCount.
@@ -944,7 +823,8 @@ async def list_watchlists() -> list[dict[str, Any]]:
         )
         result = await db.execute(stmt)
         rows = result.all()
-        return [
+        return {
+            "data": [
             {
                 "id": r.id,
                 "name": r.name,
@@ -952,11 +832,12 @@ async def list_watchlists() -> list[dict[str, Any]]:
                 "itemCount": r.item_count,
             }
             for r in rows
-        ]
+            ]
+        }
 
 
 @mcp.tool()
-async def get_watchlist_items(watchlist_id: int) -> list[dict[str, Any]]:
+async def get_watchlist_items(watchlist_id: int) -> dict[str, Any]:
     """Fetch all symbol/exchange items in a watchlist by its numeric ID.
 
     Args:
@@ -977,16 +858,18 @@ async def get_watchlist_items(watchlist_id: int) -> list[dict[str, Any]]:
         )
         result = await db.execute(stmt)
         rows = result.scalars().all()
-        return [
-            {
-                "id": r.id,
-                "watchlistId": r.watchlist_id,
-                "symbol": r.symbol,
-                "exchange": r.exchange,
-                "createdAt": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows
-        ]
+        return {
+            "data": [
+                {
+                    "id": r.id,
+                    "watchlistId": r.watchlist_id,
+                    "symbol": r.symbol,
+                    "exchange": r.exchange,
+                    "createdAt": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -995,7 +878,11 @@ async def get_watchlist_items(watchlist_id: int) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def get_notifications(watchlist_id: int) -> list[dict[str, Any]]:
+async def get_notifications(
+    watchlist_id: int,
+    limit: int | None = None,
+    since_id: int | None = None,
+) -> dict[str, Any]:
     """Fetch unread market-event notifications for a watchlist, newest first.
 
     Args:
@@ -1011,34 +898,45 @@ async def get_notifications(watchlist_id: int) -> list[dict[str, Any]]:
             .where(Notification.is_read == False)  # noqa: E712
             .order_by(Notification.triggered_at.desc())
         )
+        if since_id is not None:
+            stmt = stmt.where(Notification.id > since_id)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await db.execute(stmt)
         rows = result.scalars().all()
-        return [
-            {
-                "id": r.id,
-                "watchlistId": r.watchlist_id,
-                "symbol": r.symbol,
-                "exchange": r.exchange,
-                "triggerType": r.trigger_type,
-                "message": r.message,
-                "triggeredAt": r.triggered_at.isoformat() if r.triggered_at else None,
-                "triggeredDate": r.triggered_date.isoformat() if r.triggered_date else None,
-            }
-            for r in rows
-        ]
+        return {
+            "data": [
+                {
+                    "id": r.id,
+                    "watchlistId": r.watchlist_id,
+                    "symbol": r.symbol,
+                    "exchange": r.exchange,
+                    "triggerType": r.trigger_type,
+                    "message": r.message,
+                    "triggeredAt": r.triggered_at.isoformat() if r.triggered_at else None,
+                    "triggeredDate": r.triggered_date.isoformat() if r.triggered_date else None,
+                }
+                for r in rows
+            ]
+        }
 
 
 @mcp.tool()
 async def get_global_notifications(
     limit: int | None = None,
     trigger_type: str | None = None,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Fetch unread global NSE scan alerts across all stocks, with optional type and count filters.
 
     Args:
         limit: Cap the number of results returned (default: no limit).
-        trigger_type: Filter by event type (e.g. "52wk_high", "52wk_low", "volume_spike");
-                      omit to return all trigger types.
+        trigger_type: Filter by event type (e.g. "52w_high_breakout", "52w_low_breakout",
+                      "volume_breakout", "top_gainer", "top_loser", "results_upcoming",
+                      "rsi_oversold", "rsi_overbought", "macd_bullish_cross",
+                      "macd_bearish_cross", "bb_squeeze_alert", "bb_upper_break",
+                      "bb_lower_break", "volatility_spike", "atr_expansion",
+                      "momentum_surge", "return_1w_spike", "streak_up_5d",
+                      "streak_down_5d", "near_52w_high", "near_52w_low"); omit to return all.
 
     Each alert includes: id, symbol, exchange, triggerType, message,
     triggeredAt, triggeredDate.
@@ -1055,18 +953,20 @@ async def get_global_notifications(
             stmt = stmt.limit(limit)
         result = await db.execute(stmt)
         rows = result.scalars().all()
-        return [
-            {
-                "id": r.id,
-                "symbol": r.symbol,
-                "exchange": r.exchange,
-                "triggerType": r.trigger_type,
-                "message": r.message,
-                "triggeredAt": r.triggered_at.isoformat() if r.triggered_at else None,
-                "triggeredDate": r.triggered_date.isoformat() if r.triggered_date else None,
-            }
-            for r in rows
-        ]
+        return {
+            "data": [
+                {
+                    "id": r.id,
+                    "symbol": r.symbol,
+                    "exchange": r.exchange,
+                    "triggerType": r.trigger_type,
+                    "message": r.message,
+                    "triggeredAt": r.triggered_at.isoformat() if r.triggered_at else None,
+                    "triggeredDate": r.triggered_date.isoformat() if r.triggered_date else None,
+                }
+                for r in rows
+            ]
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1115,7 +1015,7 @@ async def get_morningstar_fairvalue(
 
 
 @mcp.tool()
-async def get_global_news(days: int = 7, limit: int = 50) -> list[dict[str, Any]]:
+async def get_global_news(days: int = 7, limit: int = 50) -> dict[str, Any]:
     """Fetch recent global financial news articles from MoneyControl, filtered by date range.
 
     Args:
@@ -1137,16 +1037,18 @@ async def get_global_news(days: int = 7, limit: int = 50) -> list[dict[str, Any]
         result = await db.execute(stmt)
         articles = result.scalars().all()
 
-        return [
-            {
-                "url": a.url,
-                "title": a.title,
-                "text": a.text,
-                "publish_date": a.publish_date.isoformat() if a.publish_date else None,
-                "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
-            }
-            for a in articles
-        ]
+        return {
+            "data": [
+                {
+                    "url": a.url,
+                    "title": a.title,
+                    "text": a.text,
+                    "publish_date": a.publish_date.isoformat() if a.publish_date else None,
+                    "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
+                }
+                for a in articles
+            ]
+        }
 
 
 _COMPANY_NEWS_STALE_SECONDS = 5 * 60  # matches global crawl cadence
