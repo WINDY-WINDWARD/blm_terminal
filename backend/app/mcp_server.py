@@ -126,7 +126,10 @@ async def get_bulk_deals(
     symbol: str | None = None,
     symbols: list[str] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
-    """Fetch recent NSE bulk deal records for one or multiple stock symbols.
+    """Fetch today's NSE bulk deal records for one or multiple stock symbols.
+
+    Note: This returns only today's intraday deals from NSE's live snapshot.
+    For historical bulk deal data (multi-year), use the `screener_trades` tool instead.
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
@@ -134,9 +137,8 @@ async def get_bulk_deals(
         symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
             Mutually exclusive with symbol.
 
-    Returns a list of deal records in single-symbol mode, or a dict keyed by
-    symbol in bulk mode. Failed symbols return {"error": "<message>"}.
-    The snapshot is fetched only once when symbols is provided.
+    Returns a list of deal records in single-symbol mode (empty if no deals today),
+    or a dict keyed by symbol in bulk mode. Failed symbols return {"error": "<message>"}.
     """
     if symbol is None and symbols is None:
         raise ValueError("Provide either 'symbol' or 'symbols'")
@@ -172,7 +174,10 @@ async def get_block_deals(
     symbol: str | None = None,
     symbols: list[str] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
-    """Fetch recent NSE block deal records for one or multiple stock symbols.
+    """Fetch today's NSE block deal records for one or multiple stock symbols.
+
+    Note: This returns only today's intraday deals from NSE's live snapshot.
+    For historical block deal data (multi-year), use the `screener_trades` tool instead.
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
@@ -180,9 +185,8 @@ async def get_block_deals(
         symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "TCS"]).
             Mutually exclusive with symbol.
 
-    Returns a list of deal records in single-symbol mode, or a dict keyed by
-    symbol in bulk mode. Failed symbols return {"error": "<message>"}.
-    The snapshot is fetched only once when symbols is provided.
+    Returns a list of deal records in single-symbol mode (empty if no deals today),
+    or a dict keyed by symbol in bulk mode. Failed symbols return {"error": "<message>"}.
     """
     if symbol is None and symbols is None:
         raise ValueError("Provide either 'symbol' or 'symbols'")
