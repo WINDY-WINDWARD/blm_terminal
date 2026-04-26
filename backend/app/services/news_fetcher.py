@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,6 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse
+
+
+@dataclass
+class _PageResult:
+    """Minimal wrapper returned by _get_page so callers are path-agnostic."""
+
+    text: str
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +88,9 @@ class NewsFetcher:
         self._cookies_loaded = False
         self._client: httpx.AsyncClient | None = None
         self._client_loop: asyncio.AbstractEventLoop | None = None
+        # Camoufox local browser (only active when CAMOUFOX_ENABLED=true)
+        self._camoufox_ctx: Any | None = None   # AsyncCamoufox context manager
+        self._browser: Any | None = None        # Playwright Browser instance
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazily create Semaphore in the current event loop to avoid loop-mismatch errors."""
@@ -90,63 +101,87 @@ class NewsFetcher:
         return self._semaphore
 
     async def init(self) -> None:
-        """Initialize persistent httpx client with cookies. Call in lifespan startup."""
+        """Initialize persistent httpx client with cookies and camoufox browser.
+
+        Safe to call multiple times — the httpx client is only (re)created when
+        missing or when the event loop has changed, and the camoufox browser is
+        only started when CAMOUFOX_ENABLED=true and not already running.
+        """
         current_loop = asyncio.get_running_loop()
-        if self._client is not None and self._client_loop is current_loop:
-            return
 
-        # Close stale client if there's a loop mismatch before creating a new one
-        if self._client is not None:
+        # --- httpx client ---
+        if self._client is None or self._client_loop is not current_loop:
+            # Close stale client if there's a loop mismatch before creating a new one
+            if self._client is not None:
+                try:
+                    await self._client.aclose()
+                except Exception:
+                    logger.debug("NewsFetcher: error closing stale client", exc_info=True)
+                self._client = None
+
+            self._client = httpx.AsyncClient(
+                headers=self._headers,
+                timeout=httpx.Timeout(30.0, connect=10.0, pool=5.0),
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                    keepalive_expiry=30.0,
+                ),
+            )
+            self._client_loop = current_loop
+
+            from app.services.cookie_loader import load_cookies_from_pickle
+
+            pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "moneycontrol")
+            if pickle_cookies:
+                for c in pickle_cookies:
+                    raw_domain = c.get("domain")
+                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                    name_str: str = str(c.get("name")) if c.get("name") else ""
+                    value_str: str = str(c.get("value")) if c.get("value") else ""
+                    self._client.cookies.set(
+                        name_str, value_str, domain=domain_str if domain_str else ""
+                    )
+                self._cookies_loaded = True
+                logger.info("NewsFetcher: loaded %d cookies from pickle", len(pickle_cookies))
+            else:
+                try:
+                    import rookiepy
+                    raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
+                    if raw:
+                        for c in raw:
+                            raw_domain = c.get("domain")
+                            domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                            name_str: str = str(c.get("name")) if c.get("name") else ""
+                            value_str: str = str(c.get("value")) if c.get("value") else ""
+                            self._client.cookies.set(
+                                name_str, value_str, domain=domain_str if domain_str else ""
+                            )
+                        self._cookies_loaded = True
+                        logger.info("NewsFetcher: loaded %d cookies into persistent httpx client", len(raw))
+                except Exception:
+                    logger.warning("NewsFetcher: could not load cookies — proceeding without authentication")
+                    self._cookies_loaded = False
+
+        # --- Camoufox local browser ---
+        # Always evaluated so that a restart (browser=None after crash) is honoured
+        # even when the httpx client is still healthy.
+        from app.config import settings
+        if settings.camoufox_enabled and self._browser is None:
             try:
-                await self._client.aclose()
+                from camoufox.async_api import AsyncCamoufox
+
+                self._camoufox_ctx = AsyncCamoufox(headless=True)
+                self._browser = await self._camoufox_ctx.__aenter__()
+                logger.info("NewsFetcher: camoufox headless browser started")
             except Exception:
-                logger.debug("NewsFetcher: error closing stale client", exc_info=True)
-            self._client = None
-
-        self._client = httpx.AsyncClient(
-            headers=self._headers,
-            timeout=httpx.Timeout(30.0, connect=10.0, pool=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=10,
-                max_keepalive_connections=5,
-                keepalive_expiry=30.0,
-            ),
-        )
-        self._client_loop = current_loop
-
-        from app.services.cookie_loader import load_cookies_from_pickle
-
-        pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "moneycontrol")
-        if pickle_cookies:
-            for c in pickle_cookies:
-                raw_domain = c.get("domain")
-                domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                name_str: str = str(c.get("name")) if c.get("name") else ""
-                value_str: str = str(c.get("value")) if c.get("value") else ""
-                self._client.cookies.set(
-                    name_str, value_str, domain=domain_str if domain_str else ""
+                logger.warning(
+                    "NewsFetcher: failed to start camoufox — falling back to httpx",
+                    exc_info=True,
                 )
-            self._cookies_loaded = True
-            logger.info("NewsFetcher: loaded %d cookies from pickle", len(pickle_cookies))
-        else:
-            try:
-                import rookiepy
-                raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
-                if raw:
-                    for c in raw:
-                        raw_domain = c.get("domain")
-                        domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                        name_str: str = str(c.get("name")) if c.get("name") else ""
-                        value_str: str = str(c.get("value")) if c.get("value") else ""
-                        self._client.cookies.set(
-                            name_str, value_str, domain=domain_str if domain_str else ""
-                        )
-                    self._cookies_loaded = True
-                    logger.info("NewsFetcher: loaded %d cookies into persistent httpx client", len(raw))
-            except Exception:
-                logger.warning("NewsFetcher: could not load cookies — proceeding without authentication")
-                self._cookies_loaded = False
+                self._browser = None
+                self._camoufox_ctx = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Return the persistent client, initializing lazily if needed."""
@@ -161,8 +196,46 @@ class NewsFetcher:
         await self.init()
         return self._cookies_loaded
 
-    async def _get_page(self, url: str) -> httpx.Response:
-        """Fetch a page with 403-handling: retry once with fresh cookies."""
+    async def _camoufox_get_page(self, url: str) -> _PageResult:
+        """Fetch a page via the local camoufox headless Firefox browser.
+
+        Opens a fresh page per call (avoids state leakage between fetches).
+        On browser process death, attempts a single restart before raising.
+        """
+        assert self._browser is not None
+
+        try:
+            page = await self._browser.new_page()
+        except Exception as e:
+            logger.warning("NewsFetcher: camoufox browser error, restarting: %s", e)
+            try:
+                await self._camoufox_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._browser = None
+            self._camoufox_ctx = None
+            await self.init()
+            if self._browser is None:
+                raise RuntimeError("camoufox: restart failed, no browser available") from e
+            page = await self._browser.new_page()
+
+        try:
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            if response is None or not response.ok:
+                status = response.status if response else 0
+                raise RuntimeError(f"camoufox: HTTP {status} for {url}")
+            content = await page.content()
+            await asyncio.sleep(REQUEST_DELAY)
+            return _PageResult(text=content)
+        finally:
+            await page.close()
+
+    async def _get_page(self, url: str) -> _PageResult:
+        """Fetch a page. Uses camoufox if enabled, otherwise httpx with 403-retry."""
+        if self._browser is not None:
+            return await self._camoufox_get_page(url)
+
+        # --- httpx path (default) ---
         try:
             client = await self._get_client()
             response = await client.get(url)
@@ -183,10 +256,18 @@ class NewsFetcher:
             await self._refresh_cookies()
             response = await client.get(url)
         response.raise_for_status()
-        return response
+        return _PageResult(text=response.text)
 
     async def close(self) -> None:
-        """Close the persistent httpx client."""
+        """Close the camoufox browser (if running) and the persistent httpx client."""
+        if self._camoufox_ctx is not None:
+            try:
+                await self._camoufox_ctx.__aexit__(None, None, None)
+            except Exception:
+                logger.debug("NewsFetcher: error closing camoufox context", exc_info=True)
+            self._browser = None
+            self._camoufox_ctx = None
+
         if self._client is not None:
             await self._client.aclose()
             self._client = None

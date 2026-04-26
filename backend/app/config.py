@@ -28,5 +28,10 @@ class Settings(BaseSettings):
     market_end_hour: int = 15
     market_end_minute: int = 30
 
+    # Camoufox — set CAMOUFOX_ENABLED=true to use a local camoufox headless Firefox
+    # for news HTML fetching instead of the default httpx + cookie path.
+    # Requires: pip install "camoufox[geoip]" && camoufox fetch
+    camoufox_enabled: bool = False
+
 
 settings = Settings()
