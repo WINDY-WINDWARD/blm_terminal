@@ -10,12 +10,12 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.news import NewsArticle
-from app.schemas.news import NewsArticleOut
+from app.schemas.news import NewsArticleOut, NewsPaginatedOut
 from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,8 @@ router = APIRouter(prefix="/news", tags=["news"])
 
 @router.get(
     "/global",
-    summary="Get global news articles",
-    response_model=list[NewsArticleOut],
+    summary="Get paginated global news articles",
+    response_model=NewsPaginatedOut,
 )
 async def get_global_news(
     start_date: datetime = Query(
@@ -37,42 +37,56 @@ async def get_global_news(
         default=None,
         description="End date for filtering (default: current date)",
     ),
+    limit: int = Query(default=50, ge=1, le=100, description="Number of articles per page"),
+    offset: int = Query(default=0, ge=0, description="Number of articles to skip"),
     db: AsyncSession = Depends(get_db),
-) -> list[NewsArticleOut]:
-    """Return cached news articles from MoneyControl filtered by date range.
+) -> NewsPaginatedOut:
+    """Return paginated cached news articles from MoneyControl filtered by date range.
 
     If no start_date is provided, defaults to 7 days ago.
     If no end_date is provided, defaults to current datetime.
+    Default page size is 50 articles.
     """
     if end_date is None:
         end_date = datetime.now()
     if start_date is None:
         start_date = end_date - timedelta(days=7)
 
+    # Build filter conditions
+    conditions = [NewsArticle.source == SOURCE_NAME]
+    if start_date:
+        conditions.append(NewsArticle.publish_date >= start_date)
+    if end_date:
+        conditions.append(NewsArticle.publish_date <= end_date)
+
+    # Get total count
+    count_stmt = (
+        select(func.count())
+        .select_from(NewsArticle)
+        .where(and_(*conditions))
+    )
+    total = await db.scalar(count_stmt) or 0
+
+    # Fetch paginated articles
     stmt = (
         select(NewsArticle)
-        .where(
-            and_(
-                NewsArticle.source == SOURCE_NAME,
-            )
-        )
+        .where(and_(*conditions))
         .order_by(NewsArticle.publish_date.desc().nullslast())
+        .limit(limit)
+        .offset(offset)
     )
 
     result = await db.execute(stmt)
     articles: list[NewsArticle] = list(result.scalars().all())
 
-    if start_date or end_date:
-        filtered: list[NewsArticle] = []
-        for a in articles:
-            if a.publish_date is None:
-                filtered.append(a)
-            elif start_date <= a.publish_date <= end_date:
-                filtered.append(a)
-        articles = filtered
-
-    logger.debug("Returning %d articles", len(articles))
-    return [NewsArticleOut.model_validate(a) for a in articles]
+    logger.debug("Returning %d articles (offset %d, limit %d, total %d)", len(articles), offset, limit, total)
+    return NewsPaginatedOut(
+        articles=[NewsArticleOut.model_validate(a) for a in articles],
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,20 +109,22 @@ class CompanyNewsFetchRequest(BaseModel):
 @router.post(
     "/company",
     summary="Fetch and store news articles for a specific company",
-    response_model=list[NewsArticleOut],
+    response_model=NewsPaginatedOut,
 )
 async def fetch_company_news(
     body: CompanyNewsFetchRequest,
     db: AsyncSession = Depends(get_db),
-) -> list[NewsArticleOut]:
+) -> NewsPaginatedOut:
     """Fetch company-specific news from the MoneyControl stock quote page.
 
     Parses the ``#news`` section of *mc_url*, fetches each new article, stores
-    it tagged with *symbol*, and returns the full list of articles now associated
+    it tagged with *symbol*, and returns the first page of articles now associated
     with that symbol.  Articles already in the DB from the global crawl are
     tagged (not duplicated).
     """
     symbol_upper = body.symbol.upper()
+    limit = 50  # Default page size for initial fetch
+    offset = 0
 
     count = await news_fetcher.fetch_company_news(
         symbol=symbol_upper,
@@ -121,21 +137,38 @@ async def fetch_company_news(
         symbol_upper,
     )
 
-    # Return the full set of articles now tagged for this symbol
+    # Get total count
+    count_stmt = (
+        select(func.count())
+        .select_from(NewsArticle)
+        .where(NewsArticle.company_symbol == symbol_upper)
+    )
+    total = await db.scalar(count_stmt) or 0
+
+    # Fetch first page of articles
     stmt = (
         select(NewsArticle)
         .where(NewsArticle.company_symbol == symbol_upper)
         .order_by(NewsArticle.publish_date.desc().nullslast())
+        .limit(limit)
+        .offset(offset)
     )
     result = await db.execute(stmt)
     articles: list[NewsArticle] = list(result.scalars().all())
-    return [NewsArticleOut.model_validate(a) for a in articles]
+
+    return NewsPaginatedOut(
+        articles=[NewsArticleOut.model_validate(a) for a in articles],
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )
 
 
 @router.get(
     "/company/{symbol}",
-    summary="Get stored news articles for a company symbol",
-    response_model=list[NewsArticleOut],
+    summary="Get paginated stored news articles for a company symbol",
+    response_model=NewsPaginatedOut,
 )
 async def get_company_news(
     symbol: str,
@@ -147,12 +180,15 @@ async def get_company_news(
         default=None,
         description="End date for filtering (default: current date)",
     ),
+    limit: int = Query(default=50, ge=1, le=100, description="Number of articles per page"),
+    offset: int = Query(default=0, ge=0, description="Number of articles to skip"),
     db: AsyncSession = Depends(get_db),
-) -> list[NewsArticleOut]:
-    """Return cached news articles tagged with *symbol*.
+) -> NewsPaginatedOut:
+    """Return paginated cached news articles tagged with *symbol*.
 
     Applies an optional date range filter (defaults to the last 30 days).
     Returns 404 if no articles are stored for the symbol yet.
+    Default page size is 50 articles.
     """
     symbol_upper = symbol.upper()
 
@@ -161,30 +197,47 @@ async def get_company_news(
     if start_date is None:
         start_date = end_date - timedelta(days=30)
 
-    stmt = (
-        select(NewsArticle)
-        .where(NewsArticle.company_symbol == symbol_upper)
-        .order_by(NewsArticle.publish_date.desc().nullslast())
-    )
-    result = await db.execute(stmt)
-    articles: list[NewsArticle] = list(result.scalars().all())
+    # Build filter conditions
+    conditions = [NewsArticle.company_symbol == symbol_upper]
+    if start_date:
+        conditions.append(NewsArticle.publish_date >= start_date)
+    if end_date:
+        conditions.append(NewsArticle.publish_date <= end_date)
 
-    if not articles:
+    # Check if any articles exist
+    count_stmt = (
+        select(func.count())
+        .select_from(NewsArticle)
+        .where(and_(*conditions))
+    )
+    total = await db.scalar(count_stmt) or 0
+
+    if total == 0:
         raise HTTPException(
             status_code=404,
             detail=f"No articles found for symbol '{symbol_upper}'. "
             "Use POST /news/company to fetch them first.",
         )
 
-    filtered: list[NewsArticle] = []
-    for a in articles:
-        if a.publish_date is None:
-            filtered.append(a)
-        elif start_date <= a.publish_date <= end_date:
-            filtered.append(a)
-    articles = filtered
+    # Fetch paginated articles
+    stmt = (
+        select(NewsArticle)
+        .where(and_(*conditions))
+        .order_by(NewsArticle.publish_date.desc().nullslast())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.execute(stmt)
+    articles: list[NewsArticle] = list(result.scalars().all())
 
     logger.debug(
-        "get_company_news: returning %d articles for %s", len(articles), symbol_upper
+        "get_company_news: returning %d articles (offset %d, limit %d, total %d) for %s",
+        len(articles), offset, limit, total, symbol_upper
     )
-    return [NewsArticleOut.model_validate(a) for a in articles]
+    return NewsPaginatedOut(
+        articles=[NewsArticleOut.model_validate(a) for a in articles],
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=(offset + limit) < total,
+    )

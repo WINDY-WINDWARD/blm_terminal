@@ -20,3 +20,13 @@ class NewsArticleOut(BaseModel):
     fetched_at: datetime
     created_at: datetime
     company_symbol: str | None
+
+
+class NewsPaginatedOut(BaseModel):
+    """Paginated response for news articles."""
+
+    articles: list[NewsArticleOut]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

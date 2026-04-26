@@ -17,7 +17,17 @@ interface NewsArticle {
   authors: string | null;
 }
 
+interface NewsPaginatedResponse {
+  articles: NewsArticle[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 type Tab = 'global' | 'company';
+
+const PAGE_LIMIT = 50;
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -87,7 +97,23 @@ function TabButton({
 export function NewsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
   const [activeTab, setActiveTab] = useState<Tab>('global');
+  const [globalOffset, setGlobalOffset] = useState(0);
+  const [companyOffset, setCompanyOffset] = useState(0);
   const queryClient = useQueryClient();
+
+  // Reset offsets when switching tabs or changing symbol
+  const handleTabChange = (tab: Tab) => {
+    setActiveTab(tab);
+    if (tab === 'global') setGlobalOffset(0);
+    if (tab === 'company') setCompanyOffset(0);
+  };
+
+  // Reset company offset when symbol changes
+  React.useEffect(() => {
+    if (activeTab === 'company') {
+      setCompanyOffset(0);
+    }
+  }, [symbol, activeTab]);
 
   const handleRefresh = async () => {
     await queryClient.cancelQueries({ queryKey: ['news/company', symbol] });
@@ -96,19 +122,20 @@ export function NewsWidget() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol }),
     });
+    setCompanyOffset(0);
     await queryClient.refetchQueries({ queryKey: ['news/company', symbol] });
   };
 
   const {
-    data: globalArticles = [],
+    data: globalData,
     isLoading: globalLoading,
     error: globalError,
-  } = useQuery<NewsArticle[]>({
-    queryKey: ['news/global'],
+  } = useQuery<NewsPaginatedResponse>({
+    queryKey: ['news/global', { limit: PAGE_LIMIT, offset: globalOffset }],
     queryFn: async () => {
-      const res = await fetch('/api/py/news/global');
+      const res = await fetch(`/api/py/news/global?limit=${PAGE_LIMIT}&offset=${globalOffset}`);
       if (!res.ok) throw new Error('Failed to fetch global news');
-      return res.json() as Promise<NewsArticle[]>;
+      return res.json() as Promise<NewsPaginatedResponse>;
     },
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
@@ -116,14 +143,14 @@ export function NewsWidget() {
   });
 
   const {
-    data: companyArticles = [],
+    data: companyData,
     isLoading: companyLoading,
     isFetching: companyFetching,
     error: companyError,
-  } = useQuery<NewsArticle[]>({
-    queryKey: ['news/company', symbol],
+  } = useQuery<NewsPaginatedResponse>({
+    queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset }],
     queryFn: async () => {
-      const res = await fetch(`/api/py/news/company/${encodeURIComponent(symbol)}`);
+      const res = await fetch(`/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}`);
       if (res.status === 404) {
         const postRes = await fetch('/api/py/news/company', {
           method: 'POST',
@@ -133,10 +160,10 @@ export function NewsWidget() {
         if (!postRes.ok) {
           throw new Error('Failed to fetch company news');
         }
-        return postRes.json() as Promise<NewsArticle[]>;
+        return postRes.json() as Promise<NewsPaginatedResponse>;
       }
       if (!res.ok) throw new Error('Failed to fetch company news');
-      return res.json() as Promise<NewsArticle[]>;
+      return res.json() as Promise<NewsPaginatedResponse>;
     },
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
@@ -147,7 +174,23 @@ export function NewsWidget() {
   const isLoading = activeTab === 'global' ? globalLoading : companyLoading;
   const isRefreshing = activeTab === 'company' && companyFetching && !companyLoading;
   const error = activeTab === 'global' ? globalError : companyError;
-  const articles = activeTab === 'global' ? globalArticles : companyArticles;
+  
+  const currentData = activeTab === 'global' ? globalData : companyData;
+  const articles = currentData?.articles || [];
+  const total = currentData?.total || 0;
+  const currentOffset = activeTab === 'global' ? globalOffset : companyOffset;
+  const setOffset = activeTab === 'global' ? setGlobalOffset : setCompanyOffset;
+  const hasMore = currentData?.has_more || false;
+
+  const handlePrevPage = () => {
+    setOffset((prev: number) => Math.max(0, prev - PAGE_LIMIT));
+  };
+
+  const handleNextPage = () => {
+    if (hasMore) {
+      setOffset((prev: number) => prev + PAGE_LIMIT);
+    }
+  };
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden">
@@ -155,12 +198,12 @@ export function NewsWidget() {
       <div className="flex border-b border-terminal-gray shrink-0">
         <TabButton
           active={activeTab === 'global'}
-          onClick={() => setActiveTab('global')}
+          onClick={() => handleTabChange('global')}
           label="Global"
         />
         <TabButton
           active={activeTab === 'company'}
-          onClick={() => setActiveTab('company')}
+          onClick={() => handleTabChange('company')}
           label="Company"
         />
         {activeTab === 'company' && symbol && (
@@ -220,10 +263,34 @@ export function NewsWidget() {
             <span className="text-white/40 text-[10px]">No articles found</span>
           </div>
         ) : (
-          <div className="flex flex-col">
-            {articles.map((article, idx) => (
-              <ArticleRow key={article.url + idx} article={article} />
-            ))}
+          <div className="flex flex-col h-full">
+            <div className="flex-1 overflow-auto">
+              {articles.map((article, idx) => (
+                <ArticleRow key={article.url + idx} article={article} />
+              ))}
+            </div>
+            {/* Pagination Controls */}
+            {total > 0 && (
+              <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
+                <button
+                  onClick={handlePrevPage}
+                  disabled={currentOffset === 0}
+                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
+                >
+                  Prev
+                </button>
+                <span className="font-mono">
+                  {currentOffset + 1}-{Math.min(currentOffset + PAGE_LIMIT, total)} of {total}
+                </span>
+                <button
+                  onClick={handleNextPage}
+                  disabled={!hasMore}
+                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
