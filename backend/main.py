@@ -47,10 +47,13 @@ from app.backgroundtasks import (
     sync_watchlist_fair_values,
     _run_watchlist_scheduler,
     _run_nightly_scheduler,
+    set_async_shutdown_event,
 )
 from app import mcp_server
 
 logger = logging.getLogger(__name__)
+
+_background_tasks: list[asyncio.Task] = []
 
 # ---------------------------------------------------------------------------
 # Migrations
@@ -298,12 +301,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_client()
     if await _should_trigger_full_sync():
         logger.info("Triggering immediate full fair value sync (DB cold or stale)")
-        asyncio.create_task(sync_all_fair_values())
-        asyncio.create_task(sync_watchlist_fair_values())
+        _background_tasks.append(asyncio.create_task(sync_all_fair_values()))
+        _background_tasks.append(asyncio.create_task(sync_watchlist_fair_values()))
 
     # Start schedulers
-    asyncio.create_task(_run_watchlist_scheduler())
-    asyncio.create_task(_run_nightly_scheduler())
+    _background_tasks.append(asyncio.create_task(_run_watchlist_scheduler()))
+    _background_tasks.append(asyncio.create_task(_run_nightly_scheduler()))
 
     if ai_summarizer.is_configured:
         logger.info(
@@ -327,8 +330,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     async with mcp_server.mcp._session_manager.run():
         yield
 
-        logger.info("Shutting down — closing clients...")
+        logger.info("Shutting down — cancelling background tasks...")
         cleanup_task.cancel()
+        set_async_shutdown_event()
+        for task in _background_tasks:
+            task.cancel()
+        if _background_tasks:
+            await asyncio.gather(*_background_tasks, return_exceptions=True)
+        _background_tasks.clear()
+
+        logger.info("Shutting down — stopping workers and closing clients...")
         stop_all_workers(timeout=10.0)
 
         await ai_summarizer.close()

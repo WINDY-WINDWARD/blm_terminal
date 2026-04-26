@@ -250,6 +250,36 @@ _shutdown_event = threading.Event()
 _worker_threads: list[threading.Thread] = []
 
 
+# ---------------------------------------------------------------------------
+# Async task shutdown event — for asyncio tasks
+# ---------------------------------------------------------------------------
+_async_shutdown_event: asyncio.Event | None = None
+
+
+def get_async_shutdown_event() -> asyncio.Event:
+    """Get or create the async shutdown event."""
+    global _async_shutdown_event
+    if _async_shutdown_event is None:
+        _async_shutdown_event = asyncio.Event()
+        _async_shutdown_event.set()
+    return _async_shutdown_event
+
+
+def reset_async_shutdown_event() -> None:
+    """Reset the async shutdown event (clear it) to allow async tasks to run."""
+    global _async_shutdown_event
+    if _async_shutdown_event is not None:
+        _async_shutdown_event.clear()
+
+
+def set_async_shutdown_event() -> None:
+    """Set the async shutdown event to signal async tasks to stop."""
+    global _async_shutdown_event
+    if _async_shutdown_event is None:
+        _async_shutdown_event = asyncio.Event()
+    _async_shutdown_event.set()
+
+
 def _sleep_interruptible(seconds: float) -> bool:
     """Sleep for up to `seconds`, returning True if interrupted by shutdown."""
     return _shutdown_event.wait(timeout=seconds)
@@ -1483,9 +1513,10 @@ async def start_all_workers() -> list[threading.Thread]:
       7. global_scan_worker        — needs ticker_scores populated
       8. watchlist_notification_worker — needs market data + indicators
       9. news_worker               — independent; crawls global news
-     10. watchlist_news_worker     — independent; per-symbol news
-     11. results_calendar_worker  — upcoming board meeting results alerts
+      10. watchlist_news_worker     — independent; per-symbol news
+      11. results_calendar_worker  — upcoming board meeting results alerts
     """
+    reset_async_shutdown_event()
     register_all_jobs()
     await sync_all_jobs_to_db()
 
@@ -2925,13 +2956,21 @@ async def _should_trigger_full_sync() -> bool:
 
 async def _run_watchlist_scheduler():
     """Run every 3 hours (cron: 0 */3 * * *)."""
-    while True:
+    shutdown_event = get_async_shutdown_event()
+    while not shutdown_event.is_set():
         await asyncio.sleep(_seconds_until_next_cron("0 */3 * * *"))
+        if shutdown_event.is_set():
+            break
         await sync_watchlist_fair_values()
+    logger.info("watchlist_scheduler: stopped")
 
 
 async def _run_nightly_scheduler():
     """Run at 8:30 PM UTC daily (cron: 30 20 * * *)."""
-    while True:
+    shutdown_event = get_async_shutdown_event()
+    while not shutdown_event.is_set():
         await asyncio.sleep(_seconds_until_next_cron("30 20 * * *"))
+        if shutdown_event.is_set():
+            break
         await sync_all_fair_values()
+    logger.info("nightly_scheduler: stopped")
