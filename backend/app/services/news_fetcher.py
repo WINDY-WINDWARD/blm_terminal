@@ -216,6 +216,16 @@ class NewsFetcher:
         self._cookies_loaded = False
         self._client: httpx.AsyncClient | None = None
         self._client_loop: asyncio.AbstractEventLoop | None = None
+        self._init_lock: asyncio.Lock | None = None
+        self._init_lock_loop: asyncio.AbstractEventLoop | None = None
+
+    def _get_init_lock(self) -> asyncio.Lock:
+        """Lazily create the init lock bound to the current event loop."""
+        current_loop = asyncio.get_running_loop()
+        if self._init_lock is None or self._init_lock_loop is not current_loop:
+            self._init_lock = asyncio.Lock()
+            self._init_lock_loop = current_loop
+        return self._init_lock
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazily create Semaphore in the current event loop to avoid loop-mismatch errors."""
@@ -232,6 +242,11 @@ class NewsFetcher:
         missing or when the event loop has changed.
         Set reload_cookies=False to skip cookie loading (for retries).
         """
+        async with self._get_init_lock():
+            await self._init_locked(reload_cookies=reload_cookies)
+
+    async def _init_locked(self, reload_cookies: bool = True) -> None:
+        """Inner init body — must only be called while holding _init_lock."""
         current_loop = asyncio.get_running_loop()
 
         # --- httpx client ---
@@ -262,6 +277,8 @@ class NewsFetcher:
     
     async def _load_cookies(self) -> None:
         """Load cookies into the httpx client (called once on init, not on retries)."""
+        if self._cookies_loaded:
+            return
         # Try rookiepy first (live Firefox cookies)
         try:
             import rookiepy
@@ -456,7 +473,7 @@ class NewsFetcher:
 
     def _extract_article_urls(self, html: str) -> list[str]:
         """Extract article URLs from listing page HTML."""
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         urls: list[str] = []
 
         for link in soup.find_all("a", href=True):
@@ -484,7 +501,7 @@ class NewsFetcher:
 
         Returns (is_valid, reason).
         """
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
 
         # Check for Cloudflare/challenge pages (quick check, no size threshold)
         title = soup.find("title")
@@ -523,11 +540,7 @@ class NewsFetcher:
                 logger.debug("Parsing article: %s", url)
                 response = await self._get_page(url)
 
-                try:
-                    soup = BeautifulSoup(response.text, "lxml")
-                except Exception:
-                    # lxml can segfault on malformed HTML in Python 3.13 — fall back to pure-Python parser
-                    soup = BeautifulSoup(response.text, "html.parser")
+                soup = BeautifulSoup(response.text, "html.parser")
 
                 # --- Title extraction with multiple selectors ---
                 title = None
@@ -786,7 +799,7 @@ class NewsFetcher:
         Only links inside the ``<div id="news">`` block are considered so that
         unrelated site-wide navigation links are excluded.
         """
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         news_div = soup.find(id="news")
         if news_div is None:
             logger.warning("No #news section found on company page")
