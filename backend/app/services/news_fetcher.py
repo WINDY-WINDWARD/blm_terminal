@@ -48,34 +48,154 @@ _FALLBACK_MC_URL_MAP: dict[str, str] = {
     "WIPRO": "https://www.moneycontrol.com/india/stockpricequote/computers-software/wipro/WRI",
 }
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-]
+# Matches only real article URLs: end with -NNNNNN.html (6+ digits)
+ARTICLE_PATTERN = re.compile(r"-\d{6,}\.html$")
 
-UA_FIREFOX = "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/148.0"
+# ── Realistic Browser Presets (fully consistent header sets) ──────────────
+# Chrome has ~65% global market share — weight it higher
+BROWSER_WEIGHTS = {
+    "chrome_windows": 25,
+    "chrome_mac": 20,
+    "chrome_linux": 20,
+    "firefox_windows": 15,
+    "firefox_linux": 20,
+}
 
-CONCURRENCY_LIMIT = 3
-REQUEST_DELAY = 1.0
-ARTICLE_BATCH_SIZE = 10
-
-
-def _build_headers(ua: str | None = None) -> dict:
-    """Build request headers with realistic browser headers."""
-    user_agent = ua or random.choice(USER_AGENTS)
-    return {
-        "User-Agent": user_agent,
+BROWSER_PRESETS = [
+    # Chrome on Windows 11
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "sec-ch-ua": '"Not A;Brand";v="99", "Chromium";v="147", "Google Chrome";v="147"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    },
+    # Chrome on macOS
+    {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "sec-ch-ua": '"Not A;Brand";v="99", "Chromium";v="147", "Google Chrome";v="147"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
+    # Chrome on Linux
+    {
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "sec-ch-ua": '"Not A;Brand";v="99", "Chromium";v="147", "Google Chrome";v="147"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Linux"',
+    },
+    # Firefox on Windows
+    {
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:149.0) Gecko/20100101 Firefox/149.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Referer": "https://www.moneycontrol.com/",
-        "Origin": "https://www.moneycontrol.com",
-    }
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        # NOTE: Firefox does NOT send sec-ch-ua* headers
+    },
+    # Firefox on Linux
+    {
+        "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    },
+]
+
+
+def get_weighted_preset() -> dict:
+    """Return a random browser preset weighted by real market share."""
+    presets = list(BROWSER_WEIGHTS.keys())
+    weights = list(BROWSER_WEIGHTS.values())
+    chosen = random.choices(presets, weights=weights, k=1)[0]
+    idx = list(BROWSER_WEIGHTS.keys()).index(chosen)
+    return BROWSER_PRESETS[idx].copy()
+
+
+def adjust_headers_for_request(headers: dict, url: str, referer: str | None = None) -> dict:
+    """Adjust Sec-Fetch-* headers based on request type.
+    
+    Real browsers send different values:
+    - Initial navigation: Sec-Fetch-Site: none
+    - Same-origin XHR: Sec-Fetch-Site: same-origin, Sec-Fetch-Mode: cors
+    - Cross-origin: Sec-Fetch-Site: cross-site
+    """
+    result = headers.copy()
+    
+    # Determine request type based on URL
+    is_article = "/news/" in url and ARTICLE_PATTERN.search(url)
+    is_company = "/stockpricequote/" in url
+    is_listing = "/news-all" in url or "/page-" in url
+    
+    if is_article or is_company:
+        # These are typically navigations from listing pages
+        if referer and "moneycontrol.com" in referer:
+            result["Sec-Fetch-Site"] = "same-origin"
+            result["Sec-Fetch-Mode"] = "navigate"
+            result["Sec-Fetch-Dest"] = "document"
+        else:
+            result["Sec-Fetch-Site"] = "none"
+    elif is_listing:
+        # Top-level navigation
+        result["Sec-Fetch-Site"] = "none"
+        result["Sec-Fetch-Mode"] = "navigate"
+        result["Sec-Fetch-Dest"] = "document"
+    
+    if referer:
+        result["Referer"] = referer
+    elif "Referer" in result:
+        # Remove static referer for non-initial requests
+        del result["Referer"]
+    
+    return result
+
+
+def _build_headers(url: str | None = None, referer: str | None = None) -> dict:
+    """Build fully realistic, browser-consistent request headers."""
+    preset = get_weighted_preset()
+    
+    # Adjust Sec-Fetch-* based on request type
+    if url:
+        preset = adjust_headers_for_request(preset, url, referer)
+    
+    return preset
 
 
 class NewsFetcher:
@@ -84,7 +204,7 @@ class NewsFetcher:
     def __init__(self) -> None:
         self._semaphore: asyncio.Semaphore | None = None
         self._semaphore_loop: asyncio.AbstractEventLoop | None = None
-        self._headers = _build_headers(UA_FIREFOX)
+        self._headers = _build_headers()
         self._cookies_loaded = False
         self._client: httpx.AsyncClient | None = None
         self._client_loop: asyncio.AbstractEventLoop | None = None
@@ -171,36 +291,148 @@ class NewsFetcher:
     async def _refresh_cookies(self) -> bool:
         """Force-refresh cookies from Firefox profile (e.g. after a 403)."""
         self._cookies_loaded = False
-        await self.init()
-        return self._cookies_loaded
 
-    async def _get_page(self, url: str) -> _PageResult:
-        """Fetch a page via httpx with 403-retry and stale-client recovery."""
+        # Clear existing cookies
+        if self._client:
+            try:
+                self._client.cookies.clear()
+            except Exception:
+                pass
+
+        # Try rookiepy first (live Firefox cookies)
         try:
-            client = await self._get_client()
-            response = await client.get(url)
-        except RuntimeError as e:
-            # Reinitialize on: closed client or stale event-loop binding
-            msg = str(e).lower()
-            if "client has been closed" in msg or "different event loop" in msg:
-                logger.debug(
-                    "httpx client stale (%s), reinitializing for %s",
-                    str(e)[:80], url,
+            import rookiepy
+            raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
+            if raw:
+                for c in raw:
+                    raw_domain = c.get("domain")
+                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                    name_str: str = str(c.get("name")) if c.get("name") else ""
+                    value_str: str = str(c.get("value")) if c.get("value") else ""
+                    if self._client:
+                        self._client.cookies.set(
+                            name_str, value_str, domain=domain_str if domain_str else ""
+                        )
+                self._cookies_loaded = True
+                logger.info(
+                    "NewsFetcher: refreshed %d cookies via rookiepy", len(raw)
                 )
-                self._client = None
-                self._client_loop = None
-                await self.init()
+                return True
+        except Exception as e:
+            logger.warning("NewsFetcher: rookiepy failed: %s", str(e)[:80])
+
+        # Fallback: try loading from pickle
+        try:
+            from app.services.cookie_loader import load_cookies_from_pickle
+
+            pickle_cookies = await asyncio.to_thread(
+                load_cookies_from_pickle, "moneycontrol"
+            )
+            if pickle_cookies:
+                for c in pickle_cookies:
+                    raw_domain = c.get("domain")
+                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
+                    name_str: str = str(c.get("name")) if c.get("name") else ""
+                    value_str: str = str(c.get("value")) if c.get("value") else ""
+                    if self._client:
+                        self._client.cookies.set(
+                            name_str, value_str, domain=domain_str if domain_str else ""
+                        )
+                self._cookies_loaded = True
+                logger.info(
+                    "NewsFetcher: refreshed %d cookies from pickle", len(pickle_cookies)
+                )
+                return True
+        except Exception as e:
+            logger.warning(
+                "NewsFetcher: pickle cookie load failed: %s", str(e)[:80]
+            )
+
+        logger.warning(
+            "NewsFetcher: could not refresh cookies — proceeding without"
+        )
+        return False
+
+    async def _get_page(self, url: str, max_retries: int = 3) -> _PageResult:
+        """Fetch a page via httpx with retry, validation, and stale-client recovery."""
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
                 client = await self._get_client()
+
+                # Build FRESH headers for each attempt (rotates browser preset)
+                referer = "https://www.moneycontrol.com/" if attempt == 0 else None
+                headers = _build_headers(url, referer)
+                client.headers.update(headers)  # Override ALL headers
+
                 response = await client.get(url)
-            else:
-                raise
-        if response.status_code == 403:
-            logger.warning("Got 403 on %s — refreshing cookies and retrying", url)
-            await asyncio.sleep(2)
-            await self._refresh_cookies()
-            response = await client.get(url)
-        response.raise_for_status()
-        return _PageResult(text=response.text)
+
+                # Handle HTTP errors with retry
+                if response.status_code in (403, 429):
+                    logger.warning(
+                        "Got %s on %s, attempt %d/%d",
+                        response.status_code, url, attempt + 1, max_retries,
+                    )
+                    if attempt < max_retries - 1:
+                        backoff = 2 ** attempt
+                        logger.debug("Retrying in %ds...", backoff)
+                        await asyncio.sleep(backoff)
+                        if response.status_code == 403:
+                            await self._refresh_cookies()
+                        continue
+                    response.raise_for_status()
+
+                response.raise_for_status()
+
+                # Validate response content
+                is_valid, reason = self._is_valid_response(response.text, url)
+                if not is_valid:
+                    logger.warning(
+                        "Invalid response (%s) for %s, attempt %d/%d",
+                        reason, url, attempt + 1, max_retries,
+                    )
+                    if attempt < max_retries - 1:
+                        backoff = 2 ** attempt
+                        logger.debug("Retrying in %ds...", backoff)
+                        await asyncio.sleep(backoff)
+                        await self._refresh_cookies()
+                        continue
+                    # On final attempt, return what we got
+
+                return _PageResult(text=response.text)
+
+            except RuntimeError as e:
+                msg = str(e).lower()
+                if "client has been closed" in msg or "different event loop" in msg:
+                    logger.debug(
+                        "httpx client stale (%s), reinitializing for %s",
+                        str(e)[:80], url,
+                    )
+                    self._client = None
+                    self._client_loop = None
+                    await self.init()
+                    if attempt < max_retries - 1:
+                        continue
+                else:
+                    last_error = e
+                    if attempt == max_retries - 1:
+                        raise
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    backoff = 2 ** attempt
+                    logger.debug(
+                        "Fetch failed (%s), retrying in %ds...", str(e)[:80], backoff
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    raise
+
+        raise last_error or RuntimeError(
+            f"Failed to fetch {url} after {max_retries} retries"
+        )
 
     async def close(self) -> None:
         """Close the persistent httpx client."""
@@ -219,9 +451,6 @@ class NewsFetcher:
         logger.debug("Fetching listing page: %s", url)
         response = await self._get_page(url)
         return response.text
-
-    # Matches only real article URLs: end with -NNNNNN.html (6+ digits)
-    _ARTICLE_PATTERN = re.compile(r"-\d{6,}\.html$")
 
     # Reject non-textual content types — videos, photo galleries, podcasts, tag/paginated pages,
     # and liveblogs. Liveblogs are React-rendered rolling feeds whose body content lives in
@@ -252,7 +481,7 @@ class NewsFetcher:
             if not href or "/news/" not in href:
                 continue
             # Must end with -NNNNNN.html
-            if not self._ARTICLE_PATTERN.search(href):
+            if not ARTICLE_PATTERN.search(href):
                 continue
             # Must not contain any rejected path segment
             if any(seg in href for seg in self._REJECT_SEGMENTS):
@@ -266,10 +495,45 @@ class NewsFetcher:
         logger.debug("Extracted %d article URLs from listing page", len(urls))
         return urls
 
+    def _is_valid_response(self, html: str, url: str) -> tuple[bool, str]:
+        """Validate that HTML response has expected content.
+
+        Returns (is_valid, reason).
+        """
+        soup = BeautifulSoup(html, "lxml")
+
+        # Check for Cloudflare/challenge pages (quick check, no size threshold)
+        title = soup.find("title")
+        if title and "just a moment" in title.get_text().lower():
+            return False, "Cloudflare challenge page detected"
+
+        if len(html) < 10000:  # 10KB minimum for a real page
+            return False, f"Response too small: {len(html)} bytes"
+
+        # For company pages, check #news div exists
+        if "/stockpricequote/" in url:
+            if soup.find(id="news") is None:
+                return False, "Missing #news div on company page"
+
+        # For news ARTICLE pages (not listing pages), check article body exists
+        # Only check URLs that look like individual articles (end with -NNNNNN.html)
+        if "/news/" in url and ARTICLE_PATTERN.search(url):
+            has_body = (
+                soup.find("div", class_="article_body")
+                or soup.find(id="article_body")
+                or soup.find("div", class_="article_consum_wrapper")
+                or soup.find("div", class_="content_wrapper")
+                or soup.find("article")
+            )
+            if not has_body:
+                return False, "Missing article body"
+
+        return True, "OK"
+
     async def _fetch_and_parse_article(
         self, url: str, source: str = SOURCE_NAME
     ) -> dict[str, Any] | None:
-        """Fetch and parse a single article using httpx."""
+        """Fetch and parse a single article using httpx with multiple selector fallbacks."""
         async with self._get_semaphore():
             try:
                 logger.debug("Parsing article: %s", url)
@@ -277,27 +541,51 @@ class NewsFetcher:
 
                 soup = BeautifulSoup(response.text, "lxml")
 
+                # --- Title extraction with multiple selectors ---
                 title = None
-                title_tag = soup.find("h1")
-                if title_tag:
-                    title = title_tag.get_text(strip=True)
-                if not title:
-                    title_tag = soup.find("title")
+                title_selectors = ["h1", "title", "h2.title", "h2.artTitle"]
+                for selector in title_selectors:
+                    if " " in selector:  # CSS selector
+                        title_tag = soup.select_one(selector)
+                    else:  # tag name
+                        title_tag = soup.find(selector)
                     if title_tag:
                         title = title_tag.get_text(strip=True)
+                        if title:
+                            break
 
+                # --- Article body extraction with multiple selectors ---
                 text = None
-                article_body = soup.find("div", class_="article_body")
-                if article_body:
-                    text = article_body.get_text(strip=True)
-                if not text:
-                    article_body = soup.find("div", {"id": "article_body"})
-                    if article_body:
-                        text = article_body.get_text(strip=True)
-                if not text:
-                    article_body = soup.find("div", class_="article_consum_wrapper")
-                    if article_body:
-                        text = article_body.get_text(strip=True)
+                body_selectors = [
+                    {"class": "article_body"},
+                    {"id": "article_body"},
+                    {"class": "article_consum_wrapper"},
+                    {"class": "content_wrapper"},
+                    {"class": "artical_content"},
+                    {"itemprop": "articleBody"},
+                    {"class": "entry-content"},
+                    {"class": "post-content"},
+                ]
+                for selector in body_selectors:
+                    # Try div with selector
+                    element = soup.find("div", selector) or soup.find("article", selector)
+                    if element:
+                        text = element.get_text(strip=True)
+                        if text and len(text) > 100:  # Must have meaningful content
+                            break
+
+                # Fallback: try CSS selectors
+                if not text or len(text) < 100:
+                    css_selectors = [
+                        ".article_body", ".article_consum_wrapper",
+                        ".content_wrapper", "article", ".entry-content",
+                    ]
+                    for css_sel in css_selectors:
+                        element = soup.select_one(css_sel)
+                        if element:
+                            text = element.get_text(strip=True)
+                            if text and len(text) > 100:
+                                break
 
                 top_image = None
                 og_image = soup.find("meta", property="og:image")
@@ -341,9 +629,6 @@ class NewsFetcher:
                     f"Parsed article: {title[:30] if title else 'No title'}..."
                 )
                 return result
-            except TimeoutError as e:
-                logger.warning("Skipping article (navigation timeout): %s", url)
-                return None
             except Exception:
                 logger.exception("Failed to parse article: %s", url)
                 return None
@@ -522,7 +807,7 @@ class NewsFetcher:
             href = str(raw) if raw else ""
             if not href:
                 continue
-            if not self._ARTICLE_PATTERN.search(href):
+            if not ARTICLE_PATTERN.search(href):
                 continue
             if any(seg in href for seg in self._REJECT_SEGMENTS):
                 continue
