@@ -10,7 +10,6 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,9 +88,6 @@ class NewsFetcher:
         self._cookies_loaded = False
         self._client: httpx.AsyncClient | None = None
         self._client_loop: asyncio.AbstractEventLoop | None = None
-        # Camoufox local browser (only active when CAMOUFOX_ENABLED=true)
-        self._camoufox_ctx: Any | None = None   # AsyncCamoufox context manager
-        self._browser: Any | None = None        # Playwright Browser instance
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         """Lazily create Semaphore in the current event loop to avoid loop-mismatch errors."""
@@ -102,11 +98,10 @@ class NewsFetcher:
         return self._semaphore
 
     async def init(self) -> None:
-        """Initialize persistent httpx client with cookies and camoufox browser.
+        """Initialize persistent httpx client with cookies.
 
         Safe to call multiple times — the httpx client is only (re)created when
-        missing or when the event loop has changed, and the camoufox browser is
-        only started when CAMOUFOX_ENABLED=true and not already running.
+        missing or when the event loop has changed.
         """
         current_loop = asyncio.get_running_loop()
 
@@ -163,42 +158,8 @@ class NewsFetcher:
                         logger.info("NewsFetcher: loaded %d cookies into persistent httpx client", len(raw))
                 except Exception:
                     logger.warning("NewsFetcher: could not load cookies — proceeding without authentication")
-                    self._cookies_loaded = False
-
-        # --- Camoufox local browser ---
-        # Always evaluated so that a restart (browser=None after crash) is honoured
-        # even when the httpx client is still healthy.
-        from app.config import settings
-        if settings.camoufox_enabled and self._browser is None:
-            try:
-                from camoufox.async_api import AsyncCamoufox
-                from camoufox.exceptions import (
-                    CannotFindXvfb,
-                    VirtualDisplayError,
-                    VirtualDisplayNotSupported,
-                )
-
-                try:
-                    self._camoufox_ctx = AsyncCamoufox(headless="virtual")
-                    self._browser = await self._camoufox_ctx.__aenter__()
-                    logger.info("NewsFetcher: camoufox virtual-display browser started")
-                except (CannotFindXvfb, VirtualDisplayNotSupported, VirtualDisplayError) as vd_exc:
-                    logger.warning(
-                        "NewsFetcher: virtual display unavailable (%s) — "
-                        "falling back to headless=True (Linux: sudo apt install xvfb)",
-                        vd_exc,
-                    )
-                    self._camoufox_ctx = AsyncCamoufox(headless=True)
-                    self._browser = await self._camoufox_ctx.__aenter__()
-                    logger.info("NewsFetcher: camoufox headless browser started (fallback)")
-            except Exception:
-                logger.warning(
-                    "NewsFetcher: failed to start camoufox — falling back to httpx",
-                    exc_info=True,
-                )
-                self._browser = None
-                self._camoufox_ctx = None
-
+                self._cookies_loaded = False
+    
     async def _get_client(self) -> httpx.AsyncClient:
         """Return the persistent client, reinitializing if missing or if the event loop changed."""
         current_loop = asyncio.get_running_loop()
@@ -213,73 +174,8 @@ class NewsFetcher:
         await self.init()
         return self._cookies_loaded
 
-    async def _camoufox_get_page(self, url: str) -> _PageResult:
-        """Fetch a page via the local camoufox headless Firefox browser.
-
-        Opens a fresh page per call (avoids state leakage between fetches).
-        On browser process death, attempts a single restart before raising.
-        """
-        assert self._browser is not None
-
-        try:
-            page = await self._browser.new_page()
-        except Exception as e:
-            logger.warning("NewsFetcher: camoufox browser error, restarting: %s", e)
-            try:
-                await self._camoufox_ctx.__aexit__(None, None, None)
-            except Exception:
-                pass
-            self._browser = None
-            self._camoufox_ctx = None
-            await self.init()
-            if self._browser is None:
-                raise RuntimeError("camoufox: restart failed, no browser available") from e
-            page = await self._browser.new_page()
-
-        try:
-            # "commit" fires as soon as the HTTP response is received — before JS runs.
-            # After commit we wait for "domcontentloaded" so that React/Next.js hydrates
-            # and injects dynamic content (article links on listing pages, body text on
-            # article pages). The extra wait is capped at 15 s and swallowed on timeout
-            # so heavily-tracked pages that never fire domcontentloaded still succeed.
-            # Timeout is 30 s (down from 60 s): failures are detected faster and the
-            # httpx fallback in _get_page kicks in sooner.
-            try:
-                response = await page.goto(url, wait_until="commit", timeout=30_000)
-            except PlaywrightTimeoutError:
-                raise TimeoutError(f"camoufox: navigation timed out for {url}")
-            if response is None or not response.ok:
-                status = response.status if response else 0
-                raise RuntimeError(f"camoufox: HTTP {status} for {url}")
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
-            except Exception:
-                logger.debug(
-                    "camoufox: domcontentloaded timed out for %s, using partial HTML", url
-                )
-            content = await page.content()
-            await asyncio.sleep(REQUEST_DELAY)
-            return _PageResult(text=content)
-        finally:
-            await page.close()
-
     async def _get_page(self, url: str) -> _PageResult:
-        """Fetch a page. Uses camoufox if enabled, otherwise httpx with 403-retry.
-
-        When camoufox is enabled but raises TimeoutError (e.g. MoneyControl throttling
-        or a slow stock-quote page), the request is transparently retried via httpx so
-        that callers always get a result rather than silently returning 0 articles.
-        """
-        if self._browser is not None:
-            try:
-                return await self._camoufox_get_page(url)
-            except TimeoutError:
-                logger.warning(
-                    "camoufox timed out for %s — falling back to httpx", url
-                )
-                # fall through to httpx path below
-
-        # --- httpx path (default / fallback) ---
+        """Fetch a page via httpx with 403-retry and stale-client recovery."""
         try:
             client = await self._get_client()
             response = await client.get(url)
@@ -307,15 +203,7 @@ class NewsFetcher:
         return _PageResult(text=response.text)
 
     async def close(self) -> None:
-        """Close the camoufox browser (if running) and the persistent httpx client."""
-        if self._camoufox_ctx is not None:
-            try:
-                await self._camoufox_ctx.__aexit__(None, None, None)
-            except Exception:
-                logger.debug("NewsFetcher: error closing camoufox context", exc_info=True)
-            self._browser = None
-            self._camoufox_ctx = None
-
+        """Close the persistent httpx client."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
