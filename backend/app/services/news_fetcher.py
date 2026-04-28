@@ -172,10 +172,25 @@ class NewsFetcher:
         if settings.camoufox_enabled and self._browser is None:
             try:
                 from camoufox.async_api import AsyncCamoufox
+                from camoufox.exceptions import (
+                    CannotFindXvfb,
+                    VirtualDisplayError,
+                    VirtualDisplayNotSupported,
+                )
 
-                self._camoufox_ctx = AsyncCamoufox(headless=True)
-                self._browser = await self._camoufox_ctx.__aenter__()
-                logger.info("NewsFetcher: camoufox headless browser started")
+                try:
+                    self._camoufox_ctx = AsyncCamoufox(headless="virtual")
+                    self._browser = await self._camoufox_ctx.__aenter__()
+                    logger.info("NewsFetcher: camoufox virtual-display browser started")
+                except (CannotFindXvfb, VirtualDisplayNotSupported, VirtualDisplayError) as vd_exc:
+                    logger.warning(
+                        "NewsFetcher: virtual display unavailable (%s) — "
+                        "falling back to headless=True (Linux: sudo apt install xvfb)",
+                        vd_exc,
+                    )
+                    self._camoufox_ctx = AsyncCamoufox(headless=True)
+                    self._browser = await self._camoufox_ctx.__aenter__()
+                    logger.info("NewsFetcher: camoufox headless browser started (fallback)")
             except Exception:
                 logger.warning(
                     "NewsFetcher: failed to start camoufox — falling back to httpx",
@@ -185,8 +200,9 @@ class NewsFetcher:
                 self._camoufox_ctx = None
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Return the persistent client, initializing lazily if needed."""
-        if self._client is None:
+        """Return the persistent client, reinitializing if missing or if the event loop changed."""
+        current_loop = asyncio.get_running_loop()
+        if self._client is None or self._client_loop is not current_loop:
             await self.init()
         assert self._client is not None
         return self._client
@@ -268,9 +284,13 @@ class NewsFetcher:
             client = await self._get_client()
             response = await client.get(url)
         except RuntimeError as e:
-            # Client was closed (e.g., during shutdown) — reinitialize and retry
-            if "client has been closed" in str(e).lower():
-                logger.debug("httpx client was closed, reinitializing for %s", url)
+            # Reinitialize on: closed client or stale event-loop binding
+            msg = str(e).lower()
+            if "client has been closed" in msg or "different event loop" in msg:
+                logger.debug(
+                    "httpx client stale (%s), reinitializing for %s",
+                    str(e)[:80], url,
+                )
                 self._client = None
                 self._client_loop = None
                 await self.init()

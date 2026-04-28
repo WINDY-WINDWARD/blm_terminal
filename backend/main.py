@@ -48,6 +48,7 @@ from app.backgroundtasks import (
     _run_watchlist_scheduler,
     _run_nightly_scheduler,
     set_async_shutdown_event,
+    _is_first_run,
 )
 from app import mcp_server
 
@@ -299,8 +300,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Initialize Morningstar client and start fair value sync
     await init_client()
-    if await _should_trigger_full_sync():
-        logger.info("Triggering immediate full fair value sync (DB cold or stale)")
+    # Only run immediate sync on first run
+    if _is_first_run() and await _should_trigger_full_sync():
+        logger.info("Triggering immediate full fair value sync (first run + DB cold or stale)")
         _background_tasks.append(asyncio.create_task(sync_all_fair_values()))
         _background_tasks.append(asyncio.create_task(sync_watchlist_fair_values()))
 

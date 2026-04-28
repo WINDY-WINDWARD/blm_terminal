@@ -280,6 +280,67 @@ def set_async_shutdown_event() -> None:
     _async_shutdown_event.set()
 
 
+# ---------------------------------------------------------------------------
+# First run detection — controls whether jobs run at startup
+# ---------------------------------------------------------------------------
+_first_run_completed = False
+
+
+def _is_first_run() -> bool:
+    """Check if this is the first run (from SystemConfig).
+
+    Returns True if:
+    - SystemConfig table doesn't have the 'first_run' key yet, OR
+    - The 'first_run' value is 'True'
+
+    After first run, the flag is set to 'False' by _set_first_run_complete().
+    """
+    global _first_run_completed
+    if _first_run_completed:
+        return False
+
+    try:
+        with _SyncSessionLocal() as db:
+            stmt = select(SystemConfig).where(SystemConfig.key == "first_run")
+            result = db.execute(stmt)
+            config = result.scalar_one_or_none()
+            if config is None:
+                # First run - set it to True by default
+                db.add(SystemConfig(key="first_run", value="True"))
+                db.commit()
+                return True
+            return config.value == "True"
+    except Exception as e:
+        logger.warning(f"Failed to check first_run, defaulting to True: {e}")
+        return True
+
+
+def _set_first_run_complete() -> None:
+    """Set first_run to False after successful startup sync.
+
+    This is called by each worker after its first successful sync.
+    Once set to False, workers will only follow cron schedules on subsequent restarts.
+    """
+    global _first_run_completed
+    if _first_run_completed:
+        return
+
+    try:
+        with _SyncSessionLocal() as db:
+            stmt = select(SystemConfig).where(SystemConfig.key == "first_run")
+            result = db.execute(stmt)
+            config = result.scalar_one_or_none()
+            if config:
+                config.value = "False"
+            else:
+                db.add(SystemConfig(key="first_run", value="False"))
+            db.commit()
+            _first_run_completed = True
+            logger.info("first_run flag set to False")
+    except Exception as e:
+        logger.warning(f"Failed to set first_run to False: {e}")
+
+
 def _sleep_interruptible(seconds: float) -> bool:
     """Sleep for up to `seconds`, returning True if interrupted by shutdown."""
     return _shutdown_event.wait(timeout=seconds)
@@ -455,8 +516,14 @@ def stock_universe_worker() -> None:
         logger.info("stock_universe_worker: stopped")
         return
 
-    update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting...")
-    _stock_universe_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting initial sync...")
+        _stock_universe_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("stock_universe_worker: first_run=False, skipping startup execution")
+        update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("0 0 * * *")
@@ -516,7 +583,7 @@ def _ticker_backfill_sync() -> None:
 
 
 def ticker_backfill_worker() -> None:
-    """Daemon thread target for ticker backfill. Runs once at startup, then idles."""
+    """Daemon thread target for ticker backfill. Runs once at startup (if first_run=True), then idles."""
     logger.info("ticker_backfill_worker: started")
 
     if not _is_job_enabled("job.ticker_backfill"):
@@ -528,7 +595,12 @@ def ticker_backfill_worker() -> None:
         logger.info("ticker_backfill_worker: stopped")
         return
 
-    _ticker_backfill_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        _ticker_backfill_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("ticker_backfill_worker: first_run=False, skipping backfill")
 
     update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete — run-once job")
     logger.info("ticker_backfill_worker: backfill complete, idling until shutdown")
@@ -626,8 +698,14 @@ def ticker_daily_update_worker() -> None:
         logger.info("ticker_daily_update_worker: stopped")
         return
 
-    update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
-    _ticker_daily_update_sync()
+    # Check first_run for startup execution (will also check market hours inside sync)
+    if _is_first_run():
+        update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
+        _ticker_daily_update_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("ticker_daily_update_worker: first_run=False, skipping startup execution")
+        update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("30 10,14 * * 1-5")
@@ -934,8 +1012,14 @@ def ticker_scores_worker() -> None:
         logger.info("ticker_scores_worker: stopped")
         return
 
-    update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
-    _ticker_scores_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
+        _ticker_scores_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("ticker_scores_worker: first_run=False, skipping startup computation")
+        update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("0 0 * * *")
@@ -967,8 +1051,14 @@ def ticker_indicators_worker() -> None:
         logger.info("ticker_indicators_worker: stopped")
         return
 
-    update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting indicator computation...")
-    _ticker_indicators_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting initial computation...")
+        _ticker_indicators_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("ticker_indicators_worker: first_run=False, skipping startup computation")
+        update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("0 11 * * 1-5")
@@ -1057,8 +1147,14 @@ def news_worker() -> None:
         logger.info("news_worker: stopped")
         return
 
-    update_job_status_sync("job.news", "running", progress=10, message="Starting news crawl...")
-    _news_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.news", "running", progress=10, message="Starting initial news crawl...")
+        _news_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("news_worker: first_run=False, skipping startup crawl")
+        update_job_status_sync("job.news", "waiting", progress=0, message="Waiting for cron schedule")
 
     current_interval = _seconds_until_next_cron(NEWS_CRON)
     while not _shutdown_event.is_set():
@@ -1171,8 +1267,14 @@ def watchlist_news_worker() -> None:
         logger.info("watchlist_news_worker: stopped")
         return
 
-    update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting...")
-    _watchlist_news_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting initial fetch...")
+        _watchlist_news_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("watchlist_news_worker: first_run=False, skipping startup fetch")
+        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("*/5 * * * *")
@@ -1288,8 +1390,14 @@ def market_data_worker() -> None:
         logger.info("market_data_worker: stopped")
         return
 
-    update_job_status_sync("job.market_data", "running", progress=0, message="Starting...")
-    _market_data_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.market_data", "running", progress=0, message="Starting initial sync...")
+        _market_data_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("market_data_worker: first_run=False, skipping startup execution")
+        update_job_status_sync("job.market_data", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         if _is_market_open():
@@ -1474,8 +1582,14 @@ def results_calendar_worker() -> None:
     # Small startup delay so the main app event loop is stable
     _sleep_interruptible(15)
 
-    update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
-    _results_calendar_sync()
+    # Check first_run for startup execution
+    if _is_first_run():
+        update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
+        _results_calendar_sync()
+        _set_first_run_complete()
+    else:
+        logger.info("results_calendar_worker: first_run=False, skipping startup execution")
+        update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron(_RESULTS_CALENDAR_CRON)

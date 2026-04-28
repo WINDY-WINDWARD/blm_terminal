@@ -68,7 +68,7 @@ def record(label: str, passed: bool, detail: str = ""):
 # ── import service internals ──────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(__file__))
 
-from app.services.news_fetcher import NewsFetcher, MONEYCONTROL_BASE_URL, MONEYCONTROL_NEWS_ALL  # noqa: E402
+from app.services.news_fetcher import NewsFetcher, MONEYCONTROL_BASE_URL, MONEYCONTROL_NEWS_ALL, UA_FIREFOX, _build_headers  # noqa: E402
 from bs4 import BeautifulSoup  # noqa: E402
 
 COMPANY_URL = "https://www.moneycontrol.com/india/stockpricequote/refineries/relianceindustries/RI"
@@ -371,7 +371,85 @@ async def run_tests() -> int:
         record("Fallback to httpx on TimeoutError", False,
                f"{type(exc).__name__}: {exc} (after {elapsed:.1f}s)")
 
-    # ── Final shutdown ────────────────────────────────────────────────────────
+    # ── Test 13: _get_client() reinitializes on loop change ─────────────────────
+    section("Test 13 — _get_client() reinitializes on loop change")
+    try:
+        saved_loop = fetcher._client_loop
+        fake_loop = object()  # unique object, never equal to real loop
+        old_client = fetcher._client
+        fetcher._client_loop = fake_loop
+        new_client = await fetcher._get_client()
+        fetcher._client_loop = saved_loop  # restore
+        record("_get_client() re-inits on loop change",
+               new_client is not old_client,
+               f"client changed: {new_client is not old_client}")
+    except Exception as exc:
+        record("_get_client() re-inits on loop change", False, str(exc))
+
+    # ── Test 14: _get_page() survives "different event loop" RuntimeError ───
+    section("Test 14 — _get_page() survives 'different event loop' RuntimeError")
+    try:
+        if fetcher._client is None:
+            await fetcher.init()
+        real_get = fetcher._client.get
+        call_count = 0
+        async def _get_with_retry_once(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("is bound to a different event loop")
+            return await real_get(url, **kwargs)
+        fetcher._client.get = _get_with_retry_once  # type: ignore[method-assign]
+        result = await fetcher._get_page(COMPANY_URL)
+        fetcher._client.get = real_get  # restore
+        record("_get_page() survives RuntimeError",
+               len(result.text) > 500,
+               f"got {len(result.text):,} bytes after RuntimeError reinit")
+    except Exception as exc:
+        try:
+            fetcher._client.get = real_get  # type: ignore[method-assign]
+        except Exception:
+            pass
+        record("_get_page() survives RuntimeError", False, str(exc))
+
+    # ── Test 15: virtual display browser startup ──────────────────────────
+    section("Test 15 — virtual display browser startup")
+    try:
+        from camoufox.exceptions import (
+            CannotFindXvfb,
+            VirtualDisplayNotSupported,
+        )
+
+        fetcher2 = NewsFetcher()
+        fetcher2._headers = _build_headers(UA_FIREFOX)
+        try:
+            await fetcher2.init()
+            vd_started = fetcher2._browser is not None
+            info(f"fetcher2._browser is not None: {vd_started}")
+        except (CannotFindXvfb, VirtualDisplayNotSupported) as vd_exc:
+            info(f"Virtual display unavailable: {vd_exc}")
+            vd_started = False
+
+        record(
+            "Virtual display browser started",
+            vd_started,
+            "browser started" if vd_started else "Xvfb unavailable / fallback to headless"
+        )
+
+        if fetcher2._browser is not None:
+            try:
+                await fetcher2.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        record("Virtual display browser started", False, str(exc))
+        if 'fetcher2' in dir() and getattr(fetcher2, '_browser', None) is not None:
+            try:
+                await fetcher2.close()
+            except Exception:
+                pass
+
+    # ── Final shutdown ─────────────────────────────────���──────────────────────
     section("Final — clean browser shutdown")
     try:
         await fetcher.close()
