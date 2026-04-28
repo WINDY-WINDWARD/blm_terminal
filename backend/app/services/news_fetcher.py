@@ -221,11 +221,12 @@ class NewsFetcher:
             self._semaphore_loop = current_loop
         return self._semaphore
 
-    async def init(self) -> None:
+    async def init(self, reload_cookies: bool = True) -> None:
         """Initialize persistent httpx client with cookies.
 
         Safe to call multiple times — the httpx client is only (re)created when
         missing or when the event loop has changed.
+        Set reload_cookies=False to skip cookie loading (for retries).
         """
         current_loop = asyncio.get_running_loop()
 
@@ -251,58 +252,12 @@ class NewsFetcher:
             )
             self._client_loop = current_loop
 
-            from app.services.cookie_loader import load_cookies_from_pickle
-
-            pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "moneycontrol")
-            if pickle_cookies:
-                for c in pickle_cookies:
-                    raw_domain = c.get("domain")
-                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                    name_str: str = str(c.get("name")) if c.get("name") else ""
-                    value_str: str = str(c.get("value")) if c.get("value") else ""
-                    self._client.cookies.set(
-                        name_str, value_str, domain=domain_str if domain_str else ""
-                    )
-                self._cookies_loaded = True
-                logger.info("NewsFetcher: loaded %d cookies from pickle", len(pickle_cookies))
-            else:
-                try:
-                    import rookiepy
-                    raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
-                    if raw:
-                        for c in raw:
-                            raw_domain = c.get("domain")
-                            domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                            name_str: str = str(c.get("name")) if c.get("name") else ""
-                            value_str: str = str(c.get("value")) if c.get("value") else ""
-                            self._client.cookies.set(
-                                name_str, value_str, domain=domain_str if domain_str else ""
-                            )
-                        self._cookies_loaded = True
-                        logger.info("NewsFetcher: loaded %d cookies into persistent httpx client", len(raw))
-                except Exception:
-                    logger.warning("NewsFetcher: could not load cookies — proceeding without authentication")
-                self._cookies_loaded = False
+            # Only load cookies on initial creation, not on retries
+            if reload_cookies:
+                await self._load_cookies()
     
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Return the persistent client, reinitializing if missing or if the event loop changed."""
-        current_loop = asyncio.get_running_loop()
-        if self._client is None or self._client_loop is not current_loop:
-            await self.init()
-        assert self._client is not None
-        return self._client
-
-    async def _refresh_cookies(self) -> bool:
-        """Force-refresh cookies from Firefox profile (e.g. after a 403)."""
-        self._cookies_loaded = False
-
-        # Clear existing cookies
-        if self._client:
-            try:
-                self._client.cookies.clear()
-            except Exception:
-                pass
-
+    async def _load_cookies(self) -> None:
+        """Load cookies into the httpx client (called once on init, not on retries)."""
         # Try rookiepy first (live Firefox cookies)
         try:
             import rookiepy
@@ -319,9 +274,9 @@ class NewsFetcher:
                         )
                 self._cookies_loaded = True
                 logger.info(
-                    "NewsFetcher: refreshed %d cookies via rookiepy", len(raw)
+                    "NewsFetcher: loaded %d cookies via rookiepy", len(raw)
                 )
-                return True
+                return
         except Exception as e:
             logger.warning("NewsFetcher: rookiepy failed: %s", str(e)[:80])
 
@@ -344,18 +299,35 @@ class NewsFetcher:
                         )
                 self._cookies_loaded = True
                 logger.info(
-                    "NewsFetcher: refreshed %d cookies from pickle", len(pickle_cookies)
+                    "NewsFetcher: loaded %d cookies from pickle", len(pickle_cookies)
                 )
-                return True
+                return
         except Exception as e:
             logger.warning(
                 "NewsFetcher: pickle cookie load failed: %s", str(e)[:80]
             )
 
         logger.warning(
-            "NewsFetcher: could not refresh cookies — proceeding without"
+            "NewsFetcher: could not load cookies — proceeding without"
         )
-        return False
+    
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Return the persistent client, reinitializing if missing or if the event loop changed."""
+        current_loop = asyncio.get_running_loop()
+        if self._client is None or self._client_loop is not current_loop:
+            await self.init()
+        assert self._client is not None
+        return self._client
+
+    async def _refresh_cookies(self) -> bool:
+        """Force-refresh cookies by recreating client (called after 403)."""
+        self._cookies_loaded = False
+        
+        # Recreate client without reloading cookies (cookies were just refreshed)
+        self._client = None
+        self._client_loop = None
+        await self.init(reload_cookies=False)
+        return True
 
     async def _get_page(self, url: str, max_retries: int = 3) -> _PageResult:
         """Fetch a page via httpx with retry, validation, and stale-client recovery."""
@@ -383,7 +355,7 @@ class NewsFetcher:
                         logger.debug("Retrying in %ds...", backoff)
                         await asyncio.sleep(backoff)
                         if response.status_code == 403:
-                            await self._refresh_cookies()
+                            await self.init(reload_cookies=False)
                         continue
                     response.raise_for_status()
 
@@ -400,13 +372,13 @@ class NewsFetcher:
                         backoff = 2 ** attempt
                         logger.debug("Retrying in %ds...", backoff)
                         await asyncio.sleep(backoff)
-                        await self._refresh_cookies()
+                        await self.init(reload_cookies=False)
                         continue
                     # On final attempt, return what we got
 
                 return _PageResult(text=response.text)
 
-            except RuntimeError as e:
+            except (RuntimeError, httpx.ReadError) as e:
                 msg = str(e).lower()
                 if "client has been closed" in msg or "different event loop" in msg:
                     logger.debug(
@@ -415,13 +387,24 @@ class NewsFetcher:
                     )
                     self._client = None
                     self._client_loop = None
-                    await self.init()
+                    await self.init(reload_cookies=False)
                     if attempt < max_retries - 1:
                         continue
                 else:
                     last_error = e
                     if attempt == max_retries - 1:
                         raise
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    backoff = 2 ** attempt
+                    logger.debug(
+                        "Fetch failed (%s), retrying in %ds...", str(e)[:80], backoff
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    raise
 
             except Exception as e:
                 last_error = e
