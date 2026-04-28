@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import re
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,13 @@ from bs4 import BeautifulSoup
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# Pre-create one SSL context at import time (module level, single-threaded).
+# ssl.SSLContext.__new__ is NOT thread-safe in Python 3.13 — constructing
+# httpx.AsyncClient concurrently from multiple threads (e.g. background workers
+# each spinning up their own event loop) causes a segfault.  Reusing a single
+# pre-built context eliminates that race entirely.
+_SSL_CONTEXT = ssl.create_default_context()
 
 from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse
@@ -261,6 +269,7 @@ class NewsFetcher:
 
             self._client = httpx.AsyncClient(
                 headers=self._headers,
+                verify=_SSL_CONTEXT,
                 timeout=httpx.Timeout(30.0, connect=10.0, pool=5.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
@@ -473,7 +482,7 @@ class NewsFetcher:
 
     def _extract_article_urls(self, html: str) -> list[str]:
         """Extract article URLs from listing page HTML."""
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, "html5lib")
         urls: list[str] = []
 
         for link in soup.find_all("a", href=True):
@@ -501,7 +510,7 @@ class NewsFetcher:
 
         Returns (is_valid, reason).
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, "html5lib")
 
         # Check for Cloudflare/challenge pages (quick check, no size threshold)
         title = soup.find("title")
@@ -540,7 +549,7 @@ class NewsFetcher:
                 logger.debug("Parsing article: %s", url)
                 response = await self._get_page(url)
 
-                soup = BeautifulSoup(response.text, "html.parser")
+                soup = BeautifulSoup(response.text, "html5lib")
 
                 # --- Title extraction with multiple selectors ---
                 title = None
@@ -732,7 +741,7 @@ class NewsFetcher:
         Only links inside the ``<div id="news">`` block are considered so that
         unrelated site-wide navigation links are excluded.
         """
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, "html5lib")
         news_div = soup.find(id="news")
         if news_div is None:
             logger.warning("No #news section found on company page")
