@@ -24,6 +24,10 @@ class _PageResult:
 
     text: str
 
+
+class _ArticleNotFound(Exception):
+    """Raised by _get_page when the server returns 404 — caller should skip the article."""
+
 logger = logging.getLogger(__name__)
 
 MONEYCONTROL_BASE_URL = "https://www.moneycontrol.com"
@@ -345,6 +349,9 @@ class NewsFetcher:
                 response = await client.get(url)
 
                 # Handle HTTP errors with retry
+                if response.status_code == 404:
+                    raise _ArticleNotFound(url)
+
                 if response.status_code in (403, 429):
                     logger.warning(
                         "Got %s on %s, attempt %d/%d",
@@ -406,17 +413,6 @@ class NewsFetcher:
                 else:
                     raise
 
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    backoff = 2 ** attempt
-                    logger.debug(
-                        "Fetch failed (%s), retrying in %ds...", str(e)[:80], backoff
-                    )
-                    await asyncio.sleep(backoff)
-                else:
-                    raise
-
         raise last_error or RuntimeError(
             f"Failed to fetch {url} after {max_retries} retries"
         )
@@ -454,6 +450,7 @@ class NewsFetcher:
             "/silver-rates-today/",
             "/page-",
             "-liveblog-",
+            "-live-",
         ]
     )
 
@@ -526,7 +523,11 @@ class NewsFetcher:
                 logger.debug("Parsing article: %s", url)
                 response = await self._get_page(url)
 
-                soup = BeautifulSoup(response.text, "lxml")
+                try:
+                    soup = BeautifulSoup(response.text, "lxml")
+                except Exception:
+                    # lxml can segfault on malformed HTML in Python 3.13 — fall back to pure-Python parser
+                    soup = BeautifulSoup(response.text, "html.parser")
 
                 # --- Title extraction with multiple selectors ---
                 title = None
@@ -616,6 +617,9 @@ class NewsFetcher:
                     f"Parsed article: {title[:30] if title else 'No title'}..."
                 )
                 return result
+            except _ArticleNotFound:
+                logger.debug("Article not found (404), skipping: %s", url)
+                return None
             except Exception:
                 logger.exception("Failed to parse article: %s", url)
                 return None
