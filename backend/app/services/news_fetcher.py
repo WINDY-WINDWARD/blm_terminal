@@ -51,6 +51,10 @@ _FALLBACK_MC_URL_MAP: dict[str, str] = {
 # Matches only real article URLs: end with -NNNNNN.html (6+ digits)
 ARTICLE_PATTERN = re.compile(r"-\d{6,}\.html$")
 
+CONCURRENCY_LIMIT = 3
+REQUEST_DELAY = 1.0
+ARTICLE_BATCH_SIZE = 10
+
 # ── Realistic Browser Presets (fully consistent header sets) ──────────────
 # Chrome has ~65% global market share — weight it higher
 BROWSER_WEIGHTS = {
