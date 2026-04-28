@@ -724,74 +724,7 @@ class NewsFetcher:
         await db.commit()
         logger.info("Stored %d new articles", stored_count)
 
-        # Backfill any articles (old or new) that still have NULL text or date
-        backfilled = await self.backfill_null_articles(db)
-        if backfilled:
-            logger.info(
-                "Backfilled %d articles with previously missing fields", backfilled
-            )
-
         return stored_count
-
-    async def backfill_null_articles(self, db: AsyncSession) -> int:
-        """Re-fetch and update any stored articles that have NULL text or publish_date.
-
-        Returns the number of articles successfully updated.
-        """
-        from sqlalchemy import or_
-
-        stmt = select(NewsArticle.url).where(
-            or_(NewsArticle.text.is_(None), NewsArticle.publish_date.is_(None))
-        )
-        result = await db.execute(stmt)
-        null_urls = [row[0] for row in result]
-
-        if not null_urls:
-            logger.debug("backfill: no articles with NULL fields — nothing to do")
-            return 0
-
-        logger.info(
-            "backfill: re-fetching %d articles with NULL fields", len(null_urls)
-        )
-
-        tasks = [self._fetch_and_parse_article(url) for url in null_urls]
-        results = await asyncio.gather(*tasks)
-
-        updated = 0
-        for parsed in results:
-            if parsed is None:
-                continue
-            # Only update the fields that were NULL; skip if still missing
-            url = parsed.get("url")
-            if not url:
-                continue
-            update_fields: dict[str, Any] = {}
-            if parsed.get("text"):
-                update_fields["text"] = parsed["text"]
-            if parsed.get("publish_date"):
-                update_fields["publish_date"] = parsed["publish_date"]
-            if parsed.get("top_image"):
-                update_fields["top_image"] = parsed["top_image"]
-            if parsed.get("authors"):
-                update_fields["authors"] = parsed["authors"]
-            if not update_fields:
-                logger.debug("backfill: still no data for %s", url)
-                continue
-            try:
-                from sqlalchemy import update as sa_update
-
-                await db.execute(
-                    sa_update(NewsArticle)
-                    .where(NewsArticle.url == url)
-                    .values(**update_fields)
-                )
-                updated += 1
-            except Exception:
-                logger.exception("backfill: failed to update %s", url)
-
-        await db.commit()
-        logger.info("backfill: updated %d articles", updated)
-        return updated
 
     def _extract_company_article_urls(self, html: str) -> list[str]:
         """Extract article URLs from a MoneyControl stock quote page's #news section.
@@ -1098,14 +1031,6 @@ class NewsFetcher:
             total,
             symbol_upper,
         )
-
-        backfilled = await self.backfill_null_articles(db)
-        if backfilled:
-            logger.info(
-                "fetch_company_news: backfilled %d articles with missing fields for %s",
-                backfilled,
-                symbol_upper,
-            )
 
         return total
 
