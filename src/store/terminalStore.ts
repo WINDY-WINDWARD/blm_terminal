@@ -92,3 +92,25 @@ export interface Watchlist {
 export const watchlistsAtom = atom<Watchlist[]>([]);
 
 export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1);
+
+// ─── Notif / Scan Sub-Filters ─────────────────────────────────────────────────
+
+/**
+ * Per-tab sub-filter state for NotifWidget and ScanWidget.
+ * Keys are tab ids (e.g. "technical", "streaks"), values are arrays of
+ * selected trigger_type strings (e.g. ["rsi_oversold", "macd_bullish_cross"]).
+ * An empty array means no sub-filter active for that tab (show all).
+ */
+export type SubFilterMap = Partial<Record<string, string[]>>;
+
+/** NotifWidget — selected trigger_type bubbles per tab */
+export const notifSubFiltersAtom = atomWithStorage<SubFilterMap>('notif.subFilters', {});
+
+/** NotifWidget — minimum streak day count for the streaks tab (floor = 5) */
+export const notifStreakMinDaysAtom = atomWithStorage<number>('notif.streakMinDays', 5);
+
+/** ScanWidget — selected trigger_type bubbles per tab */
+export const scanSubFiltersAtom = atomWithStorage<SubFilterMap>('scan.subFilters', {});
+
+/** ScanWidget — minimum streak day count for the streaks tab (floor = 5) */
+export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays', 5);

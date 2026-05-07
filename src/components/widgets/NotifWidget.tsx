@@ -1,10 +1,20 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useAtomValue, useAtom } from 'jotai';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactDOM from 'react-dom';
-import { activeExchangeAtom, activeSymbolAtom, watchlistsAtom, type Watchlist } from '@/store/terminalStore';
+import {
+  activeExchangeAtom,
+  activeSymbolAtom,
+  watchlistsAtom,
+  notifSubFiltersAtom,
+  notifStreakMinDaysAtom,
+  type Watchlist,
+  type SubFilterMap,
+} from '@/store/terminalStore';
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Notification {
   id: number;
@@ -18,7 +28,23 @@ interface Notification {
   is_read: boolean;
 }
 
-type NotifTab = 'all' | 'breakout' | 'volume' | 'movers' | 'deals' | 'insider' | 'technical' | 'momentum' | 'volatility' | 'streaks' | 'results';
+type NotifTab =
+  | 'all'
+  | 'breakout'
+  | 'volume'
+  | 'movers'
+  | 'deals'
+  | 'insider'
+  | 'technical'
+  | 'momentum'
+  | 'volatility'
+  | 'streaks'
+  | 'results';
+
+type DaysFilter = 2 | 4 | 6 | 8 | 12;
+type ReadFilter = 'unread' | 'read' | 'all';
+
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   all: [],
@@ -27,12 +53,60 @@ const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   movers: ['top_gainer', 'top_loser'],
   deals: ['bulk_deal', 'block_deal', 'short_deal'],
   insider: ['insider_buy', 'insider_sell'],
-  technical: ['rsi_oversold', 'rsi_overbought', 'macd_bullish_cross', 'macd_bearish_cross', 'bb_squeeze_alert', 'bb_upper_break', 'bb_lower_break'],
+  technical: [
+    'rsi_oversold',
+    'rsi_overbought',
+    'macd_bullish_cross',
+    'macd_bearish_cross',
+    'bb_squeeze_alert',
+    'bb_upper_break',
+    'bb_lower_break',
+  ],
   momentum: ['momentum_surge', 'return_1w_spike'],
   volatility: ['volatility_spike', 'atr_expansion'],
   streaks: ['streak_up_5d', 'streak_down_5d'],
   results: ['results_upcoming'],
 };
+
+/** All known trigger types across every tab */
+const ALL_TRIGGER_TYPES: string[] = Array.from(
+  new Set(Object.values(TAB_TRIGGERS).flat()),
+);
+
+/** Human-readable label for each trigger type (used in autocomplete) */
+const TRIGGER_LABELS: Record<string, string> = {
+  '52w_high_breakout': '52W HIGH BREAKOUT',
+  '52w_low_breakout': '52W LOW BREAKOUT',
+  near_52w_high: 'NEAR 52W HIGH',
+  near_52w_low: 'NEAR 52W LOW',
+  volume_breakout: 'VOLUME BREAKOUT',
+  top_gainer: 'TOP GAINER',
+  top_loser: 'TOP LOSER',
+  bulk_deal: 'BULK DEAL',
+  block_deal: 'BLOCK DEAL',
+  short_deal: 'SHORT DEAL',
+  insider_buy: 'INSIDER BUY',
+  insider_sell: 'INSIDER SELL',
+  rsi_oversold: 'RSI OVERSOLD',
+  rsi_overbought: 'RSI OVERBOUGHT',
+  macd_bullish_cross: 'MACD BULLISH CROSS',
+  macd_bearish_cross: 'MACD BEARISH CROSS',
+  bb_squeeze_alert: 'BB SQUEEZE',
+  bb_upper_break: 'BB UPPER BREAK',
+  bb_lower_break: 'BB LOWER BREAK',
+  volatility_spike: 'VOLATILITY SPIKE',
+  atr_expansion: 'ATR EXPANSION',
+  momentum_surge: 'MOMENTUM SURGE',
+  return_1w_spike: '1W RETURN SPIKE',
+  streak_up_5d: 'STREAK UP',
+  streak_down_5d: 'STREAK DOWN',
+  results_upcoming: 'RESULTS UPCOMING',
+};
+
+const STREAK_TRIGGER_TYPES = new Set(['streak_up_5d', 'streak_down_5d']);
+const STREAK_MIN = 5;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getBadgeColor(triggerType: string): string {
   if (triggerType.startsWith('52w_')) return 'bg-terminal-amber text-black';
@@ -162,8 +236,183 @@ function formatDateTime(iso: string): string {
   return `${mon} ${dd}, ${hh}:${mm}`;
 }
 
-type DaysFilter = 2 | 4 | 6 | 8 | 12;
-type ReadFilter = 'unread' | 'read' | 'all';
+/** Parse streak day count from a notification message. Returns null if not parseable. */
+export function parseStreakDays(message: string): number | null {
+  // Matches: "RELIANCE up 7 consecutive days" or "TCS down 5 days"
+  const match = message.match(/(?:up|down)\s+(\d+)\s+(?:consecutive\s+)?days?/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+// ─── SubFilterBar Component ───────────────────────────────────────────────────
+
+interface SubFilterBarProps {
+  activeTab: NotifTab;
+  subFilters: SubFilterMap;
+  onSubFiltersChange: (updated: SubFilterMap) => void;
+  streakMinDays: number;
+  onStreakMinDaysChange: (days: number) => void;
+}
+
+function SubFilterBar({
+  activeTab,
+  subFilters,
+  onSubFiltersChange,
+  streakMinDays,
+  onStreakMinDaysChange,
+}: SubFilterBarProps) {
+  const [inputValue, setInputValue] = useState('');
+  const [showDropdown, setShowDropdown] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selectedForTab = subFilters[activeTab] ?? [];
+
+  // Candidates: trigger types valid for this tab (or all if "all" tab), minus already selected
+  const candidatePool = activeTab === 'all' ? ALL_TRIGGER_TYPES : TAB_TRIGGERS[activeTab];
+  const candidates = candidatePool.filter(
+    (t) =>
+      !selectedForTab.includes(t) &&
+      (inputValue === '' ||
+        (TRIGGER_LABELS[t] ?? t.toUpperCase()).includes(inputValue.toUpperCase()) ||
+        t.toUpperCase().includes(inputValue.toUpperCase())),
+  );
+
+  const addFilter = useCallback(
+    (triggerType: string) => {
+      if (selectedForTab.includes(triggerType)) return;
+      onSubFiltersChange({ ...subFilters, [activeTab]: [...selectedForTab, triggerType] });
+      setInputValue('');
+      setShowDropdown(false);
+      inputRef.current?.focus();
+    },
+    [activeTab, selectedForTab, subFilters, onSubFiltersChange],
+  );
+
+  const removeFilter = useCallback(
+    (triggerType: string) => {
+      onSubFiltersChange({
+        ...subFilters,
+        [activeTab]: selectedForTab.filter((t) => t !== triggerType),
+      });
+    },
+    [activeTab, selectedForTab, subFilters, onSubFiltersChange],
+  );
+
+  const clearAll = useCallback(() => {
+    onSubFiltersChange({ ...subFilters, [activeTab]: [] });
+  }, [activeTab, subFilters, onSubFiltersChange]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && candidates.length > 0) {
+      addFilter(candidates[0]);
+    } else if (e.key === 'Escape') {
+      setShowDropdown(false);
+      setInputValue('');
+    }
+  };
+
+  // Determine whether to show the streak stepper:
+  // - active tab is streaks, OR
+  // - any selected sub-filter in this tab is a streak type
+  const showStreakStepper =
+    activeTab === 'streaks' ||
+    selectedForTab.some((t) => STREAK_TRIGGER_TYPES.has(t));
+
+  return (
+    <div className="flex-shrink-0 px-2 py-1 border-b border-terminal-gray/40 bg-zinc-950 flex flex-wrap items-center gap-1 min-h-[28px]">
+      {/* Active filter bubbles */}
+      {selectedForTab.map((triggerType) => (
+        <span
+          key={triggerType}
+          className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-px rounded ${getBadgeColor(triggerType)}`}
+        >
+          {getBadgeLabel(triggerType)}
+          <button
+            onClick={() => removeFilter(triggerType)}
+            className="opacity-70 hover:opacity-100 leading-none"
+            title={`Remove ${TRIGGER_LABELS[triggerType] ?? triggerType}`}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+
+      {/* Autocomplete input */}
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={inputValue}
+          onChange={(e) => {
+            setInputValue(e.target.value);
+            setShowDropdown(true);
+          }}
+          onFocus={() => setShowDropdown(true)}
+          onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
+          onKeyDown={handleKeyDown}
+          placeholder="+ filter..."
+          className="bg-transparent text-white/60 text-[9px] border border-transparent focus:border-terminal-gray/60 outline-none px-1 py-px w-16 focus:w-28 transition-all placeholder:text-white/30"
+        />
+        {showDropdown && candidates.length > 0 && (
+          <div className="absolute top-full left-0 mt-0.5 w-48 bg-zinc-800 border border-terminal-gray/60 rounded shadow-xl z-50 max-h-40 overflow-auto">
+            {candidates.map((t) => (
+              <button
+                key={t}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // keep focus on input through the click
+                  addFilter(t);
+                }}
+                className="w-full text-left px-2 py-1 text-[9px] text-white/80 hover:bg-zinc-700 hover:text-terminal-amber flex items-center gap-1.5"
+              >
+                <span className={`text-[8px] font-bold px-1 py-px rounded ${getBadgeColor(t)}`}>
+                  {getBadgeLabel(t)}
+                </span>
+                <span className="truncate">{TRIGGER_LABELS[t] ?? t}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Clear all bubbles */}
+      {selectedForTab.length > 0 && (
+        <button
+          onClick={clearAll}
+          className="text-[9px] text-white/30 hover:text-terminal-red transition-colors ml-0.5"
+          title="Clear all filters"
+        >
+          CLEAR
+        </button>
+      )}
+
+      {/* Streak day stepper — shown when streaks are in scope */}
+      {showStreakStepper && (
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          <span className="text-white/40 text-[9px]">≥</span>
+          <button
+            onClick={() => onStreakMinDaysChange(Math.max(STREAK_MIN, streakMinDays - 1))}
+            className="text-white/50 hover:text-white text-[10px] w-4 text-center leading-none"
+            title="Decrease minimum streak days"
+          >
+            −
+          </button>
+          <span className="text-terminal-amber text-[9px] font-bold w-5 text-center tabular-nums">
+            {streakMinDays}
+          </span>
+          <button
+            onClick={() => onStreakMinDaysChange(streakMinDays + 1)}
+            className="text-white/50 hover:text-white text-[10px] w-4 text-center leading-none"
+            title="Increase minimum streak days"
+          >
+            +
+          </button>
+          <span className="text-white/30 text-[9px]">days</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Widget ──────────────────────────────────────────────────────────────
 
 export function NotifWidget() {
   const queryClient = useQueryClient();
@@ -177,12 +426,17 @@ export function NotifWidget() {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
 
+  const [subFilters, setSubFilters] = useAtom(notifSubFiltersAtom);
+  const [streakMinDays, setStreakMinDays] = useAtom(notifStreakMinDaysAtom);
+
   const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
 
   const { data, isLoading, isError, error, refetch } = useQuery<Notification[]>({
     queryKey: ['notifications', selectedWatchlistId, daysFilter, readFilter],
     queryFn: async () => {
-      const res = await fetch(`/api/py/notifications?watchlist_id=${selectedWatchlistId}&days=${daysFilter}&read_filter=${readFilter}`);
+      const res = await fetch(
+        `/api/py/notifications?watchlist_id=${selectedWatchlistId}&days=${daysFilter}&read_filter=${readFilter}`,
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -192,10 +446,9 @@ export function NotifWidget() {
 
   const dismissMutation = useMutation({
     mutationFn: async (id: number) => {
-        const res = await fetch(
-          `/api/py/notifications/${id}?watchlist_id=${selectedWatchlistId}`,
-        { method: 'DELETE' },
-      );
+      const res = await fetch(`/api/py/notifications/${id}?watchlist_id=${selectedWatchlistId}`, {
+        method: 'DELETE',
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     },
     onSuccess: () => {
@@ -205,8 +458,8 @@ export function NotifWidget() {
 
   const clearAllMutation = useMutation({
     mutationFn: async () => {
-        const res = await fetch(
-          `/api/py/notifications?all=true&watchlist_id=${selectedWatchlistId}`,
+      const res = await fetch(
+        `/api/py/notifications?all=true&watchlist_id=${selectedWatchlistId}`,
         { method: 'DELETE' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -226,9 +479,19 @@ export function NotifWidget() {
     dismissMutation.mutate(id);
   };
 
+  const activeSubFilters = subFilters[activeTab] ?? [];
+
   const filteredNotifications = (data ?? []).filter((n) => {
-    if (activeTab === 'all') return true;
-    return TAB_TRIGGERS[activeTab].includes(n.trigger_type);
+    // Coarse tab filter
+    if (activeTab !== 'all' && !TAB_TRIGGERS[activeTab].includes(n.trigger_type)) return false;
+    // Sub-filter bubbles (OR — match any selected type)
+    if (activeSubFilters.length > 0 && !activeSubFilters.includes(n.trigger_type)) return false;
+    // Streak numeric filter: applies whenever a streak trigger is shown
+    if (STREAK_TRIGGER_TYPES.has(n.trigger_type) && streakMinDays > STREAK_MIN) {
+      const days = parseStreakDays(n.message);
+      if (days === null || days < streakMinDays) return false;
+    }
+    return true;
   });
 
   const selectedWatchlist = watchlists.find((wl) => wl.id === selectedWatchlistId);
@@ -273,6 +536,7 @@ export function NotifWidget() {
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
+      {/* Header bar */}
       <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-center gap-2 min-w-0">
         <span className="text-terminal-amber font-bold text-[11px] uppercase shrink-0">NOTIF</span>
         <select
@@ -281,7 +545,9 @@ export function NotifWidget() {
           className="bg-terminal-bg text-terminal-amber text-[10px] border border-terminal-gray px-1 py-px max-w-[120px] truncate"
         >
           {watchlists.map((wl: Watchlist) => (
-            <option key={wl.id} value={wl.id}>{wl.name}</option>
+            <option key={wl.id} value={wl.id}>
+              {wl.name}
+            </option>
           ))}
         </select>
         <select
@@ -304,9 +570,7 @@ export function NotifWidget() {
           <option value="read">READ</option>
           <option value="all">ALL</option>
         </select>
-        <span className="text-white/60 text-[10px] shrink-0">
-          ({(data ?? []).length})
-        </span>
+        <span className="text-white/60 text-[10px] shrink-0">({filteredNotifications.length})</span>
         {(data ?? []).length > 0 && readFilter === 'unread' && (
           <button
             onClick={() => clearAllMutation.mutate()}
@@ -317,6 +581,7 @@ export function NotifWidget() {
         )}
       </div>
 
+      {/* Category tab strip */}
       <div className="flex-shrink-0 flex border-b border-terminal-gray/60 overflow-x-auto">
         {tabs.map((tab) => (
           <button
@@ -330,10 +595,24 @@ export function NotifWidget() {
             style={activeTab === tab.id ? { borderBottomColor: '#ffb900' } : undefined}
           >
             {tab.label}
+            {/* Dot indicator when this tab has active sub-filters */}
+            {(subFilters[tab.id] ?? []).length > 0 && activeTab !== tab.id && (
+              <span className="ml-1 inline-block w-1 h-1 rounded-full bg-terminal-amber align-middle" />
+            )}
           </button>
         ))}
       </div>
 
+      {/* Sub-filter bubble bar */}
+      <SubFilterBar
+        activeTab={activeTab}
+        subFilters={subFilters}
+        onSubFiltersChange={setSubFilters}
+        streakMinDays={streakMinDays}
+        onStreakMinDaysChange={(d) => setStreakMinDays(Math.max(STREAK_MIN, d))}
+      />
+
+      {/* Notification list */}
       <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
         {filteredNotifications.length === 0 ? (
           <div className="text-white/40 text-[10px] py-4 text-center">
@@ -345,11 +624,15 @@ export function NotifWidget() {
               <div
                 key={n.id}
                 onClick={() => handleRowClick(n)}
-                onMouseEnter={(e) => setHoveredNotif({ id: n.id, rect: e.currentTarget.getBoundingClientRect() })}
+                onMouseEnter={(e) =>
+                  setHoveredNotif({ id: n.id, rect: e.currentTarget.getBoundingClientRect() })
+                }
                 onMouseLeave={() => setHoveredNotif(null)}
                 className="relative flex items-center gap-2 px-2 py-[4px] bg-zinc-900 hover:bg-zinc-800 cursor-pointer group border border-terminal-gray/20 rounded-sm"
               >
-                <span className={`shrink-0 text-[8px] font-bold px-1 py-px rounded ${getBadgeColor(n.trigger_type)}`}>
+                <span
+                  className={`shrink-0 text-[8px] font-bold px-1 py-px rounded ${getBadgeColor(n.trigger_type)}`}
+                >
                   {getBadgeLabel(n.trigger_type)}
                 </span>
                 <span className="font-bold text-terminal-amber text-[11px] shrink-0">
@@ -361,7 +644,9 @@ export function NotifWidget() {
                 >
                   {n.message}
                 </span>
-                <span className="text-white/40 text-[9px] shrink-0">{formatDateTime(n.triggered_at)}</span>
+                <span className="text-white/40 text-[9px] shrink-0">
+                  {formatDateTime(n.triggered_at)}
+                </span>
                 <button
                   onClick={(e) => handleDismiss(e, n.id)}
                   className="shrink-0 text-white/30 hover:text-terminal-red text-[11px] w-4 text-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -375,29 +660,36 @@ export function NotifWidget() {
         )}
       </div>
 
-      {hoveredNotif && typeof document !== 'undefined' && ReactDOM.createPortal(
-        <div
-          className="fixed z-[99999] pointer-events-none"
-          style={{
-            left: hoveredNotif.rect.left,
-            top: hoveredNotif.rect.top - 4,
-            transform: 'translateY(-100%)',
-          }}
-        >
-          <div className="bg-zinc-800 border border-terminal-amber/60 rounded-md shadow-2xl p-3 max-w-80 mb-1">
-            <div className="text-terminal-amber text-[10px] font-bold mb-1">
-              {getBadgeLabel(filteredNotifications.find(n => n.id === hoveredNotif.id)?.trigger_type ?? '')}
+      {/* Hover tooltip portal */}
+      {hoveredNotif &&
+        typeof document !== 'undefined' &&
+        ReactDOM.createPortal(
+          <div
+            className="fixed z-[99999] pointer-events-none"
+            style={{
+              left: hoveredNotif.rect.left,
+              top: hoveredNotif.rect.top - 4,
+              transform: 'translateY(-100%)',
+            }}
+          >
+            <div className="bg-zinc-800 border border-terminal-amber/60 rounded-md shadow-2xl p-3 max-w-80 mb-1">
+              <div className="text-terminal-amber text-[10px] font-bold mb-1">
+                {getBadgeLabel(
+                  filteredNotifications.find((n) => n.id === hoveredNotif.id)?.trigger_type ?? '',
+                )}
+              </div>
+              <div className="text-white/80 text-[9px] mb-1 leading-snug">
+                {getTooltipDescription(
+                  filteredNotifications.find((n) => n.id === hoveredNotif.id)?.trigger_type ?? '',
+                )}
+              </div>
+              <div className="text-white/50 text-[8px] truncate">
+                {filteredNotifications.find((n) => n.id === hoveredNotif.id)?.message}
+              </div>
             </div>
-            <div className="text-white/80 text-[9px] mb-1 leading-snug">
-              {getTooltipDescription(filteredNotifications.find(n => n.id === hoveredNotif.id)?.trigger_type ?? '')}
-            </div>
-            <div className="text-white/50 text-[8px] truncate">
-              {filteredNotifications.find(n => n.id === hoveredNotif.id)?.message}
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
