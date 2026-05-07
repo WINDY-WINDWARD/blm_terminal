@@ -75,6 +75,7 @@ const WATCHLIST_COLUMNS = [
   { key: '5y', label: '5Y%' },
   { key: '52wh', label: '52W HIGH' },
   { key: '52wl', label: '52W LOW' },
+  { key: 'alerts', label: 'ALERTS' },
 ];
 
 const MOVERS_COLUMNS = [
@@ -200,8 +201,23 @@ export function SettingsWidget() {
     fetch('/api/settings')
       .then((res) => res.json())
       .then((data) => {
-        if (data.watchlistColumns) {
-          setWatchlistCols(data.watchlistColumns);
+        let cols: string[] | undefined = data.watchlistColumns;
+        // One-time migration: inject 'alerts' for existing users who predate this feature.
+        // A localStorage flag prevents re-adding after the user intentionally removes it.
+        const MIGRATION_KEY = 'blm_migrated_alerts_col_v1';
+        const alreadyMigrated =
+          typeof window !== 'undefined' && localStorage.getItem(MIGRATION_KEY) === '1';
+        if (cols && !cols.includes('alerts') && !alreadyMigrated) {
+          cols = [...cols, 'alerts'];
+          if (typeof window !== 'undefined') localStorage.setItem(MIGRATION_KEY, '1');
+          fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ watchlistColumns: cols, moversColumns: data.moversColumns }),
+          }).catch(console.error);
+        }
+        if (cols) {
+          setWatchlistCols(cols);
         }
         if (data.moversColumns) {
           setMoversCols(data.moversColumns);
