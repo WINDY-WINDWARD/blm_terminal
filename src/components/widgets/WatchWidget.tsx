@@ -238,18 +238,14 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
         );
       }
       case 'alerts':
-        if (alertCount === 0) return dash;
         return (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onAlertClick(item.symbol);
-            }}
-            className="text-[10px] font-bold px-1.5 py-px rounded bg-blue-700 hover:bg-blue-500 text-white tabular-nums"
-            title={`${alertCount} alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel`}
+          <span
+            className={`text-[10px] font-bold tabular-nums ${
+              alertCount > 0 ? 'text-blue-300' : 'text-white/30'
+            }`}
           >
-            {alertCount}
-          </button>
+            {alertCount > 0 ? alertCount : '—'}
+          </span>
         );
       default:
         return null;
@@ -283,7 +279,13 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
       {columns.map((col) => (
         <td
           key={col}
-          className={`p-1 border-r border-terminal-gray ${col === 'alerts' ? 'text-center' : 'text-right'}`}
+          onClick={col === 'alerts' ? (e) => { e.stopPropagation(); onAlertClick(item.symbol); } : undefined}
+          className={`p-1 border-r border-terminal-gray ${
+            col === 'alerts'
+              ? 'text-center cursor-pointer select-none hover:bg-blue-900/40 active:bg-blue-800/60'
+              : 'text-right'
+          }`}
+          title={col === 'alerts' ? `${alertCount} alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel` : undefined}
         >
           {renderCell(col)}
         </td>
