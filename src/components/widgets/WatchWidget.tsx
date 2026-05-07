@@ -244,7 +244,7 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
               e.stopPropagation();
               onAlertClick(item.symbol);
             }}
-            title={`${alertCount} alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel`}
+            title={`${alertCount} unread alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel`}
             className="w-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-terminal-amber
               bg-zinc-600 hover:bg-zinc-500 active:bg-zinc-700
               border border-zinc-500
@@ -473,13 +473,13 @@ export function WatchWidget() {
     })),
   });
 
-  // Fetch notification counts for the active watchlist (2 days, all read states)
+  // Fetch unread notification counts for the active watchlist (2-day window).
   // A single query for all symbols — count per-symbol client-side to avoid N requests.
   const { data: notifCountData } = useQuery<Array<{ symbol: string }>>({
-    queryKey: ['notifications-count', activeWatchlistId],
+    queryKey: ['notifications-count', activeWatchlistId, 'unread'],
     queryFn: async () => {
       const res = await fetch(
-        `/api/py/notifications?watchlist_id=${activeWatchlistId}&days=2&read_filter=all`,
+        `/api/py/notifications?watchlist_id=${activeWatchlistId}&days=2&read_filter=unread`,
       );
       if (!res.ok) return [];
       return res.json();
