@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useAtomValue, useAtom } from 'jotai';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactDOM from 'react-dom';
@@ -8,6 +8,7 @@ import {
   activeExchangeAtom,
   activeSymbolAtom,
   watchlistsAtom,
+  activeWatchlistIdAtom,
   notifSubFiltersAtom,
   notifStreakMinDaysAtom,
   notifSymbolFilterAtom,
@@ -418,6 +419,7 @@ function SubFilterBar({
 export function NotifWidget() {
   const queryClient = useQueryClient();
   const watchlists = useAtomValue(watchlistsAtom);
+  const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<number>(
     watchlists.length > 0 ? watchlists[0].id : 1,
   );
@@ -430,6 +432,14 @@ export function NotifWidget() {
   const [subFilters, setSubFilters] = useAtom(notifSubFiltersAtom);
   const [streakMinDays, setStreakMinDays] = useAtom(notifStreakMinDaysAtom);
   const [symbolFilter, setSymbolFilter] = useAtom(notifSymbolFilterAtom);
+
+  // When a symbol filter is applied from WatchWidget, sync the watchlist
+  // selection so the query targets the same watchlist the badge was counted from.
+  useEffect(() => {
+    if (symbolFilter !== null) {
+      setSelectedWatchlistId(activeWatchlistId);
+    }
+  }, [symbolFilter, activeWatchlistId]);
 
   const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
 

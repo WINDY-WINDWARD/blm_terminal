@@ -239,13 +239,21 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
       }
       case 'alerts':
         return (
-          <span
-            className={`text-[10px] font-bold tabular-nums ${
-              alertCount > 0 ? 'text-blue-300' : 'text-white/30'
-            }`}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAlertClick(item.symbol);
+            }}
+            title={`${alertCount} alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel`}
+            className="w-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-terminal-amber
+              bg-zinc-600 hover:bg-zinc-500 active:bg-zinc-700
+              border border-zinc-500
+              shadow-[0_2px_0_#18181b,inset_0_1px_0_rgba(255,255,255,0.12)]
+              active:shadow-[inset_0_2px_3px_rgba(0,0,0,0.45)] active:translate-y-px
+              transition-colors select-none cursor-pointer rounded-sm"
           >
             {alertCount > 0 ? alertCount : '—'}
-          </span>
+          </button>
         );
       default:
         return null;
@@ -279,13 +287,7 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
       {columns.map((col) => (
         <td
           key={col}
-          onClick={col === 'alerts' ? (e) => { e.stopPropagation(); onAlertClick(item.symbol); } : undefined}
-          className={`p-1 border-r border-terminal-gray ${
-            col === 'alerts'
-              ? 'text-center cursor-pointer select-none hover:bg-blue-900/40 active:bg-blue-800/60'
-              : 'text-right'
-          }`}
-          title={col === 'alerts' ? `${alertCount} alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel` : undefined}
+          className={`p-1 border-r border-terminal-gray ${col === 'alerts' ? 'text-center' : 'text-right'}`}
         >
           {renderCell(col)}
         </td>
