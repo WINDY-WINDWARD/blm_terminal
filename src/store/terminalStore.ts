@@ -74,7 +74,7 @@ export const fundsAtom = atom<FundsData | null>(null);
 
 // ─── Column Configuration ───────────────────────────────────────────────────
 
-export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', 'msfv', '1w', '1m', '3m', '6m', '1y', 'results'];
+export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', 'msfv', '1w', '1m', '3m', '6m', '1y', 'results', 'alerts'];
 export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '1y'];
 
 export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
@@ -114,3 +114,12 @@ export const scanSubFiltersAtom = atomWithStorage<SubFilterMap>('scan.subFilters
 
 /** ScanWidget — minimum streak day count for the streaks tab (floor = 5) */
 export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays', 5);
+
+// ─── Notif Symbol Filter ──────────────────────────────────────────────────────
+
+/**
+ * Symbol filter set by WatchWidget when an alert count badge is clicked.
+ * NotifWidget reads this and filters its list to only show the chosen symbol.
+ * null = no filter active.
+ */
+export const notifSymbolFilterAtom = atom<string | null>(null);

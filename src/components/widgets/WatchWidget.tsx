@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import { 
   activeSymbolAtom, 
   activeExchangeAtom, 
@@ -10,6 +10,8 @@ import {
   watchlistColumnsAtom,
   watchlistsAtom,
   activeWatchlistIdAtom,
+  activePanelsAtom,
+  notifSymbolFilterAtom,
   type Watchlist
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
@@ -65,6 +67,7 @@ interface WatchRowData {
   yearHigh: number | null;
   yearLow: number | null;
   fairValue: number | null;
+  alertCount: number;
   isLoading: boolean;
 }
 
@@ -89,7 +92,8 @@ type SortColumn =
   | '52wh'
   | '52wl'
   | 'msfv'
-  | 'results';
+  | 'results'
+  | 'alerts';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -117,6 +121,7 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   '52wl': { key: '52wl', label: '52W LOW', textAlign: 'right', defaultSort: 'desc' },
   msfv: { key: 'msfv', label: 'MS FV', textAlign: 'right', defaultSort: 'desc' },
   results: { key: 'results', label: 'RESULTS', textAlign: 'center', defaultSort: 'asc' },
+  alerts: { key: 'alerts', label: 'ALERTS', textAlign: 'center', defaultSort: 'desc' },
 };
 
 function formatResultsDate(dateStr: string): string {
@@ -172,10 +177,11 @@ interface WatchRowProps {
   onRemove: (id: number) => void;
   removing: boolean;
   flash: 'up' | 'down' | null;
+  onAlertClick: (symbol: string) => void;
 }
 
-function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash }: WatchRowProps) {
-  const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, isLoading } = rowData;
+function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash, onAlertClick }: WatchRowProps) {
+  const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, alertCount, isLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
   const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
   const dash = <span className="text-white/60">—</span>;
@@ -231,6 +237,20 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
           </span>
         );
       }
+      case 'alerts':
+        if (alertCount === 0) return dash;
+        return (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAlertClick(item.symbol);
+            }}
+            className="text-[10px] font-bold px-1.5 py-px rounded bg-blue-700 hover:bg-blue-500 text-white tabular-nums"
+            title={`${alertCount} alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel`}
+          >
+            {alertCount}
+          </button>
+        );
       default:
         return null;
     }
@@ -261,7 +281,10 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
         <span className="text-white/60 text-[9px] ml-1">{item.exchange}</span>
       </td>
       {columns.map((col) => (
-        <td key={col} className="p-1 text-right border-r border-terminal-gray">
+        <td
+          key={col}
+          className={`p-1 border-r border-terminal-gray ${col === 'alerts' ? 'text-center' : 'text-right'}`}
+        >
           {renderCell(col)}
         </td>
       ))}
@@ -321,6 +344,8 @@ export function WatchWidget() {
   const [watchlistColumns] = useAtom(watchlistColumnsAtom);
   const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
+  const activePanels = useAtomValue(activePanelsAtom);
+  const [, setNotifSymbolFilter] = useAtom(notifSymbolFilterAtom);
 
   const [newSymbol, setNewSymbol] = useState('');
   const [newExchange, setNewExchange] = useState('NSE');
@@ -444,6 +469,39 @@ export function WatchWidget() {
     })),
   });
 
+  // Fetch notification counts for the active watchlist (2 days, all read states)
+  // A single query for all symbols — count per-symbol client-side to avoid N requests.
+  const { data: notifCountData } = useQuery<Array<{ symbol: string }>>({
+    queryKey: ['notifications-count', activeWatchlistId],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/py/notifications?watchlist_id=${activeWatchlistId}&days=2&read_filter=all`,
+      );
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  });
+
+  const alertCountMap = React.useMemo(() => {
+    const map = new Map<string, number>();
+    for (const n of notifCountData ?? []) {
+      map.set(n.symbol, (map.get(n.symbol) ?? 0) + 1);
+    }
+    return map;
+  }, [notifCountData]);
+
+  // Cross-widget: set symbol filter on NotifWidget when NOTIF panel is open
+  const handleAlertClick = useCallback(
+    (symbol: string) => {
+      const isNotifOpen = Object.values(activePanels).includes('NOTIF');
+      if (isNotifOpen) setNotifSymbolFilter(symbol);
+    },
+    [activePanels, setNotifSymbolFilter],
+  );
+
   // Build derived row data
   const rowDataList: WatchRowData[] = watchlist.map((item, idx) => {
     const quote = symbolQueries[idx];
@@ -465,6 +523,7 @@ export function WatchWidget() {
       yearHigh: quote?.data?.yearHigh ?? null,
       yearLow: quote?.data?.yearLow ?? null,
       fairValue: fairValue?.data ?? null,
+      alertCount: alertCountMap.get(item.symbol) ?? 0,
       isLoading: (quote?.isLoading ?? false) || (ranges?.isLoading ?? false) || (fairValue?.isLoading ?? false),
     };
   });
@@ -581,6 +640,10 @@ export function WatchWidget() {
         case 'results':
           aVal = resultDates.get(a.item.symbol.toUpperCase()) ?? null;
           bVal = resultDates.get(b.item.symbol.toUpperCase()) ?? null;
+          break;
+        case 'alerts':
+          aVal = a.alertCount;
+          bVal = b.alertCount;
           break;
         default:
           return 0;
@@ -907,6 +970,7 @@ export function WatchWidget() {
                     onRemove={(id) => removeMutation.mutate(id)}
                     removing={removeMutation.isPending && removeMutation.variables === rowData.item.id}
                     flash={flashStates.get(rowData.item.symbol) ?? null}
+                    onAlertClick={handleAlertClick}
                   />
                 ))}
                 {watchlist.length === 0 && (

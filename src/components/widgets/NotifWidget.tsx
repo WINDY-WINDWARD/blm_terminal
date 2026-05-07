@@ -10,6 +10,7 @@ import {
   watchlistsAtom,
   notifSubFiltersAtom,
   notifStreakMinDaysAtom,
+  notifSymbolFilterAtom,
   type Watchlist,
   type SubFilterMap,
 } from '@/store/terminalStore';
@@ -428,6 +429,7 @@ export function NotifWidget() {
 
   const [subFilters, setSubFilters] = useAtom(notifSubFiltersAtom);
   const [streakMinDays, setStreakMinDays] = useAtom(notifStreakMinDaysAtom);
+  const [symbolFilter, setSymbolFilter] = useAtom(notifSymbolFilterAtom);
 
   const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
 
@@ -482,6 +484,8 @@ export function NotifWidget() {
   const activeSubFilters = subFilters[activeTab] ?? [];
 
   const filteredNotifications = (data ?? []).filter((n) => {
+    // Symbol filter set by WatchWidget alert-count click
+    if (symbolFilter && n.symbol !== symbolFilter) return false;
     // Coarse tab filter
     if (activeTab !== 'all' && !TAB_TRIGGERS[activeTab].includes(n.trigger_type)) return false;
     // Sub-filter bubbles (OR — match any selected type)
@@ -611,6 +615,21 @@ export function NotifWidget() {
         streakMinDays={streakMinDays}
         onStreakMinDaysChange={(d) => setStreakMinDays(Math.max(STREAK_MIN, d))}
       />
+
+      {/* Symbol filter banner — set when WatchWidget alert-count badge is clicked */}
+      {symbolFilter && (
+        <div className="flex-shrink-0 flex items-center gap-2 px-3 py-0.5 bg-blue-950 border-b border-blue-700/50">
+          <span className="text-blue-400 text-[10px] font-bold uppercase shrink-0">SYMBOL:</span>
+          <span className="text-terminal-amber text-[10px] font-bold">{symbolFilter}</span>
+          <button
+            onClick={() => setSymbolFilter(null)}
+            className="ml-auto text-white/40 hover:text-white text-[11px] leading-none"
+            title="Clear symbol filter"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Notification list */}
       <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
