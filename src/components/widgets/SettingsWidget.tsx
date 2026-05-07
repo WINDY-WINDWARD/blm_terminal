@@ -26,6 +26,8 @@ const NOTIF_CONFIG_KEYS = [
   'notif.return_1w_spike_threshold',
   'notif.streak_days_threshold',
   'notif.near_52w_threshold',
+  'notif.deal_significance_pct',
+  'notif.deal_absolute_threshold_cr',
 ] as const;
 
 const NOTIF_CONFIG_LABELS: Record<(typeof NOTIF_CONFIG_KEYS)[number], string> = {
@@ -37,6 +39,8 @@ const NOTIF_CONFIG_LABELS: Record<(typeof NOTIF_CONFIG_KEYS)[number], string> = 
   'notif.return_1w_spike_threshold': '1W Return Spike',
   'notif.streak_days_threshold': 'Streak Days',
   'notif.near_52w_threshold': 'Near 52W Threshold',
+  'notif.deal_significance_pct': 'Deal Min % of Mkt Cap',
+  'notif.deal_absolute_threshold_cr': 'Deal Min Value (₹ Cr)',
 };
 
 type NotifConfigKey = (typeof NOTIF_CONFIG_KEYS)[number];
@@ -52,6 +56,8 @@ const DEFAULT_NOTIF_CONFIG: NotifConfigState = {
   'notif.return_1w_spike_threshold': '10',
   'notif.streak_days_threshold': '5',
   'notif.near_52w_threshold': '3',
+  'notif.deal_significance_pct': '0.05',
+  'notif.deal_absolute_threshold_cr': '2',
 };
 
 const WATCHLIST_COLUMNS = [

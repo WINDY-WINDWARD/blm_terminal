@@ -12,13 +12,20 @@ Performance optimizations (v1.3):
 
 import logging
 import os
+from datetime import datetime
 from functools import partial
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy import and_, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
+from app.models.marketcategory import MarketCategoryStock
+from app.models.system_config import SystemConfig
+from app.models.ticker import TickerDaily
 from app.services.cache import nse_cache
 from app.services.nse_rate_limiter import throttled_nse_call
 
@@ -179,18 +186,148 @@ async def high_short_interest() -> JSONResponse:
     return _cache_response(data, "high-short-interest", 600.0)
 
 
-@router.get("/largedeal-snapshot", summary="Full largedeal snapshot (bulk/short/block) from NSE", response_class=JSONResponse)
-async def largedeal_snapshot() -> JSONResponse:
-    cached = nse_cache.get("largedeal-snapshot")
+@router.get("/largedeal-snapshot", summary="Full largedeal snapshot (bulk/short/block) from NSE — filtered by deal significance", response_class=JSONResponse)
+async def largedeal_snapshot(db: AsyncSession = Depends(get_db)) -> JSONResponse:
+    """Return today's bulk/block/short deals filtered to only significant trades.
+
+    A deal is significant when its trade value (qty × price) meets one of:
+      - trade_value >= notif.deal_significance_pct × market_cap  (preferred)
+      - trade_value >= notif.deal_absolute_threshold_cr Rs Cr    (fallback when
+        market cap is unavailable)
+
+    Short deals carry no watp from NSE; their price is resolved from TickerDaily.
+    Each returned deal is enriched with a ``trade_value_cr`` field.
+
+    The filtered result is cached using a threshold-keyed cache key so that
+    changing the thresholds in SettingsWidget produces a fresh result immediately.
+    """
+    # 1. Read significance thresholds from system_config
+    cfg_rows = await db.execute(
+        select(SystemConfig.key, SystemConfig.value).where(
+            SystemConfig.key.in_([
+                "notif.deal_significance_pct",
+                "notif.deal_absolute_threshold_cr",
+            ])
+        )
+    )
+    cfg_map = {r[0]: r[1] for r in cfg_rows.fetchall()}
+    try:
+        sig_pct = float(cfg_map.get("notif.deal_significance_pct") or "0.05")
+    except (TypeError, ValueError):
+        sig_pct = 0.05
+    try:
+        abs_cr = float(cfg_map.get("notif.deal_absolute_threshold_cr") or "2.0")
+    except (TypeError, ValueError):
+        abs_cr = 2.0
+
+    # 2. Check threshold-keyed cache (changing thresholds produces a new key)
+    filter_cache_key = f"largedeal-filtered:{sig_pct}:{abs_cr}"
+    cached = nse_cache.get(filter_cache_key)
     if cached is not None:
         return _json_response(cached, 600.0)
 
-    data = await throttled_nse_call(
-        "largedeal-snapshot",
-        _active_client.get_largedeal_snapshot,
-        is_async_fn=USE_ASYNC_NSE,
+    # 3. Fetch raw NSE snapshot (shared 10-min cache with bulk/block per-symbol routes)
+    raw = await _get_largedeal_snapshot_shared()
+
+    # 4. Collect all deal symbols and short-deal (symbol, date) pairs for DB lookups
+    all_deal_symbols: set[str] = set()
+    short_pairs: list[tuple[str, object]] = []  # (symbol, date)
+    for list_key, is_short in [
+        ("BULK_DEALS_DATA", False),
+        ("BLOCK_DEALS_DATA", False),
+        ("SHORT_DEALS_DATA", True),
+    ]:
+        for item in raw.get(list_key, []):
+            sym = (item.get("symbol") or "").upper()
+            if not sym:
+                continue
+            all_deal_symbols.add(sym)
+            if is_short:
+                date_str = item.get("date") or ""
+                try:
+                    d = datetime.strptime(date_str, "%d-%b-%Y").date()
+                    short_pairs.append((sym, d))
+                except (ValueError, AttributeError):
+                    pass
+
+    # 5. Bulk-fetch market caps (Rs Cr) for all deal symbols
+    mkt_rows = await db.execute(
+        select(MarketCategoryStock.symbol, MarketCategoryStock.market_cap).where(
+            MarketCategoryStock.symbol.in_(all_deal_symbols)
+        )
     )
-    return _cache_response(_clean_nan(data), "largedeal-snapshot", 600.0)
+    market_caps_cr: dict[str, float] = {
+        r[0]: float(r[1]) for r in mkt_rows.fetchall() if r[1] is not None
+    }
+
+    # 6. Fetch close prices for short deals (no watp available from NSE)
+    #    Single batch query instead of one query per (symbol, date) pair.
+    short_close: dict[str, dict[str, float]] = {}
+    if short_pairs:
+        unique_pairs = list({(sym, d) for sym, d in short_pairs})
+        batch_cond = or_(*(
+            and_(TickerDaily.symbol == sym, TickerDaily.date == d)
+            for sym, d in unique_pairs
+        ))
+        close_rows = await db.execute(
+            select(TickerDaily.symbol, TickerDaily.date, TickerDaily.close)
+            .where(batch_cond)
+        )
+        for sym_val, date_val, close_val in close_rows.fetchall():
+            if close_val is not None:
+                # date_val may be a date object or an ISO string depending on driver
+                if hasattr(date_val, "strftime"):
+                    nse_date_str = date_val.strftime("%d-%b-%Y")
+                else:
+                    nse_date_str = datetime.strptime(str(date_val), "%Y-%m-%d").strftime("%d-%b-%Y")
+                short_close.setdefault(sym_val, {})[nse_date_str] = float(close_val)
+
+    # 7. Helper: compute trade value in Rs Cr for a raw NSE deal dict
+    def _trade_value_cr(item: dict, is_short: bool) -> float:
+        sym = (item.get("symbol") or "").upper()
+        try:
+            qty = int(str(item.get("qty") or 0).replace(",", ""))
+        except (ValueError, TypeError):
+            return 0.0
+        if is_short:
+            date_str = item.get("date") or ""
+            price = short_close.get(sym, {}).get(date_str, 0.0)
+        else:
+            try:
+                price = float(str(item.get("watp") or 0).replace(",", ""))
+            except (ValueError, TypeError):
+                price = 0.0
+        if price <= 0 or qty <= 0:
+            return 0.0
+        return (qty * price) / 1e7
+
+    # 8. Helper: decide whether a deal is significant
+    def _significant(item: dict, tv_cr: float) -> bool:
+        if tv_cr <= 0:
+            return False
+        sym = (item.get("symbol") or "").upper()
+        mkt = market_caps_cr.get(sym)
+        if mkt and mkt > 0:
+            return (tv_cr / mkt) >= sig_pct
+        return tv_cr >= abs_cr
+
+    # 9. Filter each deal list and annotate with trade_value_cr
+    filtered: dict = {"as_on_date": raw.get("as_on_date")}
+    for list_key, is_short in [
+        ("BULK_DEALS_DATA", False),
+        ("BLOCK_DEALS_DATA", False),
+        ("SHORT_DEALS_DATA", True),
+    ]:
+        kept: list[dict] = []
+        for item in raw.get(list_key, []):
+            tv_cr = _trade_value_cr(item, is_short)
+            if _significant(item, tv_cr):
+                enriched = dict(item)
+                enriched["trade_value_cr"] = round(tv_cr, 2)
+                kept.append(enriched)
+        filtered[list_key] = kept
+
+    return _cache_response(_clean_nan(filtered), filter_cache_key, 600.0)
 
 
 @router.get("/change-ranges/{symbol}", summary="Percentage changes over multiple timeframes for a symbol", response_class=JSONResponse)

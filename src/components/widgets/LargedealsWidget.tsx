@@ -14,6 +14,8 @@ interface LargedealRow {
   qty: string;
   watp: string | number | null;
   remarks: string | null;
+  /** Trade value in Rs Cr, added by the backend significance filter */
+  trade_value_cr?: number | null;
 }
 
 interface LargedealSnapshot {
@@ -126,6 +128,11 @@ function CompanyAccordion({ group, expanded, onToggle }: CompanyAccordionProps) 
                     ₹{fmtNumber(row.watp)}
                   </span>
                 </span>
+                {row.trade_value_cr != null && row.trade_value_cr > 0 && (
+                  <span className="text-[10px] text-terminal-amber font-mono font-semibold">
+                    ₹{row.trade_value_cr.toFixed(1)} Cr
+                  </span>
+                )}
               </div>
               {row.remarks && row.remarks !== '-' && (
                 <div className="text-white/60 text-[9px] mt-[1px] truncate">

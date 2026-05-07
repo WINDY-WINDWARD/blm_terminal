@@ -17,6 +17,7 @@ from app.backgroundtasks import (
     _parse_volume_gainers,
     _parse_largedeal_snapshot,
     _build_alerts,
+    _is_deal_significant,
     _safe_fetch_52week_high,
     _safe_fetch_52week_low,
     _safe_fetch_volume_gainers,
@@ -322,13 +323,14 @@ class TestBuildAlerts:
         assert "-3.2%" in alerts[0][1]
     
     def test_deal_alert(self):
+        # qty=200_000, watp=500.0 → trade value = 10 Cr > 2 Cr fallback threshold
         deals = [
             DealRecord(
                 symbol="TEST",
                 deal_type="bulk",
                 date=date.today().strftime("%d-%b-%Y"),
-                qty=1000,
-                watp=150.5,
+                qty=200_000,
+                watp=500.0,
                 client_name=None,
                 buy_sell=None,
             ),
@@ -337,7 +339,7 @@ class TestBuildAlerts:
         alerts = _build_alerts("TEST", deals_by_symbol=deals_by_symbol)
         assert len(alerts) == 1
         assert alerts[0][0] == "bulk_deal"
-        assert "1,000 shares" in alerts[0][1]
+        assert "200,000 shares" in alerts[0][1]
     
     def test_deal_alert_old_date(self):
         ten_days_ago = (date.today() - timedelta(days=10)).strftime("%d-%b-%Y")
@@ -552,6 +554,179 @@ class TestIntegration:
         
         # Should not call bulk_upsert
         mock_bulk_upsert.assert_not_called()
+
+
+class TestIsDealSignificant:
+    """Unit tests for _is_deal_significant helper."""
+
+    def _make_deal(self, deal_type="bulk", qty=100_000, watp=500.0, date_str=None) -> DealRecord:
+        return DealRecord(
+            symbol="TEST",
+            deal_type=deal_type,
+            date=date_str or date.today().strftime("%d-%b-%Y"),
+            qty=qty,
+            watp=watp,
+            client_name=None,
+            buy_sell=None,
+        )
+
+    def test_significant_via_market_cap_pct(self):
+        """trade_value >= 5% of market cap → significant."""
+        deal = self._make_deal(qty=100_000, watp=500.0)
+        # trade_value = 100_000 * 500 / 1e7 = 5 Cr; market_cap = 100 Cr → 5% threshold
+        is_sig, val_cr = _is_deal_significant(deal, {}, {"TEST": 100.0}, 0.05, 2.0)
+        assert is_sig is True
+        assert abs(val_cr - 5.0) < 0.01
+
+    def test_insignificant_via_market_cap_pct(self):
+        """trade_value < 5% of market cap → not significant."""
+        deal = self._make_deal(qty=1_000, watp=150.0)
+        # trade_value = 1000 * 150 / 1e7 = 0.015 Cr; market_cap = 1000 Cr → 0.0015% << 5%
+        is_sig, val_cr = _is_deal_significant(deal, {}, {"TEST": 1000.0}, 0.05, 2.0)
+        assert is_sig is False
+
+    def test_significant_via_absolute_fallback(self):
+        """No market cap → falls back to absolute threshold; value above threshold."""
+        deal = self._make_deal(qty=200_000, watp=500.0)
+        # trade_value = 10 Cr >= 2 Cr fallback
+        is_sig, val_cr = _is_deal_significant(deal, {}, {}, 0.05, 2.0)
+        assert is_sig is True
+        assert abs(val_cr - 10.0) < 0.01
+
+    def test_insignificant_via_absolute_fallback(self):
+        """No market cap → falls back to absolute threshold; value below threshold."""
+        deal = self._make_deal(qty=1_000, watp=150.0)
+        # trade_value = 0.015 Cr < 2 Cr fallback
+        is_sig, val_cr = _is_deal_significant(deal, {}, {}, 0.05, 2.0)
+        assert is_sig is False
+
+    def test_short_deal_uses_close_price(self):
+        """Short deals resolve price from close prices dict, not watp."""
+        deal = self._make_deal(deal_type="short", qty=200_000, watp=0.0)
+        today_str = date.today().strftime("%d-%b-%Y")
+        short_prices = {"TEST": {today_str: 600.0}}
+        # trade_value = 200_000 * 600 / 1e7 = 12 Cr >= 2 Cr
+        is_sig, val_cr = _is_deal_significant(deal, short_prices, {}, 0.05, 2.0)
+        assert is_sig is True
+        assert abs(val_cr - 12.0) < 0.01
+
+    def test_short_deal_no_close_price_returns_false(self):
+        """Short deal with no close price available → price=0 → not significant."""
+        deal = self._make_deal(deal_type="short", qty=200_000, watp=0.0)
+        is_sig, val_cr = _is_deal_significant(deal, {}, {}, 0.05, 2.0)
+        assert is_sig is False
+        assert val_cr == 0.0
+
+    def test_zero_watp_returns_false(self):
+        """Bulk deal with watp=0 → price=0 → not significant."""
+        deal = self._make_deal(deal_type="bulk", qty=500_000, watp=0.0)
+        is_sig, val_cr = _is_deal_significant(deal, {}, {}, 0.05, 2.0)
+        assert is_sig is False
+
+    def test_zero_qty_returns_false(self):
+        """Deal with qty=0 → not significant regardless of price."""
+        deal = self._make_deal(qty=0, watp=1000.0)
+        is_sig, val_cr = _is_deal_significant(deal, {}, {"TEST": 100.0}, 0.05, 2.0)
+        assert is_sig is False
+
+    def test_exact_absolute_threshold_boundary(self):
+        """Deal value exactly at absolute threshold is significant (>=)."""
+        deal = self._make_deal(qty=200_000, watp=100.0)
+        # trade_value = 200_000 * 100 / 1e7 = 2.0 Cr == threshold
+        is_sig, val_cr = _is_deal_significant(deal, {}, {}, 0.05, 2.0)
+        assert is_sig is True
+
+    def test_exact_market_cap_boundary(self):
+        """Deal value exactly at 5% of market cap is significant (>=)."""
+        deal = self._make_deal(qty=100_000, watp=500.0)
+        # trade_value = 5 Cr; 5% of 100 Cr = 5 Cr → exactly at boundary
+        is_sig, val_cr = _is_deal_significant(deal, {}, {"TEST": 100.0}, 0.05, 2.0)
+        assert is_sig is True
+
+
+class TestBuildAlertsDealSignificance:
+    """Additional _build_alerts tests verifying significance filter integration."""
+
+    def test_deal_alert_insignificant_filtered_out(self):
+        """Deal below absolute threshold produces no alert."""
+        deals = [
+            DealRecord(
+                symbol="TEST",
+                deal_type="bulk",
+                date=date.today().strftime("%d-%b-%Y"),
+                qty=1_000,
+                watp=150.0,  # trade_value = 0.015 Cr << 2 Cr
+                client_name=None,
+                buy_sell=None,
+            )
+        ]
+        alerts = _build_alerts("TEST", deals_by_symbol={"TEST": deals})
+        assert alerts == []
+
+    def test_deal_alert_significant_via_market_cap(self):
+        """Deal passes 5% market-cap significance check and generates alert."""
+        deals = [
+            DealRecord(
+                symbol="TEST",
+                deal_type="bulk",
+                date=date.today().strftime("%d-%b-%Y"),
+                qty=100_000,
+                watp=500.0,  # trade_value = 5 Cr; 5% of 100 Cr = 5 Cr
+                client_name=None,
+                buy_sell=None,
+            )
+        ]
+        alerts = _build_alerts(
+            "TEST",
+            deals_by_symbol={"TEST": deals},
+            deal_market_caps_cr={"TEST": 100.0},
+            deal_significance_pct=0.05,
+        )
+        assert len(alerts) == 1
+        assert alerts[0][0] == "bulk_deal"
+        assert "₹5.0 Cr" in alerts[0][1]
+
+    def test_deal_alert_insignificant_via_market_cap_filtered(self):
+        """Deal well below 5% market cap threshold is filtered out."""
+        deals = [
+            DealRecord(
+                symbol="TEST",
+                deal_type="bulk",
+                date=date.today().strftime("%d-%b-%Y"),
+                qty=1_000,
+                watp=150.0,  # trade_value = 0.015 Cr; 5% of 10_000 Cr = 500 Cr
+                client_name=None,
+                buy_sell=None,
+            )
+        ]
+        alerts = _build_alerts(
+            "TEST",
+            deals_by_symbol={"TEST": deals},
+            deal_market_caps_cr={"TEST": 10_000.0},
+            deal_significance_pct=0.05,
+        )
+        assert alerts == []
+
+    def test_zero_absolute_threshold_always_passes_if_value_positive(self):
+        """Setting absolute threshold to 0 lets any deal with positive value through."""
+        deals = [
+            DealRecord(
+                symbol="TEST",
+                deal_type="bulk",
+                date=date.today().strftime("%d-%b-%Y"),
+                qty=10,
+                watp=10.0,  # trade_value = 0.00001 Cr
+                client_name=None,
+                buy_sell=None,
+            )
+        ]
+        alerts = _build_alerts(
+            "TEST",
+            deals_by_symbol={"TEST": deals},
+            deal_absolute_threshold_cr=0.0,
+        )
+        assert len(alerts) == 1
+        assert alerts[0][0] == "bulk_deal"
 
 
 if __name__ == "__main__":

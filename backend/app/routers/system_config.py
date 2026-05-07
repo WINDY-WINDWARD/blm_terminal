@@ -22,6 +22,10 @@ DEFAULT_NOTIF_CONFIG: dict[str, float] = {
     "notif.return_1w_spike_threshold": 10.0,
     "notif.streak_days_threshold": 5.0,
     "notif.near_52w_threshold": 3.0,
+    # Deal significance: fraction of market cap (e.g. 0.05 = 5%)
+    "notif.deal_significance_pct": 0.05,
+    # Absolute fallback threshold in Rs Cr when market cap is unknown
+    "notif.deal_absolute_threshold_cr": 2.0,
 }
 
 

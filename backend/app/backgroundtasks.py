@@ -1921,14 +1921,17 @@ def _bulk_upsert_global_notifications(rows: list[dict]) -> None:
 def get_notif_config() -> dict:
     """Read notif.* threshold values from system_config with hardcoded fallbacks."""
     DEFAULTS: dict = {
-        "notif.rsi_oversold_threshold":    30.0,
-        "notif.rsi_overbought_threshold":  70.0,
-        "notif.volatility_spike_ratio":     1.5,
-        "notif.atr_expansion_threshold":    4.0,
-        "notif.momentum_surge_threshold":  70.0,
-        "notif.return_1w_spike_threshold": 10.0,
-        "notif.streak_days_threshold":      5.0,
-        "notif.near_52w_threshold":         3.0,
+        "notif.rsi_oversold_threshold":        30.0,
+        "notif.rsi_overbought_threshold":      70.0,
+        "notif.volatility_spike_ratio":         1.5,
+        "notif.atr_expansion_threshold":        4.0,
+        "notif.momentum_surge_threshold":      70.0,
+        "notif.return_1w_spike_threshold":     10.0,
+        "notif.streak_days_threshold":          5.0,
+        "notif.near_52w_threshold":             3.0,
+        # Deal significance thresholds
+        "notif.deal_significance_pct":          0.05,
+        "notif.deal_absolute_threshold_cr":     2.0,
     }
     try:
         with _SyncSessionLocal() as db:
@@ -1952,6 +1955,106 @@ def get_notif_config() -> dict:
         else:
             config[key] = default
     return config
+
+
+# ---------------------------------------------------------------------------
+# Deal significance helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_deal_market_caps(symbols: set[str]) -> dict[str, float]:
+    """Bulk-fetch market caps (Rs Cr) for deal symbols from MarketCategoryStock."""
+    from app.models.marketcategory import MarketCategoryStock
+    if not symbols:
+        return {}
+    try:
+        with _SyncSessionLocal() as db:
+            rows = db.execute(
+                select(MarketCategoryStock.symbol, MarketCategoryStock.market_cap)
+                .where(MarketCategoryStock.symbol.in_(symbols))
+            ).fetchall()
+        return {row[0]: float(row[1]) for row in rows if row[1] is not None}
+    except Exception:
+        logger.warning("_fetch_deal_market_caps: DB query failed, returning empty dict")
+        return {}
+
+
+def _fetch_short_deal_close_prices(
+    short_deals: list["DealRecord"],
+) -> dict[str, dict[str, float]]:
+    """Fetch closing prices for short deals (which carry no watp) from TickerDaily.
+
+    Returns: {symbol: {date_str: close_price}} where date_str is the original
+    NSE format "12-Mar-2026".
+    """
+    from app.models.ticker import TickerDaily
+
+    pairs: list[tuple[str, date]] = []
+    for deal in short_deals:
+        if deal.deal_type != "short" or not deal.date:
+            continue
+        try:
+            d = datetime.strptime(deal.date, "%d-%b-%Y").date()
+            pairs.append((deal.symbol, d))
+        except (ValueError, AttributeError):
+            pass
+
+    if not pairs:
+        return {}
+
+    try:
+        result: dict[str, dict[str, float]] = {}
+        with _SyncSessionLocal() as db:
+            for symbol, d in pairs:
+                close = db.execute(
+                    select(TickerDaily.close)
+                    .where(TickerDaily.symbol == symbol, TickerDaily.date == d)
+                    .limit(1)
+                ).scalar_one_or_none()
+                if close is not None:
+                    date_str = d.strftime("%d-%b-%Y")
+                    result.setdefault(symbol, {})[date_str] = float(close)
+        return result
+    except Exception:
+        logger.warning("_fetch_short_deal_close_prices: DB query failed")
+        return {}
+
+
+def _is_deal_significant(
+    deal: "DealRecord",
+    short_close_prices: dict[str, dict[str, float]],
+    market_caps_cr: dict[str, float],
+    significance_pct: float,
+    absolute_threshold_cr: float,
+) -> tuple[bool, float]:
+    """Check whether a deal is significant enough to generate an alert.
+
+    Significance is defined as:
+      trade_value >= significance_pct * market_cap
+    with a fallback of trade_value >= absolute_threshold_cr (Rs Cr) when the
+    market cap is unknown.
+
+    Short deals carry no watp from NSE — their price is resolved from TickerDaily.
+
+    Returns:
+        (is_significant, trade_value_cr)
+    """
+    if deal.deal_type == "short":
+        price = short_close_prices.get(deal.symbol, {}).get(deal.date, 0.0)
+    else:
+        price = deal.watp
+
+    if price <= 0 or deal.qty <= 0:
+        return False, 0.0
+
+    trade_value_cr = (deal.qty * price) / 1e7  # Rs → Rs Cr
+
+    market_cap_cr = market_caps_cr.get(deal.symbol)
+    if market_cap_cr and market_cap_cr > 0:
+        is_sig = (trade_value_cr / market_cap_cr) >= significance_pct
+    else:
+        is_sig = trade_value_cr >= absolute_threshold_cr
+
+    return is_sig, trade_value_cr
 
 
 # ---------------------------------------------------------------------------
@@ -2180,6 +2283,10 @@ def _build_alerts(
     losers_df: pd.DataFrame | None = None,
     deals_by_symbol: dict[str, list[DealRecord]] | None = None,
     insider_trades: list[dict] | None = None,
+    deal_significance_pct: float = 0.05,
+    deal_absolute_threshold_cr: float = 2.0,
+    deal_market_caps_cr: dict[str, float] | None = None,
+    deal_short_prices: dict[str, dict[str, float]] | None = None,
 ) -> list[tuple[str, str]]:
     """Build list of (trigger_type, message) tuples for a symbol."""
     alerts: list[tuple[str, str]] = []
@@ -2215,14 +2322,25 @@ def _build_alerts(
                 alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
                 break
     
-    # Deals (bulk/block/short) — O(1) lookup via pre-indexed dict
+    # Deals (bulk/block/short) — O(1) lookup via pre-indexed dict.
+    # Only fire for trades whose value is significant relative to market cap.
     if deals_by_symbol and symbol in deals_by_symbol:
+        _mkt_caps = deal_market_caps_cr or {}
+        _short_px = deal_short_prices or {}
         for deal in deals_by_symbol[symbol]:
-            if _is_recent(deal.date, DAILY_NOTIFICATION_WINDOW_DAYS):
-                alerts.append((
-                    f"{deal.deal_type}_deal",
-                    f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}"
-                ))
+            if not _is_recent(deal.date, DAILY_NOTIFICATION_WINDOW_DAYS):
+                continue
+            is_sig, trade_val_cr = _is_deal_significant(
+                deal, _short_px, _mkt_caps,
+                deal_significance_pct, deal_absolute_threshold_cr,
+            )
+            if not is_sig:
+                continue
+            val_str = f" = ₹{trade_val_cr:.1f} Cr" if trade_val_cr > 0 else ""
+            alerts.append((
+                f"{deal.deal_type}_deal",
+                f"{symbol} — {deal.deal_type} deal: {deal.qty:,} shares @ ₹{deal.watp}{val_str}",
+            ))
     
     # Insider trades (from screener.in)
     if insider_trades:
@@ -2277,6 +2395,17 @@ def _notification_cycle_full() -> None:
         vol_data = _parse_volume_gainers(vol_raw)
         deals = _parse_largedeal_snapshot(deals_raw)
 
+        # Read deal significance thresholds
+        cfg = get_notif_config()
+        deal_sig_pct = float(cfg["notif.deal_significance_pct"])
+        deal_abs_cr  = float(cfg["notif.deal_absolute_threshold_cr"])
+
+        # Pre-fetch deal significance data (single DB round-trip)
+        deal_symbols = set(deals.keys())
+        deal_mkt_caps = _fetch_deal_market_caps(deal_symbols)
+        short_deals   = [d for ds in deals.values() for d in ds if d.deal_type == "short"]
+        deal_short_px = _fetch_short_deal_close_prices(short_deals)
+
         # Cache insider trades per symbol
         insider_cache: dict[str, list[dict]] = {}
 
@@ -2296,6 +2425,10 @@ def _notification_cycle_full() -> None:
                     losers_df=losers_df,
                     deals_by_symbol=deals,
                     insider_trades=insider_cache[symbol],
+                    deal_significance_pct=deal_sig_pct,
+                    deal_absolute_threshold_cr=deal_abs_cr,
+                    deal_market_caps_cr=deal_mkt_caps,
+                    deal_short_prices=deal_short_px,
                 )
 
                 # Add to pending if not seen today
@@ -2348,6 +2481,17 @@ def _notification_cycle_reduced() -> None:
         deals_raw = _safe_fetch_largedeal_snapshot()
         deals = _parse_largedeal_snapshot(deals_raw)
 
+        # Read deal significance thresholds
+        cfg = get_notif_config()
+        deal_sig_pct = float(cfg["notif.deal_significance_pct"])
+        deal_abs_cr  = float(cfg["notif.deal_absolute_threshold_cr"])
+
+        # Pre-fetch deal significance data
+        deal_symbols  = set(deals.keys())
+        deal_mkt_caps = _fetch_deal_market_caps(deal_symbols)
+        short_deals   = [d for ds in deals.values() for d in ds if d.deal_type == "short"]
+        deal_short_px = _fetch_short_deal_close_prices(short_deals)
+
         insider_cache: dict[str, list[dict]] = {}
 
         for wl_id, symbols in symbols_by_watchlist.items():
@@ -2361,6 +2505,10 @@ def _notification_cycle_reduced() -> None:
                     symbol=symbol,
                     deals_by_symbol=deals,
                     insider_trades=insider_cache[symbol],
+                    deal_significance_pct=deal_sig_pct,
+                    deal_absolute_threshold_cr=deal_abs_cr,
+                    deal_market_caps_cr=deal_mkt_caps,
+                    deal_short_prices=deal_short_px,
                 )
 
                 # Add to pending if not seen today
@@ -2487,6 +2635,8 @@ def _global_scan_cycle() -> None:
         return_1w_thr = float(cfg["notif.return_1w_spike_threshold"])
         streak_thr = int(cfg["notif.streak_days_threshold"])
         near52w_thr = float(cfg["notif.near_52w_threshold"])
+        deal_sig_pct = float(cfg["notif.deal_significance_pct"])
+        deal_abs_cr  = float(cfg["notif.deal_absolute_threshold_cr"])
 
         with _SyncSessionLocal() as db:
             result = db.execute(
@@ -2530,6 +2680,12 @@ def _global_scan_cycle() -> None:
         low52_data = _parse_52week_data(low52_raw)
         vol_data = _parse_volume_gainers(vol_raw)
         deals = _parse_largedeal_snapshot(deals_raw)
+
+        # Pre-fetch deal significance data once for the whole scan
+        deal_symbols      = set(deals.keys())
+        deal_mkt_caps     = _fetch_deal_market_caps(deal_symbols)
+        short_deals_list  = [d for ds in deals.values() for d in ds if d.deal_type == "short"]
+        deal_short_px     = _fetch_short_deal_close_prices(short_deals_list)
 
         processed = 0
         alerts_generated = 0
@@ -2681,11 +2837,19 @@ def _global_scan_cycle() -> None:
 
                     if deals and symbol in deals:
                         for deal in deals[symbol]:
-                            if _is_recent(deal.date, DAILY_NOTIFICATION_WINDOW_DAYS):
-                                alerts.append((
-                                    f"{deal.deal_type}_deal",
-                                    f"{symbol} {deal.deal_type} {deal.qty:,} @ ₹{deal.watp}"
-                                ))
+                            if not _is_recent(deal.date, DAILY_NOTIFICATION_WINDOW_DAYS):
+                                continue
+                            is_sig, trade_val_cr = _is_deal_significant(
+                                deal, deal_short_px, deal_mkt_caps,
+                                deal_sig_pct, deal_abs_cr,
+                            )
+                            if not is_sig:
+                                continue
+                            val_str = f" = ₹{trade_val_cr:.1f} Cr" if trade_val_cr > 0 else ""
+                            alerts.append((
+                                f"{deal.deal_type}_deal",
+                                f"{symbol} {deal.deal_type} {deal.qty:,} @ ₹{deal.watp}{val_str}",
+                            ))
 
                     for trigger_type, message in alerts:
                         key = (symbol, trigger_type)
