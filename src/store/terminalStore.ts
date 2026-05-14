@@ -123,3 +123,17 @@ export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays
  * null = no filter active.
  */
 export const notifSymbolFilterAtom = atom<string | null>(null);
+
+// ─── Global Notification Alert Modal ──────────────────────────────────────────
+
+/** IDs the alert modal has already notified for (persisted, capped at 1000) */
+export const seenNotifIdsAtom = atomWithStorage<number[]>('notif.seenIds', []);
+
+/** Whether the global notification alert modal is visible */
+export const notifAlertVisibleAtom = atom<boolean>(false);
+
+/** Number of new notifications shown in the alert modal */
+export const notifAlertCountAtom = atom<number>(0);
+
+/** Timestamp bump to trigger NOTIF panel highlight flash */
+export const notifPanelHighlightAtom = atom<number>(0);

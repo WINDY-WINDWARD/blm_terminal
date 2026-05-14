@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useAtomValue, useAtom } from 'jotai';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactDOM from 'react-dom';
@@ -43,7 +43,6 @@ type NotifTab =
   | 'streaks'
   | 'results';
 
-type DaysFilter = 2 | 4 | 6 | 8 | 12;
 type ReadFilter = 'unread' | 'read' | 'all';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -424,7 +423,7 @@ export function NotifWidget() {
     watchlists.length > 0 ? watchlists[0].id : 1,
   );
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
-  const [daysFilter, setDaysFilter] = useState<DaysFilter>(2);
+  const [selectedDate, setSelectedDate] = useState<string>('today');
   const [readFilter, setReadFilter] = useState<ReadFilter>('unread');
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
@@ -444,10 +443,10 @@ export function NotifWidget() {
   const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
 
   const { data, isLoading, isError, error, refetch } = useQuery<Notification[]>({
-    queryKey: ['notifications', selectedWatchlistId, daysFilter, readFilter],
+    queryKey: ['notifications', selectedWatchlistId, readFilter],
     queryFn: async () => {
       const res = await fetch(
-        `/api/py/notifications?watchlist_id=${selectedWatchlistId}&days=${daysFilter}&read_filter=${readFilter}`,
+        `/api/py/notifications?watchlist_id=${selectedWatchlistId}&days=14&read_filter=${readFilter}`,
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -493,6 +492,32 @@ export function NotifWidget() {
 
   const activeSubFilters = subFilters[activeTab] ?? [];
 
+  const todayStr = useMemo(
+    () => new Date().toISOString().slice(0, 10),
+    [],
+  );
+
+  const dateOptions = useMemo(() => {
+    const dates = new Set((data ?? []).map((n) => n.triggered_date));
+    const sorted = Array.from(dates).sort().reverse();
+    const labels: Record<string, string> = {};
+    for (const d of sorted) {
+      if (d === todayStr) {
+        labels[d] = 'Today';
+      } else {
+        const date = new Date(d + 'T00:00:00');
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        labels[d] = `${months[date.getMonth()]} ${date.getDate()}`;
+      }
+    }
+    return [
+      { label: 'Today', value: 'today' },
+      ...sorted.filter((d) => d !== todayStr).map((d) => ({ label: labels[d], value: d })),
+    ];
+  }, [data, todayStr]);
+
+  const targetDate = selectedDate === 'today' ? todayStr : selectedDate;
+
   const filteredNotifications = (data ?? []).filter((n) => {
     // Symbol filter set by WatchWidget alert-count click
     if (symbolFilter && n.symbol !== symbolFilter) return false;
@@ -505,6 +530,8 @@ export function NotifWidget() {
       const days = parseStreakDays(n.message);
       if (days === null || days < streakMinDays) return false;
     }
+    // Date filter
+    if (n.triggered_date !== targetDate) return false;
     return true;
   });
 
@@ -565,15 +592,15 @@ export function NotifWidget() {
           ))}
         </select>
         <select
-          value={daysFilter}
-          onChange={(e) => setDaysFilter(Number(e.target.value) as DaysFilter)}
-          className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px"
+          value={selectedDate}
+          onChange={(e) => setSelectedDate(e.target.value)}
+          className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px max-w-[110px]"
         >
-          <option value={2}>2D</option>
-          <option value={4}>4D</option>
-          <option value={6}>6D</option>
-          <option value={8}>8D</option>
-          <option value={12}>12D</option>
+          {dateOptions.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
         </select>
         <select
           value={readFilter}

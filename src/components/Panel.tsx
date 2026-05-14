@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useAtom } from 'jotai';
-import { focusedPanelAtom } from '@/store/terminalStore';
+import { focusedPanelAtom, notifPanelHighlightAtom } from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
 import { OrderWidget } from './widgets/OrderWidget';
@@ -27,7 +27,26 @@ interface PanelProps {
 
 export function Panel({ id, title }: PanelProps) {
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
+  const [notifHighlight] = useAtom(notifPanelHighlightAtom);
+  const headerRef = useRef<HTMLDivElement>(null);
   const isFocused = focusedPanel === id;
+
+  useEffect(() => {
+    if (title === 'NOTIF' && notifHighlight > 0 && headerRef.current) {
+      const el = headerRef.current;
+      el.style.backgroundColor = 'rgba(255, 185, 0, 0.4)';
+      el.style.color = 'white';
+      const timer = setTimeout(() => {
+        el.style.backgroundColor = '';
+        el.style.color = '';
+      }, 2000);
+      return () => {
+        clearTimeout(timer);
+        el.style.backgroundColor = '';
+        el.style.color = '';
+      };
+    }
+  }, [notifHighlight, title]);
 
   const renderWidget = () => {
     switch (title) {
@@ -63,6 +82,7 @@ export function Panel({ id, title }: PanelProps) {
       onClick={() => setFocusedPanel(id)}
     >
       <div
+        ref={headerRef}
         className={`h-6 px-2 flex items-center font-bold text-xs uppercase ${
           isFocused ? 'bg-blue-900 text-white' : 'bg-terminal-gray text-terminal-amber'
         }`}
