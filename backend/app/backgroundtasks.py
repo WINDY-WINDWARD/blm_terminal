@@ -55,13 +55,18 @@ def register_all_jobs() -> None:
     """Register all background jobs with the job registry."""
     jobs = [
         # --- Data warehouse (startup / daily) ---
+        # NOTE: callables here are the *sync* (work) functions, not the worker
+        # daemon loops.  The daemons are spawned separately by start_all_workers()
+        # and own the first_run guard + cron-sleep loop.  Registering sync
+        # functions here means trigger_job() / manual API calls execute the
+        # real work directly without touching first_run flags or sleeping.
         JobDefinition(
             job_key="job.ticker_backfill",
             name="ticker_backfill",
             description="Backfill 1-year OHLCV daily history for all NSE stocks (watchlist-first)",
             category="data_warehouse",
             cron_expression="@startup",
-            callable=ticker_backfill_worker,
+            callable=_ticker_backfill_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -70,7 +75,7 @@ def register_all_jobs() -> None:
             description="Sync stock metadata from NSE",
             category="data_sync",
             cron_expression="0 0 * * *",
-            callable=stock_universe_worker,
+            callable=_stock_universe_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -79,7 +84,7 @@ def register_all_jobs() -> None:
             description="Compute and store technical indicators for all symbols",
             category="data_warehouse",
             cron_expression="0 11 * * 1-5",
-            callable=ticker_indicators_worker,
+            callable=_ticker_indicators_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -88,7 +93,7 @@ def register_all_jobs() -> None:
             description="Compute and cache returns + momentum for all symbols (once per day)",
             category="data_warehouse",
             cron_expression="0 0 * * *",
-            callable=ticker_scores_worker,
+            callable=_ticker_scores_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -97,7 +102,7 @@ def register_all_jobs() -> None:
             description="Post-close bhavcopy download + nightly catch-up for all NSE stocks",
             category="data_warehouse",
             cron_expression="30 10,14 * * 1-5",
-            callable=ticker_daily_update_worker,
+            callable=_ticker_daily_update_sync,
             is_async=False,
         ),
         # --- Live market data ---
@@ -107,7 +112,7 @@ def register_all_jobs() -> None:
             description="Fetch sector/industry data from MoneyControl",
             category="data_sync",
             cron_expression="*/5 * * * *",
-            callable=market_data_worker,
+            callable=_market_data_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -116,7 +121,7 @@ def register_all_jobs() -> None:
             description="Scan all NSE stocks for technical & market alerts",
             category="notifications",
             cron_expression="*/30 * * * *",
-            callable=global_scan_worker,
+            callable=_global_scan_cycle,
             is_async=False,
         ),
         # --- Notifications ---
@@ -126,7 +131,7 @@ def register_all_jobs() -> None:
             description="Generate watchlist stock alerts",
             category="notifications",
             cron_expression="*/5 * * * *",
-            callable=watchlist_notification_worker,
+            callable=_notification_cycle_full,
             is_async=False,
         ),
         # --- News ---
@@ -136,7 +141,7 @@ def register_all_jobs() -> None:
             description="Crawl global news from MoneyControl",
             category="data_sync",
             cron_expression="*/5 * * * *",
-            callable=news_worker,
+            callable=_news_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -145,7 +150,7 @@ def register_all_jobs() -> None:
             description="Fetch news for watchlist symbols",
             category="notifications",
             cron_expression="*/5 * * * *",
-            callable=watchlist_news_worker,
+            callable=_watchlist_news_sync,
             is_async=False,
         ),
         # --- Fair value (async) ---
@@ -173,7 +178,7 @@ def register_all_jobs() -> None:
             description="Sync upcoming board meeting results alerts from NSE event calendar",
             category="notifications",
             cron_expression="0 8,14 * * 1-5",
-            callable=results_calendar_worker,
+            callable=_results_calendar_sync,
             is_async=False,
         ),
     ]
