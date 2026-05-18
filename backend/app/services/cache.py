@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import sqlite3
+import tempfile
 import threading
 import time
 from typing import Any
@@ -70,7 +71,7 @@ class SQLiteCache:
         max_size: int = 1000,
         default_ttl: float = 600.0,
     ) -> None:
-        self._db_path = db_path or "/tmp/blm_shared_cache.db"
+        self._db_path = db_path or os.path.join(tempfile.gettempdir(), "blm_shared_cache.db")
         self._max_size = max_size
         self._default_ttl = default_ttl
 
@@ -213,7 +214,7 @@ def get_shared_cache() -> SQLiteCache:
     if _shared_cache is None:
         with _shared_cache_lock:
             if _shared_cache is None:
-                cache_db_path = os.getenv("SHARED_CACHE_DB", "/tmp/blm_shared_cache.db")
+                cache_db_path = os.getenv("SHARED_CACHE_DB", os.path.join(tempfile.gettempdir(), "blm_shared_cache.db"))
                 _shared_cache = SQLiteCache(cache_db_path)
                 logger.info("SQLite shared cache initialized at %s", cache_db_path)
     return _shared_cache
