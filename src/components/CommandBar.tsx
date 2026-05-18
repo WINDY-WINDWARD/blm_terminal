@@ -27,6 +27,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'NOTIF', desc: 'Notifications generated' },
   { cmd: 'ANNC', desc: 'NSE announcements feed' },
   { cmd: 'SCAN', desc: 'Global market scanner' },
+  { cmd: 'DOCS', desc: 'Panel documentation' },
 ];
 
 export function CommandBar() {
