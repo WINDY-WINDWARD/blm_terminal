@@ -290,9 +290,9 @@ Invoke-Step "Installing Python dependencies (pip install -e .)" {
     & $VenvPip install -e $BackendDir
 }
 
-Invoke-Step "Running database migrations (alembic upgrade head)" {
+Invoke-Step "Running database migrations (alembic upgrade heads)" {
     Set-Location $BackendDir
-    & $VenvAlembic upgrade head
+    & $VenvAlembic upgrade heads
 }
 
 Write-Step "Setting up backend environment file"
