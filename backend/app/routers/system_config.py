@@ -34,23 +34,30 @@ class SystemConfigUpdate(BaseModel):
 
 
 @router.get("/system-config")
-async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, float]:
-    """Return editable notification thresholds with defaults for missing rows."""
-    stmt = select(SystemConfig.key, SystemConfig.value).where(SystemConfig.key.like("notif.%"))
+async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Return editable notification thresholds and read-only app metadata."""
+    stmt = select(SystemConfig.key, SystemConfig.value).where(
+        (SystemConfig.key.like("notif.%")) | (SystemConfig.key == "app.version")
+    )
     result = await db.execute(stmt)
     rows = result.fetchall()
 
-    values: dict[str, float] = {}
+    values: dict[str, Any] = {}
+
+    # Notification thresholds (editable, numeric)
     for key, default in DEFAULT_NOTIF_CONFIG.items():
         raw = next((row[1] for row in rows if row[0] == key), None)
         if raw is None:
             values[key] = default
             continue
-
         try:
             values[key] = float(raw)
         except (TypeError, ValueError):
             values[key] = default
+
+    # App version (read-only, string)
+    version_row = next((row[1] for row in rows if row[0] == "app.version"), None)
+    values["app.version"] = version_row if version_row is not None else "1.0.0"
 
     return values
 

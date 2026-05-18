@@ -160,6 +160,7 @@ export function SettingsWidget() {
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
   const [, setPanelSizes] = useAtom(panelSizesAtom);
   const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
+  const [appVersion, setAppVersion] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
   const [configLoading, setConfigLoading] = useState(true);
@@ -230,7 +231,7 @@ export function SettingsWidget() {
   useEffect(() => {
     fetch('/api/py/system-config')
       .then((res) => res.json())
-      .then((data: Partial<Record<NotifConfigKey, number>>) => {
+      .then((data: Partial<Record<NotifConfigKey, number>> & { 'app.version'?: string }) => {
         setNotifConfig((current) => ({
           ...current,
           ...Object.fromEntries(
@@ -240,6 +241,9 @@ export function SettingsWidget() {
             ]),
           ),
         }));
+        if (data['app.version']) {
+          setAppVersion(data['app.version']);
+        }
       })
       .catch(console.error)
       .finally(() => setConfigLoading(false));
@@ -500,6 +504,11 @@ export function SettingsWidget() {
         <div className="text-white text-[10px]">
           F1 = BUY · F2 = SELL (in ORDER widget)
         </div>
+        {appVersion && (
+          <div className="text-white/40 text-[10px] mt-1">
+            v{appVersion}
+          </div>
+        )}
       </div>
     </div>
   );
