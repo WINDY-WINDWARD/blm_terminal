@@ -492,10 +492,16 @@ export function NotifWidget() {
 
   const activeSubFilters = subFilters[activeTab] ?? [];
 
-  const todayStr = useMemo(
-    () => new Date().toISOString().slice(0, 10),
-    [],
-  );
+  const todayStr = useMemo(() => {
+    // triggered_date is stored as an IST (UTC+5:30) date string.
+    // Using toISOString() would give the UTC date, which is up to 5.5 hours
+    // behind IST — during IST evening/night, today's notifications would be
+    // invisible under the "Today" filter. Compute the date in IST instead.
+    const now = new Date();
+    const istOffset = 5.5 * 60; // IST is UTC+5:30
+    const istMs = now.getTime() + (istOffset - now.getTimezoneOffset()) * 60_000;
+    return new Date(istMs).toISOString().slice(0, 10);
+  }, []);
 
   const dateOptions = useMemo(() => {
     const dates = new Set((data ?? []).map((n) => n.triggered_date));

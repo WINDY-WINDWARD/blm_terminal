@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAtom } from 'jotai';
 import { focusedPanelAtom, notifPanelHighlightAtom } from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
@@ -28,24 +28,17 @@ interface PanelProps {
 export function Panel({ id, title }: PanelProps) {
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
   const [notifHighlight] = useAtom(notifPanelHighlightAtom);
-  const headerRef = useRef<HTMLDivElement>(null);
   const isFocused = focusedPanel === id;
+  const [isFlashing, setIsFlashing] = useState(false);
 
   useEffect(() => {
-    if (title === 'NOTIF' && notifHighlight > 0 && headerRef.current) {
-      const el = headerRef.current;
-      el.style.backgroundColor = 'rgba(255, 185, 0, 0.4)';
-      el.style.color = 'white';
-      const timer = setTimeout(() => {
-        el.style.backgroundColor = '';
-        el.style.color = '';
-      }, 2000);
-      return () => {
-        clearTimeout(timer);
-        el.style.backgroundColor = '';
-        el.style.color = '';
-      };
-    }
+    if (title !== 'NOTIF' || notifHighlight === 0) return;
+    setIsFlashing(true);
+    const timer = setTimeout(() => setIsFlashing(false), 2000);
+    return () => {
+      clearTimeout(timer);
+      setIsFlashing(false);
+    };
   }, [notifHighlight, title]);
 
   const renderWidget = () => {
@@ -82,9 +75,12 @@ export function Panel({ id, title }: PanelProps) {
       onClick={() => setFocusedPanel(id)}
     >
       <div
-        ref={headerRef}
-        className={`h-6 px-2 flex items-center font-bold text-xs uppercase ${
-          isFocused ? 'bg-blue-900 text-white' : 'bg-terminal-gray text-terminal-amber'
+        className={`h-6 px-2 flex items-center font-bold text-xs uppercase transition-colors duration-200 ${
+          isFlashing
+            ? 'bg-yellow-500/40 text-white'
+            : isFocused
+              ? 'bg-blue-900 text-white'
+              : 'bg-terminal-gray text-terminal-amber'
         }`}
       >
         <span className="truncate">{title}</span>

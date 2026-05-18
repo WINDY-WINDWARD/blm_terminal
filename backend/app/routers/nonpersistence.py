@@ -312,20 +312,40 @@ async def largedeal_snapshot(db: AsyncSession = Depends(get_db)) -> JSONResponse
         return tv_cr >= abs_cr
 
     # 9. Filter each deal list and annotate with trade_value_cr
-    filtered: dict = {"as_on_date": raw.get("as_on_date")}
+    filtered: dict = {
+        "as_on_date": raw.get("as_on_date"),
+        "_filter": {
+            "significance_pct": sig_pct,
+            "significance_abs_cr": abs_cr,
+            "description": (
+                f"Only deals where trade_value >= {sig_pct*100:.2f}% of market cap "
+                f"OR trade_value >= Rs {abs_cr:.1f} Cr are included"
+            ),
+        },
+    }
+    total_counts: dict[str, int] = {}
+    kept_counts: dict[str, int] = {}
     for list_key, is_short in [
         ("BULK_DEALS_DATA", False),
         ("BLOCK_DEALS_DATA", False),
         ("SHORT_DEALS_DATA", True),
     ]:
+        raw_list = raw.get(list_key, [])
+        total_counts[list_key] = len(raw_list)
         kept: list[dict] = []
-        for item in raw.get(list_key, []):
+        for item in raw_list:
             tv_cr = _trade_value_cr(item, is_short)
             if _significant(item, tv_cr):
                 enriched = dict(item)
                 enriched["trade_value_cr"] = round(tv_cr, 2)
                 kept.append(enriched)
+        kept_counts[list_key] = len(kept)
         filtered[list_key] = kept
+
+    filtered["_filter"]["counts"] = {
+        k: {"total": total_counts[k], "kept": kept_counts[k]}
+        for k in total_counts
+    }
 
     return _cache_response(_clean_nan(filtered), filter_cache_key, 600.0)
 

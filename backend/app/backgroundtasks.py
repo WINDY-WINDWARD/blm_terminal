@@ -1995,6 +1995,7 @@ def _fetch_short_deal_close_prices(
     Returns: {symbol: {date_str: close_price}} where date_str is the original
     NSE format "12-Mar-2026".
     """
+    from sqlalchemy import tuple_ as sa_tuple
     from app.models.ticker import TickerDaily
 
     pairs: list[tuple[str, date]] = []
@@ -2012,16 +2013,17 @@ def _fetch_short_deal_close_prices(
 
     try:
         result: dict[str, dict[str, float]] = {}
+        unique_pairs = list({(sym, d) for sym, d in pairs})
         with _SyncSessionLocal() as db:
-            for symbol, d in pairs:
-                close = db.execute(
-                    select(TickerDaily.close)
-                    .where(TickerDaily.symbol == symbol, TickerDaily.date == d)
-                    .limit(1)
-                ).scalar_one_or_none()
-                if close is not None:
-                    date_str = d.strftime("%d-%b-%Y")
-                    result.setdefault(symbol, {})[date_str] = float(close)
+            rows = db.execute(
+                select(TickerDaily.symbol, TickerDaily.date, TickerDaily.close).where(
+                    sa_tuple(TickerDaily.symbol, TickerDaily.date).in_(unique_pairs)
+                )
+            ).all()
+        for symbol, d, close in rows:
+            if close is not None:
+                date_str = d.strftime("%d-%b-%Y")
+                result.setdefault(symbol, {})[date_str] = float(close)
         return result
     except Exception:
         logger.warning("_fetch_short_deal_close_prices: DB query failed")

@@ -58,17 +58,27 @@ export function NotifAlertModal() {
     if (!data || data.length === 0) return;
 
     const currentIds = data.map((n) => n.id);
-    const seenSet = new Set(seenIds);
-    const newIds = currentIds.filter((id) => !seenSet.has(id));
 
-    if (newIds.length === 0) return;
-
+    // Compute newIds and update seenIds atomically inside the updater so we
+    // never read `seenIds` directly in this effect. This avoids adding seenIds
+    // to the dependency array, which would cause a double-execution on every
+    // poll cycle and could suppress the first real alert after a page reload
+    // (if seenIds was already populated from localStorage and the first data
+    // batch happened to contain only known IDs, initialLoadRef would never
+    // flip and the next real new notification would be silently skipped).
+    let newIds: number[] = [];
     setSeenIds((prev) => {
+      const seenSet = new Set(prev);
+      newIds = currentIds.filter((id) => !seenSet.has(id));
+      if (newIds.length === 0) return prev;
       const updated = [...prev, ...newIds];
       return updated.length > MAX_SEEN_IDS
         ? updated.slice(updated.length - MAX_SEEN_IDS)
         : updated;
     });
+
+    // newIds is populated synchronously by the updater above before this line.
+    if (newIds.length === 0) return;
 
     if (initialLoadRef.current) {
       initialLoadRef.current = false;
@@ -81,7 +91,7 @@ export function NotifAlertModal() {
     setAlertCount(newIds.length);
     setVisible(true);
     progressRef.current = 100;
-  }, [data, seenIds, setSeenIds, setAlertCount, setVisible]);
+  }, [data, setSeenIds, setAlertCount, setVisible]);
 
   useEffect(() => {
     if (!visible) return;
