@@ -256,6 +256,69 @@ _worker_threads: list[threading.Thread] = []
 
 
 # ---------------------------------------------------------------------------
+# Startup sequencing events
+# Set by each worker after its first-run sync completes (or is skipped).
+# Downstream workers poll these before starting their own first-run work.
+# ---------------------------------------------------------------------------
+_startup_stock_universe_done   = threading.Event()
+_startup_ticker_backfill_done  = threading.Event()
+_startup_ticker_indicators_done = threading.Event()
+_startup_ticker_scores_done    = threading.Event()
+
+
+# ---------------------------------------------------------------------------
+# Cron-cycle pipeline coordination
+#
+# _pipeline_lock   — mutual exclusion between pipeline *producers*
+#                    (ticker_daily_update, ticker_indicators, ticker_scores).
+#                    Only one producer runs its pipeline at a time.
+#
+# _pipeline_idle   — event that is SET when no pipeline is active.
+#                    Pipeline consumers (global_scan, watchlist_notification)
+#                    wait on this before each cycle so they never run on
+#                    stale data while a refresh is in progress.
+# ---------------------------------------------------------------------------
+_pipeline_lock = threading.Lock()
+_pipeline_idle = threading.Event()
+_pipeline_idle.set()   # initially idle
+
+
+def _wait_for_startup_event(event: threading.Event, name: str, job_key: str) -> bool:
+    """Block until *event* is set, polling every 5 s with a status update.
+
+    Returns True if shutdown was requested before the event fired (caller
+    should return immediately), False if the event is now set.
+    """
+    while not event.is_set():
+        if _shutdown_event.is_set():
+            return True
+        update_job_status_sync(
+            job_key, "waiting", progress=0,
+            message=f"Waiting for {name} to complete...",
+        )
+        _shutdown_event.wait(timeout=5)
+    return False
+
+
+def _wait_for_pipeline(job_key: str, job_name: str) -> bool:
+    """Block until the data pipeline is idle (no producer is running).
+
+    Returns True if shutdown was requested, False when pipeline is idle.
+    """
+    while not _pipeline_idle.is_set():
+        if _shutdown_event.is_set():
+            return True
+        update_job_status_sync(
+            job_key, "waiting", progress=0,
+            message="Waiting for data pipeline to complete...",
+        )
+        # Wait on _shutdown_event (not _pipeline_idle) so a shutdown signal
+        # wakes this loop immediately rather than blocking the full 5 s timeout.
+        _shutdown_event.wait(timeout=5)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Async task shutdown event — for asyncio tasks
 # ---------------------------------------------------------------------------
 _async_shutdown_event: asyncio.Event | None = None
@@ -534,6 +597,10 @@ def stock_universe_worker() -> None:
         logger.info("stock_universe_worker: first_run=False, skipping startup execution")
         update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for cron schedule")
 
+    # Unblock all workers that depend on stock universe data
+    _startup_stock_universe_done.set()
+    logger.info("stock_universe_worker: startup gate released (_startup_stock_universe_done)")
+
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("0 0 * * *")
         logger.info("stock_universe_worker: sleeping %.0fs until next cron (0 0 * * *)", wait_secs)
@@ -606,10 +673,19 @@ def ticker_backfill_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("ticker_backfill"):
+        # Wait for stock universe to be populated before backfilling
+        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.ticker_backfill"):
+            update_job_status_sync("job.ticker_backfill", "idle", progress=0, message="Stopped")
+            logger.info("ticker_backfill_worker: stopped")
+            return
         _ticker_backfill_sync()
         _set_first_run_complete("ticker_backfill")
     else:
         logger.info("ticker_backfill_worker: first_run=False, skipping backfill")
+
+    # Unblock workers that depend on candle history
+    _startup_ticker_backfill_done.set()
+    logger.info("ticker_backfill_worker: startup gate released (_startup_ticker_backfill_done)")
 
     update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete — run-once job")
     logger.info("ticker_backfill_worker: backfill complete, idling until shutdown")
@@ -709,8 +785,25 @@ def ticker_daily_update_worker() -> None:
 
     # Check first_run for startup execution (will also check market hours inside sync)
     if _is_first_run("ticker_daily_update"):
-        update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
-        _ticker_daily_update_sync()
+        # Wait for candle backfill before attempting daily update
+        if _wait_for_startup_event(_startup_ticker_backfill_done, "ticker_backfill", "job.ticker_daily_update"):
+            update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
+            logger.info("ticker_daily_update_worker: stopped")
+            return
+        # Acquire pipeline lock for startup first-run: daily_update runs the
+        # full inline pipeline (candles → indicators → scores), so scan/notif
+        # workers that became unblocked by _startup_ticker_scores_done must
+        # still wait if the startup daily update fires concurrently.
+        # NOTE: No _startup_ticker_daily_update_done event is published here
+        # because no worker depends on it — the downstream gate is
+        # _startup_ticker_scores_done, set by ticker_scores_worker.
+        with _pipeline_lock:
+            _pipeline_idle.clear()
+            try:
+                update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
+                _ticker_daily_update_sync()
+            finally:
+                _pipeline_idle.set()
         _set_first_run_complete("ticker_daily_update")
     else:
         logger.info("ticker_daily_update_worker: first_run=False, skipping startup execution")
@@ -727,8 +820,15 @@ def ticker_daily_update_worker() -> None:
                 update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Disabled")
                 _sleep_interruptible(60)
                 continue
-            update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Running daily update...")
-            _ticker_daily_update_sync()
+            # Acquire pipeline lock: daily_update runs the full pipeline
+            # (candles → indicators → scores) so scan/notif workers wait
+            with _pipeline_lock:
+                _pipeline_idle.clear()
+                try:
+                    update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Running daily update...")
+                    _ticker_daily_update_sync()
+                finally:
+                    _pipeline_idle.set()
 
     update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
     logger.info("ticker_daily_update_worker: stopped")
@@ -1023,12 +1123,21 @@ def ticker_scores_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("ticker_scores"):
+        # Wait for indicators to be computed before scoring
+        if _wait_for_startup_event(_startup_ticker_indicators_done, "ticker_indicators", "job.ticker_scores"):
+            update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
+            logger.info("ticker_scores_worker: stopped")
+            return
         update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
         _ticker_scores_sync()
         _set_first_run_complete("ticker_scores")
     else:
         logger.info("ticker_scores_worker: first_run=False, skipping startup computation")
         update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for cron schedule")
+
+    # Unblock scan/notification workers that depend on scores
+    _startup_ticker_scores_done.set()
+    logger.info("ticker_scores_worker: startup gate released (_startup_ticker_scores_done)")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("0 0 * * *")
@@ -1041,8 +1150,14 @@ def ticker_scores_worker() -> None:
                 update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Disabled")
                 _sleep_interruptible(60)
                 continue
-            update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
-            _ticker_scores_sync()
+            # Acquire pipeline lock so scan/notif workers wait during score recomputation
+            with _pipeline_lock:
+                _pipeline_idle.clear()
+                try:
+                    update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
+                    _ticker_scores_sync()
+                finally:
+                    _pipeline_idle.set()
 
     update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
     logger.info("ticker_scores_worker: stopped")
@@ -1062,12 +1177,21 @@ def ticker_indicators_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("ticker_indicators"):
+        # Wait for candle backfill to complete before computing indicators
+        if _wait_for_startup_event(_startup_ticker_backfill_done, "ticker_backfill", "job.ticker_indicators"):
+            update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
+            logger.info("ticker_indicators_worker: stopped")
+            return
         update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting initial computation...")
         _ticker_indicators_sync()
         _set_first_run_complete("ticker_indicators")
     else:
         logger.info("ticker_indicators_worker: first_run=False, skipping startup computation")
         update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for cron schedule")
+
+    # Unblock workers that depend on indicators
+    _startup_ticker_indicators_done.set()
+    logger.info("ticker_indicators_worker: startup gate released (_startup_ticker_indicators_done)")
 
     while not _shutdown_event.is_set():
         wait_secs = _seconds_until_next_cron("0 11 * * 1-5")
@@ -1080,8 +1204,14 @@ def ticker_indicators_worker() -> None:
                 update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Disabled")
                 _sleep_interruptible(60)
                 continue
-            update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Computing indicators...")
-            _ticker_indicators_sync()
+            # Acquire pipeline lock so scan/notif workers wait during recomputation
+            with _pipeline_lock:
+                _pipeline_idle.clear()
+                try:
+                    update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Computing indicators...")
+                    _ticker_indicators_sync()
+                finally:
+                    _pipeline_idle.set()
 
     update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
     logger.info("ticker_indicators_worker: stopped")
@@ -1158,6 +1288,11 @@ def news_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("news"):
+        # Wait for stock universe before crawling news (universe provides symbol context)
+        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.news"):
+            update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
+            logger.info("news_worker: stopped")
+            return
         update_job_status_sync("job.news", "running", progress=10, message="Starting initial news crawl...")
         _news_sync()
         _set_first_run_complete("news")
@@ -1278,6 +1413,11 @@ def watchlist_news_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("watchlist_news"):
+        # Wait for stock universe to be populated before fetching per-symbol news
+        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.watchlist_news"):
+            update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
+            logger.info("watchlist_news_worker: stopped")
+            return
         update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting initial fetch...")
         _watchlist_news_sync()
         _set_first_run_complete("watchlist_news")
@@ -1401,6 +1541,11 @@ def market_data_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("market_data"):
+        # Wait for stock universe before fetching market data
+        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.market_data"):
+            update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
+            logger.info("market_data_worker: stopped")
+            return
         update_job_status_sync("job.market_data", "running", progress=0, message="Starting initial sync...")
         _market_data_sync()
         _set_first_run_complete("market_data")
@@ -1588,8 +1733,11 @@ def results_calendar_worker() -> None:
         logger.info("results_calendar_worker: stopped")
         return
 
-    # Small startup delay so the main app event loop is stable
-    _sleep_interruptible(15)
+    # Wait for stock universe to be ready (replaces the old fixed 15s delay)
+    if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.results_calendar"):
+        update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
+        logger.info("results_calendar_worker: stopped")
+        return
 
     # Check first_run for startup execution
     if _is_first_run("results_calendar"):
@@ -1626,18 +1774,29 @@ def results_calendar_worker() -> None:
 async def start_all_workers() -> list[threading.Thread]:
     """Register jobs and spawn all background worker threads.
 
-    Order matters — later workers depend on data produced by earlier ones:
-      1. ticker_backfill_worker    — ensures candle history exists (run-once)
-      2. stock_universe_worker     — populates symbol metadata
-      3. ticker_indicators_worker  — backfills indicators after candles exist
-      4. ticker_scores_worker      — needs indicators up to date
-      5. ticker_daily_update_worker — ongoing daily candle + score refresh
-      6. market_data_worker        — live sector/industry data (market-hours)
-      7. global_scan_worker        — needs ticker_scores populated
-      8. watchlist_notification_worker — needs market data + indicators
-      9. news_worker               — independent; crawls global news
-      10. watchlist_news_worker     — independent; per-symbol news
-      11. results_calendar_worker  — upcoming board meeting results alerts
+    Startup ordering is strictly enforced via threading.Event gates:
+
+      1. stock_universe_worker      — runs first; sets _startup_stock_universe_done
+                                      All other workers wait on this before their first-run.
+      2. ticker_backfill_worker     — waits stock_universe_done; sets _startup_ticker_backfill_done
+      3. ticker_indicators_worker   — waits ticker_backfill_done; sets _startup_ticker_indicators_done
+      4. ticker_scores_worker       — waits ticker_indicators_done; sets _startup_ticker_scores_done
+      5. ticker_daily_update_worker — waits ticker_backfill_done (runs its own inline pipeline)
+      6. global_scan_worker         — waits ticker_scores_done; polls _pipeline_idle on every cycle
+      7. watchlist_notification_worker — waits ticker_scores_done; polls _pipeline_idle on every cycle
+      8. news_worker                — waits stock_universe_done; then runs independently
+      9. watchlist_news_worker      — waits stock_universe_done; then runs independently
+      10. market_data_worker        — waits stock_universe_done; then runs independently
+      11. results_calendar_worker   — waits stock_universe_done; then runs independently
+
+    Cron-cycle ordering is enforced via _pipeline_lock + _pipeline_idle:
+      ticker_daily_update / ticker_indicators / ticker_scores each acquire
+      _pipeline_lock and clear _pipeline_idle while running. global_scan and
+      watchlist_notification call _wait_for_pipeline() before each cycle, so
+      they will not start a new cycle while a pipeline run is known to be in
+      progress. Note: there is an inherent narrow race where a consumer passes
+      the idle check and a producer then starts — this is accepted because scan
+      workers are DB-read-only and the window is sub-millisecond.
     """
     reset_async_shutdown_event()
     register_all_jobs()
@@ -2587,14 +2746,21 @@ def watchlist_notification_worker() -> None:
         logger.info("watchlist_notification_worker: stopped")
         return
 
-    update_job_status_sync("job.notifications", "running", progress=0, message="Starting...")
-    _sleep_interruptible(30)  # wait for app startup before first cycle
+    # Wait for ticker scores to be ready before first notification cycle
+    update_job_status_sync("job.notifications", "waiting", progress=0, message="Waiting for startup pipeline...")
+    if _wait_for_startup_event(_startup_ticker_scores_done, "ticker_scores", "job.notifications"):
+        update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
+        logger.info("watchlist_notification_worker: stopped")
+        return
 
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.notifications"):
             update_job_status_sync("job.notifications", "waiting", progress=0, message="Disabled")
             _sleep_interruptible(60)
             continue
+        # Wait for any active data pipeline (daily_update/indicators/scores) to finish
+        if _wait_for_pipeline("job.notifications", "watchlist_notification"):
+            break
         if _is_market_open():
             update_job_status_sync("job.notifications", "running", progress=50, message="Checking market events...")
             _notification_cycle_full()
@@ -2916,14 +3082,21 @@ def global_scan_worker() -> None:
         logger.info("global_scan_worker: stopped")
         return
 
-    update_job_status_sync("job.global_scan", "running", progress=0, message="Starting...")
-    _sleep_interruptible(60)  # allow other workers to initialise before first scan
+    # Wait for ticker scores to be ready before first scan
+    update_job_status_sync("job.global_scan", "waiting", progress=0, message="Waiting for startup pipeline...")
+    if _wait_for_startup_event(_startup_ticker_scores_done, "ticker_scores", "job.global_scan"):
+        update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
+        logger.info("global_scan_worker: stopped")
+        return
 
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.global_scan"):
             update_job_status_sync("job.global_scan", "waiting", progress=0, message="Disabled")
             _sleep_interruptible(60)
             continue
+        # Wait for any active data pipeline (daily_update/indicators/scores) to finish
+        if _wait_for_pipeline("job.global_scan", "global_scan"):
+            break
         update_job_status_sync("job.global_scan", "running", progress=50, message="Scanning all NSE stocks...")
         _global_scan_cycle()
         wait = _seconds_until_next_cron("*/30 * * * *")
