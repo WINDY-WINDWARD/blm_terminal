@@ -281,64 +281,68 @@ def set_async_shutdown_event() -> None:
 
 
 # ---------------------------------------------------------------------------
-# First run detection — controls whether jobs run at startup
+# First run detection — per-worker flags in SystemConfig
 # ---------------------------------------------------------------------------
-_first_run_completed = False
+# Each worker owns its own key: "first_run.<worker_name>"
+# Workers never share a flag, so a fast-starting worker cannot steal the
+# first-run opportunity from a slower one.
+# ---------------------------------------------------------------------------
+_first_run_completed_cache: dict[str, bool] = {}
+_first_run_lock = threading.Lock()
 
 
-def _is_first_run() -> bool:
-    """Check if this is the first run (from SystemConfig).
+def _is_first_run(worker: str) -> bool:
+    """Return True if this worker has not yet completed its first-run sync.
 
-    Returns True if:
-    - SystemConfig table doesn't have the 'first_run' key yet, OR
-    - The 'first_run' value is 'True'
-
-    After first run, the flag is set to 'False' by _set_first_run_complete().
+    Uses key ``first_run.<worker>`` in SystemConfig.  If the key is absent it
+    is created (value ``"True"``) and True is returned.  Thread-safe: a lock
+    prevents two threads from both seeing the key as absent simultaneously.
     """
-    global _first_run_completed
-    if _first_run_completed:
+    if _first_run_completed_cache.get(worker):
         return False
 
-    try:
-        with _SyncSessionLocal() as db:
-            stmt = select(SystemConfig).where(SystemConfig.key == "first_run")
-            result = db.execute(stmt)
-            config = result.scalar_one_or_none()
-            if config is None:
-                # First run - set it to True by default
-                db.add(SystemConfig(key="first_run", value="True"))
-                db.commit()
-                return True
-            return config.value == "True"
-    except Exception as e:
-        logger.warning(f"Failed to check first_run, defaulting to True: {e}")
-        return True
+    key = f"first_run.{worker}"
+    with _first_run_lock:
+        # Re-check inside lock in case another thread just set it.
+        if _first_run_completed_cache.get(worker):
+            return False
+        try:
+            with _SyncSessionLocal() as db:
+                stmt = select(SystemConfig).where(SystemConfig.key == key)
+                config = db.execute(stmt).scalar_one_or_none()
+                if config is None:
+                    db.add(SystemConfig(key=key, value="True"))
+                    db.commit()
+                    return True
+                return config.value == "True"
+        except Exception as e:
+            logger.warning(f"Failed to check first_run for {worker}, defaulting to True: {e}")
+            return True
 
 
-def _set_first_run_complete() -> None:
-    """Set first_run to False after successful startup sync.
+def _set_first_run_complete(worker: str) -> None:
+    """Mark this worker's first-run as complete.
 
-    This is called by each worker after its first successful sync.
-    Once set to False, workers will only follow cron schedules on subsequent restarts.
+    Sets ``first_run.<worker>`` to ``"False"`` in SystemConfig and caches the
+    result in-process so subsequent calls are free.
     """
-    global _first_run_completed
-    if _first_run_completed:
+    if _first_run_completed_cache.get(worker):
         return
 
+    key = f"first_run.{worker}"
     try:
         with _SyncSessionLocal() as db:
-            stmt = select(SystemConfig).where(SystemConfig.key == "first_run")
-            result = db.execute(stmt)
-            config = result.scalar_one_or_none()
+            stmt = select(SystemConfig).where(SystemConfig.key == key)
+            config = db.execute(stmt).scalar_one_or_none()
             if config:
                 config.value = "False"
             else:
-                db.add(SystemConfig(key="first_run", value="False"))
+                db.add(SystemConfig(key=key, value="False"))
             db.commit()
-            _first_run_completed = True
-            logger.info("first_run flag set to False")
+            _first_run_completed_cache[worker] = True
+            logger.info(f"first_run flag set to False for worker: {worker}")
     except Exception as e:
-        logger.warning(f"Failed to set first_run to False: {e}")
+        logger.warning(f"Failed to set first_run to False for {worker}: {e}")
 
 
 def _sleep_interruptible(seconds: float) -> bool:
@@ -517,10 +521,10 @@ def stock_universe_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("stock_universe"):
         update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting initial sync...")
         _stock_universe_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("stock_universe")
     else:
         logger.info("stock_universe_worker: first_run=False, skipping startup execution")
         update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for cron schedule")
@@ -596,9 +600,9 @@ def ticker_backfill_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("ticker_backfill"):
         _ticker_backfill_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("ticker_backfill")
     else:
         logger.info("ticker_backfill_worker: first_run=False, skipping backfill")
 
@@ -699,10 +703,10 @@ def ticker_daily_update_worker() -> None:
         return
 
     # Check first_run for startup execution (will also check market hours inside sync)
-    if _is_first_run():
+    if _is_first_run("ticker_daily_update"):
         update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
         _ticker_daily_update_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("ticker_daily_update")
     else:
         logger.info("ticker_daily_update_worker: first_run=False, skipping startup execution")
         update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
@@ -1013,10 +1017,10 @@ def ticker_scores_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("ticker_scores"):
         update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
         _ticker_scores_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("ticker_scores")
     else:
         logger.info("ticker_scores_worker: first_run=False, skipping startup computation")
         update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for cron schedule")
@@ -1052,10 +1056,10 @@ def ticker_indicators_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("ticker_indicators"):
         update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting initial computation...")
         _ticker_indicators_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("ticker_indicators")
     else:
         logger.info("ticker_indicators_worker: first_run=False, skipping startup computation")
         update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for cron schedule")
@@ -1148,10 +1152,10 @@ def news_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("news"):
         update_job_status_sync("job.news", "running", progress=10, message="Starting initial news crawl...")
         _news_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("news")
     else:
         logger.info("news_worker: first_run=False, skipping startup crawl")
         update_job_status_sync("job.news", "waiting", progress=0, message="Waiting for cron schedule")
@@ -1268,10 +1272,10 @@ def watchlist_news_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("watchlist_news"):
         update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting initial fetch...")
         _watchlist_news_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("watchlist_news")
     else:
         logger.info("watchlist_news_worker: first_run=False, skipping startup fetch")
         update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Waiting for cron schedule")
@@ -1391,10 +1395,10 @@ def market_data_worker() -> None:
         return
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("market_data"):
         update_job_status_sync("job.market_data", "running", progress=0, message="Starting initial sync...")
         _market_data_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("market_data")
     else:
         logger.info("market_data_worker: first_run=False, skipping startup execution")
         update_job_status_sync("job.market_data", "waiting", progress=0, message="Waiting for cron schedule")
@@ -1583,10 +1587,10 @@ def results_calendar_worker() -> None:
     _sleep_interruptible(15)
 
     # Check first_run for startup execution
-    if _is_first_run():
+    if _is_first_run("results_calendar"):
         update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
         _results_calendar_sync()
-        _set_first_run_complete()
+        _set_first_run_complete("results_calendar")
     else:
         logger.info("results_calendar_worker: first_run=False, skipping startup execution")
         update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Waiting for cron schedule")
