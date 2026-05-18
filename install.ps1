@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Installs all prerequisites, sets up the Node.js frontend and Python FastAPI
-    backend, runs database migrations, and optionally launches both dev servers.
+    backend, runs database migrations, builds the frontend, and optionally launches both servers.
 
     Run from the repository root:
         .\install.ps1
@@ -250,6 +250,11 @@ Invoke-Step "Generating Prisma client (npx prisma generate)" {
     & npx prisma generate
 }
 
+Invoke-Step "Building frontend (npm run build)" {
+    Set-Location $RepoRoot
+    & npm run build
+}
+
 Write-Step "Setting up frontend environment file"
 $FrontendEnvExample = Join-Path $RepoRoot ".env.example"
 $FrontendEnvLocal   = Join-Path $RepoRoot ".env.local"
@@ -358,10 +363,10 @@ Write-Host "  $Sep2" -ForegroundColor DarkGray
 # ---------------------------------------------------------------------------
 # SECTION 5 - Optionally start dev servers
 # ---------------------------------------------------------------------------
-Write-Header "STEP 5 of 5 - Start Development Servers"
+Write-Header "STEP 5 of 5 - Start Servers"
 Write-Host ""
-Write-Host "  Frontend : npm run dev               (http://localhost:3000)" -ForegroundColor White
-Write-Host "  Backend  : uvicorn main:app --reload  (http://localhost:4455)" -ForegroundColor White
+Write-Host "  Frontend : npm start                 (http://localhost:3000)" -ForegroundColor White
+Write-Host "  Backend  : uvicorn main:app --port 4455  (http://localhost:4455)" -ForegroundColor White
 Write-Host ""
 
 $answer = Read-Host "  Start both dev servers now? [y/N]"
@@ -372,14 +377,14 @@ if ($answer -match '^[Yy]$') {
     Write-Host "  Launching servers in separate windows..." -ForegroundColor Cyan
 
     # Frontend window
-    $frontendCmd = "Set-Location '$RepoRoot'; Write-Host 'Starting Next.js dev server...' -ForegroundColor Cyan; npm run dev; Read-Host 'Press Enter to close'"
+    $frontendCmd = "Set-Location '$RepoRoot'; Write-Host 'Starting Next.js server...' -ForegroundColor Cyan; npm start; Read-Host 'Press Enter to close'"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd -WindowStyle Normal
 
     Start-Sleep -Seconds 1
 
     # Backend window
     $backendActivate = Join-Path $VenvDir "Scripts\Activate.ps1"
-    $backendCmd = "Set-Location '$BackendDir'; & '$backendActivate'; Write-Host 'Starting FastAPI backend...' -ForegroundColor Cyan; uvicorn main:app --reload --port 4455; Read-Host 'Press Enter to close'"
+    $backendCmd = "Set-Location '$BackendDir'; & '$backendActivate'; Write-Host 'Starting FastAPI backend...' -ForegroundColor Cyan; uvicorn main:app --port 4455; Read-Host 'Press Enter to close'"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd -WindowStyle Normal
 
     Write-Host ""
@@ -389,8 +394,8 @@ if ($answer -match '^[Yy]$') {
     Write-Host "  Backend  -> http://localhost:4455" -ForegroundColor Green
     Write-Host "  API docs -> http://localhost:4455/docs" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  NOTE: The backend starts faster. The frontend may take 10-30 seconds" -ForegroundColor DarkGray
-    Write-Host "        on first boot while Next.js compiles the app." -ForegroundColor DarkGray
+    Write-Host "  NOTE: The backend starts faster. The frontend may take a few seconds" -ForegroundColor DarkGray
+    Write-Host "        to respond on first request after starting." -ForegroundColor DarkGray
 
 } else {
     Write-Host ""
@@ -398,12 +403,12 @@ if ($answer -match '^[Yy]$') {
     Write-Host ""
     Write-Host "  Terminal 1 - Frontend:" -ForegroundColor Cyan
     Write-Host "    cd $RepoRoot" -ForegroundColor White
-    Write-Host "    npm run dev" -ForegroundColor White
+    Write-Host "    npm start" -ForegroundColor White
     Write-Host ""
     Write-Host "  Terminal 2 - Backend:" -ForegroundColor Cyan
     Write-Host "    cd $BackendDir" -ForegroundColor White
     Write-Host "    .\.venv\Scripts\Activate.ps1" -ForegroundColor White
-    Write-Host "    uvicorn main:app --reload --port 4455" -ForegroundColor White
+    Write-Host "    uvicorn main:app --port 4455" -ForegroundColor White
 }
 
 Write-Host ""
