@@ -28,6 +28,7 @@ const VALID_WIDGETS = [
   'ANNC',
   'SCAN',
   'DOCS',
+  'AI',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {

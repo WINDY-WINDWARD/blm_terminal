@@ -675,6 +675,54 @@ const DOCS_MAP: WidgetDoc[] = [
       },
     ],
   },
+  // ─── AI Chat ─────────────────────────────────────────────────────────────────
+  {
+    command: 'AI',
+    title: 'AI Chat',
+    summary:
+      'Conversational AI assistant with live access to all NSE market data tools. Powered by MiniMax via OpenCode Zen.',
+    sections: [
+      {
+        heading: 'Overview',
+        body: 'Ask questions in plain English about any NSE stock, sector, or market condition. The AI calls live data tools to answer — it does not rely on memorised training data for prices, fundamentals, or news.',
+      },
+      {
+        heading: 'Available data tools',
+        items: [
+          { name: 'Live quotes', desc: 'get_symbol_data — LTP, 52-week range, sector' },
+          { name: 'Fundamentals', desc: 'screener_company — P/E, ROCE, ROE, quarterly results' },
+          { name: 'News', desc: 'get_company_news, get_global_news — MoneyControl articles' },
+          { name: 'Deals', desc: 'get_bulk_deals, get_block_deals, screener_trades — institutional activity' },
+          { name: 'Market movers', desc: 'get_top_gainers, get_top_losers, get_volume_gainers' },
+          { name: 'Breakouts', desc: 'get_52week_high_stocks, get_52week_low_stocks, get_global_notifications' },
+          { name: 'Sectors', desc: 'list_sectors, list_industries, get_sector_stocks, get_industry_stocks' },
+          { name: 'Fair value', desc: 'get_morningstar_fairvalue — Morningstar estimates' },
+          { name: 'Watchlists', desc: 'list_watchlists, get_watchlist_items' },
+          { name: 'Alerts', desc: 'get_notifications, get_global_notifications — unread scan alerts' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Models',
+        items: [
+          { name: 'M2.5 Free', desc: 'Zero cost — for development and testing only. Do not use with sensitive data.' },
+          { name: 'M2.5', desc: 'Best for coding-style data queries and structured output. Fast.' },
+          { name: 'M2.7', desc: 'Highest quality reasoning. Slower and more verbose — use for complex analysis.' },
+          { name: 'M2.1', desc: 'Strong multilingual support. Lower cost than M2.7.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Tips',
+        items: [
+          'The active symbol is injected automatically — ask "what\'s the PE?" without specifying the ticker.',
+          'Press Enter to send, Shift+Enter for a newline.',
+          'Click Stop to cancel a running response.',
+          'Tool call badges appear while the AI is fetching data — green check when done.',
+          'The AI follows an agentic loop: it can call multiple tools across turns to build a complete answer.',
+          'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
+        ],
+      },
+    ],
+  },
 ];
 
 // ─── Lookup helper ────────────────────────────────────────────────────────────

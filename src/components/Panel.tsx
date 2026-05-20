@@ -19,6 +19,7 @@ import { NotifWidget } from './widgets/NotifWidget';
 import { ScanWidget } from './widgets/ScanWidget';
 import { AnnouncementsWidget } from './widgets/AnnouncementsWidget';
 import { DocsWidget } from './widgets/DocsWidget';
+import { AiWidget } from './widgets/AiWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -60,6 +61,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'ANNC':    return <AnnouncementsWidget />;
       case 'SCAN':    return <ScanWidget />;
       case 'DOCS':    return <DocsWidget />;
+      case 'AI':      return <AiWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">

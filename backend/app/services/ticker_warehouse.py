@@ -14,6 +14,8 @@ from datetime import date, datetime, timedelta
 from io import StringIO
 from typing import Generator, Optional
 
+import pytz
+
 import pandas as pd
 import requests
 import nsepython
@@ -35,6 +37,42 @@ TICKER_SERIES_FILTER = "EQ"
 DEFAULT_BACKFILL_DAYS = 365
 MIN_EXPECTED_ROWS = 200  # ~1 year of trading days
 REQUEST_DELAY_SECONDS = 3.0
+
+_IST = pytz.timezone("Asia/Kolkata")
+_MARKET_CLOSE_HOUR = 15
+_MARKET_CLOSE_MINUTE = 30
+
+
+def get_last_trading_day() -> date:
+    """Return the most recent trading day for which end-of-day data should exist.
+
+    Rules:
+    - If today is a weekday AND current IST time is at or after market close
+      (15:30), today counts as the last trading day.
+    - Otherwise return the most recent weekday before today.
+    - Weekends (Sat/Sun) are skipped; public holidays are NOT modelled here
+      (NSE bhavcopy simply won't have data for them and the daily update will
+      skip those dates gracefully).
+    """
+    now_ist = datetime.now(_IST)
+    candidate = now_ist.date()
+
+    # If it's a weekday and market has closed, today is the last trading day
+    if candidate.weekday() < 5:
+        market_close = now_ist.replace(
+            hour=_MARKET_CLOSE_HOUR,
+            minute=_MARKET_CLOSE_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+        if now_ist >= market_close:
+            return candidate
+
+    # Step back to the most recent weekday
+    candidate -= timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def _get_session() -> Generator[Session, None, None]:
@@ -493,6 +531,8 @@ def get_latest_candle(symbol: str) -> Optional[dict]:
 
 def get_warehouse_status() -> dict:
     """Get warehouse statistics."""
+    last_trading_day = get_last_trading_day()
+
     with _get_session() as db:
         total_rows = db.execute(select(func.count(TickerDaily.id))).scalar() or 0
         symbols_covered = db.execute(
@@ -506,23 +546,44 @@ def get_warehouse_status() -> dict:
         latest_date = latest_row.date if latest_row else None
         last_update_time = latest_row.created_at if latest_row else None
 
-        max_date = db.execute(
-            select(func.max(TickerDaily.date))
-        ).scalar()
+        universe_count = db.execute(
+            select(func.count(StockUniverse.symbol))
+        ).scalar() or 0
 
-        today = date.today()
-        backfill_pending = 0
+        # Count symbols whose most recent candle is on the last trading day
+        current_symbols = db.execute(
+            select(func.count())
+            .select_from(
+                select(TickerDaily.symbol)
+                .group_by(TickerDaily.symbol)
+                .having(func.max(TickerDaily.date) >= last_trading_day)
+                .subquery()
+            )
+        ).scalar() or 0
 
-        if max_date:
-            universe_count = db.execute(
-                select(func.count(StockUniverse.symbol))
-            ).scalar() or 0
-            covered_count = db.execute(
-                select(func.count(func.distinct(TickerDaily.symbol)))
-            ).scalar() or 0
+        # Stale = in universe but max date is behind last trading day
+        all_symbol_max = db.execute(
+            select(TickerDaily.symbol, func.max(TickerDaily.date).label("max_date"))
+            .group_by(TickerDaily.symbol)
+        ).fetchall()
 
-            if max_date < today - timedelta(days=1):
-                backfill_pending = max(0, universe_count - covered_count)
+        universe_symbols = set(
+            db.execute(select(StockUniverse.symbol)).scalars().all()
+        )
+
+        stale_count = sum(
+            1 for sym, max_date in all_symbol_max
+            if sym in universe_symbols and (max_date is None or max_date < last_trading_day)
+        )
+        # Also count universe symbols with zero rows
+        symbols_with_any_rows = {sym for sym, _ in all_symbol_max}
+        stale_count += sum(1 for sym in universe_symbols if sym not in symbols_with_any_rows)
+
+        backfill_progress_percent = (
+            round((current_symbols / universe_count) * 100, 1)
+            if universe_count > 0
+            else 0.0
+        )
 
         watchlist_symbols = db.execute(
             select(func.distinct(WatchlistItem.symbol))
@@ -540,12 +601,13 @@ def get_warehouse_status() -> dict:
         return {
             "total_rows": total_rows,
             "symbols_covered": symbols_covered,
+            "symbols_current": current_symbols,
+            "symbols_stale": stale_count,
+            "last_trading_day": last_trading_day,
             "latest_date": latest_date,
             "last_update_time": last_update_time,
-            "backfill_pending": backfill_pending,
-            "backfill_progress_percent": (
-                0.0 if symbols_covered == 0 else 100.0
-            ),
+            "backfill_pending": stale_count,
+            "backfill_progress_percent": backfill_progress_percent,
             "watchlist_symbols_covered": watchlist_covered,
             "watchlist_symbols_total": watchlist_total,
         }
@@ -553,14 +615,19 @@ def get_warehouse_status() -> dict:
 
 def get_symbols_needing_backfill() -> list[str]:
     """
-    Get symbols that need backfilling, prioritized by count threshold.
+    Get symbols that need backfilling, prioritized by watchlist.
 
-    A symbol needs backfill if it has fewer than MIN_EXPECTED_ROWS rows.
+    A symbol needs backfill if:
+      - It has fewer than MIN_EXPECTED_ROWS rows (historical data missing), OR
+      - Its most recent date is older than the last trading day (stale data).
+
     Watchlist symbols are returned first, then the rest of universe.
 
     Returns:
         List of symbols needing backfill.
     """
+    last_trading_day = get_last_trading_day()
+
     with _get_session() as db:
         watchlist_symbols = set(
             db.execute(select(func.distinct(WatchlistItem.symbol))).scalars().all()
@@ -573,21 +640,29 @@ def get_symbols_needing_backfill() -> list[str]:
 
         rows = (
             db.execute(
-                select(TickerDaily.symbol, func.count(TickerDaily.id).label("cnt"))
+                select(
+                    TickerDaily.symbol,
+                    func.count(TickerDaily.id).label("cnt"),
+                    func.max(TickerDaily.date).label("max_date"),
+                )
                 .where(TickerDaily.symbol.in_(universe_symbols))
                 .group_by(TickerDaily.symbol)
             )
             .fetchall()
         )
 
-    counts_by_symbol = {row[0]: row[1] for row in rows}
+    stats_by_symbol = {row[0]: (row[1], row[2]) for row in rows}
 
     priority_symbols = []
     other_symbols = []
 
     for sym in universe_symbols:
-        row_count = counts_by_symbol.get(sym, 0)
-        needs_backfill = row_count < MIN_EXPECTED_ROWS
+        row_count, max_date = stats_by_symbol.get(sym, (0, None))
+        needs_backfill = (
+            row_count < MIN_EXPECTED_ROWS
+            or max_date is None
+            or max_date < last_trading_day
+        )
 
         if not needs_backfill:
             continue

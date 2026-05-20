@@ -28,6 +28,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'ANNC', desc: 'NSE announcements feed' },
   { cmd: 'SCAN', desc: 'Global market scanner' },
   { cmd: 'DOCS', desc: 'Panel documentation' },
+  { cmd: 'AI', desc: 'Live market AI chat' },
 ];
 
 export function CommandBar() {

@@ -659,7 +659,12 @@ def _ticker_backfill_sync() -> None:
 
 
 def ticker_backfill_worker() -> None:
-    """Daemon thread target for ticker backfill. Runs once at startup (if first_run=True), then idles."""
+    """Daemon thread target for ticker backfill.
+
+    Runs on every server startup (after stock universe is ready).
+    get_symbols_needing_backfill() now checks both row count and staleness, so
+    when data is current this completes near-instantly with no symbols to process.
+    """
     logger.info("ticker_backfill_worker: started")
 
     if not _is_job_enabled("job.ticker_backfill"):
@@ -671,23 +676,19 @@ def ticker_backfill_worker() -> None:
         logger.info("ticker_backfill_worker: stopped")
         return
 
-    # Check first_run for startup execution
-    if _is_first_run("ticker_backfill"):
-        # Wait for stock universe to be populated before backfilling
-        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.ticker_backfill"):
-            update_job_status_sync("job.ticker_backfill", "idle", progress=0, message="Stopped")
-            logger.info("ticker_backfill_worker: stopped")
-            return
-        _ticker_backfill_sync()
-        _set_first_run_complete("ticker_backfill")
-    else:
-        logger.info("ticker_backfill_worker: first_run=False, skipping backfill")
+    # Wait for stock universe to be populated before backfilling
+    if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.ticker_backfill"):
+        update_job_status_sync("job.ticker_backfill", "idle", progress=0, message="Stopped")
+        logger.info("ticker_backfill_worker: stopped")
+        return
+
+    _ticker_backfill_sync()
 
     # Unblock workers that depend on candle history
     _startup_ticker_backfill_done.set()
     logger.info("ticker_backfill_worker: startup gate released (_startup_ticker_backfill_done)")
 
-    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete — run-once job")
+    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
     logger.info("ticker_backfill_worker: backfill complete, idling until shutdown")
 
     while not _shutdown_event.is_set():
@@ -701,7 +702,9 @@ def _ticker_daily_update_sync() -> None:
     """Perform the daily ticker update via bhavcopy.
 
     Only runs during post-market hours (after 15:30 IST) on trading days.
-    Checks for existing data before attempting fetches to avoid redundant calls.
+    Loops over the last CATCH_UP_DAYS weekdays (newest first) so that missed
+    days (e.g. server downtime, transient NSE failures) are caught up
+    automatically.  Stops as soon as it finds a date that already has data.
     After candles are inserted, triggers _ticker_indicator_notification_cycle()
     and _ticker_scores_sync() so that indicator-based alerts are evaluated
     on the freshest data.
@@ -709,6 +712,8 @@ def _ticker_daily_update_sync() -> None:
     import pytz
     from sqlalchemy import func
     from app.models.ticker import TickerDaily
+
+    CATCH_UP_DAYS = 5  # look back at most this many weekdays
 
     now_utc = datetime.now(pytz.utc)
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
@@ -738,36 +743,51 @@ def _ticker_daily_update_sync() -> None:
         logger.info(f"ticker_daily_update_sync: market hours ({now_ist.strftime('%H:%M:%S %Z')}), waiting for post-market")
         return
 
-    today = date.today()
-    date_str = today.strftime("%d-%m-%Y")
+    # Build list of up to CATCH_UP_DAYS recent weekdays (newest first)
+    candidates: list[date] = []
+    cursor = date.today()
+    while len(candidates) < CATCH_UP_DAYS:
+        if cursor.weekday() < 5:
+            candidates.append(cursor)
+        cursor -= timedelta(days=1)
 
-    update_job_status_sync("job.ticker_daily_update", "running", progress=10, message="Checking for existing data...")
-    with _SyncSessionLocal() as db:
-        row = db.query(func.count(TickerDaily.symbol)).filter(TickerDaily.date == today).scalar()
-        if row and row > 2000:
-            logger.info(f"ticker_daily_update_sync: data already present ({row} symbols), skipping")
-            return
+    inserted_any = False
+    for target_date in candidates:
+        date_str = target_date.strftime("%d-%m-%Y")
 
-    logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str}")
-    update_job_status_sync("job.ticker_daily_update", "running", progress=30, message=f"Fetching bhavcopy for {date_str}...")
+        # Check if this date already has sufficient data
+        with _SyncSessionLocal() as db:
+            row = db.query(func.count(TickerDaily.symbol)).filter(TickerDaily.date == target_date).scalar()
+            if row and row > 2000:
+                logger.info(f"ticker_daily_update_sync: {date_str} already has {row} rows — stopping catch-up")
+                break  # most recent date with data found; older dates are fine
 
-    try:
-        rows = ticker_warehouse.bulk_update_via_bhavcopy(date_str)
-        if rows > 0:
-            logger.info(f"ticker_daily_update_sync: inserted {rows} rows via bhavcopy")
-            update_job_status_sync(
-                "job.ticker_daily_update",
-                "waiting",
-                progress=100,
-                message=f"Updated {rows} symbols",
-            )
-            _ticker_indicator_notification_cycle()
-            _ticker_scores_sync()
-            return
-    except Exception as e:
-        logger.warning(f"ticker_daily_update_sync: bhavcopy failed: {e}")
+        logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str}")
+        update_job_status_sync(
+            "job.ticker_daily_update", "running", progress=30,
+            message=f"Fetching bhavcopy for {date_str}...",
+        )
 
-    logger.info("ticker_daily_update_sync: bhavcopy failed, likely NSE holiday, skipping fallback")
+        try:
+            rows = ticker_warehouse.bulk_update_via_bhavcopy(date_str)
+            if rows > 0:
+                logger.info(f"ticker_daily_update_sync: inserted {rows} rows for {date_str}")
+                inserted_any = True
+                update_job_status_sync(
+                    "job.ticker_daily_update",
+                    "waiting",
+                    progress=100,
+                    message=f"Updated {rows} symbols for {date_str}",
+                )
+                # Continue loop to catch up any older missing dates too
+            else:
+                logger.info(f"ticker_daily_update_sync: bhavcopy returned 0 rows for {date_str} (likely holiday), skipping")
+        except Exception as e:
+            logger.warning(f"ticker_daily_update_sync: bhavcopy failed for {date_str}: {e}")
+
+    if inserted_any:
+        _ticker_indicator_notification_cycle()
+        _ticker_scores_sync()
 
 
 def ticker_daily_update_worker() -> None:

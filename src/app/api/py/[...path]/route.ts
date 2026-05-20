@@ -28,7 +28,7 @@ function buildUpstreamUrl(params: { path: string[] }, request: NextRequest): str
 async function proxyRequest(
   request: NextRequest,
   params: { path: string[] },
-): Promise<NextResponse> {
+): Promise<Response> {
   const upstreamUrl = buildUpstreamUrl(params, request)
 
   // Forward only safe, non-host headers
@@ -56,6 +56,33 @@ async function proxyRequest(
       body,
     })
 
+    const contentType = upstream.headers.get('content-type') ?? ''
+
+    if (contentType.includes('text/event-stream')) {
+      // Forward SSE body directly, but strip hop-by-hop headers that must
+      // not be forwarded to the end client (transfer-encoding, connection, etc.)
+      const HOP_BY_HOP = new Set([
+        'transfer-encoding',
+        'connection',
+        'keep-alive',
+        'proxy-authenticate',
+        'proxy-authorization',
+        'te',
+        'trailers',
+        'upgrade',
+      ])
+      const sseHeaders = new Headers()
+      upstream.headers.forEach((value, key) => {
+        if (!HOP_BY_HOP.has(key.toLowerCase())) {
+          sseHeaders.set(key, value)
+        }
+      })
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: sseHeaders,
+      })
+    }
+
     const data = await upstream.json()
     return NextResponse.json(data, { status: upstream.status })
   } catch (err: unknown) {
@@ -79,27 +106,27 @@ async function proxyRequest(
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
-): Promise<NextResponse> {
+): Promise<Response> {
   return proxyRequest(request, await params)
 }
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
-): Promise<NextResponse> {
+): Promise<Response> {
   return proxyRequest(request, await params)
 }
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
-): Promise<NextResponse> {
+): Promise<Response> {
   return proxyRequest(request, await params)
 }
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
-): Promise<NextResponse> {
+): Promise<Response> {
   return proxyRequest(request, await params)
 }
