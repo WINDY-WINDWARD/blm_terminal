@@ -380,7 +380,9 @@ async def get_52week_high_stocks() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_volume_gainers() -> dict[str, Any]:
-    """Fetch NSE stocks with the largest volume surge relative to their weekly average."""
+    """Fetch NSE stocks with the largest volume surge relative to their weekly average. This data is more up-to-date than the global scan tool as it is calculated from NSE live data.
+    Use this when looking for volume breakouts or unusual trading activity in the current day, and use the global scan tool for a broader historical view of volume trends.
+    """
     cache_key = "mcp_volume_gainers"
     cached = _cache_get(cache_key)
     if cached is not None:
