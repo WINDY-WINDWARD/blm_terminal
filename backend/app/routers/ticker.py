@@ -116,12 +116,18 @@ async def get_status() -> TickerStatusResponse:
     return TickerStatusResponse(
         total_rows=status_data["total_rows"],
         symbols_covered=status_data["symbols_covered"],
+        symbols_current=status_data["symbols_current"],
+        symbols_stale=status_data["symbols_stale"],
+        universe_count=status_data["universe_count"],
+        last_trading_day=status_data["last_trading_day"],
         latest_date=status_data["latest_date"],
         last_update_time=status_data["last_update_time"],
         backfill_pending=status_data["backfill_pending"],
         backfill_progress_percent=status_data["backfill_progress_percent"],
         watchlist_symbols_covered=status_data["watchlist_symbols_covered"],
         watchlist_symbols_total=status_data["watchlist_symbols_total"],
+        watchlist_symbols_current=status_data["watchlist_symbols_current"],
+        days_behind_breakdown=status_data["days_behind_breakdown"],
     )
 
 

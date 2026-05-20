@@ -592,17 +592,64 @@ def get_warehouse_status() -> dict:
         watchlist_total = len(watchlist_symbols_list)
 
         watchlist_covered = 0
+        watchlist_current = 0
         if watchlist_symbols_list:
             watchlist_covered = db.execute(
                 select(func.count(func.distinct(TickerDaily.symbol)))
                 .where(TickerDaily.symbol.in_(watchlist_symbols_list))
             ).scalar() or 0
+            # Watchlist symbols with data on the last trading day
+            watchlist_current = db.execute(
+                select(func.count())
+                .select_from(
+                    select(TickerDaily.symbol)
+                    .where(TickerDaily.symbol.in_(watchlist_symbols_list))
+                    .group_by(TickerDaily.symbol)
+                    .having(func.max(TickerDaily.date) >= last_trading_day)
+                    .subquery()
+                )
+            ).scalar() or 0
+
+        # --- Days-behind breakdown for universe symbols ---
+        # Build a map of symbol -> most recent date (for universe symbols only)
+        sym_max_date: dict[str, date | None] = {sym: None for sym in universe_symbols}
+        for sym, max_date in all_symbol_max:
+            if sym in universe_symbols:
+                sym_max_date[sym] = max_date
+
+        def _weekdays_behind(d: date | None) -> int:
+            """Return how many weekdays behind `d` is relative to last_trading_day."""
+            if d is None:
+                return 999  # never had data
+            if d >= last_trading_day:
+                return 0
+            # Count weekdays between d (exclusive) and last_trading_day (inclusive)
+            behind = 0
+            cursor = d + timedelta(days=1)
+            while cursor <= last_trading_day:
+                if cursor.weekday() < 5:
+                    behind += 1
+                cursor += timedelta(days=1)
+            return behind
+
+        days_behind_breakdown: dict[str, int] = {"0": 0, "1": 0, "2": 0, "3+": 0}
+        for sym in universe_symbols:
+            behind = _weekdays_behind(sym_max_date.get(sym))
+            if behind == 0:
+                days_behind_breakdown["0"] += 1
+            elif behind == 1:
+                days_behind_breakdown["1"] += 1
+            elif behind == 2:
+                days_behind_breakdown["2"] += 1
+            else:
+                days_behind_breakdown["3+"] += 1
 
         return {
             "total_rows": total_rows,
             "symbols_covered": symbols_covered,
             "symbols_current": current_symbols,
             "symbols_stale": stale_count,
+            "universe_count": universe_count,
             "last_trading_day": last_trading_day,
             "latest_date": latest_date,
             "last_update_time": last_update_time,
@@ -610,6 +657,8 @@ def get_warehouse_status() -> dict:
             "backfill_progress_percent": backfill_progress_percent,
             "watchlist_symbols_covered": watchlist_covered,
             "watchlist_symbols_total": watchlist_total,
+            "watchlist_symbols_current": watchlist_current,
+            "days_behind_breakdown": days_behind_breakdown,
         }
 
 

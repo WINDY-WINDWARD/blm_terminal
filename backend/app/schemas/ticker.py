@@ -57,12 +57,18 @@ class TickerStatusResponse(BaseModel):
 
     total_rows: int
     symbols_covered: int
+    symbols_current: int
+    symbols_stale: int
+    universe_count: int
+    last_trading_day: date | None
     latest_date: date | None
     last_update_time: datetime | None
     backfill_pending: int
     backfill_progress_percent: float
     watchlist_symbols_covered: int
     watchlist_symbols_total: int
+    watchlist_symbols_current: int
+    days_behind_breakdown: dict[str, int]
 
 
 class TriggerResponse(BaseModel):

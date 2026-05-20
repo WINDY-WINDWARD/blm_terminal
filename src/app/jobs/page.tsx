@@ -23,12 +23,18 @@ interface Job {
 interface TickerStatus {
   total_rows: number;
   symbols_covered: number;
+  symbols_current: number;
+  symbols_stale: number;
+  universe_count: number;
+  last_trading_day: string | null;
   latest_date: string | null;
   last_update_time: string | null;
   backfill_pending: number;
   backfill_progress_percent: number;
   watchlist_symbols_covered: number;
   watchlist_symbols_total: number;
+  watchlist_symbols_current: number;
+  days_behind_breakdown: Record<string, number>;
 }
 
 function formatDate(dateStr: string | null): string {
@@ -50,6 +56,7 @@ function formatCron(expr: string | null | undefined): string {
     '0 0 * * *':         'Daily midnight',
     '0 11 * * 1-5':      'Weekdays 11:00',
     '30 10,14 * * 1-5':  'Weekdays 10:30 & 14:30',
+    '*/30 15,16,17,18,19,20 * * 1-5': 'Weekdays every 30min 15:00–20:30',
     '*/5 * * * *':       'Every 5 min',
     '*/30 * * * *':      'Every 30 min',
     '0 */3 * * *':       'Every 3 hours',
@@ -159,10 +166,11 @@ export default function JobsPage() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'stats' && !tickerStatus) {
-      fetchStats();
-    }
-  }, [activeTab, tickerStatus, fetchStats]);
+    if (activeTab !== 'stats') return;
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, [activeTab, fetchStats]);
 
   const handleTriggerBackfill = async () => {
     if (!confirm('Trigger full backfill for all watchlist symbols?')) return;
@@ -347,7 +355,7 @@ export default function JobsPage() {
           )
         ) : (
           <div>
-            {statsLoading ? (
+            {statsLoading && !tickerStatus ? (
               <div className="text-terminal-amber">Loading...</div>
             ) : statsError ? (
               <div className="p-3 bg-terminal-red/10 border border-terminal-red text-terminal-red text-xs">
@@ -355,27 +363,75 @@ export default function JobsPage() {
               </div>
             ) : tickerStatus ? (
               <div className="space-y-4">
-                {/* Stat cards grid */}
+                {/* Row 1: Data freshness status */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="bg-terminal-gray/10 p-3 rounded">
-                    <div className="text-[10px] text-white/60 uppercase tracking-wider">Total Rows</div>
-                    <div className="text-2xl text-terminal-amber font-bold mt-1">
-                      {tickerStatus.total_rows.toLocaleString()}
-                    </div>
-                  </div>
-                  <div className="bg-terminal-gray/10 p-3 rounded">
-                    <div className="text-[10px] text-white/60 uppercase tracking-wider">Symbols Covered</div>
-                    <div className="text-2xl text-terminal-amber font-bold mt-1">
-                      {tickerStatus.symbols_covered.toLocaleString()}
-                    </div>
-                  </div>
-                  <div className="bg-terminal-gray/10 p-3 rounded">
-                    <div className="text-[10px] text-white/60 uppercase tracking-wider">Latest Date</div>
+                  {/* Expected date vs actual */}
+                  <div className={`p-3 rounded border ${
+                    tickerStatus.latest_date === tickerStatus.last_trading_day
+                      ? 'bg-terminal-green/5 border-terminal-green/30'
+                      : 'bg-terminal-red/5 border-terminal-red/30'
+                  }`}>
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider">Expected Date</div>
                     <div className="text-lg text-white font-bold mt-1">
-                      {tickerStatus.latest_date || '—'}
+                      {tickerStatus.last_trading_day || '—'}
+                    </div>
+                    <div className={`text-[10px] mt-0.5 ${
+                      tickerStatus.latest_date === tickerStatus.last_trading_day
+                        ? 'text-terminal-green'
+                        : 'text-terminal-red'
+                    }`}>
+                      {tickerStatus.latest_date === tickerStatus.last_trading_day
+                        ? 'Up to date'
+                        : `Latest: ${tickerStatus.latest_date || 'none'}`}
                     </div>
                   </div>
-                  <div className="bg-terminal-gray/10 p-3 rounded">
+
+                  {/* Current symbols */}
+                  <div className={`p-3 rounded border ${
+                    tickerStatus.symbols_current === tickerStatus.universe_count
+                      ? 'bg-terminal-green/5 border-terminal-green/30'
+                      : tickerStatus.symbols_current > tickerStatus.universe_count * 0.9
+                      ? 'bg-terminal-amber/5 border-terminal-amber/30'
+                      : 'bg-terminal-red/5 border-terminal-red/30'
+                  }`}>
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider">Current Symbols</div>
+                    <div className={`text-2xl font-bold mt-1 ${
+                      tickerStatus.symbols_current === tickerStatus.universe_count
+                        ? 'text-terminal-green'
+                        : tickerStatus.symbols_current > tickerStatus.universe_count * 0.9
+                        ? 'text-terminal-amber'
+                        : 'text-terminal-red'
+                    }`}>
+                      {tickerStatus.symbols_current.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-white/50 mt-0.5">
+                      of {tickerStatus.universe_count.toLocaleString()} universe
+                    </div>
+                  </div>
+
+                  {/* Stale symbols */}
+                  <div className={`p-3 rounded border ${
+                    tickerStatus.symbols_stale === 0
+                      ? 'bg-terminal-green/5 border-terminal-green/30'
+                      : tickerStatus.symbols_stale < 50
+                      ? 'bg-terminal-amber/5 border-terminal-amber/30'
+                      : 'bg-terminal-red/5 border-terminal-red/30'
+                  }`}>
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider">Stale Symbols</div>
+                    <div className={`text-2xl font-bold mt-1 ${
+                      tickerStatus.symbols_stale === 0
+                        ? 'text-terminal-green'
+                        : tickerStatus.symbols_stale < 50
+                        ? 'text-terminal-amber'
+                        : 'text-terminal-red'
+                    }`}>
+                      {tickerStatus.symbols_stale.toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-white/50 mt-0.5">behind last trading day</div>
+                  </div>
+
+                  {/* Last update */}
+                  <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
                     <div className="text-[10px] text-white/60 uppercase tracking-wider">Last Update</div>
                     <div className="text-sm text-white font-bold mt-1">
                       {tickerStatus.last_update_time
@@ -388,18 +444,69 @@ export default function JobsPage() {
                           })
                         : '—'}
                     </div>
+                    <div className="text-[10px] text-white/50 mt-0.5">
+                      {tickerStatus.total_rows.toLocaleString()} total rows
+                    </div>
                   </div>
                 </div>
 
-                {/* Watchlist coverage */}
-                <div className="bg-terminal-gray/10 p-3 rounded">
+                {/* Row 2: Freshness breakdown */}
+                <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
+                  <div className="text-[10px] text-white/60 uppercase tracking-wider mb-3">
+                    Data Freshness Breakdown
+                    <span className="ml-2 text-white/30 normal-case">(universe symbols)</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-3">
+                    {[
+                      { key: '0', label: 'Up to date', color: 'text-terminal-green', bar: 'bg-terminal-green' },
+                      { key: '1', label: '1 day behind', color: 'text-terminal-amber', bar: 'bg-terminal-amber' },
+                      { key: '2', label: '2 days behind', color: 'text-orange-400', bar: 'bg-orange-400' },
+                      { key: '3+', label: '3+ days / no data', color: 'text-terminal-red', bar: 'bg-terminal-red' },
+                    ].map(({ key, label, color, bar }) => {
+                      const count = tickerStatus.days_behind_breakdown[key] ?? 0;
+                      const pct = tickerStatus.universe_count > 0
+                        ? (count / tickerStatus.universe_count) * 100
+                        : 0;
+                      return (
+                        <div key={key} className="text-center">
+                          <div className={`text-2xl font-bold ${color}`}>
+                            {count.toLocaleString()}
+                          </div>
+                          <div className="text-[10px] text-white/50 mt-0.5">{label}</div>
+                          <div className="mt-2 h-1.5 bg-terminal-gray/30 rounded overflow-hidden">
+                            <div className={`h-full ${bar} transition-all`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <div className="text-[10px] text-white/30 mt-0.5">{pct.toFixed(1)}%</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Row 3: Watchlist coverage */}
+                <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
                   <div className="text-[10px] text-white/60 uppercase tracking-wider mb-2">
                     Watchlist Coverage
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 mb-1.5">
                     <div className="flex-1 h-2 bg-terminal-gray rounded overflow-hidden">
                       <div
                         className="h-full bg-terminal-green transition-all"
+                        style={{
+                          width: `${tickerStatus.watchlist_symbols_total > 0
+                            ? (tickerStatus.watchlist_symbols_current / tickerStatus.watchlist_symbols_total) * 100
+                            : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-sm font-bold text-terminal-green w-20 text-right">
+                      {tickerStatus.watchlist_symbols_current}/{tickerStatus.watchlist_symbols_total} current
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-1.5 bg-terminal-gray rounded overflow-hidden">
+                      <div
+                        className="h-full bg-blue-400 transition-all"
                         style={{
                           width: `${tickerStatus.watchlist_symbols_total > 0
                             ? (tickerStatus.watchlist_symbols_covered / tickerStatus.watchlist_symbols_total) * 100
@@ -407,16 +514,30 @@ export default function JobsPage() {
                         }}
                       />
                     </div>
-                    <span className="text-sm font-bold text-terminal-green">
-                      {tickerStatus.watchlist_symbols_covered}/{tickerStatus.watchlist_symbols_total}
+                    <span className="text-xs font-bold text-blue-400 w-20 text-right">
+                      {tickerStatus.watchlist_symbols_covered}/{tickerStatus.watchlist_symbols_total} covered
                     </span>
+                  </div>
+                  <div className="text-[10px] text-white/40 mt-1.5">
+                    &quot;current&quot; = has data for the last trading day &nbsp;|&nbsp; &quot;covered&quot; = has any historical data
                   </div>
                 </div>
 
-                {/* Backfill progress */}
-                <div className="bg-terminal-gray/10 p-3 rounded">
-                  <div className="text-[10px] text-white/60 uppercase tracking-wider mb-2">
-                    Backfill Progress
+                {/* Row 4: Backfill progress */}
+                <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider">
+                      Overall Freshness
+                    </div>
+                    <span className={`text-sm font-bold ${
+                      tickerStatus.backfill_progress_percent === 100
+                        ? 'text-terminal-green'
+                        : tickerStatus.backfill_progress_percent >= 95
+                        ? 'text-terminal-amber'
+                        : 'text-terminal-red'
+                    }`}>
+                      {tickerStatus.backfill_progress_percent.toFixed(1)}%
+                    </span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex-1 h-2 bg-terminal-gray rounded overflow-hidden">
@@ -424,22 +545,17 @@ export default function JobsPage() {
                         className={`h-full transition-all ${
                           tickerStatus.backfill_progress_percent === 100
                             ? 'bg-terminal-green'
-                            : 'bg-terminal-amber'
+                            : tickerStatus.backfill_progress_percent >= 95
+                            ? 'bg-terminal-amber'
+                            : 'bg-terminal-red'
                         }`}
                         style={{ width: `${tickerStatus.backfill_progress_percent}%` }}
                       />
                     </div>
-                    <span className={`text-sm font-bold ${
-                      tickerStatus.backfill_progress_percent === 100
-                        ? 'text-terminal-green'
-                        : 'text-terminal-amber'
-                    }`}>
-                      {tickerStatus.backfill_progress_percent.toFixed(1)}%
-                    </span>
                   </div>
                   {tickerStatus.backfill_pending > 0 && (
                     <div className="text-[10px] text-white/60 mt-2">
-                      {tickerStatus.backfill_pending} symbol{tickerStatus.backfill_pending !== 1 ? 's' : ''} pending backfill
+                      {tickerStatus.backfill_pending} symbol{tickerStatus.backfill_pending !== 1 ? 's' : ''} pending update
                     </div>
                   )}
                 </div>

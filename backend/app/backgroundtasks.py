@@ -101,7 +101,7 @@ def register_all_jobs() -> None:
             name="ticker_daily_update",
             description="Post-close bhavcopy download + nightly catch-up for all NSE stocks",
             category="data_warehouse",
-            cron_expression="30 10,14 * * 1-5",
+            cron_expression="*/30 15,16,17,18,19,20 * * 1-5",
             callable=_ticker_daily_update_sync,
             is_async=False,
         ),
@@ -702,9 +702,14 @@ def _ticker_daily_update_sync() -> None:
     """Perform the daily ticker update via bhavcopy.
 
     Only runs during post-market hours (after 15:30 IST) on trading days.
-    Loops over the last CATCH_UP_DAYS weekdays (newest first) so that missed
-    days (e.g. server downtime, transient NSE failures) are caught up
-    automatically.  Stops as soon as it finds a date that already has data.
+    Loops over the last CATCH_UP_DAYS weekdays (newest first) and fetches
+    bhavcopy for every date that is missing or has insufficient data —
+    regardless of whether a more-recent date already has data (gap-safe).
+
+    After bhavcopy runs, any watchlist symbols that are still stale (e.g.
+    listed under a different bhavcopy name) are patched individually via
+    the equity_history fallback.
+
     After candles are inserted, triggers _ticker_indicator_notification_cycle()
     and _ticker_scores_sync() so that indicator-based alerts are evaluated
     on the freshest data.
@@ -712,8 +717,10 @@ def _ticker_daily_update_sync() -> None:
     import pytz
     from sqlalchemy import func
     from app.models.ticker import TickerDaily
+    from app.models.watchlist import WatchlistItem
 
     CATCH_UP_DAYS = 5  # look back at most this many weekdays
+    BHAVCOPY_MIN_ROWS = 2000  # minimum rows expected from a valid bhavcopy
 
     now_utc = datetime.now(pytz.utc)
     now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
@@ -752,19 +759,22 @@ def _ticker_daily_update_sync() -> None:
         cursor -= timedelta(days=1)
 
     inserted_any = False
-    for target_date in candidates:
+    for i, target_date in enumerate(candidates):
         date_str = target_date.strftime("%d-%m-%Y")
+        progress_pct = int(20 + (i / len(candidates)) * 60)
 
-        # Check if this date already has sufficient data
+        # Check if this date already has sufficient data — if so, skip it
+        # (but do NOT break: older dates may still have gaps)
         with _SyncSessionLocal() as db:
-            row = db.query(func.count(TickerDaily.symbol)).filter(TickerDaily.date == target_date).scalar()
-            if row and row > 2000:
-                logger.info(f"ticker_daily_update_sync: {date_str} already has {row} rows — stopping catch-up")
-                break  # most recent date with data found; older dates are fine
+            row_count = db.query(func.count(TickerDaily.symbol)).filter(TickerDaily.date == target_date).scalar() or 0
 
-        logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str}")
+        if row_count >= BHAVCOPY_MIN_ROWS:
+            logger.info(f"ticker_daily_update_sync: {date_str} already has {row_count} rows — skipping")
+            continue
+
+        logger.info(f"ticker_daily_update_sync: fetching bhavcopy for {date_str} (currently {row_count} rows)")
         update_job_status_sync(
-            "job.ticker_daily_update", "running", progress=30,
+            "job.ticker_daily_update", "running", progress=progress_pct,
             message=f"Fetching bhavcopy for {date_str}...",
         )
 
@@ -774,16 +784,74 @@ def _ticker_daily_update_sync() -> None:
                 logger.info(f"ticker_daily_update_sync: inserted {rows} rows for {date_str}")
                 inserted_any = True
                 update_job_status_sync(
-                    "job.ticker_daily_update",
-                    "waiting",
-                    progress=100,
+                    "job.ticker_daily_update", "running", progress=progress_pct,
                     message=f"Updated {rows} symbols for {date_str}",
                 )
-                # Continue loop to catch up any older missing dates too
             else:
-                logger.info(f"ticker_daily_update_sync: bhavcopy returned 0 rows for {date_str} (likely holiday), skipping")
+                logger.info(
+                    f"ticker_daily_update_sync: bhavcopy returned 0 rows for {date_str} "
+                    f"(likely a public holiday), skipping"
+                )
         except Exception as e:
             logger.warning(f"ticker_daily_update_sync: bhavcopy failed for {date_str}: {e}")
+
+    # --- Watchlist staleness fallback ---
+    # After bhavcopy, check watchlist symbols still missing today's candle.
+    # Some symbols appear under different names in bhavcopy (e.g. SME stocks)
+    # so we patch them individually via equity_history.
+    last_trading_day = ticker_warehouse.get_last_trading_day()
+    try:
+        with _SyncSessionLocal() as db:
+            watchlist_symbols = list(
+                db.execute(
+                    select(func.distinct(WatchlistItem.symbol))
+                ).scalars().all()
+            )
+
+        if watchlist_symbols:
+            # Find which watchlist symbols are missing today's candle
+            with _SyncSessionLocal() as db:
+                covered = set(
+                    db.execute(
+                        select(TickerDaily.symbol)
+                        .where(TickerDaily.date == last_trading_day)
+                        .where(TickerDaily.symbol.in_(watchlist_symbols))
+                    ).scalars().all()
+                )
+
+            stale_watchlist = [s for s in watchlist_symbols if s not in covered]
+
+            if stale_watchlist:
+                logger.info(
+                    f"ticker_daily_update_sync: {len(stale_watchlist)} watchlist symbol(s) still "
+                    f"stale after bhavcopy — patching via equity_history: {stale_watchlist[:10]}"
+                    + ("..." if len(stale_watchlist) > 10 else "")
+                )
+                update_job_status_sync(
+                    "job.ticker_daily_update", "running", progress=85,
+                    message=f"Patching {len(stale_watchlist)} stale watchlist symbols...",
+                )
+                patched = 0
+                for sym in stale_watchlist:
+                    try:
+                        n = ticker_warehouse.update_symbol_today(sym, last_trading_day)
+                        if n > 0:
+                            patched += 1
+                            inserted_any = True
+                    except Exception as e:
+                        logger.warning(f"ticker_daily_update_sync: equity_history fallback failed for {sym}: {e}")
+                    # Small delay to avoid hammering NSE
+                    time.sleep(0.5)
+
+                if patched:
+                    logger.info(f"ticker_daily_update_sync: patched {patched}/{len(stale_watchlist)} watchlist symbols")
+    except Exception as e:
+        logger.warning(f"ticker_daily_update_sync: watchlist staleness check failed: {e}")
+
+    update_job_status_sync(
+        "job.ticker_daily_update", "running", progress=95,
+        message="Running indicators and scores..." if inserted_any else "No new data",
+    )
 
     if inserted_any:
         _ticker_indicator_notification_cycle()
@@ -791,7 +859,7 @@ def _ticker_daily_update_sync() -> None:
 
 
 def ticker_daily_update_worker() -> None:
-    """Daemon thread target for ticker daily updates (cron: 30 10,14 * * 1-5)."""
+    """Daemon thread target for ticker daily updates (cron: */30 15,16,17,18,19,20 * * 1-5)."""
     logger.info("ticker_daily_update_worker: started")
 
     if not _is_job_enabled("job.ticker_daily_update"):
@@ -830,8 +898,8 @@ def ticker_daily_update_worker() -> None:
         update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron("30 10,14 * * 1-5")
-        logger.info("ticker_daily_update_worker: sleeping %.0fs until next cron (30 10,14 * * 1-5)", wait_secs)
+        wait_secs = _seconds_until_next_cron("*/30 15,16,17,18,19,20 * * 1-5")
+        logger.info("ticker_daily_update_worker: sleeping %.0fs until next cron (*/30 15,16,17,18,19,20 * * 1-5)", wait_secs)
         update_job_status_sync("job.ticker_daily_update", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
         if _sleep_interruptible(wait_secs):
             break
