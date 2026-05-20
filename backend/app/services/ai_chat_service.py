@@ -11,6 +11,7 @@ frontend are completely format-agnostic.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -41,6 +42,33 @@ AVAILABLE_MODELS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Tool description registry — sourced from mcp_server.py docstrings
+# ---------------------------------------------------------------------------
+# This ensures the AI agent's tool descriptions stay in sync with the MCP
+# tool definitions automatically. Edit the docstring in mcp_server.py and
+# the change propagates here at import time — no duplication needed.
+
+def _mcp_tool_docs() -> dict[str, str]:
+    """Return {tool_name: docstring} for every @mcp.tool() function in mcp_server."""
+    from app import mcp_server  # local import to avoid circular deps at module level
+
+    docs: dict[str, str] = {}
+    for name, obj in inspect.getmembers(mcp_server, inspect.isfunction):
+        doc = inspect.getdoc(obj)
+        if doc:
+            docs[name] = doc
+    return docs
+
+
+_TOOL_DOCS: dict[str, str] = _mcp_tool_docs()
+
+
+def _desc(tool_name: str, fallback: str = "") -> str:
+    """Look up the MCP docstring for a tool, falling back to a literal string."""
+    return _TOOL_DOCS.get(tool_name, fallback)
+
+
+# ---------------------------------------------------------------------------
 # Tool definitions — OpenAI /chat/completions format
 # ---------------------------------------------------------------------------
 
@@ -49,7 +77,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "health_check",
-            "description": "Check backend service health and connectivity.",
+            "description": _desc("health_check"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -57,7 +85,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_top_gainers",
-            "description": "Fetch today's top-gaining NSE equities ranked by intraday percentage change. Use for market movers, top performers, or best stocks today.",
+            "description": _desc("get_top_gainers"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -65,7 +93,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_top_losers",
-            "description": "Fetch today's top-losing NSE equities ranked by intraday percentage change. Use for worst performers, biggest decliners today.",
+            "description": _desc("get_top_losers"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -73,7 +101,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_bulk_deals",
-            "description": "Fetch today's NSE bulk deal records for one or multiple symbols. Use for institutional buying/selling activity. NOTE: only today's deals — for historical bulk deals use screener_trades.",
+            "description": _desc("get_bulk_deals"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -87,7 +115,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_block_deals",
-            "description": "Fetch today's NSE block deal records for one or multiple symbols. Use for large block trades. NOTE: only today's deals — for historical block deals use screener_trades.",
+            "description": _desc("get_block_deals"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -101,7 +129,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_largedeal_snapshot",
-            "description": "Fetch a combined real-time snapshot of NSE insider, bulk, and block deals across all stocks. Use for a broad picture of large deal activity.",
+            "description": _desc("get_largedeal_snapshot"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -109,7 +137,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_change_ranges",
-            "description": "Fetch NSE percentage price changes across multiple timeframes (1w, 1m, 3m, 6m, 1y, 2y, 3y, 5y) for one or multiple symbols. Use for performance analysis, momentum scoring, or return comparisons.",
+            "description": _desc("get_change_ranges"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -123,7 +151,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_symbol_data",
-            "description": "Fetch live NSE quote data: LTP (last traded price), 52-week high/low, sector, and industry. Use for current price, valuation range context, or sector identification.",
+            "description": _desc("get_symbol_data"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -138,7 +166,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_52week_low_stocks",
-            "description": "Fetch NSE stocks that crossed a new 52-week low today. Use for stocks at yearly lows, potential value opportunities, or breakdown candidates.",
+            "description": _desc("get_52week_low_stocks"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -146,7 +174,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_52week_high_stocks",
-            "description": "Fetch NSE stocks that crossed a new 52-week high today. Use for breakout stocks, momentum leaders, or all-time-high candidates.",
+            "description": _desc("get_52week_high_stocks"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -154,7 +182,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_volume_gainers",
-            "description": "Fetch NSE stocks with the largest volume surge relative to their weekly average. Use for unusual activity, potential breakouts, or stocks attracting institutional attention.",
+            "description": _desc("get_volume_gainers"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -162,7 +190,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "screener_search",
-            "description": "Search screener.in for NSE companies by name or symbol fragment. Use to resolve a company name to its NSE symbol before calling other tools.",
+            "description": _desc("screener_search"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -176,7 +204,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "screener_company",
-            "description": "Fetch fundamental ratios and quarterly results for NSE companies from screener.in. Returns P/E, ROCE, ROE, debt-to-equity, sales growth, profit growth, and last 4 quarters of financials. Use for fundamental analysis, quality screening, or earnings trend assessment.",
+            "description": _desc("screener_company"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -191,7 +219,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "screener_trades",
-            "description": "Fetch historical insider trades, bulk deals, and block deals for NSE companies from screener.in. Use for multi-year deal history and promoter activity patterns. Do NOT use for today's deals — use get_bulk_deals or get_block_deals instead.",
+            "description": _desc("screener_trades"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -206,7 +234,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_corporate_filings",
-            "description": "Fetch NSE quarterly corporate filing results as structured CSV data. Use for detailed quarterly P&L, revenue, and EPS figures.",
+            "description": _desc("get_corporate_filings"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -220,7 +248,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_stock_universe",
-            "description": "List all tracked NSE stocks with symbol, company name, sector, industry, and PE data. Use to browse the full investable universe or scan for stocks by sector.",
+            "description": _desc("list_stock_universe"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -228,7 +256,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_stock_universe",
-            "description": "Look up NSE stock universe metadata (sector, industry, PE) for one or multiple symbols. Prefer screener_company for deeper fundamental research.",
+            "description": _desc("get_stock_universe"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -242,7 +270,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_stock_universe",
-            "description": "Search tracked NSE stocks by symbol or company name prefix.",
+            "description": _desc("search_stock_universe"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -256,7 +284,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_watchlist",
-            "description": "List all items in the user's default watchlist (ID 1). Returns symbol, exchange, and timestamp.",
+            "description": _desc("list_watchlist"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -264,7 +292,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_watchlists",
-            "description": "List all user-created watchlists with name and item count.",
+            "description": _desc("list_watchlists"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -272,7 +300,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_watchlist_items",
-            "description": "Fetch all symbol/exchange items in a watchlist by its numeric ID.",
+            "description": _desc("get_watchlist_items"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -286,7 +314,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_notifications",
-            "description": "Fetch unread market-event notifications for a specific watchlist. Returns alerts like 52w highs, volume breakouts, RSI signals for watched stocks.",
+            "description": _desc("get_notifications"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -302,7 +330,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_global_notifications",
-            "description": "Fetch unread global NSE scan alerts across all stocks. Filter by trigger_type for specific signal categories.",
+            "description": _desc("get_global_notifications"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -328,7 +356,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_morningstar_fairvalue",
-            "description": "Fetch Morningstar fair value estimate and uncertainty rating for one or multiple NSE symbols. Use for valuation gap analysis — compare fair value vs current price to identify overvalued or undervalued stocks.",
+            "description": _desc("get_morningstar_fairvalue"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -342,7 +370,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_global_news",
-            "description": "Fetch recent global financial news from MoneyControl. Use for macro events, market-wide headlines, RBI/government policy news, or FII/DII flow stories.",
+            "description": _desc("get_global_news"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -356,7 +384,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_company_news",
-            "description": "Fetch MoneyControl news for one or multiple NSE companies. Use for company-specific catalysts, earnings coverage, management commentary, or corporate announcements.",
+            "description": _desc("get_company_news"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -373,7 +401,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_industries",
-            "description": "List all NSE industries with market cap, PE ratio, advance/decline counts, and sentiment. Use for sector rotation analysis, identifying hot/cold industries, or market breadth assessment.",
+            "description": _desc("list_industries"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -381,7 +409,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_sectors",
-            "description": "List all NSE sectors with market cap, PE ratio, advance/decline counts, and sentiment. Use for broad sector analysis or thematic investing.",
+            "description": _desc("list_sectors"),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -389,7 +417,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_industry_stocks",
-            "description": "Fetch all NSE stocks in a given industry, sorted by market cap. Use list_industries() first to get valid slugs.",
+            "description": _desc("get_industry_stocks"),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -403,7 +431,7 @@ BLM_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_sector_stocks",
-            "description": "Fetch all NSE stocks in a given sector, sorted by market cap. Use list_sectors() first to get valid slugs.",
+            "description": _desc("get_sector_stocks"),
             "parameters": {
                 "type": "object",
                 "properties": {
