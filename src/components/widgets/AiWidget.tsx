@@ -3,6 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 import { cn } from '@/lib/utils';
 
@@ -82,6 +84,84 @@ interface MessageBubbleProps {
   toolsDone?: boolean;
 }
 
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        // Paragraphs — keep tight spacing
+        p: ({ children }) => <p className="mb-1.5 last:mb-0 leading-relaxed">{children}</p>,
+        // Headings
+        h1: ({ children }) => <h1 className="text-sm font-bold text-terminal-amber mt-2 mb-1 border-b border-terminal-amber/20 pb-0.5">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-xs font-bold text-terminal-amber mt-2 mb-1">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-xs font-semibold text-terminal-amber/80 mt-1.5 mb-0.5">{children}</h3>,
+        // Inline code
+        code: ({ children, className }) => {
+          const isBlock = className?.startsWith('language-');
+          if (isBlock) {
+            return (
+              <code className="block bg-black/40 border border-terminal-amber/15 rounded px-2 py-1.5 text-[10px] text-terminal-amber/90 whitespace-pre overflow-x-auto my-1">
+                {children}
+              </code>
+            );
+          }
+          return (
+            <code className="bg-black/30 border border-terminal-amber/20 rounded px-1 py-0.5 text-[10px] text-terminal-amber/90">
+              {children}
+            </code>
+          );
+        },
+        // Code block wrapper — strip default pre padding
+        pre: ({ children }) => <pre className="my-1">{children}</pre>,
+        // Lists
+        ul: ({ children }) => <ul className="list-none pl-3 mb-1.5 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal list-inside pl-1 mb-1.5 space-y-0.5">{children}</ol>,
+        li: ({ children }) => (
+          <li className="flex gap-1.5 leading-relaxed">
+            <span className="text-terminal-amber/40 shrink-0">-</span>
+            <span className="flex-1">{children}</span>
+          </li>
+        ),
+        // Blockquote
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-terminal-amber/30 pl-2 my-1 text-terminal-amber/70 italic">
+            {children}
+          </blockquote>
+        ),
+        // Bold / italic
+        strong: ({ children }) => <strong className="font-bold text-terminal-amber">{children}</strong>,
+        em: ({ children }) => <em className="italic text-terminal-amber/80">{children}</em>,
+        // Horizontal rule
+        hr: () => <hr className="border-terminal-amber/15 my-2" />,
+        // Tables
+        table: ({ children }) => (
+          <div className="overflow-x-auto my-1.5">
+            <table className="text-[10px] border-collapse w-full">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="border-b border-terminal-amber/20">{children}</thead>,
+        th: ({ children }) => (
+          <th className="px-2 py-0.5 text-left font-semibold text-terminal-amber/80 border border-terminal-amber/10">
+            {children}
+          </th>
+        ),
+        td: ({ children }) => (
+          <td className="px-2 py-0.5 border border-terminal-amber/10 text-terminal-amber/70">{children}</td>
+        ),
+        tr: ({ children }) => <tr className="even:bg-terminal-amber/3">{children}</tr>,
+        // Links — no-op styling, just keep text
+        a: ({ children, href }) => (
+          <span className="text-blue-400/70 underline underline-offset-2 cursor-default" title={href ?? ''}>
+            {children}
+          </span>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
 function MessageBubble({ msg, isLastAssistant, toolsDone }: MessageBubbleProps) {
   const isUser = msg.role === 'user';
   const toolCalls = msg.toolCalls ?? [];
@@ -96,13 +176,19 @@ function MessageBubble({ msg, isLastAssistant, toolsDone }: MessageBubbleProps) 
       )}
       <div
         className={cn(
-          'rounded px-2 py-1.5 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words max-w-full',
+          'rounded px-2 py-1.5 text-xs font-mono leading-relaxed break-words max-w-full',
           isUser
-            ? 'bg-blue-900/40 text-blue-100 border border-blue-800/50'
+            ? 'bg-blue-900/40 text-blue-100 border border-blue-800/50 whitespace-pre-wrap'
             : 'bg-terminal-gray/30 text-terminal-amber border border-terminal-amber/10',
         )}
       >
-        {msg.content || <span className="opacity-40 animate-pulse">▋</span>}
+        {isUser ? (
+          msg.content || <span className="opacity-40 animate-pulse">▋</span>
+        ) : msg.content ? (
+          <MarkdownContent content={msg.content} />
+        ) : (
+          <span className="opacity-40 animate-pulse">▋</span>
+        )}
       </div>
       <span className="text-[10px] text-terminal-amber/30 px-1">
         {isUser ? 'you' : 'blm ai'}
