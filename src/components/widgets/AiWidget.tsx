@@ -55,6 +55,28 @@ type StreamEvent =
   | { type: 'error'; message: string }
   | { type: 'done' };
 
+// ─── Per-session state ────────────────────────────────────────────────────────
+
+interface SessionState {
+  messages: ChatMessage[];
+  isStreaming: boolean;
+  toolsDone: boolean;
+  input: string;
+  model: string;
+  abortController: AbortController | null;
+}
+
+function emptySessionState(defaultModel = ''): SessionState {
+  return {
+    messages: [],
+    isStreaming: false,
+    toolsDone: false,
+    input: '',
+    model: defaultModel,
+    abortController: null,
+  };
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 interface ToolCallBadgeProps {
@@ -89,13 +111,10 @@ function MarkdownContent({ content }: { content: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        // Paragraphs — keep tight spacing
         p: ({ children }) => <p className="mb-1.5 last:mb-0 leading-relaxed">{children}</p>,
-        // Headings
         h1: ({ children }) => <h1 className="text-sm font-bold text-terminal-amber mt-2 mb-1 border-b border-terminal-amber/20 pb-0.5">{children}</h1>,
         h2: ({ children }) => <h2 className="text-xs font-bold text-terminal-amber mt-2 mb-1">{children}</h2>,
         h3: ({ children }) => <h3 className="text-xs font-semibold text-terminal-amber/80 mt-1.5 mb-0.5">{children}</h3>,
-        // Inline code
         code: ({ children, className }) => {
           const isBlock = className?.startsWith('language-');
           if (isBlock) {
@@ -111,9 +130,7 @@ function MarkdownContent({ content }: { content: string }) {
             </code>
           );
         },
-        // Code block wrapper — strip default pre padding
         pre: ({ children }) => <pre className="my-1">{children}</pre>,
-        // Lists
         ul: ({ children }) => <ul className="list-none pl-3 mb-1.5 space-y-0.5">{children}</ul>,
         ol: ({ children }) => <ol className="list-decimal list-inside pl-1 mb-1.5 space-y-0.5">{children}</ol>,
         li: ({ children }) => (
@@ -122,18 +139,14 @@ function MarkdownContent({ content }: { content: string }) {
             <span className="flex-1">{children}</span>
           </li>
         ),
-        // Blockquote
         blockquote: ({ children }) => (
           <blockquote className="border-l-2 border-terminal-amber/30 pl-2 my-1 text-terminal-amber/70 italic">
             {children}
           </blockquote>
         ),
-        // Bold / italic
         strong: ({ children }) => <strong className="font-bold text-terminal-amber">{children}</strong>,
         em: ({ children }) => <em className="italic text-terminal-amber/80">{children}</em>,
-        // Horizontal rule
         hr: () => <hr className="border-terminal-amber/15 my-2" />,
-        // Tables
         table: ({ children }) => (
           <div className="overflow-x-auto my-1.5">
             <table className="text-[10px] border-collapse w-full">{children}</table>
@@ -149,7 +162,6 @@ function MarkdownContent({ content }: { content: string }) {
           <td className="px-2 py-0.5 border border-terminal-amber/10 text-terminal-amber/70">{children}</td>
         ),
         tr: ({ children }) => <tr className="even:bg-terminal-amber/3">{children}</tr>,
-        // Links — no-op styling, just keep text
         a: ({ children, href }) => (
           <span className="text-blue-400/70 underline underline-offset-2 cursor-default" title={href ?? ''}>
             {children}
@@ -201,7 +213,8 @@ function MessageBubble({ msg, isLastAssistant, toolsDone }: MessageBubbleProps) 
 
 interface SessionSidebarProps {
   sessions: SessionSummary[];
-  activeSessionId: number | null;
+  activeKey: number | null;
+  streamingKeys: Set<number | null>;
   onSelectSession: (id: number) => void;
   onDeleteSession: (id: number) => void;
   onNewChat: () => void;
@@ -209,7 +222,8 @@ interface SessionSidebarProps {
 
 function SessionSidebar({
   sessions,
-  activeSessionId,
+  activeKey,
+  streamingKeys,
   onSelectSession,
   onDeleteSession,
   onNewChat,
@@ -221,7 +235,6 @@ function SessionSidebar({
 
   return (
     <div className="flex flex-col h-full w-full border-r border-terminal-amber/10 bg-terminal-bg">
-      {/* Sidebar header */}
       <div className="flex items-center justify-between px-2 py-1.5 border-b border-terminal-amber/10 shrink-0">
         <span className="text-[10px] text-terminal-amber/50 font-mono uppercase tracking-wider">
           History
@@ -235,51 +248,59 @@ function SessionSidebar({
         </button>
       </div>
 
-      {/* Session list */}
       <div className="flex-1 overflow-y-auto">
         {sessions.length === 0 ? (
           <div className="px-2 py-4 text-[10px] text-terminal-amber/25 text-center">
             No past chats
           </div>
         ) : (
-          sessions.map((s) => (
-            <div
-              key={s.id}
-              onClick={() => onSelectSession(s.id)}
-              className={cn(
-                'group flex flex-col px-2 py-1.5 cursor-pointer border-b border-terminal-amber/5 hover:bg-terminal-amber/5 transition-colors',
-                activeSessionId === s.id && 'bg-terminal-amber/8 border-l-2 border-l-terminal-amber/40',
-              )}
-            >
-              <div className="flex items-start justify-between gap-1">
-                <span
-                  className={cn(
-                    'text-[10px] font-mono leading-tight flex-1 truncate',
-                    activeSessionId === s.id ? 'text-terminal-amber' : 'text-terminal-amber/60',
-                  )}
-                >
-                  {s.title}
-                </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteSession(s.id);
-                  }}
-                  className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 text-[9px] px-1 transition-all shrink-0"
-                  title="Delete session"
-                >
-                  ✕
-                </button>
+          sessions.map((s) => {
+            const isActive = activeKey === s.id;
+            const isStreaming = streamingKeys.has(s.id);
+            return (
+              <div
+                key={s.id}
+                onClick={() => onSelectSession(s.id)}
+                className={cn(
+                  'group flex flex-col px-2 py-1.5 cursor-pointer border-b border-terminal-amber/5 hover:bg-terminal-amber/5 transition-colors',
+                  isActive && 'bg-terminal-amber/8 border-l-2 border-l-terminal-amber/40',
+                )}
+              >
+                <div className="flex items-start justify-between gap-1">
+                  <span
+                    className={cn(
+                      'text-[10px] font-mono leading-tight flex-1 truncate',
+                      isActive ? 'text-terminal-amber' : 'text-terminal-amber/60',
+                    )}
+                  >
+                    {s.title}
+                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isStreaming && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" title="Streaming…" />
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteSession(s.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 text-[9px] px-1 transition-all"
+                      title="Delete session"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-[9px] text-terminal-amber/30">{s.symbol}</span>
+                  <span className="text-[9px] text-terminal-amber/20">·</span>
+                  <span className="text-[9px] text-terminal-amber/30">{s.message_count} msgs</span>
+                  <span className="text-[9px] text-terminal-amber/20">·</span>
+                  <span className="text-[9px] text-terminal-amber/25">{fmt(s.updated_at)}</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[9px] text-terminal-amber/30">{s.symbol}</span>
-                <span className="text-[9px] text-terminal-amber/20">·</span>
-                <span className="text-[9px] text-terminal-amber/30">{s.message_count} msgs</span>
-                <span className="text-[9px] text-terminal-amber/20">·</span>
-                <span className="text-[9px] text-terminal-amber/25">{fmt(s.updated_at)}</span>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -288,24 +309,15 @@ function SessionSidebar({
 
 // ─── Main widget ──────────────────────────────────────────────────────────────
 
+// Sentinel key for an unsent "new chat" scratch session
+const NEW_CHAT_KEY = null;
+
 export function AiWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
   const exchange = useAtomValue(activeExchangeAtom);
   const queryClient = useQueryClient();
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [model, setModel] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [toolsDone, setToolsDone] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  // ── Models ─────────────────────────────────────────────────────────────────
 
   const { data: modelsData } = useQuery<ModelOption[]>({
     queryKey: ['ai-chat-models'],
@@ -317,13 +329,55 @@ export function AiWidget() {
     staleTime: Infinity,
   });
   const availableModels: ModelOption[] = modelsData ?? [];
+  const defaultModel = availableModels[0]?.id ?? '';
 
-  // Set model to first backend option once loaded; never hardcode an ID here
+  // ── Session map — the core of the isolation model ─────────────────────────
+  // Keys: real session IDs (number) OR null for the unsent scratch chat.
+  // Each session owns its own messages, streaming state, input, and abort handle.
+  // Switching activeKey is a pure view operation — no other key is ever touched.
+
+  const [sessionMap, setSessionMap] = useState<Map<number | null, SessionState>>(
+    () => new Map([[NEW_CHAT_KEY, emptySessionState()]]),
+  );
+  const [activeKey, setActiveKey] = useState<number | null>(NEW_CHAT_KEY);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Derive current session's state for rendering — always safe to destructure
+  const current = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
+  const { messages, isStreaming, toolsDone, input, model } = current;
+
+  // Once models load, back-fill the default model into any session that has ''
   useEffect(() => {
-    if (availableModels.length > 0 && !model) {
-      setModel(availableModels[0].id);
-    }
-  }, [availableModels, model]);
+    if (!defaultModel) return;
+    setSessionMap((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [key, state] of next) {
+        if (!state.model) {
+          next.set(key, { ...state, model: defaultModel });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [defaultModel]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /** Immutably patch one session's state without touching any other key. */
+  const patchSession = useCallback(
+    (key: number | null, patch: Partial<SessionState>) => {
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(key) ?? emptySessionState(defaultModel);
+        next.set(key, { ...existing, ...patch });
+        return next;
+      });
+    },
+    [defaultModel],
+  );
+
+  // ── Sessions list (sidebar) ────────────────────────────────────────────────
 
   const { data: sessions = [], refetch: refetchSessions } = useQuery<SessionSummary[]>({
     queryKey: ['ai-chat-sessions'],
@@ -335,7 +389,10 @@ export function AiWidget() {
     staleTime: 30_000,
   });
 
-  // ── Effects ────────────────────────────────────────────────────────────────
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -343,80 +400,125 @@ export function AiWidget() {
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
+  }, [activeKey]);
+
+  // ── Streaming keys (for sidebar pulse dots) ────────────────────────────────
+
+  const streamingKeys = new Set<number | null>(
+    [...sessionMap.entries()].filter(([, s]) => s.isStreaming).map(([k]) => k),
+  );
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  const loadSession = useCallback(async (id: number) => {
-    try {
-      const res = await fetch(`/api/py/ai/chat/sessions/${id}`);
-      if (!res.ok) {
-        console.error(`Failed to load session ${id}: ${res.status}`);
-        return;
-      }
-      const data: SessionDetail = await res.json();
-      setActiveSessionId(id);
-      setModel(data.model);
-      setMessages(
-        data.messages.map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          toolCalls: m.tool_calls ?? undefined,
-        })),
-      );
+  /** Switch to a past session. Fetches from backend only on first open. */
+  const loadSession = useCallback(
+    async (id: number) => {
+      setActiveKey(id);
       setSidebarOpen(false);
       setTimeout(() => inputRef.current?.focus(), 50);
-    } catch (err) {
-      console.error('loadSession error:', err);
-    }
-  }, []);
 
+      // Already loaded (or currently streaming) — just switch the view
+      if (sessionMap.has(id)) return;
+
+      try {
+        const res = await fetch(`/api/py/ai/chat/sessions/${id}`);
+        if (!res.ok) {
+          console.error(`Failed to load session ${id}: ${res.status}`);
+          return;
+        }
+        const data: SessionDetail = await res.json();
+        patchSession(id, {
+          model: data.model,
+          messages: data.messages.map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            toolCalls: m.tool_calls ?? undefined,
+          })),
+        });
+      } catch (err) {
+        console.error('loadSession error:', err);
+      }
+    },
+    [sessionMap, patchSession],
+  );
+
+  /** Delete a session both from backend and from the local map. */
   const deleteSession = useCallback(
     async (id: number) => {
+      // Abort any in-flight stream for this session before deleting
+      sessionMap.get(id)?.abortController?.abort();
+
       const res = await fetch(`/api/py/ai/chat/sessions/${id}`, { method: 'DELETE' });
       if (!res.ok) {
         console.error(`Failed to delete session ${id}: ${res.status}`);
         return;
       }
-      if (activeSessionId === id) {
-        setActiveSessionId(null);
-        setMessages([]);
-      }
-      refetchSessions();
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      if (activeKey === id) setActiveKey(NEW_CHAT_KEY);
+      void refetchSessions();
     },
-    [activeSessionId, refetchSessions],
+    [sessionMap, activeKey, refetchSessions],
   );
 
+  /** Create a fresh scratch session and switch to it. Does not abort others. */
   const startNewChat = useCallback(() => {
-    if (isStreaming) abortRef.current?.abort();
-    setMessages([]);
-    setActiveSessionId(null);
-    setInput('');
-    setToolsDone(false);
+    // Reset the scratch slot and switch to it
+    setSessionMap((prev) => {
+      const next = new Map(prev);
+      next.set(NEW_CHAT_KEY, emptySessionState(defaultModel));
+      return next;
+    });
+    setActiveKey(NEW_CHAT_KEY);
     setSidebarOpen(false);
     setTimeout(() => inputRef.current?.focus(), 50);
-  }, [isStreaming]);
+  }, [defaultModel]);
 
+  /** Send a message. Fully scoped to sessionKey — safe to switch sessions during streaming. */
   const sendMessage = useCallback(async () => {
-    const trimmed = input.trim();
-    if (!trimmed || isStreaming) return;
+    // Capture session key and current state AT CALL TIME — these become
+    // immutable locals so the stream closure never reads stale React state.
+    const sessionKey = activeKey;
+    const sessionState = sessionMap.get(sessionKey) ?? emptySessionState(defaultModel);
+    const trimmed = sessionState.input.trim();
+
+    if (!trimmed || sessionState.isStreaming) return;
 
     const userMessage: ChatMessage = { role: 'user', content: trimmed };
-    const updatedHistory = [...messages, userMessage];
+    const historyWithUser = [...sessionState.messages, userMessage];
 
-    setMessages(updatedHistory);
-    setInput('');
-    setIsStreaming(true);
-    setToolsDone(false);
+    const abort = new AbortController();
 
+    // Optimistic UI update for the current session
+    patchSession(sessionKey, {
+      messages: [...historyWithUser, { role: 'assistant', content: '' }],
+      input: '',
+      isStreaming: true,
+      toolsDone: false,
+      abortController: abort,
+    });
+
+    // After a session_id event the server assigns a real ID; we migrate the
+    // map entry from null → realId. This ref tracks the live key for writes
+    // that happen after the migration.
+    let liveKey: number | null = sessionKey;
+
+    // Accumulated content for the current streaming turn
     let assistantContent = '';
     let assistantToolCalls: string[] = [];
 
-    // Add streaming assistant placeholder
-    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
-
-    const abort = new AbortController();
-    abortRef.current = abort;
+    /** Write streaming progress to whichever key this stream owns. */
+    const writeStreamState = (patch: Partial<SessionState>) => {
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
+        next.set(liveKey, { ...existing, ...patch });
+        return next;
+      });
+    };
 
     try {
       const res = await fetch('/api/py/ai/chat', {
@@ -424,25 +526,24 @@ export function AiWidget() {
         headers: { 'Content-Type': 'application/json' },
         signal: abort.signal,
         body: JSON.stringify({
-          messages: updatedHistory.map((m) => ({ role: m.role, content: m.content })),
-          symbol,
-          exchange,
-          model,
-          session_id: activeSessionId,
+          messages: historyWithUser.map((m) => ({ role: m.role, content: m.content })),
+          symbol: symbol.toUpperCase(),
+          exchange: exchange.toUpperCase(),
+          model: sessionState.model || defaultModel,
+          session_id: sessionKey, // null for new chats — backend creates the session
         }),
       });
 
       if (!res.ok || !res.body) {
         const text = await res.text();
-        setMessages((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = {
-            role: 'assistant',
-            content: `Error: ${res.status} — ${text.slice(0, 200)}`,
-          };
-          return next;
+        writeStreamState({
+          messages: [
+            ...historyWithUser,
+            { role: 'assistant', content: `Error: ${res.status} — ${text.slice(0, 200)}` },
+          ],
+          isStreaming: false,
+          abortController: null,
         });
-        setIsStreaming(false);
         return;
       }
 
@@ -472,71 +573,102 @@ export function AiWidget() {
           }
 
           if (event.type === 'session_id') {
-            setActiveSessionId(event.id);
+            // Migrate the map entry from null/old-key → assigned real session ID
+            const assignedId = event.id;
+            if (liveKey !== assignedId) {
+              setSessionMap((prev) => {
+                const next = new Map(prev);
+                const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
+                next.delete(liveKey);
+                next.set(assignedId, existing);
+                return next;
+              });
+              liveKey = assignedId;
+              // If the user is still viewing this chat, update the view key too
+              setActiveKey((prev) => (prev === sessionKey ? assignedId : prev));
+            }
           } else if (event.type === 'token') {
             assistantContent += event.text;
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = {
-                role: 'assistant',
-                content: assistantContent,
-                toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
-              };
-              return next;
+            writeStreamState({
+              messages: [
+                ...historyWithUser,
+                {
+                  role: 'assistant',
+                  content: assistantContent,
+                  toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                },
+              ],
             });
           } else if (event.type === 'tool_call') {
             assistantToolCalls = [...assistantToolCalls, event.name];
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = {
-                ...next[next.length - 1],
-                toolCalls: [...assistantToolCalls],
-              };
-              return next;
+            writeStreamState({
+              messages: [
+                ...historyWithUser,
+                {
+                  role: 'assistant',
+                  content: assistantContent,
+                  toolCalls: [...assistantToolCalls],
+                },
+              ],
             });
           } else if (event.type === 'error') {
-            assistantContent += assistantContent ? `\n\n⚠ ${event.message}` : `⚠ ${event.message}`;
-            setMessages((prev) => {
-              const next = [...prev];
-              next[next.length - 1] = { role: 'assistant', content: assistantContent };
-              return next;
+            assistantContent += assistantContent
+              ? `\n\n⚠ ${event.message}`
+              : `⚠ ${event.message}`;
+            writeStreamState({
+              messages: [
+                ...historyWithUser,
+                { role: 'assistant', content: assistantContent },
+              ],
             });
           } else if (event.type === 'done') {
-            setToolsDone(true);
             streamDone = true;
-            // Refresh session list so sidebar stays current
+            writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
             void queryClient.invalidateQueries({ queryKey: ['ai-chat-sessions'] });
             break;
           }
         }
       }
     } catch (err: unknown) {
-      if ((err as Error)?.name === 'AbortError') return;
+      if ((err as Error)?.name === 'AbortError') {
+        // User stopped the stream — mark as done, keep whatever content arrived
+        writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
+        return;
+      }
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      setMessages((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = { role: 'assistant', content: `Error: ${msg}` };
-        return next;
+      writeStreamState({
+        messages: [
+          ...historyWithUser,
+          { role: 'assistant', content: `Error: ${msg}` },
+        ],
+        isStreaming: false,
+        abortController: null,
       });
     } finally {
-      setIsStreaming(false);
-      abortRef.current = null;
+      // Ensure isStreaming is always cleared even on unexpected throws
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const s = next.get(liveKey);
+        if (s?.isStreaming) {
+          next.set(liveKey, { ...s, isStreaming: false, abortController: null });
+        }
+        return next;
+      });
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [input, isStreaming, messages, symbol, exchange, model, activeSessionId, queryClient]);
+  }, [activeKey, sessionMap, defaultModel, symbol, exchange, patchSession, queryClient]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      void sendMessage();
     }
   };
 
-  const handleStop = () => {
-    abortRef.current?.abort();
-    setIsStreaming(false);
-    setToolsDone(true);
-  };
+  const handleStop = useCallback(() => {
+    current.abortController?.abort();
+    // isStreaming/abortController cleared in the AbortError catch path of sendMessage
+  }, [current]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -547,7 +679,8 @@ export function AiWidget() {
         <div className="w-44 shrink-0 flex flex-col overflow-hidden">
           <SessionSidebar
             sessions={sessions}
-            activeSessionId={activeSessionId}
+            activeKey={activeKey}
+            streamingKeys={streamingKeys}
             onSelectSession={loadSession}
             onDeleteSession={deleteSession}
             onNewChat={startNewChat}
@@ -559,7 +692,6 @@ export function AiWidget() {
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Header */}
         <div className="flex items-center gap-2 px-2 py-1 border-b border-terminal-amber/10 bg-terminal-gray/10 shrink-0">
-          {/* History toggle */}
           <button
             onClick={() => setSidebarOpen((o) => !o)}
             className={cn(
@@ -574,8 +706,8 @@ export function AiWidget() {
           </button>
 
           <select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
+            value={model || defaultModel}
+            onChange={(e) => patchSession(activeKey, { model: e.target.value })}
             disabled={isStreaming}
             className="bg-terminal-bg border border-terminal-amber/20 text-terminal-amber/70 text-[10px] font-mono px-1 py-0.5 rounded outline-none focus:border-terminal-amber/50 disabled:opacity-50 max-w-[160px]"
           >
@@ -586,7 +718,7 @@ export function AiWidget() {
                 </option>
               ))
             ) : (
-              <option value="">Loading models...</option>
+              <option value="">Loading models…</option>
             )}
           </select>
 
@@ -594,11 +726,16 @@ export function AiWidget() {
             ctx: {symbol}.{exchange}
           </span>
 
+          {/* Streaming indicator in header when viewing a streaming session */}
+          {isStreaming && (
+            <span className="text-[10px] text-blue-400/70 animate-pulse shrink-0">thinking…</span>
+          )}
+
           <button
             onClick={startNewChat}
-            className="text-[10px] text-terminal-amber/40 hover:text-terminal-amber/70 px-1.5 py-0.5 border border-terminal-amber/10 hover:border-terminal-amber/30 rounded transition-colors"
+            className="text-[10px] text-terminal-amber/40 hover:text-terminal-amber/70 px-1.5 py-0.5 border border-terminal-amber/10 hover:border-terminal-amber/30 rounded transition-colors shrink-0"
           >
-            clear
+            + new
           </button>
         </div>
 
@@ -632,12 +769,12 @@ export function AiWidget() {
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => patchSession(activeKey, { input: e.target.value })}
             onKeyDown={handleKeyDown}
             disabled={isStreaming}
             placeholder={
               isStreaming
-                ? 'thinking…'
+                ? 'AI is thinking — you can switch to another chat while waiting…'
                 : 'Ask about NSE markets… (Enter to send, Shift+Enter for newline)'
             }
             rows={1}
@@ -659,7 +796,7 @@ export function AiWidget() {
             </button>
           ) : (
             <button
-              onClick={sendMessage}
+              onClick={() => void sendMessage()}
               disabled={!input.trim()}
               className={cn(
                 'shrink-0 px-2 py-1.5 text-[10px] font-mono border rounded transition-colors',
