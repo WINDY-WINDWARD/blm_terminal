@@ -108,7 +108,10 @@ class NSEClient:
         """Fetch the list of top gainers from NSE India."""
         logger.debug("NSE: fetching top gainers")
         try:
-            df = nsepython.nse_get_top_gainers()
+            rows = self._get_market_turnover()
+            df = pandas.DataFrame(rows)
+            df["pChange"] = pandas.to_numeric(df.get("pChange", pandas.Series(dtype=float)), errors="coerce")
+            df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=False).head(20)
             logger.info("NSE: top gainers fetched (%d rows)", len(df))
             return df
         except Exception:
@@ -119,7 +122,10 @@ class NSEClient:
         """Fetch the list of top losers from NSE India."""
         logger.debug("NSE: fetching top losers")
         try:
-            df = nsepython.nse_get_top_losers()
+            rows = self._get_market_turnover()
+            df = pandas.DataFrame(rows)
+            df["pChange"] = pandas.to_numeric(df.get("pChange", pandas.Series(dtype=float)), errors="coerce")
+            df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=True).head(20)
             logger.info("NSE: top losers fetched (%d rows)", len(df))
             return df
         except Exception:
@@ -259,13 +265,23 @@ class NSEClient:
             return rows
         except Exception as exc:
             logger.warning(
-                "market-turnover endpoint failed (%s), falling back to nsepython",
+                "market-turnover endpoint failed (%s), falling back to equity-stockIndices",
                 exc,
             )
-            df = nsepython.nse_get_top_gainers()
-            if "data" in df.columns:
-                return df["data"].tolist()
-            return df.to_dict(orient="records")
+            fno_url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
+            t0 = time.perf_counter()
+            resp = self._session.get(fno_url, timeout=20)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", fno_url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+            payload = resp.json()
+            # NSE may return rows under 'data' or directly as a list
+            if isinstance(payload, list):
+                return payload
+            rows = payload.get("data") or payload.get("rows") or []
+            if not rows:
+                raise ValueError(f"No rows in equity-stockIndices response; keys={list(payload.keys())}")
+            return rows
 
     def get_largedeal_snapshot(self) -> dict:
         """Fetch the full largedeal snapshot (bulk/short/block) from NSE India.
