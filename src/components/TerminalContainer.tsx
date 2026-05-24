@@ -48,13 +48,38 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     };
   }, [setWsConnected]);
 
-  // Focus command bar on Escape or '/'
+  // Focus command bar on Escape or '/'.
+  // For '/', if the input is not already focused, focus it and seed the '/'
+  // character so symbol-search mode activates immediately.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' || e.key === '/') {
+      const input = document.getElementById('terminal-command-input') as HTMLInputElement | null;
+      const inputFocused = input === document.activeElement;
+
+      if (e.key === 'Escape') {
         e.preventDefault();
-        const input = document.getElementById('terminal-command-input');
         if (input) input.focus();
+      } else if (e.key === '/') {
+        if (!inputFocused) {
+          // Prevent the default so the '/' doesn't land twice, then manually
+          // focus and set the value so the React state picks it up via an
+          // input event.
+          e.preventDefault();
+          if (input) {
+            input.focus();
+            // Dispatch a native input event with '/' so React's onChange fires
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype,
+              'value'
+            )?.set;
+            if (nativeInputValueSetter) {
+              nativeInputValueSetter.call(input, '/');
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          }
+        }
+        // If already focused, let the keystroke fall through normally so the
+        // user can type '/' freely.
       }
     };
     window.addEventListener('keydown', handleKeyDown);
