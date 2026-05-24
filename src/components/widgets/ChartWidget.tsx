@@ -6,32 +6,57 @@ import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { activeSymbolAtom, activeExchangeAtom, focusedPanelAtom } from '@/store/terminalStore';
-import { OpenAlgoClient } from '@/lib/openalgo';
 import { wsService } from '@/lib/socket';
 import type { TickData } from '@/lib/socket';
 
+// Backend OHLCV candle row
+interface BackendCandle {
+  Date: string; // "YYYY-MM-DD"
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface BackendOHLCVResponse {
+  symbol: string;
+  candles: BackendCandle[];
+  count: number;
+}
+
+async function fetchBackendOHLCV(
+  symbol: string,
+  fromDate: string,
+  toDate: string,
+): Promise<BackendOHLCVResponse> {
+  // fromDate / toDate in DD-MM-YYYY for the backend
+  const params = new URLSearchParams({ from_date: fromDate, to_date: toDate });
+  const res = await fetch(`/api/py/ticker/ohlcv/${symbol}?${params.toString()}`);
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return res.json() as Promise<BackendOHLCVResponse>;
+}
+
 type Interval = '1m' | '5m' | '15m' | '1h' | 'D';
+const INTRADAY_INTERVALS: Interval[] = ['1m', '5m', '15m', '1h'];
 
 interface ChartWidgetProps {
   panelId: string;
 }
 
-function formatDate(date: Date): string {
-  // Format date as YYYY-MM-DD in IST (Asia/Kolkata, UTC+5:30)
-  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+/** Format date as DD-MM-YYYY for the backend ticker API. */
+function toBackendDate(date: Date): string {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}-${month}-${year}`;
 }
 
-function getDateRange(interval: Interval): { start: string; end: string } {
+function getDailyDateRange(): { fromDate: string; toDate: string } {
   const end = new Date();
   const start = new Date();
-  switch (interval) {
-    case '1m': start.setDate(end.getDate() - 5); break;
-    case '5m': start.setDate(end.getDate() - 14); break;
-    case '15m': start.setDate(end.getDate() - 30); break;
-    case '1h': start.setDate(end.getDate() - 90); break;
-    case 'D': start.setFullYear(end.getFullYear() - 1); break;
-  }
-  return { start: formatDate(start), end: formatDate(end) };
+  start.setFullYear(end.getFullYear() - 1);
+  return { fromDate: toBackendDate(start), toDate: toBackendDate(end) };
 }
 
 /**
@@ -67,7 +92,8 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const [inputSymbol, setInputSymbol] = useState(symbol);
   const [inputExchange, setInputExchange] = useState(exchange);
   const [interval, setInterval] = useState<Interval>('D');
-  const [pendingInterval, setPendingInterval] = useState<Interval | null>(null);
+
+  const isIntraday = (INTRADAY_INTERVALS as Interval[]).includes(interval);
 
   // Candle state for aggregating ticks based on selected timeframe
   interface PartialCandle {
@@ -89,39 +115,23 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     setInputExchange(exchange);
   }, [symbol, exchange]);
 
-  const { start, end } = getDateRange(interval);
+  const { fromDate, toDate } = getDailyDateRange();
 
   const queryClient = useQueryClient();
 
+  // Fetch daily OHLCV from backend warehouse (only when interval === 'D')
   const { data: histData, isLoading, isError } = useQuery({
-    queryKey: ['history', symbol, exchange, interval],
-    queryFn: () => OpenAlgoClient.getHistory(symbol, exchange, interval, start, end),
-    staleTime: 60_000,
+    queryKey: ['backend-ohlcv', symbol, fromDate, toDate],
+    queryFn: () => fetchBackendOHLCV(symbol, fromDate, toDate),
+    enabled: !isIntraday,
+    staleTime: 5 * 60_000,
     retry: 1,
-    // Tag result with symbol+exchange so the object reference always changes
-    // when the query key changes, even when data is served from cache.
-    select: (data) => ({ ...data, _symbol: symbol, _exchange: exchange }),
+    select: (data) => ({ ...data, _symbol: symbol }),
   });
 
   const handleRefresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ['history', symbol, exchange, interval] });
+    void queryClient.invalidateQueries({ queryKey: ['backend-ohlcv', symbol] });
   };
-
-  // When data loads successfully, confirm the pending interval change
-  useEffect(() => {
-    if (!isLoading && !isError && pendingInterval !== null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clears pending state on load completion
-      setPendingInterval(null);
-    }
-  }, [isLoading, isError, pendingInterval]);
-
-  // If there's an error, revert the pending interval
-  useEffect(() => {
-    if (isError && pendingInterval !== null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: reverts pending state on error
-      setPendingInterval(null);
-    }
-  }, [isError, pendingInterval]);
 
   // Build chart (once on mount)
   useEffect(() => {
@@ -184,29 +194,29 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     lastHistBarTimeRef.current = null;
   }, [symbol, exchange]);
 
-  // Populate chart with historical data
-  // Depends on histData AND symbol/exchange — the select() tag ensures histData
-  // is always a new object reference when the symbol changes, so this effect
-  // reliably fires even when new data is served from React Query cache.
+  // Populate chart with historical data (daily from backend)
+  // Depends on histData AND symbol — the select() tag ensures histData is a new
+  // object reference when the symbol changes, so this effect fires reliably.
   useEffect(() => {
     if (!seriesRef.current) return;
+    if (isIntraday) return; // handled by the intraday overlay
 
-    if (!histData?.data?.length) {
+    if (!histData?.candles?.length) {
       seriesRef.current.setData([]);
       return;
     }
 
-    // Guard: skip if the tagged symbol/exchange don't match current values
-    // (protects against a stale cached result arriving after a rapid switch)
-    if (histData._symbol !== symbol || histData._exchange !== exchange) return;
+    // Guard: skip if the tagged symbol doesn't match current
+    if (histData._symbol !== symbol) return;
 
-    const bars = histData.data
-      .map((bar) => ({
-        time: bar.timestamp as Time,
-        open: bar.open,
-        high: bar.high,
-        low: bar.low,
-        close: bar.close,
+    const bars = histData.candles
+      .map((candle) => ({
+        // Date is "YYYY-MM-DD" — convert to Unix seconds (midnight UTC)
+        time: (new Date(candle.Date + 'T00:00:00Z').getTime() / 1000) as Time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
       }))
       .sort((a, b) => (a.time as number) - (b.time as number));
 
@@ -216,14 +226,17 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     lastHistBarTimeRef.current = bars[bars.length - 1].time as number;
     partialCandleRef.current = null;
     lastCumulativeVolumeRef.current = null;
-  }, [histData, symbol, exchange]);
+  }, [histData, symbol, isIntraday]);
 
-  // Reset candle refs when interval changes (histData may come from cache unchanged)
+  // Reset candle refs when interval changes; clear chart on intraday
   useEffect(() => {
     partialCandleRef.current = null;
     lastCumulativeVolumeRef.current = null;
     lastHistBarTimeRef.current = null;
-  }, [interval]);
+    if (isIntraday && seriesRef.current) {
+      seriesRef.current.setData([]);
+    }
+  }, [interval, isIntraday]);
 
   // WebSocket: subscribe to live ticks for last-candle update (mode 2)
   //
@@ -326,7 +339,6 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
 
   const handleIntervalChange = (newInterval: Interval) => {
     setInterval(newInterval);
-    setPendingInterval(newInterval);
   };
 
   const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', 'D'];
@@ -378,8 +390,8 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           ))}
         </div>
 
-        {isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
-        {isError && <span className="text-terminal-red text-[10px] ml-1">API ERR</span>}
+        {!isIntraday && isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
+        {!isIntraday && isError && <span className="text-terminal-red text-[10px] ml-1">FETCH ERR</span>}
 
         <button
           type="button"
@@ -411,7 +423,15 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       </form>
 
       {/* Chart canvas fills remaining height */}
-      <div ref={chartContainerRef} className="flex-1 w-full min-h-0" />
+      <div ref={chartContainerRef} className="flex-1 w-full min-h-0 relative">
+        {isIntraday && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-10">
+            <p className="text-terminal-amber font-mono text-xs text-center px-4">
+              Intraday charts are scoped for future development.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
