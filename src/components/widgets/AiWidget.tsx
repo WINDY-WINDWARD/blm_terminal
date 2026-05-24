@@ -386,7 +386,8 @@ export function AiWidget() {
       if (!res.ok) return [];
       return res.json();
     },
-    staleTime: 30_000,
+    staleTime: 0,       // always re-fetch when invalidated
+    refetchOnMount: true,
   });
 
   // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -410,15 +411,15 @@ export function AiWidget() {
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  /** Switch to a past session. Fetches from backend only on first open. */
+  /** Switch to a past session. Fetches from backend unless the session is currently streaming. */
   const loadSession = useCallback(
     async (id: number) => {
       setActiveKey(id);
       setSidebarOpen(false);
       setTimeout(() => inputRef.current?.focus(), 50);
 
-      // Already loaded (or currently streaming) — just switch the view
-      if (sessionMap.has(id)) return;
+      // Never clobber a live stream — the in-memory state IS the truth while streaming
+      if (sessionMap.get(id)?.isStreaming) return;
 
       try {
         const res = await fetch(`/api/py/ai/chat/sessions/${id}`);
@@ -427,6 +428,7 @@ export function AiWidget() {
           return;
         }
         const data: SessionDetail = await res.json();
+        // Always apply DB state so completed replies are reflected after re-visiting
         patchSession(id, {
           model: data.model,
           messages: data.messages.map((m) => ({
@@ -586,6 +588,8 @@ export function AiWidget() {
               liveKey = assignedId;
               // If the user is still viewing this chat, update the view key too
               setActiveKey((prev) => (prev === sessionKey ? assignedId : prev));
+              // Immediately refresh sidebar so the new session appears
+              void refetchSessions();
             }
           } else if (event.type === 'token') {
             assistantContent += event.text;
@@ -624,7 +628,8 @@ export function AiWidget() {
           } else if (event.type === 'done') {
             streamDone = true;
             writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
-            void queryClient.invalidateQueries({ queryKey: ['ai-chat-sessions'] });
+            // Force-refetch so sidebar message count and updated_at reflect the new reply
+            void refetchSessions();
             break;
           }
         }
@@ -656,7 +661,7 @@ export function AiWidget() {
       });
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [activeKey, sessionMap, defaultModel, symbol, exchange, patchSession, queryClient]);
+  }, [activeKey, sessionMap, defaultModel, symbol, exchange, patchSession, refetchSessions]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
