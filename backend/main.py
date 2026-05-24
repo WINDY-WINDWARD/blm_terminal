@@ -15,6 +15,7 @@ from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text, event as sa_event
 
 from app.config import settings
@@ -40,6 +41,7 @@ from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
 from app.services.news_fetcher import news_fetcher
 from app.services.morningstar_client import init_client, close_client
+from app.services.nse_rate_limiter import NSEServiceUnavailableError
 from app.backgroundtasks import (
     start_all_workers,
     stop_all_workers,
@@ -384,6 +386,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(NSEServiceUnavailableError)
+async def nse_unavailable_handler(request: Request, exc: NSEServiceUnavailableError) -> JSONResponse:
+    """Return 503 when the NSE circuit breaker is open instead of crashing the ASGI app."""
+    return JSONResponse(status_code=503, content={"error": str(exc)})
+
 
 # Request / response logging — logs every HTTP call with method, path, status,
 # and latency so that all network activity appears in backend.log.
