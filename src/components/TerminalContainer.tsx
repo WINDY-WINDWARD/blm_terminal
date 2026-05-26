@@ -8,6 +8,7 @@ import {
   focusedPanelAtom,
   panelCountAtom,
   wsConnectedAtom,
+  cleanupOldLocalStorage,
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 
@@ -37,6 +38,11 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
   const [panelCount] = useAtom(panelCountAtom);
   const setWsConnected = useSetAtom(wsConnectedAtom);
+
+  // Clean up legacy localStorage keys once on mount
+  useEffect(() => {
+    cleanupOldLocalStorage();
+  }, []);
 
   // Connect WebSocket on mount and track connection state
   useEffect(() => {
