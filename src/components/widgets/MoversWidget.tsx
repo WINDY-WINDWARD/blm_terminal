@@ -3,7 +3,12 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
-import { activeSymbolAtom, activeExchangeAtom, moversColumnsAtom } from '@/store/terminalStore';
+import {
+  activeSymbolAtom,
+  activeExchangeAtom,
+  moversColumnsAtom,
+  moversCategoryAtom,
+} from '@/store/terminalStore';
 
 interface ChangeRanges {
   oneDayPercent: number | null;
@@ -35,13 +40,34 @@ interface MoverRow {
   symbol: string;
   close: string;
   pChange: number;
+  open?: string;
+  high?: string;
+  low?: string;
+  vol?: number;
+  turnover?: number;
+  caDate?: string;
+  caPurpose?: string;
 }
 
 interface TopMoverItem {
   symbol: string;
   lastPrice?: string | number;
   close?: string | number;
+  ltp?: string | number;
+  open_price?: string | number;
+  high_price?: string | number;
+  low_price?: string | number;
   pChange?: string | number;
+  perChange?: string | number;
+  trade_quantity?: string | number;
+  turnover?: string | number;
+  ca_ex_dt?: string;
+  ca_purpose?: string;
+}
+
+interface MoverCategory {
+  key: string;
+  label: string;
 }
 
 function formatPrice(val: number): string {
@@ -49,7 +75,7 @@ function formatPrice(val: number): string {
 }
 
 function formatChange(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">&mdash;</span>;
   const isUp = val > 0;
   return (
     <span className={isUp ? 'text-terminal-green font-bold' : 'text-terminal-red font-bold'}>
@@ -59,7 +85,7 @@ function formatChange(val: number | null | undefined): React.ReactNode {
 }
 
 function formatRange(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">&mdash;</span>;
   const isUp = val > 0;
   return (
     <span className={isUp ? 'text-terminal-green' : 'text-terminal-red'}>
@@ -69,8 +95,30 @@ function formatRange(val: number | null | undefined): React.ReactNode {
 }
 
 function formatPriceCell(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
+  if (val == null || isNaN(val)) return <span className="text-white/60">&mdash;</span>;
   return <span>{val.toFixed(2)}</span>;
+}
+
+function formatPriceStr(val: string | undefined): React.ReactNode {
+  if (!val || val === '—') return <span className="text-white/60">&mdash;</span>;
+  return <span>{val}</span>;
+}
+
+function formatVol(val: number | null | undefined): React.ReactNode {
+  if (val == null || isNaN(val) || val === 0) return <span className="text-white/60">&mdash;</span>;
+  if (val >= 1_00_00_000) return <span>{(val / 1_00_00_000).toFixed(1)}Cr</span>;
+  if (val >= 1_00_000) return <span>{(val / 1_00_000).toFixed(1)}L</span>;
+  return <span>{(val / 1000).toFixed(1)}K</span>;
+}
+
+function formatTurnover(val: number | null | undefined): React.ReactNode {
+  if (val == null || isNaN(val) || val === 0) return <span className="text-white/60">&mdash;</span>;
+  return <span>&#8377;{(val).toFixed(0)}Cr</span>;
+}
+
+function formatCaDt(val: string | undefined, purpose: string | undefined): React.ReactNode {
+  if (!val || val === '-') return <span className="text-white/60">&mdash;</span>;
+  return <span title={purpose || ''}>{val}</span>;
 }
 
 function useChangeRanges(symbol: string) {
@@ -104,6 +152,28 @@ function useMoverQuote(symbol: string, enabled: boolean) {
   });
 }
 
+function useMoverCategories() {
+  return useQuery<MoverCategory[]>({
+    queryKey: ['market/movers-categories'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/market/movers-categories');
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 86_400_000,
+  });
+}
+
+const CATEGORY_SHORT_LABELS: Record<string, string> = {
+  allSec: 'ALL',
+  NIFTY: 'NIFTY50',
+  BANKNIFTY: 'BANKNIFTY',
+  NIFTYNEXT50: 'NEXT50',
+  SecGtr20: '&gt;&#8377;20',
+  SecLwr20: '&lt;&#8377;20',
+  FOSec: 'F&amp;O',
+};
+
 interface MoverRowProps {
   row: MoverRow;
   columns: string[];
@@ -118,7 +188,7 @@ function MoverRowComponent({ row, columns, onClick, colorClass }: MoverRowProps)
 
   const yearHigh = quote?.yearHigh;
   const yearLow = quote?.yearLow;
-  const dash = <span className="text-white/60">—</span>;
+  const dash = <span className="text-white/60">&mdash;</span>;
 
   const renderCell = (col: string) => {
     switch (col) {
@@ -126,6 +196,18 @@ function MoverRowComponent({ row, columns, onClick, colorClass }: MoverRowProps)
         return row.close;
       case 'chg':
         return formatChange(row.pChange);
+      case 'open':
+        return formatPriceStr(row.open);
+      case 'high':
+        return formatPriceStr(row.high);
+      case 'low':
+        return formatPriceStr(row.low);
+      case 'vol':
+        return formatVol(row.vol);
+      case 'trnvr':
+        return formatTurnover(row.turnover);
+      case 'ca':
+        return formatCaDt(row.caDate, row.caPurpose);
       case '1w':
         return rangesLoading ? dash : formatRange(ranges?.oneWeekPercent);
       case '1m':
@@ -169,6 +251,12 @@ function MoverRowComponent({ row, columns, onClick, colorClass }: MoverRowProps)
 const COLUMN_LABELS: Record<string, string> = {
   close: 'CLOSE',
   chg: 'CHG%',
+  open: 'OPEN',
+  high: 'HIGH',
+  low: 'LOW',
+  vol: 'VOL',
+  trnvr: 'TRNVR',
+  ca: 'CA',
   '1w': '1W%',
   '1m': '1M%',
   '3m': '3M%',
@@ -181,15 +269,33 @@ const COLUMN_LABELS: Record<string, string> = {
   '52wl': '52W LOW',
 };
 
+function mapItemToRow(item: TopMoverItem): MoverRow {
+  return {
+    symbol: item.symbol,
+    close: formatPrice(parseFloat(String(item.ltp || item.close || item.lastPrice || '0'))),
+    pChange: parseFloat(String(item.perChange || item.pChange || '0')),
+    open: item.open_price != null ? formatPrice(parseFloat(String(item.open_price))) : undefined,
+    high: item.high_price != null ? formatPrice(parseFloat(String(item.high_price))) : undefined,
+    low: item.low_price != null ? formatPrice(parseFloat(String(item.low_price))) : undefined,
+    vol: item.trade_quantity != null ? Number(item.trade_quantity) : undefined,
+    turnover: item.turnover != null ? Number(item.turnover) : undefined,
+    caDate: item.ca_ex_dt,
+    caPurpose: item.ca_purpose,
+  };
+}
+
 export function MoversWidget() {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const [moversColumns] = useAtom(moversColumnsAtom);
+  const [moversCategory, setMoversCategory] = useAtom(moversCategoryAtom);
+
+  const { data: categories = [] } = useMoverCategories();
 
   const { data: gainers = [], isLoading: gainersLoading } = useQuery<TopMoverItem[]>({
-    queryKey: ['market/top-gainers'],
+    queryKey: ['market/top-gainers', moversCategory],
     queryFn: async () => {
-      const res = await fetch('/api/py/market/top-gainers');
+      const res = await fetch(`/api/py/market/top-gainers?category=${encodeURIComponent(moversCategory)}`);
       if (!res.ok) throw new Error('Failed to fetch top gainers');
       return res.json();
     },
@@ -198,9 +304,9 @@ export function MoversWidget() {
   });
 
   const { data: losers = [], isLoading: losersLoading } = useQuery<TopMoverItem[]>({
-    queryKey: ['market/top-losers'],
+    queryKey: ['market/top-losers', moversCategory],
     queryFn: async () => {
-      const res = await fetch('/api/py/market/top-losers');
+      const res = await fetch(`/api/py/market/top-losers?category=${encodeURIComponent(moversCategory)}`);
       if (!res.ok) throw new Error('Failed to fetch top losers');
       return res.json();
     },
@@ -208,17 +314,8 @@ export function MoversWidget() {
     refetchInterval: 60_000,
   });
 
-  const gainerRows: MoverRow[] = gainers.map((item: TopMoverItem) => ({
-    symbol: item.symbol,
-    close: formatPrice(parseFloat(String(item.lastPrice || item.close || '0'))),
-    pChange: parseFloat(String(item.pChange)),
-  }));
-
-  const loserRows: MoverRow[] = losers.map((item: TopMoverItem) => ({
-    symbol: item.symbol,
-    close: formatPrice(parseFloat(String(item.lastPrice || item.close || '0'))),
-    pChange: parseFloat(String(item.pChange)),
-  }));
+  const gainerRows: MoverRow[] = gainers.map(mapItemToRow);
+  const loserRows: MoverRow[] = losers.map(mapItemToRow);
 
   const handleRowClick = (row: MoverRow) => {
     setActiveSymbol(row.symbol);
@@ -243,6 +340,25 @@ export function MoversWidget() {
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-auto">
+      {/* Category Tabs */}
+      {categories.length > 0 && (
+        <div className="flex-shrink-0 flex gap-0.5 px-2 pt-1.5 pb-0.5 overflow-x-auto border-b border-terminal-gray">
+          {categories.map((cat) => (
+            <button
+              key={cat.key}
+              onClick={() => setMoversCategory(cat.key)}
+              className={`flex-shrink-0 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded-t border-b-2 transition-colors ${
+                moversCategory === cat.key
+                  ? 'text-terminal-amber border-terminal-amber bg-amber-900/20'
+                  : 'text-white/50 border-transparent hover:text-white hover:border-white/30'
+              }`}
+            >
+              {CATEGORY_SHORT_LABELS[cat.key] || cat.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Top Gainers */}
       <div className="flex-1 bg-terminal-bg p-2 border-b border-terminal-green">
         <div className="text-terminal-green font-bold uppercase text-[10px] tracking-widest mb-1">Top Gainers</div>

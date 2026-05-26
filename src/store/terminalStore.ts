@@ -80,6 +80,9 @@ export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '
 export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
 export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS);
 
+/** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
+export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec');
+
 // ─── Watchlists ─────────────────────────────────────────────────────────────
 
 export interface Watchlist {

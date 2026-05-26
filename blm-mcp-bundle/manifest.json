@@ -50,8 +50,8 @@
   },
   "tools": [
     { "name": "health_check",                  "description": "Check backend service health and connectivity." },
-    { "name": "get_top_gainers",               "description": "Fetch today's top-gaining NSE equities ranked by intraday percentage change." },
-    { "name": "get_top_losers",                "description": "Fetch today's top-losing NSE equities ranked by intraday percentage change." },
+    { "name": "get_top_gainers",               "description": "Fetch today's top-gaining NSE equities ranked by intraday percentage change. Supports optional category filter: NIFTY, BANKNIFTY, NIFTYNEXT50, SecGtr20, SecLwr20, FOSec, allSec (default)." },
+    { "name": "get_top_losers",                "description": "Fetch today's top-losing NSE equities ranked by intraday percentage change. Supports optional category filter: NIFTY, BANKNIFTY, NIFTYNEXT50, SecGtr20, SecLwr20, FOSec, allSec (default)." },
     { "name": "get_bulk_deals",                "description": "Fetch recent NSE bulk deal records for a given stock symbol." },
     { "name": "get_block_deals",               "description": "Fetch recent NSE block deal records for a given stock symbol." },
     { "name": "get_high_short_interest",       "description": "Fetch today's NSE stocks flagged for high short-selling interest." },

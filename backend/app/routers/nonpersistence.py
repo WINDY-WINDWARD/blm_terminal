@@ -17,7 +17,7 @@ from functools import partial
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,56 +93,117 @@ async def _get_largedeal_snapshot_shared() -> dict:
     return data
 
 
-async def _get_market_turnover_shared() -> list[dict]:
-    """Fetch market turnover payload once; cache for subsequent calls.
+_MOVERS_VALID_CATEGORIES = frozenset({
+    "NIFTY", "BANKNIFTY", "NIFTYNEXT50",
+    "SecGtr20", "SecLwr20", "FOSec", "allSec",
+})
 
-    Both top-gainers and top-losers hit the same NSE URL. Cache the payload
-    so simultaneous requests share one upstream call.
+
+async def _get_market_variations_shared(index: str) -> dict:
+    """Fetch the full live-analysis-variations payload once; cache for reuse.
+
+    Both top-gainers and top-losers share the same NSE URL conceptually (just
+    differing by index=gainers vs index=loosers), so this helper caches the
+    full categorised payload for each index.
     """
-    cached = nse_cache.get("market-turnover")
+    cache_key = f"market-variations-{index}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
-        logger.debug("Market turnover cache hit")
+        logger.debug("Market variations (%s) cache hit", index)
         return cached
 
-    rows = await throttled_nse_call(
-        "market-turnover",
-        _active_client._get_market_turnover,
+    payload = await throttled_nse_call(
+        f"market-variations-{index}",
+        partial(_active_client._get_market_variations, index),
         is_async_fn=USE_ASYNC_NSE,
     )
-    nse_cache["market-turnover"] = rows
-    return rows
+    nse_cache[cache_key] = payload
+    return payload
+
+
+def _build_mover_response(rows: list[dict], ascending: bool) -> list[dict]:
+    """Sort, filter, and normalise variation rows for the frontend.
+
+    The new API returns ``perChange`` (not ``pChange``). We alias both so
+    existing consumers using ``pChange`` and new consumers using ``perChange``
+    both work.
+
+    Also renames ``ltp`` → ``close`` for backward compat with MoversWidget
+    which reads ``lastPrice || close``.
+    """
+    df = pd.DataFrame(rows)
+    if "perChange" not in df.columns and "pChange" in df.columns:
+        df["perChange"] = pd.to_numeric(df["pChange"], errors="coerce")
+    elif "perChange" in df.columns:
+        df["perChange"] = pd.to_numeric(df["perChange"], errors="coerce")
+
+    if df.empty or "perChange" not in df.columns or df["perChange"].isna().all():
+        return []
+
+    df["pChange"] = df["perChange"]
+    df = df.dropna(subset=["pChange"])
+    df = df.sort_values("pChange", ascending=ascending).head(20)
+
+    # Normalise NaN / None before serialising
+    data = df.replace({np.nan: None, pd.NA: None}).to_dict(orient="records")
+    for row in data:
+        if "ltp" in row and "close" not in row:
+            row["close"] = row["ltp"]
+    return data
 
 
 @router.get("/top-gainers", summary="Top gainers on NSE", response_class=JSONResponse)
-async def top_gainers() -> JSONResponse:
-    cached = nse_cache.get("top-gainers")
+async def top_gainers(category: str = Query(default="allSec")) -> JSONResponse:
+    """Get today's top-gaining NSE equities for a given category.
+
+    Categories: NIFTY (Nifty 50), BANKNIFTY (Bank Nifty), NIFTYNEXT50 (Nifty
+    Next 50), SecGtr20 (Securities > Rs 20), SecLwr20 (Securities < Rs 20),
+    FOSec (F&O Securities), allSec (All Securities, default).
+    """
+    cache_key = f"top-gainers:{category}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
         return _json_response(cached, 60.0)
 
-    rows = await _get_market_turnover_shared()
-    df = pd.DataFrame(rows)
-    df_eq = df[df["series"] == "EQ"].copy()
-    df_eq["pChange"] = pd.to_numeric(df_eq["pChange"], errors="coerce")
-    df_eq = df_eq.dropna(subset=["pChange"])
-    df_eq = df_eq.sort_values("pChange", ascending=False).head(20)
-    data = _df_to_json_dict(df_eq)
-    return _cache_response(data, "top-gainers", 60.0)
+    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
+    payload = await _get_market_variations_shared("gainers")
+    rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
+    data = _build_mover_response(rows, ascending=False)
+    return _cache_response(_clean_nan(data), cache_key, 60.0)
 
 
 @router.get("/top-losers", summary="Top losers on NSE", response_class=JSONResponse)
-async def top_losers() -> JSONResponse:
-    cached = nse_cache.get("top-losers")
+async def top_losers(category: str = Query(default="allSec")) -> JSONResponse:
+    """Get today's top-losing NSE equities for a given category.
+
+    Same categories as top-gainers.
+    """
+    cache_key = f"top-losers:{category}"
+    cached = nse_cache.get(cache_key)
     if cached is not None:
         return _json_response(cached, 60.0)
 
-    rows = await _get_market_turnover_shared()
-    df = pd.DataFrame(rows)
-    df_eq = df[df["series"] == "EQ"].copy()
-    df_eq["pChange"] = pd.to_numeric(df_eq["pChange"], errors="coerce")
-    df_eq = df_eq.dropna(subset=["pChange"])
-    df_eq = df_eq.sort_values("pChange", ascending=True).head(20)
-    data = _df_to_json_dict(df_eq)
-    return _cache_response(data, "top-losers", 60.0)
+    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
+    payload = await _get_market_variations_shared("loosers")
+    rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
+    data = _build_mover_response(rows, ascending=True)
+    return _cache_response(_clean_nan(data), cache_key, 60.0)
+
+
+@router.get("/movers-categories", summary="Available categories for top-gainers/top-losers", response_class=JSONResponse)
+async def movers_categories() -> JSONResponse:
+    """Return the list of category keys and labels supported by the variations API."""
+    cached = nse_cache.get("movers-categories")
+    if cached is not None:
+        return _json_response(cached, 86400.0)
+
+    payload = await _get_market_variations_shared("gainers")
+    legends = payload.get("legends", [])
+    categories = [
+        {"key": key, "label": label}
+        for key, label in legends
+    ]
+    return _cache_response(categories, "movers-categories", 86400.0)
 
 
 @router.get("/bulk-deals/{symbol}", summary="Bulk deals for a specific stock symbol on NSE", response_class=JSONResponse)

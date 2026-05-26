@@ -81,6 +81,12 @@ const WATCHLIST_COLUMNS = [
 const MOVERS_COLUMNS = [
   { key: 'close', label: 'CLOSE' },
   { key: 'chg', label: 'CHG%' },
+  { key: 'open', label: 'OPEN' },
+  { key: 'high', label: 'HIGH' },
+  { key: 'low', label: 'LOW' },
+  { key: 'vol', label: 'VOL' },
+  { key: 'trnvr', label: 'TRNVR' },
+  { key: 'ca', label: 'CA' },
   { key: '1w', label: '1W%' },
   { key: '1m', label: '1M%' },
   { key: '3m', label: '3M%' },

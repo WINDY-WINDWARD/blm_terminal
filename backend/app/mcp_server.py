@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -99,26 +100,81 @@ async def _mcp_snapshot() -> dict:
     )
 
 
-@mcp.tool()
-async def get_top_gainers() -> list[dict[str, Any]]:
-    """Fetch today's top-gaining NSE equities ranked by intraday percentage change."""
-    df = await throttled_nse_call(
-        "top-gainers",
-        _active_client.get_top_gainers,
-        is_async_fn=USE_ASYNC_NSE,
-    )
-    return _df_to_json_dict(df)
+_MOVERS_VALID_CATEGORIES = frozenset({
+    "NIFTY", "BANKNIFTY", "NIFTYNEXT50",
+    "SecGtr20", "SecLwr20", "FOSec", "allSec",
+})
 
 
 @mcp.tool()
-async def get_top_losers() -> list[dict[str, Any]]:
-    """Fetch today's top-losing NSE equities ranked by intraday percentage change."""
-    df = await throttled_nse_call(
-        "top-losers",
-        _active_client.get_top_losers,
+async def get_top_gainers(category: str = "allSec") -> list[dict[str, Any]]:
+    """Fetch today's top-gaining NSE equities ranked by intraday percentage change.
+
+    Args:
+        category: Index filter. One of: NIFTY (Nifty 50), BANKNIFTY (Bank Nifty),
+                  NIFTYNEXT50 (Nifty Next 50), SecGtr20 (Securities > Rs 20),
+                  SecLwr20 (Securities < Rs 20), FOSec (F&O Securities),
+                  allSec (All Securities, default).
+
+    Returns rows with: symbol, ltp, open_price, high_price, low_price, prev_price,
+    net_price, perChange, trade_quantity, turnover, ca_ex_dt, ca_purpose, series,
+    market_type.
+    """
+    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
+    cache_key = f"mcp_top_gainers_{safe_cat}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    payload = await throttled_nse_call(
+        "mcp:market-variations-gainers",
+        partial(_active_client._get_market_variations, "gainers"),
         is_async_fn=USE_ASYNC_NSE,
     )
-    return _df_to_json_dict(df)
+    rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
+    if rows:
+        df = pd.DataFrame(rows)
+        if "perChange" in df.columns:
+            df["perChange"] = pd.to_numeric(df["perChange"], errors="coerce")
+            df = df.dropna(subset=["perChange"]).sort_values("perChange", ascending=False)
+            rows = _df_to_json_dict(df)
+    result = _clean_nan(rows)
+    _cache_set(cache_key, result)
+    return result
+
+
+@mcp.tool()
+async def get_top_losers(category: str = "allSec") -> list[dict[str, Any]]:
+    """Fetch today's top-losing NSE equities ranked by intraday percentage change.
+
+    Args:
+        category: Index filter. Same values as get_top_gainers.
+
+    Returns rows with: symbol, ltp, open_price, high_price, low_price, prev_price,
+    net_price, perChange, trade_quantity, turnover, ca_ex_dt, ca_purpose, series,
+    market_type.
+    """
+    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
+    cache_key = f"mcp_top_losers_{safe_cat}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    payload = await throttled_nse_call(
+        "mcp:market-variations-loosers",
+        partial(_active_client._get_market_variations, "loosers"),
+        is_async_fn=USE_ASYNC_NSE,
+    )
+    rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
+    if rows:
+        df = pd.DataFrame(rows)
+        if "perChange" in df.columns:
+            df["perChange"] = pd.to_numeric(df["perChange"], errors="coerce")
+            df = df.dropna(subset=["perChange"]).sort_values("perChange", ascending=True)
+            rows = _df_to_json_dict(df)
+    result = _clean_nan(rows)
+    _cache_set(cache_key, result)
+    return result
 
 
 @mcp.tool()

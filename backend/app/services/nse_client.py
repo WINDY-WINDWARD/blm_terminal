@@ -110,6 +110,8 @@ class NSEClient:
         try:
             rows = self._get_market_turnover()
             df = pandas.DataFrame(rows)
+            if "perChange" in df.columns and "pChange" not in df.columns:
+                df["pChange"] = pandas.to_numeric(df["perChange"], errors="coerce")
             df["pChange"] = pandas.to_numeric(df.get("pChange", pandas.Series(dtype=float)), errors="coerce")
             df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=False).head(20)
             logger.info("NSE: top gainers fetched (%d rows)", len(df))
@@ -124,6 +126,8 @@ class NSEClient:
         try:
             rows = self._get_market_turnover()
             df = pandas.DataFrame(rows)
+            if "perChange" in df.columns and "pChange" not in df.columns:
+                df["pChange"] = pandas.to_numeric(df["perChange"], errors="coerce")
             df["pChange"] = pandas.to_numeric(df.get("pChange", pandas.Series(dtype=float)), errors="coerce")
             df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=True).head(20)
             logger.info("NSE: top losers fetched (%d rows)", len(df))
@@ -240,47 +244,53 @@ class NSEClient:
 
         return payload
 
+    def _get_market_variations(self, index: str) -> dict:
+        """Fetch the full live-analysis-variations payload for gainers or loosers.
+
+        Args:
+            index: 'gainers' or 'loosers' (NSE's misspelling).
+
+        Returns the full parsed JSON: { legends, NIFTY: {data, timestamp},
+        BANKNIFTY: {...}, ..., allSec: {data, timestamp} }.
+        """
+        url = f"https://www.nseindia.com/api/live-analysis-variations?index={index}&type=allSec"
+        t0 = time.perf_counter()
+        resp = self._session.get(url, timeout=20)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+        resp.raise_for_status()
+        payload = resp.json()
+        if not isinstance(payload, dict) or "allSec" not in payload:
+            raise ValueError(
+                f"Unexpected response from live-analysis-variations?index={index}: "
+                f"keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}"
+            )
+        return payload
+
     def _get_market_turnover(self) -> list[dict]:
         """Fetch market turnover rows for top-gainers/losers.
 
-        First tries the raw market-turnover JSON endpoint (same URL as the async
-        client).  If that fails — e.g. a 404 outside market hours — falls back
-        to nsepython.nse_get_top_gainers() and extracts the DataFrame rows so
-        both paths return the same list[dict] shape.
+        Uses the live-analysis-variations API (gainers index) to get the allSec
+        category data. Falls back to the loosers index on failure.
 
         Returns:
-            list of row dicts, each containing symbol/series/pChange fields.
+            list of row dicts, each containing symbol/series/perChange fields.
         """
-        url = "https://www.nseindia.com/api/live-analysis-market-turnover"
         try:
-            t0 = time.perf_counter()
-            resp = self._session.get(url, timeout=20)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
-            resp.raise_for_status()
-            payload = resp.json()
-            rows: list[dict] = payload.get("data", [])
+            payload = self._get_market_variations("gainers")
+            rows: list[dict] = payload["allSec"].get("data", [])
             if not rows:
-                raise ValueError("No data in market turnover response")
+                raise ValueError("No data in allSec category for gainers")
             return rows
         except Exception as exc:
             logger.warning(
-                "market-turnover endpoint failed (%s), falling back to equity-stockIndices",
+                "variations-gainers failed (%s), falling back to loosers index",
                 exc,
             )
-            fno_url = "https://www.nseindia.com/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
-            t0 = time.perf_counter()
-            resp = self._session.get(fno_url, timeout=20)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            logger.info("NSE GET %s → %d (%.0fms)", fno_url, resp.status_code, elapsed_ms)
-            resp.raise_for_status()
-            payload = resp.json()
-            # NSE may return rows under 'data' or directly as a list
-            if isinstance(payload, list):
-                return payload
-            rows = payload.get("data") or payload.get("rows") or []
+            payload = self._get_market_variations("loosers")
+            rows: list[dict] = payload["allSec"].get("data", [])
             if not rows:
-                raise ValueError(f"No rows in equity-stockIndices response; keys={list(payload.keys())}")
+                raise ValueError("No data in allSec category for loosers")
             return rows
 
     def get_largedeal_snapshot(self) -> dict:
