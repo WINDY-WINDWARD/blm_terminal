@@ -25,6 +25,8 @@ from app.models.job import Job
 from app.database import _SyncSessionLocal, AsyncSessionLocal, _ThreadAsyncSessionLocal
 from app.config import settings
 from app.services.news_fetcher import news_fetcher
+from app.services.news_aggregator import fetch_all_feeds, store_articles
+from app.services.news_sources import HIGH_PRIORITY_SOURCES
 from app.services.mc_market_fetcher import market_data_fetcher
 from app.services.morningstar_client import (
     REQUEST_DELAY,
@@ -1410,6 +1412,115 @@ def news_worker() -> None:
     logger.info("news_worker: stopped")
 
 
+# RSS News Worker - Multi-source RSS aggregation
+NEWS_RSS_CRON = "*/5 * * * *"  # Every 5 minutes
+
+
+def _news_rss_sync() -> None:
+    """Fetch and store articles from all RSS sources."""
+    logger.info("news_rss_sync: starting RSS aggregation")
+    try:
+        # Fetch all high-priority sources (Tier 1 and 2)
+        all_articles, results = fetch_all_feeds(
+            sources=HIGH_PRIORITY_SOURCES,
+            concurrency=5,
+            timeout=15.0,
+        )
+
+        success_count = sum(1 for r in results if not r.error)
+        error_count = sum(1 for r in results if r.error)
+        logger.info(
+            "news_rss_sync: fetched %d articles from %d sources (%d errors)",
+            len(all_articles), success_count, error_count
+        )
+
+        # Store articles in database
+        if all_articles:
+            with _SyncSessionLocal() as session:
+                stored = 0
+                for article in all_articles:
+                    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+                    stmt = sqlite_insert(NewsArticle).values(article)
+                    stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
+                    session.execute(stmt)
+                    stored += 1
+                session.commit()
+                logger.info("news_rss_sync: stored %d articles", stored)
+
+        # Log errors for debugging (but don't fail)
+        for r in results:
+            if r.error:
+                logger.debug("news_rss_sync: %s failed: %s", r.source.id, r.error)
+
+    except Exception as e:
+        logger.exception("news_rss_sync: failed with exception: %s", e)
+
+
+async def _news_rss_sync_async() -> None:
+    """Async version of news RSS sync for use in worker threads."""
+    try:
+        all_articles, results = await fetch_all_feeds(
+            sources=HIGH_PRIORITY_SOURCES,
+            concurrency=5,
+            timeout=15.0,
+        )
+
+        success_count = sum(1 for r in results if not r.error)
+        error_count = sum(1 for r in results if r.error)
+        logger.info(
+            "news_rss_sync: fetched %d articles from %d sources (%d errors)",
+            len(all_articles), success_count, error_count
+        )
+
+        if all_articles:
+            async with _ThreadAsyncSessionLocal() as session:
+                stored = await store_articles(session, all_articles)
+                logger.info("news_rss_sync_async: stored %d articles", stored)
+
+    except Exception as e:
+        logger.exception("news_rss_sync_async: failed with exception: %s", e)
+
+
+def news_rss_worker() -> None:
+    """Daemon thread target for RSS news aggregation (cron: */5 * * * *)."""
+    logger.info("news_rss_worker: started")
+
+    if not _is_job_enabled("job.news_rss"):
+        logger.info("news_rss_worker: disabled, waiting...")
+        update_job_status_sync("job.news_rss", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
+        logger.info("news_rss_worker: stopped")
+        return
+
+    # Run immediately on startup
+    logger.info("news_rss_worker: running initial sync")
+    update_job_status_sync("job.news_rss", "running", progress=10, message="Initial RSS sync...")
+    _news_rss_sync()
+
+    # Then run on cron schedule
+    while not _shutdown_event.is_set():
+        wait_secs = _seconds_until_next_cron(NEWS_RSS_CRON)
+        logger.info("news_rss_worker: next run in %.0f s", wait_secs)
+        update_job_status_sync("job.news_rss", "waiting", progress=0, message=f"Next run in {wait_secs:.0f}s")
+        if _sleep_interruptible(wait_secs):
+            break
+
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.news_rss"):
+                update_job_status_sync("job.news_rss", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+
+            update_job_status_sync("job.news_rss", "running", progress=50, message="Fetching RSS feeds...")
+            _news_rss_sync()
+            update_job_status_sync("job.news_rss", "completed", progress=100, message="Sync complete")
+
+    update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
+    logger.info("news_rss_worker: stopped")
+
+
 WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
 
 
@@ -1897,11 +2008,12 @@ async def start_all_workers() -> list[threading.Thread]:
         ticker_scores_worker,          # 4 — momentum scores
         ticker_daily_update_worker,    # 5 — daily bhavcopy + refresh
         market_data_worker,            # 6 — live market data
-        global_scan_worker,            # 7 — full-universe scan
-        watchlist_notification_worker, # 8 — watchlist alerts
-        news_worker,                   # 9 — global news
-        watchlist_news_worker,         # 10 — per-symbol news
-        results_calendar_worker,       # 11 — upcoming results alerts
+        global_scan_worker,           # 7 — full-universe scan
+        watchlist_notification_worker,  # 8 — watchlist alerts
+        news_worker,                   # 9 — global news (MoneyControl)
+        news_rss_worker,              # 10 — RSS news aggregation
+        watchlist_news_worker,        # 11 — per-symbol news
+        results_calendar_worker,       # 12 — upcoming results alerts
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
