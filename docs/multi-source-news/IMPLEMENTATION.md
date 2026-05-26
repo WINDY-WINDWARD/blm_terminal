@@ -25,12 +25,12 @@ This document describes the complete implementation of the multi-source news sys
 
 ```mermaid
 flowchart LR
-    subgraph Sources["News Sources (35+)", "background:#333","color:#fff"]
+    subgraph Sources[News Sources]
         RSS["RSS Feeds"]
         MC["MoneyControl Scraping"]
     end
 
-    subgraph Backend["Backend Services", "background:#2a2a4a","color:#fff"]
+    subgraph Backend[Backend Services]
         RSS_P["RSS Parser"]
         NLP["NLP Service"]
         DB[(SQLite DB)]
@@ -40,7 +40,7 @@ flowchart LR
         BG["Background Worker"]
     end
 
-    subgraph Frontend["Frontend", "background:#2a4a2a","color:#fff"]
+    subgraph Frontend[Frontend]
         Widget["NewsWidget"]
         Socket["newsSocket.ts"]
         Store["Jotai Atoms"]
@@ -389,24 +389,24 @@ sequenceDiagram
     participant DB as SQLite DB
 
     Client->>Server: WebSocket connect
-    Server->>Client: {"type": "connected", "message": "News WebSocket connected"}
-    Client->>Server: {"action": "get_recent", "limit": 50}
+    Server->>Client: type=connected msg=News WebSocket connected
+    Client->>Server: action=get_recent limit=50
     Server->>DB: SELECT * FROM news_articles ORDER BY publish_date DESC LIMIT 50
     DB-->>Server: articles
-    Server->>Client: {"type": "recent_articles", "articles": [...]}
-    Client->>Server: {"action": "subscribe", "sources": ["bloomberg-mkts"]}
-    Server->>Client: {"type": "subscribed", "sources": ["bloomberg-mkts"]}
+    Server->>Client: type=recent_articles
+    Client->>Server: action=subscribe sources=[bloomberg-mkts]
+    Server->>Client: type=subscribed sources=[bloomberg-mkts]
 
     loop Every 30 seconds
-        Server->>Client: {"type": "heartbeat"}
+        Server->>Client: type=heartbeat
     end
 
     BG->>DB: INSERT new articles
     BG->>Server: broadcast_news_update(article)
-    Server->>Client: {"type": "news", "article": {...}}
+    Server->>Client: type=news article={...}
 
-    Client->>Server: {"action": "ping"}
-    Server->>Client: {"type": "pong"}
+    Client->>Server: action=ping
+    Server->>Client: type=pong
 ```
 
 ### 7.1 Connection Manager
