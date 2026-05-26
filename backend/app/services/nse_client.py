@@ -108,11 +108,13 @@ class NSEClient:
         """Fetch the list of top gainers from NSE India."""
         logger.debug("NSE: fetching top gainers")
         try:
-            rows = self._get_market_turnover()
+            rows = self._get_market_turnover(index="gainers")
             df = pandas.DataFrame(rows)
-            if "perChange" in df.columns and "pChange" not in df.columns:
-                df["pChange"] = pandas.to_numeric(df["perChange"], errors="coerce")
-            df["pChange"] = pandas.to_numeric(df.get("pChange", pandas.Series(dtype=float)), errors="coerce")
+            df["pChange"] = pandas.to_numeric(
+                df.get("pChange", pandas.Series(dtype=float)) if "pChange" in df.columns
+                else df.get("perChange", pandas.Series(dtype=float)),
+                errors="coerce",
+            )
             df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=False).head(20)
             logger.info("NSE: top gainers fetched (%d rows)", len(df))
             return df
@@ -124,11 +126,13 @@ class NSEClient:
         """Fetch the list of top losers from NSE India."""
         logger.debug("NSE: fetching top losers")
         try:
-            rows = self._get_market_turnover()
+            rows = self._get_market_turnover(index="loosers")
             df = pandas.DataFrame(rows)
-            if "perChange" in df.columns and "pChange" not in df.columns:
-                df["pChange"] = pandas.to_numeric(df["perChange"], errors="coerce")
-            df["pChange"] = pandas.to_numeric(df.get("pChange", pandas.Series(dtype=float)), errors="coerce")
+            df["pChange"] = pandas.to_numeric(
+                df.get("pChange", pandas.Series(dtype=float)) if "pChange" in df.columns
+                else df.get("perChange", pandas.Series(dtype=float)),
+                errors="coerce",
+            )
             df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=True).head(20)
             logger.info("NSE: top losers fetched (%d rows)", len(df))
             return df
@@ -267,31 +271,23 @@ class NSEClient:
             )
         return payload
 
-    def _get_market_turnover(self) -> list[dict]:
+    def _get_market_turnover(self, index: str = "gainers") -> list[dict]:
         """Fetch market turnover rows for top-gainers/losers.
 
-        Uses the live-analysis-variations API (gainers index) to get the allSec
-        category data. Falls back to the loosers index on failure.
+        Uses the live-analysis-variations API with the requested index to get
+        the allSec category data.
+
+        Args:
+            index: 'gainers' or 'loosers' (NSE's misspelling).
 
         Returns:
             list of row dicts, each containing symbol/series/perChange fields.
         """
-        try:
-            payload = self._get_market_variations("gainers")
-            rows: list[dict] = payload["allSec"].get("data", [])
-            if not rows:
-                raise ValueError("No data in allSec category for gainers")
-            return rows
-        except Exception as exc:
-            logger.warning(
-                "variations-gainers failed (%s), falling back to loosers index",
-                exc,
-            )
-            payload = self._get_market_variations("loosers")
-            rows: list[dict] = payload["allSec"].get("data", [])
-            if not rows:
-                raise ValueError("No data in allSec category for loosers")
-            return rows
+        payload = self._get_market_variations(index)
+        rows: list[dict] = payload["allSec"].get("data", [])
+        if not rows:
+            raise ValueError(f"No data in allSec category for {index}")
+        return rows
 
     def get_largedeal_snapshot(self) -> dict:
         """Fetch the full largedeal snapshot (bulk/short/block) from NSE India.

@@ -6,7 +6,8 @@ Performance optimizations (v1.3):
 - Request coalescing: simultaneous requests share one upstream call
 - Circuit breaker with OPEN → HALF_OPEN → CLOSED recovery
 - Shared snapshot cache: bulk/block/short deals from ONE NSE call
-- Shared market-turnover cache: top-gainers and top-losers share ONE call
+- Shared variations cache: top-gainers and top-losers each have their own
+  cached payload (gainers vs loosers) with per-category derived results
 - cachetools.TTLCache replaces dict-based TTL (auto-eviction, thread-safe)
 """
 
@@ -121,7 +122,7 @@ async def _get_market_variations_shared(index: str) -> dict:
     return payload
 
 
-def _build_mover_response(rows: list[dict], ascending: bool) -> list[dict]:
+def _build_mover_response(rows: list[dict], ascending: bool, category: str = "allSec") -> list[dict]:
     """Sort, filter, and normalise variation rows for the frontend.
 
     The new API returns ``perChange`` (not ``pChange``). We alias both so
@@ -139,6 +140,10 @@ def _build_mover_response(rows: list[dict], ascending: bool) -> list[dict]:
 
     if df.empty or "perChange" not in df.columns or df["perChange"].isna().all():
         return []
+
+    # Filter to equity series only for the allSec category
+    if category == "allSec" and "series" in df.columns:
+        df = df[df["series"] == "EQ"].copy()
 
     df["pChange"] = df["perChange"]
     df = df.dropna(subset=["pChange"])
@@ -160,15 +165,15 @@ async def top_gainers(category: str = Query(default="allSec")) -> JSONResponse:
     Next 50), SecGtr20 (Securities > Rs 20), SecLwr20 (Securities < Rs 20),
     FOSec (F&O Securities), allSec (All Securities, default).
     """
-    cache_key = f"top-gainers:{category}"
+    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
+    cache_key = f"top-gainers:{safe_cat}"
     cached = nse_cache.get(cache_key)
     if cached is not None:
         return _json_response(cached, 60.0)
 
-    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
     payload = await _get_market_variations_shared("gainers")
     rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
-    data = _build_mover_response(rows, ascending=False)
+    data = _build_mover_response(rows, ascending=False, category=safe_cat)
     return _cache_response(_clean_nan(data), cache_key, 60.0)
 
 
@@ -178,15 +183,15 @@ async def top_losers(category: str = Query(default="allSec")) -> JSONResponse:
 
     Same categories as top-gainers.
     """
-    cache_key = f"top-losers:{category}"
+    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
+    cache_key = f"top-losers:{safe_cat}"
     cached = nse_cache.get(cache_key)
     if cached is not None:
         return _json_response(cached, 60.0)
 
-    safe_cat = category if category in _MOVERS_VALID_CATEGORIES else "allSec"
     payload = await _get_market_variations_shared("loosers")
     rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
-    data = _build_mover_response(rows, ascending=True)
+    data = _build_mover_response(rows, ascending=True, category=safe_cat)
     return _cache_response(_clean_nan(data), cache_key, 60.0)
 
 
