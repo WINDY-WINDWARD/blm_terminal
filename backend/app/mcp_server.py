@@ -1077,22 +1077,48 @@ async def get_morningstar_fairvalue(
 
 
 @mcp.tool()
-async def get_global_news(days: int = 7, limit: int = 50) -> dict[str, Any]:
-    """Fetch recent global financial news articles from MoneyControl, filtered by date range.
+async def get_global_news(
+    days: int = 7,
+    limit: int = 50,
+    sources: list[str] | None = None,
+    sentiment: str | None = None,
+    threat_level: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
+    """Fetch recent financial news from MoneyControl and 35+ RSS sources with NLP analysis.
+
+    Returns articles from all sources by default (MoneyControl + all RSS feeds).
+    Supports additive filtering: an article passes if it matches ANY active filter.
 
     Args:
         days: Number of days to look back (default: 7).
         limit: Maximum number of articles to return (default: 50).
+        sources: Filter by source IDs (e.g. ['bloomberg-mkts', 'reuters-markets']).
+        sentiment: Filter by sentiment (POSITIVE, NEGATIVE, NEUTRAL).
+        threat_level: Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL).
+        language: Filter by two-letter language code (en, hi, zh, etc.).
     """
-    from datetime import datetime, timedelta
+    import json as _json
+
+    from sqlalchemy import or_
 
     start_date = datetime.now() - timedelta(days=days)
 
     async with AsyncSessionLocal() as db:
+        conditions = [NewsArticle.publish_date >= start_date]
+
+        if sources:
+            conditions.append(NewsArticle.source.in_(sources))
+        if sentiment:
+            conditions.append(NewsArticle.sentiment == sentiment.upper())
+        if threat_level:
+            conditions.append(NewsArticle.threat_level == threat_level.upper())
+        if language:
+            conditions.append(NewsArticle.language == language.lower())
+
         stmt = (
             select(NewsArticle)
-            .where(NewsArticle.source == SOURCE_NAME)
-            .where(NewsArticle.publish_date >= start_date)
+            .where(or_(*conditions) if conditions else True)
             .order_by(NewsArticle.publish_date.desc().nullslast())
             .limit(limit)
         )
@@ -1107,6 +1133,14 @@ async def get_global_news(days: int = 7, limit: int = 50) -> dict[str, Any]:
                     "text": a.text,
                     "publish_date": a.publish_date.isoformat() if a.publish_date else None,
                     "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
+                    "sentiment": a.sentiment,
+                    "sentiment_score": a.sentiment_score,
+                    "confidence": a.confidence,
+                    "language": a.language,
+                    "entities": _json.loads(a.entities) if a.entities else None,
+                    "threat_level": a.threat_level,
+                    "threat_category": a.threat_category,
+                    "source_credibility": a.source_credibility,
                 }
                 for a in articles
             ]
@@ -1123,17 +1157,14 @@ async def get_company_news(
     days: int = 30,
     limit: int = 50,
     refresh: bool = False,
+    sentiment: str | None = None,
+    threat_level: str | None = None,
+    language: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch MoneyControl news articles for one or multiple NSE companies, auto-refreshing stale content.
+    """Fetch news for one or multiple NSE companies with NLP analysis.
 
-    Automatically fetches fresh articles from MoneyControl when needed:
-      - No articles stored yet for the symbol (first call)
-      - The most recently fetched article is older than 5 minutes (matches the
-        global news crawl cadence — company pages are re-scraped at the same rate)
-      - refresh=True is passed explicitly
-
-    For unknown symbols (not in the built-in map), returns whatever is already
-    stored in the DB without attempting a live fetch.
+    Automatically fetches fresh articles from MoneyControl when needed.
+    Supports filtering by sentiment, threat level, and language (additive/OR logic).
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "INFY").
@@ -1143,11 +1174,15 @@ async def get_company_news(
         days: Number of days to look back (default: 30). Applies to all symbols.
         limit: Maximum number of articles to return per symbol (default: 50).
         refresh: Force a live fetch from MoneyControl even if articles are fresh (default: False).
+        sentiment: Filter by sentiment (POSITIVE, NEGATIVE, NEUTRAL).
+        threat_level: Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL).
+        language: Filter by two-letter language code (en, hi, zh, etc.).
 
     Returns a list of articles in single-symbol mode. In bulk mode returns a
     dict keyed by symbol; failed symbols return {"error": "<message>"}.
     """
-    from datetime import datetime, timedelta
+    import json as _json
+
     from sqlalchemy import func, or_
 
     if symbol is None and symbols is None:
@@ -1160,15 +1195,23 @@ async def get_company_news(
         start_date = datetime.now() - timedelta(days=days)
 
         async def _query_db(db) -> list[dict[str, Any]]:
+            conditions = [
+                NewsArticle.company_symbol == sym,
+                or_(
+                    NewsArticle.publish_date >= start_date,
+                    NewsArticle.publish_date.is_(None),
+                ),
+            ]
+            if sentiment:
+                conditions.append(NewsArticle.sentiment == sentiment.upper())
+            if threat_level:
+                conditions.append(NewsArticle.threat_level == threat_level.upper())
+            if language:
+                conditions.append(NewsArticle.language == language.lower())
+
             stmt = (
                 select(NewsArticle)
-                .where(NewsArticle.company_symbol == sym)
-                .where(
-                    or_(
-                        NewsArticle.publish_date >= start_date,
-                        NewsArticle.publish_date.is_(None),
-                    )
-                )
+                .where(or_(*conditions) if conditions else True)
                 .order_by(NewsArticle.publish_date.desc().nullslast())
                 .limit(limit)
             )
@@ -1181,6 +1224,14 @@ async def get_company_news(
                     "text": a.text,
                     "publish_date": a.publish_date.isoformat() if a.publish_date else None,
                     "fetched_at": a.fetched_at.isoformat() if a.fetched_at else None,
+                    "sentiment": a.sentiment,
+                    "sentiment_score": a.sentiment_score,
+                    "confidence": a.confidence,
+                    "language": a.language,
+                    "entities": _json.loads(a.entities) if a.entities else None,
+                    "threat_level": a.threat_level,
+                    "threat_category": a.threat_category,
+                    "source_credibility": a.source_credibility,
                 }
                 for a in articles
             ]

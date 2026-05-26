@@ -27,6 +27,7 @@ from app.config import settings
 from app.services.news_fetcher import news_fetcher
 from app.services.news_aggregator import fetch_all_feeds, store_articles
 from app.services.news_sources import HIGH_PRIORITY_SOURCES
+from app.routers.news_ws import broadcast_news_update
 from app.services.mc_market_fetcher import market_data_fetcher
 from app.services.morningstar_client import (
     REQUEST_DELAY,
@@ -1420,11 +1421,12 @@ def _news_rss_sync() -> None:
     """Fetch and store articles from all RSS sources."""
     logger.info("news_rss_sync: starting RSS aggregation")
     try:
-        # Fetch all high-priority sources (Tier 1 and 2)
-        all_articles, results = fetch_all_feeds(
-            sources=HIGH_PRIORITY_SOURCES,
-            concurrency=5,
-            timeout=15.0,
+        all_articles, results = _run_async(
+            fetch_all_feeds(
+                sources=HIGH_PRIORITY_SOURCES,
+                concurrency=5,
+                timeout=15.0,
+            )
         )
 
         success_count = sum(1 for r in results if not r.error)
@@ -1434,7 +1436,6 @@ def _news_rss_sync() -> None:
             len(all_articles), success_count, error_count
         )
 
-        # Store articles in database
         if all_articles:
             with _SyncSessionLocal() as session:
                 stored = 0
@@ -1447,7 +1448,15 @@ def _news_rss_sync() -> None:
                 session.commit()
                 logger.info("news_rss_sync: stored %d articles", stored)
 
-        # Log errors for debugging (but don't fail)
+                # Broadcast new articles via WebSocket (sync)
+                for article_dict in all_articles[:10]:
+                    try:
+                        import asyncio
+                        asyncio.get_event_loop()
+                        asyncio.ensure_future(broadcast_news_update(article_dict))
+                    except Exception as e:
+                        logger.debug("Failed to broadcast article: %s", e)
+
         for r in results:
             if r.error:
                 logger.debug("news_rss_sync: %s failed: %s", r.source.id, r.error)
@@ -1477,6 +1486,14 @@ async def _news_rss_sync_async() -> None:
                 stored = await store_articles(session, all_articles)
                 logger.info("news_rss_sync_async: stored %d articles", stored)
 
+                # Broadcast new articles via WebSocket
+                from app.services.news_aggregator import article_to_dict
+                for article_dict in all_articles[:10]:  # Broadcast newest 10
+                    try:
+                        await broadcast_news_update(article_dict)
+                    except Exception as e:
+                        logger.debug("Failed to broadcast article: %s", e)
+
     except Exception as e:
         logger.exception("news_rss_sync_async: failed with exception: %s", e)
 
@@ -1497,7 +1514,7 @@ def news_rss_worker() -> None:
     # Run immediately on startup
     logger.info("news_rss_worker: running initial sync")
     update_job_status_sync("job.news_rss", "running", progress=10, message="Initial RSS sync...")
-    _news_rss_sync()
+    _run_async(_news_rss_sync_async())
 
     # Then run on cron schedule
     while not _shutdown_event.is_set():
@@ -1514,7 +1531,7 @@ def news_rss_worker() -> None:
                 continue
 
             update_job_status_sync("job.news_rss", "running", progress=50, message="Fetching RSS feeds...")
-            _news_rss_sync()
+            _run_async(_news_rss_sync_async())
             update_job_status_sync("job.news_rss", "completed", progress=100, message="Sync complete")
 
     update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")

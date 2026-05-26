@@ -216,15 +216,46 @@
 
 ---
 
+## 13. Why Update MCP Tools with NLP Data?
+
+**Decision:** Include NLP fields in MCP get_global_news and get_company_news responses
+
+**Rationale:**
+- Claude Desktop users (via MCP) should get the same rich data as frontend
+- New NLP fields (sentiment, threat_level, entities, source_credibility) are now in DB
+- Having NLP data in MCP responses enables AI analysis of news sentiment/threat
+- User chose "both tools" and "include all by default"
+
+**Implementation:**
+- `get_global_news` now returns from ALL sources (not just MoneyControl) + all NLP fields
+- `get_company_news` returns all NLP fields
+- Both tools support filter params: sources, sentiment, threat_level, language (OR/additive logic)
+- manifest.json updated with expanded tool descriptions
+
+---
+
+## 14. Why OR/Additive Filter Logic?
+
+**Decision:** Article passes filter if it matches ANY active filter (OR logic)
+
+**Rationale:**
+- Natural for multi-source search: user wants to see "anything from Bloomberg OR Reuters"
+- More flexible than AND logic which would often return empty results
+- User confirmed "OR / additive (Recommended)"
+
+---
+
 ## Reference: FinceptTerminal vs BLM Terminal
 
-| Aspect | FinceptTerminal | BLM Terminal |
-|--------|-----------------|--------------|
+| Aspect | FinceptTerminal | BLM Terminal (after changes) |
+|--------|-----------------|------------------------------|
 | Language | C++ + Python | Python + TypeScript |
-| News Sources | 80+ RSS (C++) | 1 scraping (MoneyControl) |
-| NLP | Full pipeline | None |
-| WebSocket | Yes | No (polling) |
-| Database | Qt Sql + SQLite | SQLAlchemy + Prisma |
+| News Sources | 80+ RSS (C++) | 35+ RSS + MoneyControl scraping |
+| NLP | Full pipeline | Weighted word lists (sentiment, threat, entities) |
+| WebSocket | Yes | Yes (simple single-user at /ws/news) |
+| Database | Qt Sql + SQLite | SQLAlchemy + SQLite + Prisma |
 | Architecture | Server/desktop | Local desktop |
+| MCP Tools | N/A | Yes (32 @mcp.tool() with NLP data) |
+| Frontend | C++ widgets | Next.js 16 + React 19 + Tailwind |
 
-**BLM Terminal is simpler** - we're adding multi-source RSS and NLP without changing the fundamental architecture.
+**BLM Terminal now has** multi-source RSS news, NLP analysis, real-time WebSocket, and MCP tool access for AI assistants.

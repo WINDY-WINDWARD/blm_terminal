@@ -1,21 +1,16 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAtom, useAtomValue } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAtomValue } from 'jotai';
-import { activeSymbolAtom } from '@/store/terminalStore';
-
-interface NewsArticle {
-  url: string;
-  title: string | null;
-  text: string | null;
-  publish_date: string | null;
-  fetched_at: string | null;
-  company_symbol: string | null;
-  source: string | null;
-  top_image: string | null;
-  authors: string | null;
-}
+import {
+  activeSymbolAtom,
+  newsWsConnectedAtom,
+  liveNewsArticlesAtom,
+  newsFiltersAtom,
+} from '@/store/terminalStore';
+import { newsSocketService } from '@/lib/newsSocket';
+import type { NewsArticle } from '@/lib/newsSocket';
 
 interface NewsPaginatedResponse {
   articles: NewsArticle[];
@@ -26,8 +21,35 @@ interface NewsPaginatedResponse {
 }
 
 type Tab = 'global' | 'company';
-
 const PAGE_LIMIT = 50;
+
+const SOURCE_LABELS: Record<string, string> = {
+  'bloomberg-mkts': 'Bloomberg',
+  'reuters-markets': 'Reuters',
+  'cnbc-markets': 'CNBC',
+  'wsj-markets': 'WSJ',
+  'ft-markets': 'FT',
+  'economist': 'Economist',
+  'moneycontrol': 'MC',
+  'economictimes': 'ET',
+  'livemint': 'Mint',
+  'thehindubusiness': 'Hindu',
+  'ndtv-markets': 'NDTV',
+  'zeebusiness': 'Zee',
+};
+
+const SENTIMENT_COLORS: Record<string, string> = {
+  positive: 'bg-green-500',
+  negative: 'bg-red-500',
+  neutral: 'bg-gray-500',
+};
+
+const THREAT_BADGES: Record<string, { label: string; className: string }> = {
+  low: { label: 'LOW', className: 'bg-green-900 text-green-400' },
+  medium: { label: 'MED', className: 'bg-yellow-900 text-yellow-400' },
+  high: { label: 'HIGH', className: 'bg-red-900 text-red-400' },
+  critical: { label: 'CRIT', className: 'bg-red-900 text-red-400 font-bold' },
+};
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -44,10 +66,59 @@ function formatDate(iso: string | null): string {
   }
 }
 
-function ArticleRow({ article }: { article: NewsArticle }) {
+function SourceBadge({ sourceId }: { sourceId: string | null }) {
+  const label = sourceId ? SOURCE_LABELS[sourceId] || sourceId : '?';
+  return (
+    <span className="text-[10px] text-terminal-amber/60 shrink-0 font-mono">
+      {label}
+    </span>
+  );
+}
+
+function SentimentDot({ sentiment, score }: { sentiment: string | null; score: number | null }) {
+  const color = sentiment ? SENTIMENT_COLORS[sentiment] || 'bg-gray-500' : 'bg-gray-500';
+  const opacity = score !== null && score !== undefined ? Math.max(0.3, Math.min(1, score)) : 0.5;
+  return (
+    <span
+      className={`inline-block w-2 h-2 rounded-full ${color}`}
+      style={{ opacity }}
+      title={`${sentiment || 'unknown'} (${score?.toFixed(2) || '?'})`}
+    />
+  );
+}
+
+function ThreatBadge({ level }: { level: string | null }) {
+  if (!level) return null;
+  const badge = THREAT_BADGES[level.toLowerCase()];
+  if (!badge) return null;
+  return (
+    <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${badge.className}`}>
+      {badge.label}
+    </span>
+  );
+}
+
+function CredibilityWarning({ credibility }: { credibility: string | null }) {
+  if (!credibility || credibility === 'high' || credibility === 'medium') return null;
+  return (
+    <span className="text-[8px] text-yellow-500 ml-1" title={`Credibility: ${credibility}`}>
+      ⚠
+    </span>
+  );
+}
+
+function ArticleRow({
+  article,
+  showSentiment = true,
+}: {
+  article: NewsArticle;
+  showSentiment?: boolean;
+}) {
   const title = article.title ?? 'Untitled';
   const date = formatDate(article.publish_date);
-  const source = article.source === 'moneycontrol_global' ? 'MC Global' : 'MC Co.';
+  const sourceId = article.source;
+  const source = SOURCE_LABELS[sourceId || ''] || sourceId || '?';
+  const credibility = article.source_credibility;
 
   return (
     <a
@@ -60,14 +131,65 @@ function ArticleRow({ article }: { article: NewsArticle }) {
         <span className="text-[10px] text-white/50 shrink-0 font-mono w-20">
           {date}
         </span>
-        <span className="text-[10px] text-terminal-amber/60 shrink-0 font-mono">
-          {source}
-        </span>
-        <span className="text-xs text-terminal-amber font-medium leading-tight">
-          {title}
-        </span>
+        <div className="flex items-center gap-1 shrink-0">
+          <SourceBadge sourceId={sourceId} />
+          {showSentiment && (
+            <SentimentDot sentiment={article.sentiment} score={article.sentiment_score} />
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <span className="text-xs text-terminal-amber font-medium leading-tight truncate">
+            {title}
+          </span>
+          <ThreatBadge level={article.threat_level} />
+          <CredibilityWarning credibility={credibility} />
+        </div>
       </div>
     </a>
+  );
+}
+
+function SourceFilterChips({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (sources: string[]) => void;
+}) {
+  const allSources = Object.keys(SOURCE_LABELS);
+
+  const toggle = (sourceId: string) => {
+    if (selected.includes(sourceId)) {
+      onChange(selected.filter((s) => s !== sourceId));
+    } else {
+      onChange([...selected, sourceId]);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap gap-1 px-1 py-1 border-b border-terminal-gray/30">
+      {allSources.map((id) => (
+        <button
+          key={id}
+          onClick={() => toggle(id)}
+          className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+            selected.includes(id)
+              ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
+              : 'text-white/50 border-terminal-gray/40 hover:text-terminal-amber hover:border-terminal-amber'
+          }`}
+        >
+          {SOURCE_LABELS[id]}
+        </button>
+      ))}
+      {selected.length > 0 && (
+        <button
+          onClick={() => onChange([])}
+          className="text-[9px] px-1.5 py-0.5 text-white/40 hover:text-terminal-amber"
+        >
+          Clear
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -75,45 +197,74 @@ function TabButton({
   active,
   onClick,
   label,
+  live,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  live?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 ${
+      className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 ${
         active
           ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
           : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900 border-transparent'
       }`}
     >
       {label}
+      {live && (
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+        </span>
+      )}
     </button>
   );
 }
 
 export function NewsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
+  const [wsConnected, setWsConnected] = useAtom(newsWsConnectedAtom);
+  const [liveArticles, setLiveArticles] = useAtom(liveNewsArticlesAtom);
+  const [filters, setFilters] = useAtom(newsFiltersAtom);
+
   const [activeTab, setActiveTab] = useState<Tab>('global');
   const [globalOffset, setGlobalOffset] = useState(0);
   const [companyOffset, setCompanyOffset] = useState(0);
   const queryClient = useQueryClient();
 
-  // Reset offsets when switching tabs or changing symbol
+  useEffect(() => {
+    newsSocketService.connect();
+
+    const unsubConnection = newsSocketService.onConnectionChange((connected) => {
+      setWsConnected(connected);
+      if (connected) {
+        newsSocketService.getRecent(50);
+      }
+    });
+
+    const unsubNews = newsSocketService.onNews((article) => {
+      setLiveArticles((prev) => {
+        const exists = prev.some((a) => a.url === article.url);
+        if (exists) return prev;
+        const updated = [article, ...prev];
+        return updated.slice(0, 100);
+      });
+    });
+
+    return () => {
+      unsubConnection();
+      unsubNews();
+    };
+  }, [setLiveArticles]);
+
   const handleTabChange = (tab: Tab) => {
     setActiveTab(tab);
     if (tab === 'global') setGlobalOffset(0);
     if (tab === 'company') setCompanyOffset(0);
   };
-
-  // Reset company offset when symbol changes
-  React.useEffect(() => {
-    if (activeTab === 'company') {
-      setCompanyOffset(0);
-    }
-  }, [symbol, activeTab]);
 
   const handleRefresh = async () => {
     await queryClient.cancelQueries({ queryKey: ['news/company', symbol] });
@@ -174,13 +325,22 @@ export function NewsWidget() {
   const isLoading = activeTab === 'global' ? globalLoading : companyLoading;
   const isRefreshing = activeTab === 'company' && companyFetching && !companyLoading;
   const error = activeTab === 'global' ? globalError : companyError;
-  
+
   const currentData = activeTab === 'global' ? globalData : companyData;
-  const articles = currentData?.articles || [];
+  const dbArticles = currentData?.articles || [];
   const total = currentData?.total || 0;
   const currentOffset = activeTab === 'global' ? globalOffset : companyOffset;
   const setOffset = activeTab === 'global' ? setGlobalOffset : setCompanyOffset;
   const hasMore = currentData?.has_more || false;
+
+  const filteredLiveArticles = useCallback(() => {
+    return liveArticles.filter((a) => {
+      if (filters.sources.length > 0 && !filters.sources.includes(a.source || '')) return false;
+      if (filters.sentiment && a.sentiment !== filters.sentiment) return false;
+      if (filters.threatLevel && a.threat_level !== filters.threatLevel) return false;
+      return true;
+    });
+  }, [liveArticles, filters])();
 
   const handlePrevPage = () => {
     setOffset((prev: number) => Math.max(0, prev - PAGE_LIMIT));
@@ -192,14 +352,18 @@ export function NewsWidget() {
     }
   };
 
+  const handleSourceFilterChange = (sources: string[]) => {
+    setFilters((prev) => ({ ...prev, sources }));
+  };
+
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden">
-      {/* Tab Bar */}
       <div className="flex border-b border-terminal-gray shrink-0">
         <TabButton
           active={activeTab === 'global'}
           onClick={() => handleTabChange('global')}
           label="Global"
+          live={wsConnected && activeTab === 'global'}
         />
         <TabButton
           active={activeTab === 'company'}
@@ -230,7 +394,13 @@ export function NewsWidget() {
         )}
       </div>
 
-      {/* Content */}
+      {activeTab === 'global' && (
+        <SourceFilterChips
+          selected={filters.sources}
+          onChange={handleSourceFilterChange}
+        />
+      )}
+
       <div className="flex-1 overflow-auto">
         {isLoading ? (
           <div className="h-full w-full flex flex-col items-center justify-center gap-1">
@@ -258,18 +428,30 @@ export function NewsWidget() {
               Select a symbol to view company news
             </span>
           </div>
-        ) : articles.length === 0 ? (
-          <div className="h-full w-full flex items-center justify-center">
-            <span className="text-white/40 text-[10px]">No articles found</span>
-          </div>
         ) : (
           <div className="flex flex-col h-full">
+            {activeTab === 'global' && filteredLiveArticles.length > 0 && (
+              <div className="border-b border-terminal-gray/40 pb-1">
+                <div className="text-[9px] text-green-500 px-2 pt-1 flex items-center gap-1">
+                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                  LIVE
+                </div>
+                {filteredLiveArticles.slice(0, 5).map((article) => (
+                  <ArticleRow key={article.url + '_live'} article={article} />
+                ))}
+              </div>
+            )}
             <div className="flex-1 overflow-auto">
-              {articles.map((article, idx) => (
-                <ArticleRow key={article.url + idx} article={article} />
-              ))}
+              {(activeTab === 'global' ? dbArticles : dbArticles).length === 0 ? (
+                <div className="h-full w-full flex items-center justify-center">
+                  <span className="text-white/40 text-[10px]">No articles found</span>
+                </div>
+              ) : (
+                dbArticles.map((article, idx) => (
+                  <ArticleRow key={article.url + idx} article={article} />
+                ))
+              )}
             </div>
-            {/* Pagination Controls */}
             {total > 0 && (
               <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
                 <button

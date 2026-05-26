@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 import type { TickData } from '@/lib/socket';
 import type { FundsData } from '@/lib/openalgo';
+import type { NewsArticle } from '@/lib/newsSocket';
 
 // ─── Per-Tab Storage (sessionStorage) ─────────────────────────────────────────
 
@@ -199,3 +200,21 @@ export const notifAlertCountAtom = atom<number>(0);
 
 /** Timestamp bump to trigger NOTIF panel highlight flash */
 export const notifPanelHighlightAtom = atom<number>(0);
+
+// ─── News ──────────────────────────────────────────────────────────────────────
+
+export const newsWsConnectedAtom = atom<boolean>(false);
+
+export const liveNewsArticlesAtom = atom<NewsArticle[]>([]);
+
+export interface NewsFilters {
+  sources: string[];
+  sentiment: string | null;
+  threatLevel: string | null;
+}
+
+export const newsFiltersAtom = atomWithStorage<NewsFilters>('news.filters', {
+  sources: [],
+  sentiment: null,
+  threatLevel: null,
+});
