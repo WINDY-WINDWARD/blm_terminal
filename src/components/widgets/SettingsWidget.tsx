@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import Link from 'next/link';
@@ -168,31 +168,11 @@ export function SettingsWidget() {
   const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
   const [appVersion, setAppVersion] = useState<string>('');
 
-  const [loading, setLoading] = useState(true);
   const [configLoading, setConfigLoading] = useState(true);
 
-  // Keep a ref with the latest columns so the debounced save never reads a stale closure
-  const latestCols = useRef({ watchlist: watchlistCols, movers: moversCols });
-  useEffect(() => {
-    latestCols.current = { watchlist: watchlistCols, movers: moversCols };
-  }, [watchlistCols, moversCols]);
-
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const configSaveTimerRef = useRef<Partial<Record<NotifConfigKey, NodeJS.Timeout>>>({});
 
-  const scheduleSave = useCallback(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const { watchlist, movers } = latestCols.current;
-      fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ watchlistColumns: watchlist, moversColumns: movers }),
-      }).catch(console.error);
-    }, 300);
-  }, []);
-
-  const scheduleNotifConfigSave = useCallback((key: NotifConfigKey, value: string) => {
+  const scheduleNotifConfigSave = (key: NotifConfigKey, value: string) => {
     const existingTimer = configSaveTimerRef.current[key];
     if (existingTimer) clearTimeout(existingTimer);
     configSaveTimerRef.current[key] = setTimeout(() => {
@@ -202,37 +182,7 @@ export function SettingsWidget() {
         body: JSON.stringify({ value: Number(value) }),
       }).catch(console.error);
     }, 300);
-  }, []);
-
-  useEffect(() => {
-    fetch('/api/settings')
-      .then((res) => res.json())
-      .then((data) => {
-        let cols: string[] | undefined = data.watchlistColumns;
-        // One-time migration: inject 'alerts' for existing users who predate this feature.
-        // A localStorage flag prevents re-adding after the user intentionally removes it.
-        const MIGRATION_KEY = 'blm_migrated_alerts_col_v1';
-        const alreadyMigrated =
-          typeof window !== 'undefined' && localStorage.getItem(MIGRATION_KEY) === '1';
-        if (cols && !cols.includes('alerts') && !alreadyMigrated) {
-          cols = [...cols, 'alerts'];
-          if (typeof window !== 'undefined') localStorage.setItem(MIGRATION_KEY, '1');
-          fetch('/api/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ watchlistColumns: cols, moversColumns: data.moversColumns }),
-          }).catch(console.error);
-        }
-        if (cols) {
-          setWatchlistCols(cols);
-        }
-        if (data.moversColumns) {
-          setMoversCols(data.moversColumns);
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [setWatchlistCols, setMoversCols]);
+  };
 
   useEffect(() => {
     fetch('/api/py/system-config')
@@ -265,11 +215,9 @@ export function SettingsWidget() {
       .catch(console.error);
   }, [setWatchlists]);
 
-  // Cleanup debounce timer on unmount
   useEffect(() => {
     const timers = configSaveTimerRef.current;
     return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       Object.values(timers).forEach((timer) => {
         if (timer) clearTimeout(timer);
       });
@@ -281,7 +229,6 @@ export function SettingsWidget() {
       ? [...watchlistCols, key]
       : watchlistCols.filter((c) => c !== key);
     setWatchlistCols(newCols);
-    scheduleSave();
   };
 
   const handleMoversChange = (key: string, checked: boolean) => {
@@ -289,7 +236,6 @@ export function SettingsWidget() {
       ? [...moversCols, key]
       : moversCols.filter((c) => c !== key);
     setMoversCols(newCols);
-    scheduleSave();
   };
 
   const handlePanelCountChange = (count: PanelCount) => {
@@ -412,15 +358,11 @@ export function SettingsWidget() {
         <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
           Watchlist Columns
         </div>
-        {loading ? (
-          <div className="text-white">Loading...</div>
-        ) : (
-          <ColumnCheckboxes
-            columns={WATCHLIST_COLUMNS}
-            selected={watchlistCols}
-            onChange={handleWatchlistChange}
-          />
-        )}
+        <ColumnCheckboxes
+          columns={WATCHLIST_COLUMNS}
+          selected={watchlistCols}
+          onChange={handleWatchlistChange}
+        />
       </div>
 
       {/* Movers Columns */}
@@ -428,15 +370,11 @@ export function SettingsWidget() {
         <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
           Movers Columns
         </div>
-        {loading ? (
-          <div className="text-white">Loading...</div>
-        ) : (
-          <ColumnCheckboxes
-            columns={MOVERS_COLUMNS}
-            selected={moversCols}
-            onChange={handleMoversChange}
-          />
-        )}
+        <ColumnCheckboxes
+          columns={MOVERS_COLUMNS}
+          selected={moversCols}
+          onChange={handleMoversChange}
+        />
       </div>
 
       {/* Notification Thresholds */}

@@ -3,6 +3,64 @@ import { atomWithStorage } from 'jotai/utils';
 import type { TickData } from '@/lib/socket';
 import type { FundsData } from '@/lib/openalgo';
 
+// ─── Per-Tab Storage (sessionStorage) ─────────────────────────────────────────
+
+const getSessionStorage = () =>
+  typeof window !== 'undefined' ? window.sessionStorage : undefined;
+
+export const tabStorage = {
+  getItem: <V>(key: string, initialValue: V): V => {
+    const storage = getSessionStorage();
+    if (!storage) return initialValue;
+    const stored = storage.getItem(key);
+    if (stored === null) return initialValue;
+    try {
+      return JSON.parse(stored) as V;
+    } catch {
+      return initialValue;
+    }
+  },
+  setItem: <V>(key: string, newValue: V): void => {
+    const storage = getSessionStorage();
+    if (storage) {
+      storage.setItem(key, JSON.stringify(newValue));
+    }
+  },
+  removeItem: (key: string): void => {
+    const storage = getSessionStorage();
+    if (storage) {
+      storage.removeItem(key);
+    }
+  },
+};
+
+// ─── Legacy LocalStorage Keys (to be cleaned up) ──────────────────────────────
+
+export const OLD_LOCAL_STORAGE_KEYS = [
+  'terminal.activePanels',
+  'terminal.panelCount',
+  'terminal.panelSizes',
+  'terminal.focusedPanel',
+  'terminal.activeSymbol',
+  'terminal.activeExchange',
+  'terminal.watchlistColumns',
+  'terminal.moversColumns',
+  'terminal.moversCategory',
+  'terminal.activeWatchlistId',
+  'notif.subFilters',
+  'notif.streakMinDays',
+  'scan.subFilters',
+  'scan.streakMinDays',
+];
+
+/** Remove stale localStorage keys that have migrated to sessionStorage. */
+export function cleanupOldLocalStorage(): void {
+  if (typeof window === 'undefined') return;
+  OLD_LOCAL_STORAGE_KEYS.forEach((key) => {
+    window.localStorage.removeItem(key);
+  });
+}
+
 // ─── Existing Atoms ───────────────────────────────────────────────────────────
 
 export const activeCommandAtom = atom<string>('');
@@ -45,21 +103,22 @@ export const DEFAULT_ACTIVE_PANELS: Record<string, string> = {
 export const activePanelsAtom = atomWithStorage<Record<string, string>>(
   'terminal.activePanels',
   DEFAULT_ACTIVE_PANELS,
+  tabStorage,
 );
 
-export const panelCountAtom = atomWithStorage<PanelCount>('terminal.panelCount', 4);
+export const panelCountAtom = atomWithStorage<PanelCount>('terminal.panelCount', 4, tabStorage);
 
-export const panelSizesAtom = atomWithStorage<PanelSplitSizes | null>('terminal.panelSizes', null);
+export const panelSizesAtom = atomWithStorage<PanelSplitSizes | null>('terminal.panelSizes', null, tabStorage);
 
-export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1');
+export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1', tabStorage);
 
 // ─── Global Active Symbol ─────────────────────────────────────────────────────
 
-/** The currently active trading symbol — shared across all widgets */
-export const activeSymbolAtom = atomWithStorage<string>('terminal.activeSymbol', 'RELIANCE');
+/** The currently active trading symbol — tab-isolated via sessionStorage */
+export const activeSymbolAtom = atomWithStorage<string>('terminal.activeSymbol', 'RELIANCE', tabStorage);
 
-/** The currently active exchange — shared across all widgets */
-export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchange', 'NSE');
+/** The currently active exchange — tab-isolated via sessionStorage */
+export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchange', 'NSE', tabStorage);
 
 // ─── Other Atoms ─────────────────────────────────────────────────────────────
 
@@ -77,11 +136,11 @@ export const fundsAtom = atom<FundsData | null>(null);
 export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', 'msfv', '1w', '1m', '3m', '6m', '1y', 'results', 'alerts'];
 export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '1y'];
 
-export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
-export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS);
+export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS, tabStorage);
+export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS, tabStorage);
 
 /** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
-export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec');
+export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec', tabStorage);
 
 // ─── Watchlists ─────────────────────────────────────────────────────────────
 
@@ -94,7 +153,7 @@ export interface Watchlist {
 
 export const watchlistsAtom = atom<Watchlist[]>([]);
 
-export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1);
+export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1, tabStorage);
 
 // ─── Notif / Scan Sub-Filters ─────────────────────────────────────────────────
 
@@ -107,16 +166,16 @@ export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWat
 export type SubFilterMap = Partial<Record<string, string[]>>;
 
 /** NotifWidget — selected trigger_type bubbles per tab */
-export const notifSubFiltersAtom = atomWithStorage<SubFilterMap>('notif.subFilters', {});
+export const notifSubFiltersAtom = atomWithStorage<SubFilterMap>('notif.subFilters', {}, tabStorage);
 
 /** NotifWidget — minimum streak day count for the streaks tab (floor = 5) */
-export const notifStreakMinDaysAtom = atomWithStorage<number>('notif.streakMinDays', 5);
+export const notifStreakMinDaysAtom = atomWithStorage<number>('notif.streakMinDays', 5, tabStorage);
 
 /** ScanWidget — selected trigger_type bubbles per tab */
-export const scanSubFiltersAtom = atomWithStorage<SubFilterMap>('scan.subFilters', {});
+export const scanSubFiltersAtom = atomWithStorage<SubFilterMap>('scan.subFilters', {}, tabStorage);
 
 /** ScanWidget — minimum streak day count for the streaks tab (floor = 5) */
-export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays', 5);
+export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays', 5, tabStorage);
 
 // ─── Notif Symbol Filter ──────────────────────────────────────────────────────
 
@@ -129,7 +188,7 @@ export const notifSymbolFilterAtom = atom<string | null>(null);
 
 // ─── Global Notification Alert Modal ──────────────────────────────────────────
 
-/** IDs the alert modal has already notified for (persisted, capped at 1000) */
+/** IDs the alert modal has already notified for (persisted, capped at 1000) — global across tabs */
 export const seenNotifIdsAtom = atomWithStorage<number[]>('notif.seenIds', []);
 
 /** Whether the global notification alert modal is visible */
