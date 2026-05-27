@@ -26,6 +26,7 @@ from app.routers import (
     filings_router,
     markets_router,
     market_router,
+    market_ws_router,
     morningstar_router,
     news_router,
     news_ws_router,
@@ -507,8 +508,9 @@ app.include_router(markets_router, prefix="/api")
 app.include_router(morningstar_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
 app.include_router(news_router, prefix="/api")
-# WebSocket router mounted at /ws/news (no api prefix)
+# WebSocket routers mounted at /ws (no api prefix)
 app.include_router(news_ws_router, prefix="/ws")
+app.include_router(market_ws_router, prefix="/ws")
 app.include_router(screener_router, prefix="/api")
 app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
