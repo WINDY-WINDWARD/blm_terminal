@@ -1,8 +1,9 @@
 """Pydantic schemas for the news endpoints."""
 
+import json
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class NewsArticleOut(BaseModel):
@@ -30,6 +31,33 @@ class NewsArticleOut(BaseModel):
     threat_level: str | None = None
     threat_category: str | None = None
     source_credibility: str | None = None
+
+    @field_validator("entities", mode="before")
+    @classmethod
+    def _coerce_entities(cls, v: object) -> dict | None:
+        """Defensively decode entities field.
+
+        Handles three cases:
+        - None / dict  → pass through unchanged (clean rows)
+        - str          → legacy double-encoded rows written before the
+                         json.dumps() bug was fixed.  SQLAlchemy's JSON
+                         column already does one json.loads(), turning
+                         the stored '\"<escaped>\"' into a Python str.
+                         We need one (or two) more json.loads() to reach
+                         the actual dict.
+        """
+        if v is None or isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            try:
+                result = json.loads(v)
+                # Handle double-encoding: str → str → dict
+                if isinstance(result, str):
+                    result = json.loads(result)
+                return result if isinstance(result, dict) else None
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return None
+        return None
 
 
 class NewsPaginatedOut(BaseModel):

@@ -284,6 +284,83 @@ _configure_logging()
 # ---------------------------------------------------------------------------
 
 
+def _backfill_entities_double_encoding() -> None:
+    """Fix legacy news_articles rows where entities was double-JSON-encoded.
+
+    Before the news_aggregator.py fix, entities was stored as a JSON string
+    whose value is another JSON string (double-encoded).  SQLAlchemy's JSON
+    column decodes one layer on read, leaving a Python str instead of dict,
+    which causes Pydantic ValidationErrors in every news endpoint.
+
+    This function repairs all such rows in a single atomic transaction.
+    It is idempotent: on subsequent startups, the WHERE clause matches 0 rows
+    and the function returns instantly without touching the DB.
+
+    Safety: SQLite WAL mode allows concurrent reads during the write.  This
+    runs before start_all_workers() so the RSS background writer is not yet
+    active when the transaction commits.
+    """
+    import json
+    import sqlite3
+
+    db_path = Path(settings.db_path)
+    if not db_path.exists():
+        logger.warning("_backfill_entities: DB not found at %s — skipping", db_path)
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT rowid, entities FROM news_articles WHERE typeof(entities) = 'text'")
+        rows = cur.fetchall()
+        if not rows:
+            logger.debug("_backfill_entities: no corrupted rows found — nothing to do")
+            return
+
+        fixed: list[tuple[str, int]] = []
+        skipped = 0
+        for rowid, raw in rows:
+            try:
+                # SQLAlchemy JSON column does one json.loads() on read, so
+                # the stored value is: '"<escaped inner json string>"'
+                # raw here is the literal text from SQLite (the outer layer).
+                inner = json.loads(raw)          # str → str (still encoded)
+                if isinstance(inner, str):
+                    result = json.loads(inner)   # str → dict
+                elif isinstance(inner, dict):
+                    result = inner               # already a dict somehow
+                else:
+                    skipped += 1
+                    continue
+                if not isinstance(result, dict):
+                    skipped += 1
+                    continue
+                fixed.append((json.dumps(result), rowid))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                skipped += 1
+
+        if fixed:
+            cur.executemany(
+                "UPDATE news_articles SET entities = ? WHERE rowid = ?",
+                fixed,
+            )
+            conn.commit()
+            logger.info(
+                "_backfill_entities: fixed %d corrupted rows (%d skipped/unparseable)",
+                len(fixed),
+                skipped,
+            )
+        else:
+            logger.warning(
+                "_backfill_entities: %d candidate rows found but none were fixable (%d skipped)",
+                len(rows),
+                skipped,
+            )
+    finally:
+        conn.close()
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Re-configure logging: restores our handlers after uvicorn's own startup
@@ -293,6 +370,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
     await asyncio.to_thread(_ensure_watchlist_data)
+    await asyncio.to_thread(_backfill_entities_double_encoding)
 
     # alembic/env.py calls fileConfig(alembic.ini) during migrations which
     # resets the root logger to WARNING/stderr-only.  Restore our handlers now.
