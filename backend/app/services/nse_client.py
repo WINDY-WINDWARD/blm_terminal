@@ -5,6 +5,7 @@ NSE India Client using direct HTTP calls for fetching and caching data from NSE 
 import logging
 import time
 from datetime import datetime
+from typing import Any
 import requests
 from app.schemas.stockuniverse import StockUniverse
 
@@ -13,6 +14,18 @@ import nsepython
 import pandas
 
 logger = logging.getLogger(__name__)
+
+ILLIQUID_SERIES = frozenset({"BE", "ST", "SM"})
+SERIES_PREFERENCE = ["EQ", "BE", "ST", "SM", "T0"]
+
+
+class SymbolNotFoundError(Exception):
+    """Raised when a symbol cannot be found or has no tradeable data on NSE."""
+
+    def __init__(self, symbol: str, reason: str = "not found") -> None:
+        self.symbol = symbol
+        self.reason = reason
+        super().__init__(f"Symbol {symbol}: {reason}")
 
 
 def _parse_nse_date(date_str: str | None) -> datetime | None:
@@ -58,36 +71,82 @@ class NSEClient:
         logger.info("NSE: fetched %d equity symbols", len(result))
         return result
 
-    def get_stock_metadata(self, symbol: str) -> StockUniverse:
-        """Fetch metadata for a given stock symbol via GetQuoteApi getSymbolData endpoint."""
-        logger.debug("NSE: fetching metadata for %s", symbol)
+    def _get_metadata_for_series(self, symbol: str, series: str) -> dict[str, Any] | None:
+        """Call getMetaData for a symbol/series and return the active series info, or None."""
         url = (
             "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
-            f"?functionName=getSymbolData&marketType=N&series=EQ&symbol={symbol}"
+            f"?functionName=getMetaData&marketType=N&series={series}&symbol={symbol}"
         )
         t0 = time.perf_counter()
-        try:
-            resp = self._session.get(url, timeout=20)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
-            resp.raise_for_status()
-        except Exception:
-            logger.exception("NSE: metadata fetch failed for %s", symbol)
-            raise
-
+        resp = self._session.get(url, timeout=20)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+        resp.raise_for_status()
         payload = resp.json()
-        if not isinstance(payload, dict) or "equityResponse" not in payload:
-            raise ValueError(f"Unexpected getSymbolData response for {symbol}: {payload!r}")
+        if isinstance(payload, dict) and payload.get("activeSeries"):
+            return payload
+        return None
 
-        temp = payload["equityResponse"][0]
+    def _fetch_symbol_data(self, symbol: str, series: str) -> dict[str, Any]:
+        """Fetch getSymbolData for a symbol/series and return the parsed payload."""
+        url = (
+            "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
+            f"?functionName=getSymbolData&marketType=N&series={series}&symbol={symbol}"
+        )
+        t0 = time.perf_counter()
+        resp = self._session.get(url, timeout=20)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _classify_and_fetch_symbol(self, symbol: str, fallback_series: str | None = None) -> tuple[StockUniverse, str] | None:
+        """Try to fetch symbol data, classifying the failure reason.
+
+        Returns (StockUniverse, series) on success, or None.
+        Returns None with classification logged; does NOT raise.
+        """
+        discovered_series: str | None = None
+
+        if fallback_series:
+            ordered_series = [fallback_series] + [s for s in SERIES_PREFERENCE if s != fallback_series]
+        else:
+            ordered_series = SERIES_PREFERENCE[:]
+
+        for series_candidate in ordered_series:
+            meta = self._get_metadata_for_series(symbol, series_candidate)
+            if meta is None:
+                continue
+
+            active = meta.get("activeSeries", [])
+            if not active:
+                active = [series_candidate]
+
+            for series in active:
+                if self._fetch_symbol_data(symbol, series).get("equityResponse"):
+                    discovered_series = series
+                    break
+            else:
+                continue
+            break
+
+        if discovered_series is None:
+            return None
+
+        payload = self._fetch_symbol_data(symbol, discovered_series)
+        equity = payload.get("equityResponse", [])
+        if not equity:
+            return None
+
+        temp = equity[0]
         price_info = temp.get("priceInfo", {})
         sec_info = temp.get("secInfo", {})
         meta = temp.get("metaData", {})
 
-        tempdict = {
+        tempdict: dict[str, Any] = {
             "symbol": meta.get("symbol"),
             "companyName": meta.get("companyName"),
-            "segment": "EQ",
+            "segment": discovered_series,
             "industry": sec_info.get("basicIndustry"),
             "sectorPE": sec_info.get("pdSectorPe"),
             "symbolPE": sec_info.get("pdSymbolPe"),
@@ -97,9 +156,22 @@ class NSEClient:
             "low_52w": price_info.get("yearLow"),
             "high_52w_date": _parse_nse_date(price_info.get("yearHightDt")),
             "low_52w_date": _parse_nse_date(price_info.get("yearLowDt")),
+            "series": discovered_series,
         }
-        logger.debug("NSE: metadata fetched for %s", symbol)
-        return StockUniverse(**tempdict)
+        return (StockUniverse(**tempdict), discovered_series)
+
+    def get_stock_metadata(self, symbol: str) -> StockUniverse:
+        """Fetch metadata for a given stock symbol via GetQuoteApi.
+
+        Auto-detects active series using getMetaData, then fetches data
+        via getSymbolData. Series preference: EQ > BE > ST > SM > T0.
+        Raises SymbolNotFoundError if the symbol cannot be found in any series.
+        """
+        result = self._classify_and_fetch_symbol(symbol)
+        if result is None:
+            raise SymbolNotFoundError(symbol, "no tradeable series found")
+        stock_universe, _ = result
+        return stock_universe
 
     def get_corporate_filing_comparison(self, symbol: str) -> str:
         """Fetch corporate filing comparison for `symbol`, convert to CSV, and return CSV text.

@@ -33,6 +33,7 @@ from app.routers import (
     screener_router,
     system_config_router,
     stockuniverse_router,
+    stockuniverse_errors_router,
     watchlist_router,
     jobs_router,
 )
@@ -433,6 +434,7 @@ app.include_router(news_ws_router, prefix="/ws")
 app.include_router(screener_router, prefix="/api")
 app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
+app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")

@@ -13,7 +13,7 @@ from app.routers.news_ws import router as news_ws_router
 from app.routers.notifications import router as notifications_router
 from app.routers.screener import router as screener_router
 from app.routers.system_config import router as system_config_router
-from app.routers.stockuniverse import router as stockuniverse_router
+from app.routers.stockuniverse import router as stockuniverse_router, errors_router as stockuniverse_errors_router
 from app.routers.watchlist import router as watchlist_router
 
 __all__ = [
@@ -31,5 +31,6 @@ __all__ = [
     "screener_router",
     "system_config_router",
     "stockuniverse_router",
+    "stockuniverse_errors_router",
     "watchlist_router",
 ]

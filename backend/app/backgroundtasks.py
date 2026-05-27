@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 
-from app.services.nse_client import NSEClient
+from app.services.nse_client import NSEClient, SymbolNotFoundError
 from app.services import ticker_warehouse
 from app.services import indicators
 from app.models import stockuniverse
@@ -512,6 +512,13 @@ def _stock_universe_sync() -> None:
                         batch.clear()
                         if _sleep_interruptible(0.5):
                             return
+                except SymbolNotFoundError:
+                    _update_symbol_error_status(session, symbol, "unknown")
+                    session.commit()
+                    logger.warning("Symbol %s: no tradeable series found, marked as unknown", symbol)
+                    if _sleep_interruptible(0.5):
+                        return
+                    continue
                 except _SAOperationalError as e:
                     logger.warning(
                         "DB write failed for %s (will retry next cycle): %s", symbol, e
@@ -535,6 +542,18 @@ def _stock_universe_sync() -> None:
         logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
 
 
+def _update_symbol_error_status(session, symbol: str, reason: str, series: str | None = None) -> None:
+    """Set review_status (and optionally series) on an existing stock_universe row."""
+    values: dict[str, object] = {"review_status": reason}
+    if series is not None:
+        values["series"] = series
+    session.execute(
+        update(stockuniverse.StockUniverse)
+        .where(stockuniverse.StockUniverse.symbol == symbol)
+        .values(**values)
+    )
+
+
 def _bulk_insert_stock_universe(session, batch: list) -> None:
     """Bulk insert or update a batch of stock universe records."""
     if not batch:
@@ -542,7 +561,7 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
     for metadata in batch:
         stmt = (
             sqlite_insert(stockuniverse.StockUniverse)
-            .values(
+.values(
                 symbol=metadata.symbol,
                 company_name=metadata.companyName,
                 segment=metadata.segment,
@@ -555,6 +574,8 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
                 low_52w=metadata.low_52w,
                 high_52w_date=metadata.high_52w_date,
                 low_52w_date=metadata.low_52w_date,
+                series=metadata.series if hasattr(metadata, "series") else None,
+                review_status=None,
             )
             .on_conflict_do_update(
                 index_elements=["symbol"],
@@ -570,6 +591,8 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
                     "low_52w": metadata.low_52w,
                     "high_52w_date": metadata.high_52w_date,
                     "low_52w_date": metadata.low_52w_date,
+                    "series": metadata.series if hasattr(metadata, "series") else None,
+                    "review_status": None,  # clear error status on re-fetch
                     "high_52w_updated_at": func.now(),
                     "updated_at": func.now(),
                 },

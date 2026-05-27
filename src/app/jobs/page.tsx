@@ -20,6 +20,27 @@ interface Job {
   is_manual_only: boolean;
 }
 
+interface StockUniverseErrorSymbol {
+  symbol: string;
+  companyName: string | null;
+  reviewStatus: string;
+  series: string | null;
+  lastUpdateTime: string | null;
+}
+
+interface ErrorCategory {
+  count: number;
+  symbols: StockUniverseErrorSymbol[];
+}
+
+interface SymbolErrors {
+  delisted: ErrorCategory;
+  illiquid: ErrorCategory;
+  suspended: ErrorCategory;
+  not_tradable: ErrorCategory;
+  unknown: ErrorCategory;
+}
+
 interface TickerStatus {
   total_rows: number;
   symbols_covered: number;
@@ -90,6 +111,10 @@ export default function JobsPage() {
   const [tickerStatus, setTickerStatus] = useState<TickerStatus | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [symbolErrors, setSymbolErrors] = useState<SymbolErrors | null>(null);
+  const [errorsLoading, setErrorsLoading] = useState(false);
+  const [changeSymbolInput, setChangeSymbolInput] = useState<string>('');
+  const [changingSymbol, setChangingSymbol] = useState<string | null>(null);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -165,12 +190,30 @@ export default function JobsPage() {
     }
   }, []);
 
+  const fetchSymbolErrors = useCallback(async () => {
+    setErrorsLoading(true);
+    try {
+      const res = await fetch('/api/stockuniverse/errors');
+      if (!res.ok) throw new Error('Failed to fetch symbol errors');
+      const data = await res.json();
+      setSymbolErrors(data);
+    } catch (err) {
+      console.error('Failed to fetch symbol errors:', err);
+    } finally {
+      setErrorsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab !== 'stats') return;
     fetchStats();
-    const interval = setInterval(fetchStats, 10000);
+    fetchSymbolErrors();
+    const interval = setInterval(() => {
+      fetchStats();
+      fetchSymbolErrors();
+    }, 10000);
     return () => clearInterval(interval);
-  }, [activeTab, fetchStats]);
+  }, [activeTab, fetchStats, fetchSymbolErrors]);
 
   const handleTriggerBackfill = async () => {
     if (!confirm('Trigger full backfill for all watchlist symbols?')) return;
@@ -201,6 +244,50 @@ export default function JobsPage() {
     } catch (err) {
       console.error('Failed to trigger daily update:', err);
       alert('Failed to trigger daily update');
+    }
+  };
+
+  const handleRemoveSymbol = async (symbol: string) => {
+    if (!confirm(`Remove symbol ${symbol}? This will delete all its ticker data.`)) return;
+    try {
+      const res = await fetch(`/api/stockuniverse/errors/${symbol}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || 'Failed to remove symbol');
+      } else {
+        await fetchSymbolErrors();
+      }
+    } catch (err) {
+      console.error('Failed to remove symbol:', err);
+      alert('Failed to remove symbol');
+    }
+  };
+
+  const handleChangeSymbol = async (oldSymbol: string) => {
+    const newSymbol = changeSymbolInput.trim().toUpperCase();
+    if (!newSymbol) {
+      alert('Enter a new symbol');
+      return;
+    }
+    setChangingSymbol(oldSymbol);
+    try {
+      const res = await fetch(`/api/stockuniverse/errors/${oldSymbol}/change-symbol`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newSymbol }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.detail || 'Failed to change symbol');
+      } else {
+        setChangeSymbolInput('');
+        await fetchSymbolErrors();
+      }
+    } catch (err) {
+      console.error('Failed to change symbol:', err);
+      alert('Failed to change symbol');
+    } finally {
+      setChangingSymbol(null);
     }
   };
 
@@ -574,6 +661,94 @@ export default function JobsPage() {
                   >
                     Trigger Daily Update
                   </button>
+                </div>
+
+                {/* Symbol Health */}
+                <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider">
+                      Symbol Health
+                    </div>
+                    <div className="text-[10px] text-white/40">
+                      {errorsLoading ? 'Loading...' : symbolErrors
+                        ? Object.values(symbolErrors).reduce((s, c) => s + c.count, 0) + ' errored symbols'
+                        : '—'}
+                    </div>
+                  </div>
+
+                  {errorsLoading ? (
+                    <div className="text-[10px] text-white/40 py-4 text-center">Loading...</div>
+                  ) : symbolErrors ? (
+                    <div className="space-y-3">
+                      {([
+                        { key: 'delisted', label: 'Delisted', color: 'text-terminal-red' },
+                        { key: 'illiquid', label: 'Illiquid Series', color: 'text-orange-400' },
+                        { key: 'suspended', label: 'Suspended', color: 'text-yellow-400' },
+                        { key: 'not_tradable', label: 'Not Tradable', color: 'text-terminal-amber' },
+                        { key: 'unknown', label: 'Unknown Error', color: 'text-white/60' },
+                      ] as const).map(({ key, label, color }) => {
+                        const cat = symbolErrors[key];
+                        if (!cat || cat.count === 0) return null;
+                        return (
+                          <div key={key}>
+                            <div className={`text-[10px] uppercase tracking-wider mb-1 ${color}`}>
+                              {label} ({cat.count})
+                            </div>
+                            <div className="space-y-1">
+                              {cat.symbols.map((s) => (
+                                <div
+                                  key={s.symbol}
+                                  className="flex items-center gap-2 py-1 px-2 bg-black/20 rounded text-[10px]"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-bold text-white truncate">{s.symbol}</div>
+                                    <div className="text-white/40 truncate">{s.companyName || '—'}</div>
+                                  </div>
+                                  {s.series && (
+                                    <div className="px-1.5 py-0.5 bg-white/10 rounded text-[9px] text-white/60">
+                                      {s.series}
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1 ml-auto shrink-0">
+                                    <input
+                                      type="text"
+                                      placeholder="New symbol"
+                                      value={changingSymbol === s.symbol ? changeSymbolInput : ''}
+                                      onChange={(e) => {
+                                        setChangingSymbol(s.symbol);
+                                        setChangeSymbolInput(e.target.value.toUpperCase());
+                                      }}
+                                      className="w-20 px-1 py-0.5 bg-terminal-bg border border-terminal-gray rounded text-[10px] text-white placeholder-white/30 focus:border-terminal-amber focus:outline-none"
+                                    />
+                                    <button
+                                      onClick={() => handleChangeSymbol(s.symbol)}
+                                      disabled={changingSymbol === s.symbol}
+                                      className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 hover:bg-blue-500/40 text-[9px] font-bold disabled:opacity-30 transition-colors"
+                                    >
+                                      CHANGE
+                                    </button>
+                                    <button
+                                      onClick={() => handleRemoveSymbol(s.symbol)}
+                                      className="px-1.5 py-0.5 bg-terminal-red/20 text-terminal-red hover:bg-terminal-red/40 text-[9px] font-bold transition-colors"
+                                    >
+                                      REMOVE
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {Object.values(symbolErrors).every(c => c.count === 0) && (
+                        <div className="text-[10px] text-terminal-green py-2 text-center">
+                          All symbols are healthy
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-white/40 py-4 text-center">Failed to load</div>
+                  )}
                 </div>
               </div>
             ) : (
