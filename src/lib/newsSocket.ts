@@ -40,10 +40,8 @@ class NewsWebSocketService {
   private _recentArticles: NewsArticle[] = [];
   private subscribedSources: Set<string> = new Set();
 
-  private get wsURL(): string {
-    const base = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || 'http://localhost:8000';
-    return base.replace('http', 'ws') + '/ws/news';
-  }
+  private wsUrl: string | null = null;
+  private wsUrlFetchInitiated = false;
 
   private constructor() {}
 
@@ -59,16 +57,57 @@ class NewsWebSocketService {
       console.log('[newsSocket] Already connected');
       return;
     }
+    if (this.socket && this.socket.readyState === WebSocket.CONNECTING) return;
 
-    console.log('[newsSocket] Connecting to', this.wsURL);
+    if (!this.wsUrl && !this.wsUrlFetchInitiated) {
+      this.wsUrlFetchInitiated = true;
+      this.fetchWsUrl().then((url) => {
+        if (url) {
+          this.wsUrl = url;
+          this.openSocket();
+        } else {
+          console.warn('[newsSocket] Failed to fetch WS URL, retrying in 2s');
+          setTimeout(() => {
+            this.wsUrlFetchInitiated = false;
+            this.connect();
+          }, 2000);
+        }
+      });
+      return;
+    }
+
+    if (!this.wsUrl) return; // still waiting for URL
+    this.openSocket();
+  }
+
+  private async fetchWsUrl(): Promise<string | null> {
     try {
-      this.socket = new WebSocket(this.wsURL);
+      const res = await fetch('/api/py/ws-config');
+      if (!res.ok) return null;
+      const data = (await res.json()) as { newsWsUrl?: string };
+      return data.newsWsUrl ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private openSocket(): void {
+    if (!this.wsUrl) return;
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
+
+    console.log('[newsSocket] Connecting to', this.wsUrl);
+    try {
+      this.socket = new WebSocket(this.wsUrl);
 
       this.socket.onopen = () => {
         console.log('[newsSocket] Connected');
         this.reconnectAttempts = 0;
         this.connected = true;
         this.notifyConnection(true);
+        // Re-subscribe to any sources registered before connection
+        if (this.subscribedSources.size > 0) {
+          this.send({ action: 'subscribe', sources: [...this.subscribedSources] });
+        }
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
@@ -87,7 +126,7 @@ class NewsWebSocketService {
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[newsSocket] Failed to create WebSocket:', msg);
+      console.error('[newsSocket] Failed to open WebSocket:', msg);
     }
   }
 
@@ -102,6 +141,7 @@ class NewsWebSocketService {
       this.socket = null;
     }
     this.connected = false;
+    this.wsUrlFetchInitiated = false;
     this.notifyConnection(false);
   }
 
