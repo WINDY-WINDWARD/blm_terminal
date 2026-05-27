@@ -362,9 +362,16 @@ export function NewsWidget() {
     isLoading: globalLoading,
     error: globalError,
   } = useQuery<NewsPaginatedResponse>({
-    queryKey: ['news/all', { limit: PAGE_LIMIT, offset: globalOffset }],
+    queryKey: ['news/all', { limit: PAGE_LIMIT, offset: globalOffset, filters }],
     queryFn: async () => {
-      const res = await fetch(`/api/py/news/all?limit=${PAGE_LIMIT}&offset=${globalOffset}`);
+      const params = new URLSearchParams({
+        limit: String(PAGE_LIMIT),
+        offset: String(globalOffset),
+      });
+      if (filters.sources.length > 0) params.set('sources', filters.sources.join(','));
+      if (filters.sentiment) params.set('sentiment', filters.sentiment);
+      if (filters.threatLevel) params.set('threat_level', filters.threatLevel);
+      const res = await fetch(`/api/py/news/all?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to fetch global news');
       return res.json() as Promise<NewsPaginatedResponse>;
     },
@@ -410,13 +417,13 @@ export function NewsWidget() {
   const dbArticles = currentData?.articles || [];
   const currentOffset = activeTab === 'global' ? globalOffset : companyOffset;
   const setOffset = activeTab === 'global' ? setGlobalOffset : setCompanyOffset;
-  const hasMore = currentData?.has_more || false;
 
   const filteredLiveArticles = useCallback(() => {
     return liveArticles.filter((a) => matchesFilters(a, filters));
   }, [liveArticles, filters])();
 
-  const filteredDbArticles = dbArticles.filter((a) => matchesFilters(a, filters));
+  const totalCount = currentData?.total ?? 0;
+  const hasMore = currentData?.has_more || false;
 
   const handlePrevPage = () => {
     setOffset((prev: number) => Math.max(0, prev - PAGE_LIMIT));
@@ -430,6 +437,7 @@ export function NewsWidget() {
 
   const handleSourceFilterChange = (sources: string[]) => {
     setFilters((prev) => ({ ...prev, sources }));
+    setGlobalOffset(0); // reset to page 1 whenever filters change
   };
 
   return (
@@ -518,17 +526,17 @@ export function NewsWidget() {
               </div>
             )}
             <div className="flex-1 overflow-auto">
-              {filteredDbArticles.length === 0 ? (
+              {dbArticles.length === 0 ? (
                 <div className="h-full w-full flex items-center justify-center">
                   <span className="text-white/40 text-[10px]">No articles found</span>
                 </div>
               ) : (
-                filteredDbArticles.map((article, idx) => (
+                dbArticles.map((article, idx) => (
                   <ArticleRow key={article.url + idx} article={article} />
                 ))
               )}
             </div>
-            {filteredDbArticles.length > 0 && (
+            {dbArticles.length > 0 && (
               <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
                 <button
                   onClick={handlePrevPage}
@@ -538,7 +546,7 @@ export function NewsWidget() {
                   Prev
                 </button>
                 <span className="font-mono">
-                  {currentOffset + 1}-{Math.min(currentOffset + PAGE_LIMIT, filteredDbArticles.length)} of {filteredDbArticles.length}
+                  {currentOffset + 1}–{Math.min(currentOffset + dbArticles.length, totalCount)} of {totalCount}
                 </span>
                 <button
                   onClick={handleNextPage}

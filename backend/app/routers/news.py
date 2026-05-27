@@ -331,7 +331,7 @@ async def get_all_news(
     if end_date is None:
         end_date = datetime.now()
     if start_date is None:
-        start_date = end_date - timedelta(days=7)
+        start_date = end_date - timedelta(days=30)
 
     conditions.append(NewsArticle.publish_date >= start_date)
     conditions.append(NewsArticle.publish_date <= end_date)
