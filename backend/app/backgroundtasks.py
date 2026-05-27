@@ -1421,6 +1421,8 @@ def _news_rss_sync() -> None:
     """Fetch and store articles from all RSS sources."""
     logger.info("news_rss_sync: starting RSS aggregation")
     try:
+        from app.services.news_aggregator import _parsed_article_to_db_dict
+
         all_articles, results = _run_async(
             fetch_all_feeds(
                 sources=HIGH_PRIORITY_SOURCES,
@@ -1436,12 +1438,20 @@ def _news_rss_sync() -> None:
             len(all_articles), success_count, error_count
         )
 
-        if all_articles:
+        # Convert ParsedArticle objects to DB dicts with NLP fields
+        processed = []
+        for article in all_articles:
+            try:
+                processed.append(_parsed_article_to_db_dict(article))
+            except Exception as e:
+                logger.debug("Failed to process article %s: %s", article.url, e)
+
+        if processed:
             with _SyncSessionLocal() as session:
                 stored = 0
-                for article in all_articles:
+                for article_dict in processed:
                     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-                    stmt = sqlite_insert(NewsArticle).values(article)
+                    stmt = sqlite_insert(NewsArticle).values(article_dict)
                     stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
                     session.execute(stmt)
                     stored += 1
@@ -1449,7 +1459,7 @@ def _news_rss_sync() -> None:
                 logger.info("news_rss_sync: stored %d articles", stored)
 
                 # Broadcast new articles via WebSocket (sync)
-                for article_dict in all_articles[:10]:
+                for article_dict in processed[:10]:
                     try:
                         import asyncio
                         asyncio.get_event_loop()
@@ -1467,8 +1477,10 @@ def _news_rss_sync() -> None:
 
 async def _news_rss_sync_async() -> None:
     """Async version of news RSS sync for use in worker threads."""
+    from app.services.news_aggregator import fetch_and_process_all, store_articles
+
     try:
-        all_articles, results = await fetch_all_feeds(
+        processed, results = await fetch_and_process_all(
             sources=HIGH_PRIORITY_SOURCES,
             concurrency=5,
             timeout=15.0,
@@ -1478,17 +1490,16 @@ async def _news_rss_sync_async() -> None:
         error_count = sum(1 for r in results if r.error)
         logger.info(
             "news_rss_sync: fetched %d articles from %d sources (%d errors)",
-            len(all_articles), success_count, error_count
+            len(processed), success_count, error_count
         )
 
-        if all_articles:
+        if processed:
             async with _ThreadAsyncSessionLocal() as session:
-                stored = await store_articles(session, all_articles)
+                stored = await store_articles(session, processed)
                 logger.info("news_rss_sync_async: stored %d articles", stored)
 
                 # Broadcast new articles via WebSocket
-                from app.services.news_aggregator import article_to_dict
-                for article_dict in all_articles[:10]:  # Broadcast newest 10
+                for article_dict in processed[:10]:  # Broadcast newest 10
                     try:
                         await broadcast_news_update(article_dict)
                     except Exception as e:
