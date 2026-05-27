@@ -479,9 +479,12 @@ class NSEClient:
 
         payload = resp.json()
         if not isinstance(payload, list) or len(payload) == 0:
-            raise ValueError(
-                f"Unexpected response format from getYearwiseData for {symbol}: {payload!r}"
+            logger.warning(
+                "getYearwiseData for %s returned empty payload: %r — returning NaN values",
+                symbol,
+                payload,
             )
+            return {k: float("nan") for k in _NSE_FIELD_MAP}
 
         row = payload[0]
         result: dict[str, float] = {}
