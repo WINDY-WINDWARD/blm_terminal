@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -34,6 +35,7 @@ NSE_HEADERS = {
     "Accept": "application/json, text/html, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.nseindia.com/",
+    "Origin": "https://www.nseindia.com",
 }
 
 NSE_FIELD_MAP_CHANGE_RANGES: dict[str, str] = {
@@ -76,7 +78,7 @@ class NSEClientAsync:
             )
             logger.info("NSEClientAsync: creating httpx client — warming cookie session")
             try:
-                await self._http.get("/")
+                await self._http.get("/option-chain")
                 logger.info("NSEClientAsync: cookie session warmed successfully")
             except Exception as exc:
                 logger.warning("NSEClientAsync: cookie warmup failed: %s", exc)
@@ -269,14 +271,73 @@ class NSEClientAsync:
         return payload
 
     def get_stock_list(self) -> list[str]:
-        import nsepython
-        return nsepython.nse_eq_symbols()
+        raise NotImplementedError(
+            "get_stock_list() has no direct NSE API and nsepython is no longer used. "
+            "Maintain a static symbol list or fetch from an alternate source."
+        )
 
-    def get_stock_metadata(self, symbol: str) -> Any:
-        import nsepython
-        return nsepython.nse_eq(symbol)
+    async def get_stock_metadata(self, symbol: str) -> StockUniverse:
+        """Fetch metadata for a given stock symbol via GetQuoteApi getSymbolData endpoint."""
+        logger.debug("NSE: fetching metadata for %s", symbol)
+        url = (
+            "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
+            f"?functionName=getSymbolData&marketType=N&series=EQ&symbol={symbol}"
+        )
+        t0 = time.perf_counter()
+        try:
+            client = await self._get_client()
+            resp = await client.get(url)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            logger.info("NSE GET %s → %d (%.0fms)", url, resp.status_code, elapsed_ms)
+            resp.raise_for_status()
+        except Exception:
+            logger.exception("NSE: metadata fetch failed for %s", symbol)
+            raise
+
+        payload = resp.json()
+        if not isinstance(payload, dict) or "equityResponse" not in payload:
+            raise ValueError(f"Unexpected getSymbolData response for {symbol}: {payload!r}")
+
+        temp = payload["equityResponse"][0]
+        price_info = temp.get("priceInfo", {})
+        sec_info = temp.get("secInfo", {})
+        meta = temp.get("metaData", {})
+
+        from app.schemas.stockuniverse import StockUniverse
+
+        def _parse_date(date_str: str | None) -> datetime | None:
+            if not date_str or date_str == "-":
+                return None
+            try:
+                return datetime.strptime(date_str, "%d-%b-%Y %H:%M:%S")
+            except ValueError:
+                try:
+                    return datetime.strptime(date_str, "%d-%b-%Y")
+                except ValueError:
+                    logger.debug("Failed to parse date: %s", date_str)
+                    return None
+
+        tempdict: dict[str, Any] = {
+            "symbol": meta.get("symbol"),
+            "companyName": meta.get("companyName"),
+            "segment": "EQ",
+            "industry": sec_info.get("basicIndustry"),
+            "sectorPE": sec_info.get("pdSectorPe"),
+            "symbolPE": sec_info.get("pdSymbolPe"),
+            "industryInfo": {"description": sec_info.get("industryInfo") or ""},
+            "lastUpdateTime": meta.get("lastUpdateTime"),
+            "high_52w": price_info.get("yearHigh"),
+            "low_52w": price_info.get("yearLow"),
+            "high_52w_date": _parse_date(price_info.get("yearHightDt")),
+            "low_52w_date": _parse_date(price_info.get("yearLowDt")),
+        }
+        logger.debug("NSE: metadata fetched for %s", symbol)
+        return StockUniverse(**tempdict)
 
     def get_corporate_filing_comparison(self, symbol: str) -> str:
+        """DEPRECATED: Uses nsepython which produces data that is not useful.
+        Remove this feature in a future update — no direct NSE API available.
+        """
         from app.services.helpers.json_to_csv import dict_to_csv_text
         import nsepython
         data = nsepython.nse_past_results(symbol)
