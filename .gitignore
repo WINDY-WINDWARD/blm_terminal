@@ -61,3 +61,6 @@ data.db*
 # cookies (browser session data - platform specific)
 cookies/*.pkl
 cookies/manifest.json
+
+# network captures
+*.har

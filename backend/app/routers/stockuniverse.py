@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
-from app.models.ticker import TickerWarehouse
+from app.models.ticker import TickerDaily
 from app.schemas.stockuniverse import StockUniverse as StockUniverseSchema
 from app.services.mc_stock_linker import MCStockLinker
 from app.services.nse_client import NSEClient
@@ -244,7 +244,7 @@ async def remove_stock_universe_symbol(
     db.add(rec)
 
     await db.execute(
-        delete(TickerWarehouse).where(TickerWarehouse.symbol == symbol)
+        delete(TickerDaily).where(TickerDaily.symbol == symbol)
     )
 
     await db.commit()

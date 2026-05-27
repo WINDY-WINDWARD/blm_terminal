@@ -16,6 +16,7 @@ class StockUniverse(Base):
     __tablename__ = "stock_universe"
 
     symbol: Mapped[str] = mapped_column(String(32), primary_key=True, index=True)
+    series: Mapped[str | None] = mapped_column(String(8), nullable=True)
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     segment: Mapped[str] = mapped_column(String(64), nullable=False)
     industry: Mapped[str] = mapped_column(String(255), nullable=False)
