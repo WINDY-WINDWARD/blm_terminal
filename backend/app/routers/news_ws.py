@@ -145,9 +145,10 @@ async def _heartbeat(websocket: WebSocket) -> None:
 async def _get_recent_articles(limit: int = 20) -> list[dict]:
     """Fetch recent articles from database."""
     async with AsyncSessionLocal() as session:
+        from sqlalchemy import nullslast
         stmt = (
             select(NewsArticle)
-            .order_by(NewsArticle.publish_date.desc())
+            .order_by(nullslast(NewsArticle.publish_date.desc()))
             .limit(limit)
         )
         result = await session.execute(stmt)

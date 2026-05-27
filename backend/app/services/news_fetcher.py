@@ -603,19 +603,47 @@ class NewsFetcher:
                     top_image = str(og_image.get("content") or "") or None
 
                 publish_date = None
-                date_meta = soup.find("meta", property="article:published_time") or \
-                            soup.find("meta", property="og:article:published_time")
-                if date_meta:
-                    raw_date = date_meta.get("content")
-                    if raw_date:
+                # Try multiple date extraction strategies
+                date_meta_candidates = [
+                    soup.find("meta", property="article:published_time"),
+                    soup.find("meta", property="og:article:published_time"),
+                    soup.find("meta", property="datePublished"),
+                    soup.find("meta", attrs={"name": "date"}),
+                    soup.find("meta", attrs={"name": "publish-date"}),
+                    soup.find("meta", attrs={"name": "DC.date.issued"}),
+                ]
+                for date_meta in date_meta_candidates:
+                    if date_meta:
+                        raw_date = date_meta.get("content")
+                        if raw_date:
+                            try:
+                                publish_date = datetime.fromisoformat(
+                                    str(raw_date).replace("Z", "+00:00")
+                                )
+                                if publish_date.tzinfo is not None:
+                                    publish_date = publish_date.replace(tzinfo=None)
+                                break
+                            except Exception:
+                                continue
+
+                # Fallback 1: <time datetime="..."> tags
+                if not publish_date:
+                    time_tag = soup.find("time", datetime=True)
+                    if time_tag:
                         try:
-                            publish_date = datetime.fromisoformat(
-                                str(raw_date).replace("Z", "+00:00")
-                            )
-                            if publish_date.tzinfo is not None:
-                                publish_date = publish_date.replace(tzinfo=None)
+                            raw_date = time_tag.get("datetime")
+                            if raw_date:
+                                publish_date = datetime.fromisoformat(
+                                    str(raw_date).replace("Z", "+00:00")
+                                )
+                                if publish_date.tzinfo is not None:
+                                    publish_date = publish_date.replace(tzinfo=None)
                         except Exception:
                             pass
+
+                # Fallback 2: use current time so the article is not filtered out by date range queries
+                if not publish_date:
+                    publish_date = datetime.now(timezone.utc).replace(tzinfo=None)
 
                 authors = None
                 author_meta = soup.find("meta", attrs={"name": "author"})

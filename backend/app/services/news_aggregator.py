@@ -64,7 +64,7 @@ def _parsed_article_to_db_dict(article: ParsedArticle) -> dict[str, Any]:
         "sentiment_score": nlp["sentiment_score"],
         "confidence": nlp["confidence"],
         "language": nlp["language"],
-        "entities": json.dumps(nlp["entities"]),
+        "entities": nlp["entities"],
         "threat_level": nlp["threat_level"],
         "threat_category": nlp["threat_category"],
         "source_credibility": nlp["source_credibility"],

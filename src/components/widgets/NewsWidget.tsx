@@ -24,24 +24,57 @@ type Tab = 'global' | 'company';
 const PAGE_LIMIT = 50;
 
 const SOURCE_LABELS: Record<string, string> = {
+  // Tier 1: Wire & Regulatory
+  'ap-top': 'AP',
+  'sec-press': 'SEC',
+  'fed-press': 'Fed',
+  'ecb-press': 'ECB',
+  'boe-news': 'BoE',
+  // Tier 1: Financial Media
   'bloomberg-mkts': 'Bloomberg',
-  'reuters-markets': 'Reuters',
-  'cnbc-markets': 'CNBC',
   'wsj-markets': 'WSJ',
-  'ft-markets': 'FT',
-  'economist': 'Economist',
+  'cnbc-finance': 'CNBC',
+  // Tier 2: India
   'moneycontrol': 'MC',
-  'economictimes': 'ET',
+  'et-markets': 'ET',
   'livemint': 'Mint',
-  'thehindubusiness': 'Hindu',
-  'ndtv-markets': 'NDTV',
-  'zeebusiness': 'Zee',
+  'hindu-biz': 'Hindu',
+  // Tier 2: Global Markets
+  'marketwatch': 'MW',
+  'seekingalpha': 'SA',
+  'investing-news': 'Investing',
+  'benzinga': 'Benzinga',
+  'bbc-business': 'BBC Biz',
+  'nikkei-asia': 'Nikkei',
+  'cna': 'CNA',
+  'economist': 'Economist',
+  'aljazeera': 'AJ',
+  'foreignpolicy': 'FP',
+  // Tier 2: Crypto
+  'coindesk': 'CoinDesk',
+  'cointelegraph': 'CT',
+  'theblock': 'TheBlock',
+  // Tier 2: Tech
+  'techcrunch': 'TC',
+  'finextra': 'Finextra',
+  'theverge': 'Verge',
+  'arstechnica': 'Ars',
+  // Tier 3: Additional
+  'bbc-world': 'BBC World',
+  'calculated-risk': 'CalcRisk',
+  'zero-hedge': 'ZH',
+  'bellingcat': 'Bellingcat',
+  'hackernews': 'HN',
+  'abnormal-returns': 'AR',
+  // MoneyControl scraped
+  'moneycontrol_global': 'MC Global',
+  'moneycontrol_company': 'MC Company',
 };
 
 const SENTIMENT_COLORS: Record<string, string> = {
-  positive: 'bg-green-500',
-  negative: 'bg-red-500',
-  neutral: 'bg-gray-500',
+  BULLISH: 'bg-green-500',
+  BEARISH: 'bg-red-500',
+  NEUTRAL: 'bg-gray-500',
 };
 
 const THREAT_BADGES: Record<string, { label: string; className: string }> = {
@@ -99,7 +132,7 @@ function ThreatBadge({ level }: { level: string | null }) {
 }
 
 function CredibilityWarning({ credibility }: { credibility: string | null }) {
-  if (!credibility || credibility === 'high' || credibility === 'medium') return null;
+  if (!credibility || credibility === 'NONE') return null;
   return (
     <span className="text-[8px] text-yellow-500 ml-1" title={`Credibility: ${credibility}`}>
       ⚠
@@ -117,7 +150,6 @@ function ArticleRow({
   const title = article.title ?? 'Untitled';
   const date = formatDate(article.publish_date);
   const sourceId = article.source;
-  const source = SOURCE_LABELS[sourceId || ''] || sourceId || '?';
   const credibility = article.source_credibility;
 
   return (
@@ -258,7 +290,7 @@ export function NewsWidget() {
       unsubConnection();
       unsubNews();
     };
-  }, [setLiveArticles]);
+  }, [setLiveArticles, setWsConnected]);
 
   const handleTabChange = (tab: Tab) => {
     setActiveTab(tab);
@@ -282,9 +314,9 @@ export function NewsWidget() {
     isLoading: globalLoading,
     error: globalError,
   } = useQuery<NewsPaginatedResponse>({
-    queryKey: ['news/global', { limit: PAGE_LIMIT, offset: globalOffset }],
+    queryKey: ['news/all', { limit: PAGE_LIMIT, offset: globalOffset }],
     queryFn: async () => {
-      const res = await fetch(`/api/py/news/global?limit=${PAGE_LIMIT}&offset=${globalOffset}`);
+      const res = await fetch(`/api/py/news/all?limit=${PAGE_LIMIT}&offset=${globalOffset}`);
       if (!res.ok) throw new Error('Failed to fetch global news');
       return res.json() as Promise<NewsPaginatedResponse>;
     },

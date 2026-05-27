@@ -1481,12 +1481,10 @@ def _news_rss_sync() -> None:
                 session.commit()
                 logger.info("news_rss_sync: stored %d articles", stored)
 
-                # Broadcast new articles via WebSocket (sync)
+                # Broadcast new articles via WebSocket (sync path — dead code, async path is active)
                 for article_dict in processed[:10]:
                     try:
-                        import asyncio
-                        asyncio.get_event_loop()
-                        asyncio.ensure_future(broadcast_news_update(article_dict))
+                        _run_async(broadcast_news_update(article_dict))
                     except Exception as e:
                         logger.debug("Failed to broadcast article: %s", e)
 
