@@ -32,9 +32,21 @@ DEFAULT_CONCURRENCY = 5
 FETCH_TIMEOUT = 15.0
 
 
+def _naive_datetime(dt: datetime | None) -> datetime | None:
+    """Strip timezone info from a datetime, converting to naive UTC for SQLite compatibility.
+
+    SQLite DateTime columns with timezone=False only accept naive datetimes.
+    If the datetime is timezone-aware, strip the tzinfo (assumes UTC source).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
 def _parsed_article_to_db_dict(article: ParsedArticle) -> dict[str, Any]:
     """Convert a ParsedArticle to a dictionary suitable for database insertion."""
-    # Perform NLP analysis
     nlp = analyze_article_dict(
         headline=article.title or "",
         summary=article.summary or "",
@@ -45,10 +57,9 @@ def _parsed_article_to_db_dict(article: ParsedArticle) -> dict[str, Any]:
         "url": article.url,
         "source": article.source_id,
         "title": article.title,
-        "text": article.summary,  # Use summary as text
-        "publish_date": article.published,
-        "fetched_at": datetime.now(timezone.utc),
-        # New NLP fields
+        "text": article.summary,
+        "publish_date": _naive_datetime(article.published),
+        "fetched_at": datetime.utcnow(),
         "sentiment": nlp["sentiment"],
         "sentiment_score": nlp["sentiment_score"],
         "confidence": nlp["confidence"],
@@ -136,10 +147,10 @@ async def store_articles(
 
         for article in batch:
             try:
-                # Convert datetime objects to strings for JSON serialization
                 if article.get("publish_date"):
-                    if hasattr(article["publish_date"], "isoformat"):
-                        article["publish_date"] = article["publish_date"].isoformat()
+                    article["publish_date"] = _naive_datetime(article["publish_date"])
+                if article.get("fetched_at"):
+                    article["fetched_at"] = _naive_datetime(article["fetched_at"])
 
                 stmt = sqlite_insert(NewsArticle).values(article)
                 stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
