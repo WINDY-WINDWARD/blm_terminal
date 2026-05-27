@@ -71,6 +71,46 @@ const SOURCE_LABELS: Record<string, string> = {
   'moneycontrol_company': 'MC Company',
 };
 
+const SOURCE_FULL_NAMES: Record<string, string> = {
+  'ap-top': 'Associated Press Top News',
+  'sec-press': 'SEC Press Releases',
+  'fed-press': 'Federal Reserve',
+  'ecb-press': 'ECB Press',
+  'boe-news': 'Bank of England',
+  'bloomberg-mkts': 'Bloomberg Markets',
+  'wsj-markets': 'WSJ Markets',
+  'cnbc-finance': 'CNBC Finance',
+  'moneycontrol': 'MoneyControl',
+  'et-markets': 'Economic Times',
+  'livemint': 'LiveMint',
+  'hindu-biz': 'The Hindu Business',
+  'marketwatch': 'MarketWatch',
+  'seekingalpha': 'Seeking Alpha',
+  'investing-news': 'Investing.com',
+  'benzinga': 'Benzinga',
+  'bbc-business': 'BBC Business',
+  'nikkei-asia': 'Nikkei Asia',
+  'cna': 'Channel News Asia',
+  'economist': 'The Economist',
+  'aljazeera': 'Al Jazeera',
+  'foreignpolicy': 'Foreign Policy',
+  'coindesk': 'CoinDesk',
+  'cointelegraph': 'CoinTelegraph',
+  'theblock': 'The Block',
+  'techcrunch': 'TechCrunch',
+  'finextra': 'Finextra',
+  'theverge': 'The Verge',
+  'arstechnica': 'Ars Technica',
+  'bbc-world': 'BBC World',
+  'calculated-risk': 'Calculated Risk',
+  'zero-hedge': 'ZeroHedge',
+  'bellingcat': 'Bellingcat',
+  'hackernews': 'Hacker News',
+  'abnormal-returns': 'Abnormal Returns',
+  'moneycontrol_global': 'MoneyControl Global',
+  'moneycontrol_company': 'MoneyControl Company',
+};
+
 const SENTIMENT_COLORS: Record<string, string> = {
   BULLISH: 'bg-green-500',
   BEARISH: 'bg-red-500',
@@ -181,6 +221,13 @@ function ArticleRow({
   );
 }
 
+function matchesFilters(article: NewsArticle, filters: { sources: string[]; sentiment: string | null; threatLevel: string | null }): boolean {
+  if (filters.sources.length > 0 && !filters.sources.includes(article.source || '')) return false;
+  if (filters.sentiment && article.sentiment !== filters.sentiment) return false;
+  if (filters.threatLevel && article.threat_level !== filters.threatLevel) return false;
+  return true;
+}
+
 function SourceFilterChips({
   selected,
   onChange,
@@ -204,6 +251,7 @@ function SourceFilterChips({
         <button
           key={id}
           onClick={() => toggle(id)}
+          title={SOURCE_FULL_NAMES[id] || id}
           className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
             selected.includes(id)
               ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
@@ -360,19 +408,15 @@ export function NewsWidget() {
 
   const currentData = activeTab === 'global' ? globalData : companyData;
   const dbArticles = currentData?.articles || [];
-  const total = currentData?.total || 0;
   const currentOffset = activeTab === 'global' ? globalOffset : companyOffset;
   const setOffset = activeTab === 'global' ? setGlobalOffset : setCompanyOffset;
   const hasMore = currentData?.has_more || false;
 
   const filteredLiveArticles = useCallback(() => {
-    return liveArticles.filter((a) => {
-      if (filters.sources.length > 0 && !filters.sources.includes(a.source || '')) return false;
-      if (filters.sentiment && a.sentiment !== filters.sentiment) return false;
-      if (filters.threatLevel && a.threat_level !== filters.threatLevel) return false;
-      return true;
-    });
+    return liveArticles.filter((a) => matchesFilters(a, filters));
   }, [liveArticles, filters])();
+
+  const filteredDbArticles = dbArticles.filter((a) => matchesFilters(a, filters));
 
   const handlePrevPage = () => {
     setOffset((prev: number) => Math.max(0, prev - PAGE_LIMIT));
@@ -474,17 +518,17 @@ export function NewsWidget() {
               </div>
             )}
             <div className="flex-1 overflow-auto">
-              {(activeTab === 'global' ? dbArticles : dbArticles).length === 0 ? (
+              {filteredDbArticles.length === 0 ? (
                 <div className="h-full w-full flex items-center justify-center">
                   <span className="text-white/40 text-[10px]">No articles found</span>
                 </div>
               ) : (
-                dbArticles.map((article, idx) => (
+                filteredDbArticles.map((article, idx) => (
                   <ArticleRow key={article.url + idx} article={article} />
                 ))
               )}
             </div>
-            {total > 0 && (
+            {filteredDbArticles.length > 0 && (
               <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
                 <button
                   onClick={handlePrevPage}
@@ -494,7 +538,7 @@ export function NewsWidget() {
                   Prev
                 </button>
                 <span className="font-mono">
-                  {currentOffset + 1}-{Math.min(currentOffset + PAGE_LIMIT, total)} of {total}
+                  {currentOffset + 1}-{Math.min(currentOffset + PAGE_LIMIT, filteredDbArticles.length)} of {filteredDbArticles.length}
                 </span>
                 <button
                   onClick={handleNextPage}
