@@ -16,7 +16,7 @@ from alembic import op
 import sqlalchemy.exc as sqla_exc
 
 revision: str = "x123456789newsnlp"
-down_revision: Union[str, Sequence[str], None] = "4cb23a53b80a"
+down_revision: Union[str, Sequence[str], None] = "x123456789abn"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
