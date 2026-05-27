@@ -2090,7 +2090,7 @@ def _parse_52week_data(data: dict) -> dict[str, dict]:
             result[symbol] = {
                 "ltp": item.get("ltp"),
                 "new52WHL": item.get("new52WHL"),
-                "pChange": item.get("pChange"),
+                "pChange": item.get("pChange") or item.get("perChange"),
             }
     return result
 
@@ -2103,7 +2103,7 @@ def _parse_volume_gainers(data: dict) -> dict[str, dict]:
         if symbol:
             result[symbol] = {
                 "week1volChange": item.get("week1volChange"),
-                "pChange": item.get("pChange"),
+                "pChange": item.get("pChange") or item.get("perChange"),
             }
     return result
 
@@ -2729,18 +2729,24 @@ def _build_alerts(
         alerts.append(("volume_breakout", f"{symbol} showing volume breakout ({ratio:+.0f}x avg)"))
     
     # Top gainers/losers (DataFrame)
+    def _row_pchg(row) -> float:
+        """Read % change from either pChange (legacy) or perChange (new API)."""
+        return getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+
     if gainers_df is not None:
         for row in gainers_df.itertuples():
             if row.symbol == symbol:
-                pchg = getattr(row, "pChange", 0) or 0
-                alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
+                pchg = _row_pchg(row)
+                if pchg:
+                    alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
                 break
-    
+
     if losers_df is not None:
         for row in losers_df.itertuples():
             if row.symbol == symbol:
-                pchg = getattr(row, "pChange", 0) or 0
-                alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
+                pchg = _row_pchg(row)
+                if pchg:
+                    alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
                 break
     
     # Deals (bulk/block/short) — O(1) lookup via pre-indexed dict.
@@ -3252,15 +3258,17 @@ def _global_scan_cycle() -> None:
                     if gainers_df is not None:
                         for row in gainers_df.itertuples():
                             if row.symbol == symbol:
-                                pchg = getattr(row, "pChange", 0) or 0
-                                alerts.append(("top_gainer", f"{symbol} +{pchg:.1f}%"))
+                                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+                                if pchg:
+                                    alerts.append(("top_gainer", f"{symbol} +{pchg:.1f}%"))
                                 break
 
                     if losers_df is not None:
                         for row in losers_df.itertuples():
                             if row.symbol == symbol:
-                                pchg = getattr(row, "pChange", 0) or 0
-                                alerts.append(("top_loser", f"{symbol} {pchg:.1f}%"))
+                                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+                                if pchg:
+                                    alerts.append(("top_loser", f"{symbol} {pchg:.1f}%"))
                                 break
 
                     if deals and symbol in deals:

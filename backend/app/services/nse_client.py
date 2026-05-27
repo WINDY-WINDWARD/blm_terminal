@@ -201,11 +201,14 @@ class NSEClient:
         try:
             rows = self._get_market_turnover(index="gainers")
             df = pandas.DataFrame(rows)
-            df["pChange"] = pandas.to_numeric(
-                df.get("pChange", pandas.Series(dtype=float)) if "pChange" in df.columns
-                else df.get("perChange", pandas.Series(dtype=float)),
-                errors="coerce",
-            )
+            # Prefer perChange (new API) over pChange (legacy); copy to pChange
+            # so downstream consumers (notification worker, tests) keep working.
+            if "perChange" in df.columns:
+                df["pChange"] = pandas.to_numeric(df["perChange"], errors="coerce")
+            elif "pChange" in df.columns:
+                df["pChange"] = pandas.to_numeric(df["pChange"], errors="coerce")
+            else:
+                df["pChange"] = pandas.Series(dtype=float)
             df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=False).head(20)
             logger.info("NSE: top gainers fetched (%d rows)", len(df))
             return df
@@ -219,11 +222,12 @@ class NSEClient:
         try:
             rows = self._get_market_turnover(index="loosers")
             df = pandas.DataFrame(rows)
-            df["pChange"] = pandas.to_numeric(
-                df.get("pChange", pandas.Series(dtype=float)) if "pChange" in df.columns
-                else df.get("perChange", pandas.Series(dtype=float)),
-                errors="coerce",
-            )
+            if "perChange" in df.columns:
+                df["pChange"] = pandas.to_numeric(df["perChange"], errors="coerce")
+            elif "pChange" in df.columns:
+                df["pChange"] = pandas.to_numeric(df["pChange"], errors="coerce")
+            else:
+                df["pChange"] = pandas.Series(dtype=float)
             df = df.dropna(subset=["pChange"]).sort_values("pChange", ascending=True).head(20)
             logger.info("NSE: top losers fetched (%d rows)", len(df))
             return df
