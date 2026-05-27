@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import {
@@ -9,27 +9,8 @@ import {
   moversColumnsAtom,
   moversCategoryAtom,
 } from '@/store/terminalStore';
-
-interface ChangeRanges {
-  oneDayPercent: number | null;
-  oneWeekPercent: number | null;
-  oneMonthPercent: number | null;
-  threeMonthPercent: number | null;
-  sixMonthPercent: number | null;
-  oneYearPercent: number | null;
-  twoYearPercent: number | null;
-  threeYearPercent: number | null;
-  fiveYearPercent: number | null;
-}
-
-interface NseSymbolData {
-  equityResponse?: Array<{
-    orderBook?: { lastPrice?: number };
-    tradeInfo?: { lastPrice?: number };
-    metaData?: { pChange?: number };
-    priceInfo?: { yearHigh?: number; yearLow?: number };
-  }>;
-}
+import { marketWsService } from '@/lib/marketWs';
+import type { ChangeRanges, SymbolDataExtract } from '@/lib/marketWs';
 
 interface MoverQuote {
   yearHigh?: number;
@@ -121,35 +102,61 @@ function formatCaDt(val: string | undefined, purpose: string | undefined): React
   return <span title={purpose || ''}>{val}</span>;
 }
 
+/**
+ * Per-symbol hook: returns change-ranges data via the market WebSocket service.
+ * The service debounces concurrent calls from multiple rows into one WS message.
+ */
 function useChangeRanges(symbol: string) {
-  return useQuery({
-    queryKey: ['market/change-ranges', symbol],
-    queryFn: async () => {
-      const res = await fetch(`/api/py/market/change-ranges/${encodeURIComponent(symbol)}`);
-      if (!res.ok) return null;
-      return res.json() as Promise<ChangeRanges>;
-    },
-    staleTime: 300_000,
-    enabled: !!symbol,
-  });
+  const [data, setData] = useState<ChangeRanges | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!symbol) return;
+
+    setIsLoading(true);
+
+    const unsub = marketWsService.onChangeRanges((sym, rangesData) => {
+      if (sym !== symbol) return;
+      setData(rangesData);
+      setIsLoading(false);
+    });
+
+    marketWsService.requestChangeRanges([symbol]);
+
+    return unsub;
+  }, [symbol]);
+
+  return { data, isLoading };
 }
 
+/**
+ * Per-symbol hook: returns symbol-data (52w high/low) via the market WebSocket service.
+ * Only requests data when enabled (i.e. when 52w columns are visible).
+ */
 function useMoverQuote(symbol: string, enabled: boolean) {
-  return useQuery<MoverQuote | null>({
-    queryKey: ['market/mover-quote', symbol],
-    queryFn: async () => {
-      const res = await fetch(`/api/py/market/symbol-data/${encodeURIComponent(symbol)}`);
-      if (!res.ok) return null;
-      const payload = (await res.json()) as NseSymbolData;
-      const equity = payload.equityResponse?.[0];
-      return {
-        yearHigh: equity?.priceInfo?.yearHigh,
-        yearLow: equity?.priceInfo?.yearLow,
-      };
-    },
-    staleTime: 60_000,
-    enabled: !!symbol && enabled,
-  });
+  const [data, setData] = useState<MoverQuote | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!symbol || !enabled) {
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+
+    const unsub = marketWsService.onSymbolData((sym, symData: SymbolDataExtract | null) => {
+      if (sym !== symbol) return;
+      setData(symData ? { yearHigh: symData.yearHigh, yearLow: symData.yearLow } : null);
+      setIsLoading(false);
+    });
+
+    marketWsService.requestSymbolData([symbol]);
+
+    return unsub;
+  }, [symbol, enabled]);
+
+  return { data, isLoading };
 }
 
 function useMoverCategories() {
@@ -169,10 +176,18 @@ const CATEGORY_SHORT_LABELS: Record<string, string> = {
   NIFTY: 'NIFTY50',
   BANKNIFTY: 'BANKNIFTY',
   NIFTYNEXT50: 'NEXT50',
-  SecGtr20: '&gt;&#8377;20',
-  SecLwr20: '&lt;&#8377;20',
-  FOSec: 'F&amp;O',
+  SecGtr20: '>₹20',
+  SecLwr20: '<₹20',
+  FOSec: 'F&O',
 };
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#8377;/g, '₹');
+}
 
 interface MoverRowProps {
   row: MoverRow;
@@ -353,7 +368,7 @@ export function MoversWidget() {
                   : 'text-white/50 border-transparent hover:text-white hover:border-white/30'
               }`}
             >
-              {CATEGORY_SHORT_LABELS[cat.key] || cat.label}
+              {CATEGORY_SHORT_LABELS[cat.key] || decodeHtmlEntities(cat.label)}
             </button>
           ))}
         </div>

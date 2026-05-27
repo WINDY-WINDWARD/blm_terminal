@@ -16,6 +16,8 @@ import {
 } from '@/store/terminalStore';
 import { wsService } from '@/lib/socket';
 import type { TickData } from '@/lib/socket';
+import { marketWsService } from '@/lib/marketWs';
+import type { ChangeRanges, SymbolDataExtract } from '@/lib/marketWs';
 import type { EventCalendarItem } from '@/app/api/event-calendar/route';
 
 interface WatchlistItem {
@@ -23,27 +25,6 @@ interface WatchlistItem {
   watchlist_id: number;
   symbol: string;
   exchange: string;
-}
-
-interface ChangeRanges {
-  oneDayPercent: number | null;
-  oneWeekPercent: number | null;
-  oneMonthPercent: number | null;
-  threeMonthPercent: number | null;
-  sixMonthPercent: number | null;
-  oneYearPercent: number | null;
-  twoYearPercent: number | null;
-  threeYearPercent: number | null;
-  fiveYearPercent: number | null;
-}
-
-interface NseSymbolData {
-  equityResponse?: Array<{
-    orderBook?: { lastPrice?: number };
-    tradeInfo?: { lastPrice?: number };
-    metaData?: { pChange?: number };
-    priceInfo?: { yearHigh?: number; yearLow?: number };
-  }>;
 }
 
 interface AutocompleteResult {
@@ -424,39 +405,92 @@ export function WatchWidget() {
   });
 
   // Fetch data for all symbols in parallel using useQueries
-  const symbolQueries = useQueries({
-    queries: watchlist.map((item) => ({
-      queryKey: ['market/symbol-data', item.symbol],
-      queryFn: async () => {
-        const res = await fetch(`/api/py/market/symbol-data/${encodeURIComponent(item.symbol)}`);
-        if (!res.ok) return null;
-        const payload = (await res.json()) as NseSymbolData;
-        const equity = payload.equityResponse?.[0];
-        const ltp = equity?.orderBook?.lastPrice ?? equity?.tradeInfo?.lastPrice ?? 0;
-        const pChange = equity?.metaData?.pChange ?? 0;
-        const yearHigh = equity?.priceInfo?.yearHigh;
-        const yearLow = equity?.priceInfo?.yearLow;
-        if (!ltp) return null;
-        return { ltp, pChange, yearHigh, yearLow };
-      },
-      staleTime: 60_000,
-      refetchInterval: 60_000,
-      enabled: !!item.symbol,
-    })),
-  });
+  // ── Market data via WebSocket (change-ranges + symbol-data) ─────────────────
+  // Replaces N parallel HTTP useQueries calls with a single batched WS request.
+  const [symbolDataMap, setSymbolDataMap] = useState<Map<string, SymbolDataExtract>>(new Map());
+  const [changeRangesMap, setChangeRangesMap] = useState<Map<string, ChangeRanges>>(new Map());
+  // Track which symbols have received at least one response (for isLoading)
+  const [symbolDataReceived, setSymbolDataReceived] = useState<Set<string>>(new Set());
+  const [changeRangesReceived, setChangeRangesReceived] = useState<Set<string>>(new Set());
 
-  const rangeQueries = useQueries({
-    queries: watchlist.map((item) => ({
-      queryKey: ['market/change-ranges', item.symbol],
-      queryFn: async () => {
-        const res = await fetch(`/api/py/market/change-ranges/${encodeURIComponent(item.symbol)}`);
-        if (!res.ok) return null;
-        return res.json() as Promise<ChangeRanges>;
-      },
-      staleTime: 300_000,
-      enabled: !!item.symbol,
-    })),
-  });
+  // Subscribe to WS responses and issue requests when watchlist changes
+  useEffect(() => {
+    if (watchlist.length === 0) return;
+
+    const symbols = watchlist.map((i) => i.symbol).filter(Boolean);
+
+    // Subscribe to change-ranges responses
+    const unsubRanges = marketWsService.onChangeRanges((symbol, data) => {
+      if (data) {
+        setChangeRangesMap((prev) => {
+          const next = new Map(prev);
+          next.set(symbol, data);
+          return next;
+        });
+      }
+      setChangeRangesReceived((prev) => {
+        if (prev.has(symbol)) return prev;
+        const next = new Set(prev);
+        next.add(symbol);
+        return next;
+      });
+    });
+
+    // Subscribe to symbol-data responses
+    const unsubSymbol = marketWsService.onSymbolData((symbol, data) => {
+      if (data) {
+        setSymbolDataMap((prev) => {
+          const prevData = prev.get(symbol);
+          const ltpChanged = prevData !== undefined && prevData.ltp !== data.ltp;
+          // Trigger flash on LTP change
+          if (ltpChanged) {
+            const direction = data.ltp > prevData!.ltp ? 'up' : 'down';
+            setFlashStates((fs) => {
+              const next = new Map(fs);
+              next.set(symbol, direction);
+              return next;
+            });
+            setTimeout(() => {
+              setFlashStates((fs) => {
+                const next = new Map(fs);
+                next.delete(symbol);
+                return next;
+              });
+            }, 400);
+          }
+          const next = new Map(prev);
+          next.set(symbol, data);
+          return next;
+        });
+      }
+      setSymbolDataReceived((prev) => {
+        if (prev.has(symbol)) return prev;
+        const next = new Set(prev);
+        next.add(symbol);
+        return next;
+      });
+    });
+
+    // Request data for all symbols in this watchlist
+    marketWsService.requestChangeRanges(symbols);
+    marketWsService.requestSymbolData(symbols);
+
+    // Periodic refresh matching original staleTime intervals
+    const symbolDataInterval = setInterval(() => {
+      marketWsService.requestSymbolData(symbols);
+    }, 60_000);
+    const changeRangesInterval = setInterval(() => {
+      marketWsService.requestChangeRanges(symbols);
+    }, 300_000);
+
+    return () => {
+      unsubRanges();
+      unsubSymbol();
+      clearInterval(symbolDataInterval);
+      clearInterval(changeRangesInterval);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchlist.map((i) => i.symbol).join(',')]);
 
   const fairValueQueries = useQueries({
     queries: watchlist.map((item) => ({
@@ -508,57 +542,32 @@ export function WatchWidget() {
 
   // Build derived row data
   const rowDataList: WatchRowData[] = watchlist.map((item, idx) => {
-    const quote = symbolQueries[idx];
-    const ranges = rangeQueries[idx];
+    const quote = symbolDataMap.get(item.symbol);
+    const ranges = changeRangesMap.get(item.symbol);
     const fairValue = fairValueQueries[idx];
+
+    const symbolLoading = !symbolDataReceived.has(item.symbol);
+    const rangesLoading = !changeRangesReceived.has(item.symbol);
 
     return {
       item,
-      ltp: quote?.data?.ltp ?? null,
-      chgPct: quote?.data?.pChange ?? null,
-      oneWeek: ranges?.data?.oneWeekPercent ?? null,
-      oneMonth: ranges?.data?.oneMonthPercent ?? null,
-      threeMonth: ranges?.data?.threeMonthPercent ?? null,
-      sixMonth: ranges?.data?.sixMonthPercent ?? null,
-      oneYear: ranges?.data?.oneYearPercent ?? null,
-      twoYear: ranges?.data?.twoYearPercent ?? null,
-      threeYear: ranges?.data?.threeYearPercent ?? null,
-      fiveYear: ranges?.data?.fiveYearPercent ?? null,
-      yearHigh: quote?.data?.yearHigh ?? null,
-      yearLow: quote?.data?.yearLow ?? null,
+      ltp: quote?.ltp ?? null,
+      chgPct: quote?.pChange ?? null,
+      oneWeek: ranges?.oneWeekPercent ?? null,
+      oneMonth: ranges?.oneMonthPercent ?? null,
+      threeMonth: ranges?.threeMonthPercent ?? null,
+      sixMonth: ranges?.sixMonthPercent ?? null,
+      oneYear: ranges?.oneYearPercent ?? null,
+      twoYear: ranges?.twoYearPercent ?? null,
+      threeYear: ranges?.threeYearPercent ?? null,
+      fiveYear: ranges?.fiveYearPercent ?? null,
+      yearHigh: quote?.yearHigh ?? null,
+      yearLow: quote?.yearLow ?? null,
       fairValue: fairValue?.data ?? null,
       alertCount: alertCountMap.get(item.symbol) ?? 0,
-      isLoading: (quote?.isLoading ?? false) || (ranges?.isLoading ?? false) || (fairValue?.isLoading ?? false),
+      isLoading: symbolLoading || rangesLoading || (fairValue?.isLoading ?? false),
     };
   });
-
-  // Detect price changes on REST refetch and trigger flash
-  useEffect(() => {
-    symbolQueries.forEach((query, idx) => {
-      if (query.data?.ltp !== undefined && query.dataUpdatedAt) {
-        const item = watchlist[idx];
-        if (!item) return;
-        const key = item.symbol;
-        const prevPrice = prevPricesRef.current.get(key);
-        if (prevPrice !== undefined && query.data.ltp !== prevPrice) {
-          const direction = query.data.ltp > prevPrice ? 'up' : 'down';
-          setFlashStates((prev) => {
-            const next = new Map(prev);
-            next.set(key, direction);
-            return next;
-          });
-          setTimeout(() => {
-            setFlashStates((prev) => {
-              const next = new Map(prev);
-              next.delete(key);
-              return next;
-            });
-          }, 400);
-        }
-        prevPricesRef.current.set(key, query.data.ltp);
-      }
-    });
-  }, [symbolQueries, watchlist]);
 
   const handleHeaderClick = (column: SortColumn) => {
     const colConfig = SORTABLE_COLUMNS[column];

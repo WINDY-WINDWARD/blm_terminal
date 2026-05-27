@@ -14,10 +14,11 @@ class StockUniverse(BaseModel):
     sectorPE: float | None
     symbolPE: float | None
     industryInfo: dict[str, str]
-    lastUpdateTime: datetime | None
+    series: str | None = None
+    lastUpdateTime: datetime | None = None
     screenerTradesId: str | None = None
     mcUrl: str | None = None
-    reviewStatus: str | None = None
+    reviewUrl: str | None = None
     matchConfidence: float | None = None
     mcMatchSource: str | None = None
     mcCompanyName: str | None = None

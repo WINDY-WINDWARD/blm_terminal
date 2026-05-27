@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { unstable_batchedUpdates } from 'react-dom';
 import { useAtomValue } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
@@ -578,16 +579,17 @@ export function AiWidget() {
             // Migrate the map entry from null/old-key → assigned real session ID
             const assignedId = event.id;
             if (liveKey !== assignedId) {
-              setSessionMap((prev) => {
-                const next = new Map(prev);
-                const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
-                next.delete(liveKey);
-                next.set(assignedId, existing);
-                return next;
+              unstable_batchedUpdates(() => {
+                setSessionMap((prev) => {
+                  const next = new Map(prev);
+                  const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
+                  next.delete(liveKey);
+                  next.set(assignedId, existing);
+                  return next;
+                });
+                setActiveKey((prev) => (prev === sessionKey ? assignedId : prev));
               });
               liveKey = assignedId;
-              // If the user is still viewing this chat, update the view key too
-              setActiveKey((prev) => (prev === sessionKey ? assignedId : prev));
               // Immediately refresh sidebar so the new session appears
               void refetchSessions();
             }

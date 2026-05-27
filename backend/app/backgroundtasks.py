@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 
-from app.services.nse_client import NSEClient
+from app.services.nse_client import NSEClient, SymbolNotFoundError
 from app.services import ticker_warehouse
 from app.services import indicators
 from app.models import stockuniverse
@@ -25,6 +25,9 @@ from app.models.job import Job
 from app.database import _SyncSessionLocal, AsyncSessionLocal, _ThreadAsyncSessionLocal
 from app.config import settings
 from app.services.news_fetcher import news_fetcher
+from app.services.news_aggregator import fetch_all_feeds, store_articles
+from app.services.news_sources import HIGH_PRIORITY_SOURCES
+from app.routers.news_ws import broadcast_news_update
 from app.services.mc_market_fetcher import market_data_fetcher
 from app.services.morningstar_client import (
     REQUEST_DELAY,
@@ -509,6 +512,13 @@ def _stock_universe_sync() -> None:
                         batch.clear()
                         if _sleep_interruptible(0.5):
                             return
+                except SymbolNotFoundError:
+                    _update_symbol_error_status(session, symbol, "unknown")
+                    session.commit()
+                    logger.warning("Symbol %s: no tradeable series found, marked as unknown", symbol)
+                    if _sleep_interruptible(0.5):
+                        return
+                    continue
                 except _SAOperationalError as e:
                     logger.warning(
                         "DB write failed for %s (will retry next cycle): %s", symbol, e
@@ -532,6 +542,18 @@ def _stock_universe_sync() -> None:
         logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
 
 
+def _update_symbol_error_status(session, symbol: str, reason: str, series: str | None = None) -> None:
+    """Set review_status (and optionally series) on an existing stock_universe row."""
+    values: dict[str, object] = {"review_status": reason}
+    if series is not None:
+        values["series"] = series
+    session.execute(
+        update(stockuniverse.StockUniverse)
+        .where(stockuniverse.StockUniverse.symbol == symbol)
+        .values(**values)
+    )
+
+
 def _bulk_insert_stock_universe(session, batch: list) -> None:
     """Bulk insert or update a batch of stock universe records."""
     if not batch:
@@ -539,7 +561,7 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
     for metadata in batch:
         stmt = (
             sqlite_insert(stockuniverse.StockUniverse)
-            .values(
+.values(
                 symbol=metadata.symbol,
                 company_name=metadata.companyName,
                 segment=metadata.segment,
@@ -552,6 +574,8 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
                 low_52w=metadata.low_52w,
                 high_52w_date=metadata.high_52w_date,
                 low_52w_date=metadata.low_52w_date,
+                series=metadata.series if hasattr(metadata, "series") else None,
+                review_status=None,
             )
             .on_conflict_do_update(
                 index_elements=["symbol"],
@@ -567,6 +591,8 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
                     "low_52w": metadata.low_52w,
                     "high_52w_date": metadata.high_52w_date,
                     "low_52w_date": metadata.low_52w_date,
+                    "series": metadata.series if hasattr(metadata, "series") else None,
+                    "review_status": None,  # clear error status on re-fetch
                     "high_52w_updated_at": func.now(),
                     "updated_at": func.now(),
                 },
@@ -1410,6 +1436,140 @@ def news_worker() -> None:
     logger.info("news_worker: stopped")
 
 
+# RSS News Worker - Multi-source RSS aggregation
+NEWS_RSS_CRON = "*/5 * * * *"  # Every 5 minutes
+
+
+def _news_rss_sync() -> None:
+    """Fetch and store articles from all RSS sources."""
+    logger.info("news_rss_sync: starting RSS aggregation")
+    try:
+        from app.services.news_aggregator import _parsed_article_to_db_dict
+
+        all_articles, results = _run_async(
+            fetch_all_feeds(
+                sources=HIGH_PRIORITY_SOURCES,
+                concurrency=5,
+                timeout=15.0,
+            )
+        )
+
+        success_count = sum(1 for r in results if not r.error)
+        error_count = sum(1 for r in results if r.error)
+        logger.info(
+            "news_rss_sync: fetched %d articles from %d sources (%d errors)",
+            len(all_articles), success_count, error_count
+        )
+
+        # Convert ParsedArticle objects to DB dicts with NLP fields
+        processed = []
+        for article in all_articles:
+            try:
+                processed.append(_parsed_article_to_db_dict(article))
+            except Exception as e:
+                logger.debug("Failed to process article %s: %s", article.url, e)
+
+        if processed:
+            with _SyncSessionLocal() as session:
+                stored = 0
+                for article_dict in processed:
+                    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+                    stmt = sqlite_insert(NewsArticle).values(article_dict)
+                    stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
+                    session.execute(stmt)
+                    stored += 1
+                session.commit()
+                logger.info("news_rss_sync: stored %d articles", stored)
+
+                # Broadcast new articles via WebSocket (sync path — dead code, async path is active)
+                for article_dict in processed[:10]:
+                    try:
+                        _run_async(broadcast_news_update(article_dict))
+                    except Exception as e:
+                        logger.debug("Failed to broadcast article: %s", e)
+
+        for r in results:
+            if r.error:
+                logger.debug("news_rss_sync: %s failed: %s", r.source.id, r.error)
+
+    except Exception as e:
+        logger.exception("news_rss_sync: failed with exception: %s", e)
+
+
+async def _news_rss_sync_async() -> None:
+    """Async version of news RSS sync for use in worker threads."""
+    from app.services.news_aggregator import fetch_and_process_all, store_articles
+
+    try:
+        processed, results = await fetch_and_process_all(
+            sources=HIGH_PRIORITY_SOURCES,
+            concurrency=5,
+            timeout=15.0,
+        )
+
+        success_count = sum(1 for r in results if not r.error)
+        error_count = sum(1 for r in results if r.error)
+        logger.info(
+            "news_rss_sync: fetched %d articles from %d sources (%d errors)",
+            len(processed), success_count, error_count
+        )
+
+        if processed:
+            async with _ThreadAsyncSessionLocal() as session:
+                stored = await store_articles(session, processed)
+                logger.info("news_rss_sync_async: stored %d articles", stored)
+
+                # Broadcast new articles via WebSocket
+                for article_dict in processed[:10]:  # Broadcast newest 10
+                    try:
+                        await broadcast_news_update(article_dict)
+                    except Exception as e:
+                        logger.debug("Failed to broadcast article: %s", e)
+
+    except Exception as e:
+        logger.exception("news_rss_sync_async: failed with exception: %s", e)
+
+
+def news_rss_worker() -> None:
+    """Daemon thread target for RSS news aggregation (cron: */5 * * * *)."""
+    logger.info("news_rss_worker: started")
+
+    if not _is_job_enabled("job.news_rss"):
+        logger.info("news_rss_worker: disabled, waiting...")
+        update_job_status_sync("job.news_rss", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
+        logger.info("news_rss_worker: stopped")
+        return
+
+    # Run immediately on startup
+    logger.info("news_rss_worker: running initial sync")
+    update_job_status_sync("job.news_rss", "running", progress=10, message="Initial RSS sync...")
+    _run_async(_news_rss_sync_async())
+
+    # Then run on cron schedule
+    while not _shutdown_event.is_set():
+        wait_secs = _seconds_until_next_cron(NEWS_RSS_CRON)
+        logger.info("news_rss_worker: next run in %.0f s", wait_secs)
+        update_job_status_sync("job.news_rss", "waiting", progress=0, message=f"Next run in {wait_secs:.0f}s")
+        if _sleep_interruptible(wait_secs):
+            break
+
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.news_rss"):
+                update_job_status_sync("job.news_rss", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+
+            update_job_status_sync("job.news_rss", "running", progress=50, message="Fetching RSS feeds...")
+            _run_async(_news_rss_sync_async())
+            update_job_status_sync("job.news_rss", "completed", progress=100, message="Sync complete")
+
+    update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
+    logger.info("news_rss_worker: stopped")
+
+
 WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
 
 
@@ -1897,11 +2057,12 @@ async def start_all_workers() -> list[threading.Thread]:
         ticker_scores_worker,          # 4 — momentum scores
         ticker_daily_update_worker,    # 5 — daily bhavcopy + refresh
         market_data_worker,            # 6 — live market data
-        global_scan_worker,            # 7 — full-universe scan
-        watchlist_notification_worker, # 8 — watchlist alerts
-        news_worker,                   # 9 — global news
-        watchlist_news_worker,         # 10 — per-symbol news
-        results_calendar_worker,       # 11 — upcoming results alerts
+        global_scan_worker,           # 7 — full-universe scan
+        watchlist_notification_worker,  # 8 — watchlist alerts
+        news_worker,                   # 9 — global news (MoneyControl)
+        news_rss_worker,              # 10 — RSS news aggregation
+        watchlist_news_worker,        # 11 — per-symbol news
+        results_calendar_worker,       # 12 — upcoming results alerts
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -1927,7 +2088,7 @@ def _parse_52week_data(data: dict) -> dict[str, dict]:
             result[symbol] = {
                 "ltp": item.get("ltp"),
                 "new52WHL": item.get("new52WHL"),
-                "pChange": item.get("pChange"),
+                "pChange": item.get("pChange") or item.get("perChange"),
             }
     return result
 
@@ -1940,7 +2101,7 @@ def _parse_volume_gainers(data: dict) -> dict[str, dict]:
         if symbol:
             result[symbol] = {
                 "week1volChange": item.get("week1volChange"),
-                "pChange": item.get("pChange"),
+                "pChange": item.get("pChange") or item.get("perChange"),
             }
     return result
 
@@ -2566,18 +2727,24 @@ def _build_alerts(
         alerts.append(("volume_breakout", f"{symbol} showing volume breakout ({ratio:+.0f}x avg)"))
     
     # Top gainers/losers (DataFrame)
+    def _row_pchg(row) -> float:
+        """Read % change from either pChange (legacy) or perChange (new API)."""
+        return getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+
     if gainers_df is not None:
         for row in gainers_df.itertuples():
             if row.symbol == symbol:
-                pchg = getattr(row, "pChange", 0) or 0
-                alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
+                pchg = _row_pchg(row)
+                if pchg:
+                    alerts.append(("top_gainer", f"{symbol} among TOP GAINERS ({pchg:+.1f}%)"))
                 break
-    
+
     if losers_df is not None:
         for row in losers_df.itertuples():
             if row.symbol == symbol:
-                pchg = getattr(row, "pChange", 0) or 0
-                alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
+                pchg = _row_pchg(row)
+                if pchg:
+                    alerts.append(("top_loser", f"{symbol} among TOP LOSERS ({pchg:+.1f}%)"))
                 break
     
     # Deals (bulk/block/short) — O(1) lookup via pre-indexed dict.
@@ -3089,15 +3256,17 @@ def _global_scan_cycle() -> None:
                     if gainers_df is not None:
                         for row in gainers_df.itertuples():
                             if row.symbol == symbol:
-                                pchg = getattr(row, "pChange", 0) or 0
-                                alerts.append(("top_gainer", f"{symbol} +{pchg:.1f}%"))
+                                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+                                if pchg:
+                                    alerts.append(("top_gainer", f"{symbol} +{pchg:.1f}%"))
                                 break
 
                     if losers_df is not None:
                         for row in losers_df.itertuples():
                             if row.symbol == symbol:
-                                pchg = getattr(row, "pChange", 0) or 0
-                                alerts.append(("top_loser", f"{symbol} {pchg:.1f}%"))
+                                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+                                if pchg:
+                                    alerts.append(("top_loser", f"{symbol} {pchg:.1f}%"))
                                 break
 
                     if deals and symbol in deals:

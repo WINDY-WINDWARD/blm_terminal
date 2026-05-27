@@ -321,7 +321,43 @@ class TestBuildAlerts:
         assert len(alerts) == 1
         assert alerts[0][0] == "top_loser"
         assert "-3.2%" in alerts[0][1]
-    
+
+    def test_top_gainer_alert_perchange_only(self):
+        """Verify alerts work when NSE API returns perChange instead of pChange."""
+        gainers_df = pd.DataFrame([
+            {"symbol": "TEST", "perChange": 5.5},
+        ])
+        alerts = _build_alerts("TEST", gainers_df=gainers_df)
+        assert len(alerts) == 1
+        assert alerts[0][0] == "top_gainer"
+        assert "+5.5%" in alerts[0][1]
+
+    def test_top_loser_alert_perchange_only(self):
+        """Verify alerts work when NSE API returns perChange instead of pChange."""
+        losers_df = pd.DataFrame([
+            {"symbol": "TEST", "perChange": -3.2},
+        ])
+        alerts = _build_alerts("TEST", losers_df=losers_df)
+        assert len(alerts) == 1
+        assert alerts[0][0] == "top_loser"
+        assert "-3.2%" in alerts[0][1]
+
+    def test_top_gainer_alert_zero_ignored(self):
+        """Alerts with 0% change should be suppressed."""
+        gainers_df = pd.DataFrame([
+            {"symbol": "TEST", "pChange": 0.0},
+        ])
+        alerts = _build_alerts("TEST", gainers_df=gainers_df)
+        assert len(alerts) == 0
+
+    def test_top_gainer_alert_no_pchange_fields(self):
+        """Alerts with missing pChange/perChange should be suppressed."""
+        gainers_df = pd.DataFrame([
+            {"symbol": "TEST"},
+        ])
+        alerts = _build_alerts("TEST", gainers_df=gainers_df)
+        assert len(alerts) == 0
+
     def test_deal_alert(self):
         # qty=200_000, watp=500.0 → trade value = 10 Cr > 2 Cr fallback threshold
         deals = [

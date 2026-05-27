@@ -5,16 +5,19 @@ calls to the NSE client/service.
 """
 
 from typing import List, Optional
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
+from app.models.ticker import TickerDaily
 from app.schemas.stockuniverse import StockUniverse as StockUniverseSchema
 from app.services.mc_stock_linker import MCStockLinker
+from app.services.nse_client import NSEClient
 
 
 router = APIRouter()
@@ -30,6 +33,7 @@ def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
         sectorPE=obj.sector_pe,
         symbolPE=obj.symbol_pe,
         industryInfo=obj.industry_info or {},
+        series=obj.series,
         lastUpdateTime=obj.last_update_time,
         screenerTradesId=obj.screener_trades_id,
         mcUrl=obj.mc_url,
@@ -149,4 +153,158 @@ async def confirm_match(
             status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found"
         )
     rec = await db.get(StockUniverseModel, symbol)
+    return _orm_to_schema(rec)
+
+
+ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown"})
+REVIEW_STATUS_REMOVED = "removed"
+
+
+class StockUniverseErrorSymbol(BaseModel):
+    symbol: str
+    companyName: str | None
+    reviewStatus: str
+    series: str | None
+    lastUpdateTime: datetime | None
+
+
+class ErrorCategory(BaseModel):
+    count: int
+    symbols: list[StockUniverseErrorSymbol]
+
+
+class StockUniverseErrorsResponse(BaseModel):
+    delisted: ErrorCategory
+    illiquid: ErrorCategory
+    suspended: ErrorCategory
+    not_tradable: ErrorCategory
+    unknown: ErrorCategory
+
+
+class ChangeSymbolRequest(BaseModel):
+    newSymbol: str
+
+
+errors_router = APIRouter()
+
+
+@errors_router.get(
+    "/",
+    response_model=StockUniverseErrorsResponse,
+    tags=["stockuniverse"],
+)
+async def list_stock_universe_errors(
+    db: AsyncSession = Depends(get_db),
+) -> StockUniverseErrorsResponse:
+    """Return all errored stock universe symbols grouped by review_status."""
+    q = select(StockUniverseModel).where(
+        StockUniverseModel.review_status.in_(ERROR_STATUSES)
+    )
+    res = await db.execute(q)
+    rows = res.scalars().all()
+
+    categories: dict[str, list[StockUniverseErrorSymbol]] = {
+        "delisted": [], "illiquid": [], "suspended": [], "not_tradable": [], "unknown": []
+    }
+    for row in rows:
+        status_val = row.review_status
+        if status_val in categories:
+            categories[status_val].append(StockUniverseErrorSymbol(
+                symbol=row.symbol,
+                companyName=row.company_name,
+                reviewStatus=status_val,
+                series=row.series,
+                lastUpdateTime=row.last_update_time,
+            ))
+
+    return StockUniverseErrorsResponse(
+        delisted=ErrorCategory(count=len(categories["delisted"]), symbols=categories["delisted"]),
+        illiquid=ErrorCategory(count=len(categories["illiquid"]), symbols=categories["illiquid"]),
+        suspended=ErrorCategory(count=len(categories["suspended"]), symbols=categories["suspended"]),
+        not_tradable=ErrorCategory(count=len(categories["not_tradable"]), symbols=categories["not_tradable"]),
+        unknown=ErrorCategory(count=len(categories["unknown"]), symbols=categories["unknown"]),
+    )
+
+
+@errors_router.delete(
+    "/{symbol}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["stockuniverse"],
+)
+async def remove_stock_universe_symbol(
+    symbol: str,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Soft-delete a symbol: set review_status='removed' and delete its ticker_warehouse rows."""
+    rec = await db.get(StockUniverseModel, symbol)
+    if rec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found")
+
+    rec.review_status = REVIEW_STATUS_REMOVED
+    db.add(rec)
+
+    await db.execute(
+        delete(TickerDaily).where(TickerDaily.symbol == symbol)
+    )
+
+    await db.commit()
+
+
+@errors_router.put(
+    "/{symbol}/change-symbol",
+    response_model=StockUniverseSchema,
+    tags=["stockuniverse"],
+)
+async def change_stock_universe_symbol(
+    symbol: str,
+    body: ChangeSymbolRequest,
+    db: AsyncSession = Depends(get_db),
+) -> StockUniverseSchema:
+    """Rename a symbol and re-fetch its metadata from NSE.
+
+    1. Validate newSymbol not already in DB.
+    2. Re-fetch metadata for newSymbol from NSE.
+    3. Update existing row with all fields from fetched data.
+    4. Return updated record.
+    """
+    new_symbol = body.newSymbol.strip().upper()
+
+    rec = await db.get(StockUniverseModel, symbol)
+    if rec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="old symbol not found")
+
+    new_rec = await db.get(StockUniverseModel, new_symbol)
+    if new_rec is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"new symbol '{new_symbol}' already exists in stock universe",
+        )
+
+    nse = NSEClient()
+    try:
+        new_meta = nse.get_stock_metadata(new_symbol)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"new symbol '{new_symbol}' is also invalid on NSE: {exc}",
+        )
+
+    rec.symbol = new_meta.symbol
+    rec.company_name = new_meta.companyName
+    rec.segment = new_meta.segment
+    rec.industry = new_meta.industry
+    rec.sector_pe = new_meta.sectorPE
+    rec.symbol_pe = new_meta.symbolPE
+    rec.industry_info = new_meta.industryInfo
+    rec.series = new_meta.series
+    rec.last_update_time = new_meta.lastUpdateTime
+    rec.review_status = None
+    rec.high_52w = new_meta.high_52w
+    rec.low_52w = new_meta.low_52w
+    rec.high_52w_date = new_meta.high_52w_date
+    rec.low_52w_date = new_meta.low_52w_date
+
+    db.add(rec)
+    await db.commit()
+    await db.refresh(rec)
     return _orm_to_schema(rec)

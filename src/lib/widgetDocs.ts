@@ -501,25 +501,62 @@ const DOCS_MAP: WidgetDoc[] = [
     command: 'NEWS',
     title: 'News',
     summary:
-      'Market and company-specific news articles from MoneyControl, covering global events and watchlist stocks.',
+      'Multi-source financial news aggregator combining 35+ RSS feeds (global wire services, financial media, India business, crypto, and tech) with MoneyControl scraped articles. Articles are NLP-enriched with sentiment, threat classification, entity extraction, and source credibility scoring.',
     sections: [
       {
         heading: 'What it shows',
-        body: 'Two tabs: Global (market-wide headlines) and Company (news specific to watchlist symbols). Articles are fetched every 5 minutes and stored locally.',
+        body: 'Two tabs. Global shows a unified feed of all RSS and MoneyControl articles with source filtering, sentiment indicators, and threat badges. Company shows symbol-specific news scraped from MoneyControl stock quote pages. Articles are stored locally and refreshed every 5 minutes via background workers. A live WebSocket connection pushes new articles in real time as they are fetched.',
       },
       {
-        heading: 'Tabs',
+        heading: 'Sources & coverage',
         items: [
-          { name: 'Global', desc: 'Broad market news — macroeconomic events, RBI/SEBI announcements, global markets.' },
-          { name: 'Company', desc: 'Symbol-specific news for stocks in your active watchlist. Auto-refreshed when symbols change.' },
+          { name: 'Tier 1 Wire & Regulatory', desc: 'AP Top News, SEC Press Releases, Federal Reserve, ECB, Bank of England — primary-source regulatory and macro announcements.' },
+          { name: 'Tier 1 Financial Media', desc: 'Bloomberg Markets, WSJ Markets, CNBC Finance — major global financial outlets.' },
+          { name: 'Tier 2 India', desc: 'MoneyControl RSS, Economic Times, LiveMint, The Hindu Business — India-focused business and market news.' },
+          { name: 'Tier 2 Global', desc: 'MarketWatch, Seeking Alpha, Investing.com, Benzinga, BBC Business, Nikkei Asia, CNA, The Economist, Al Jazeera, Foreign Policy.' },
+          { name: 'Tier 2 Crypto', desc: 'CoinDesk, CoinTelegraph, The Block.' },
+          { name: 'Tier 2 Tech', desc: 'TechCrunch, Finextra, The Verge, Ars Technica.' },
+          { name: 'Tier 3 Blogs & Aggregators', desc: 'BBC World, Calculated Risk, ZeroHedge (flagged CAUTION), Bellingcat, Hacker News, Abnormal Returns.' },
+          { name: 'MoneyControl Scraped', desc: 'Full article text scraped from MoneyControl global and company pages. Serves as fallback when RSS feeds are unavailable.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'NLP pipeline (rule-based)',
+        items: [
+          { name: 'Sentiment analysis', desc: 'Weighted keyword matching against curated positive/negative word lists (e.g. "surge" +3, "crash" -3). Net score ≥ 2 → BULLISH; ≤ -2 → BEARISH; otherwise NEUTRAL. Confidence scales with total signal count.' },
+          { name: 'Entity extraction', desc: 'Regex-based extraction of countries (60+ mapped to ISO codes), organizations (30+ including central banks, regulators, tech giants), known persons (20+ political and business leaders), and tickers (uppercase 2–5 letter words, filtered against common false positives).' },
+          { name: 'Threat classification', desc: 'Keyword-pattern matching for CRITICAL (nuclear strike, market crash), HIGH (invasion, rate hike, sanction), MEDIUM (protest, tariff, recession), and LOW (general) threat levels. Each level has an associated category: conflict, market, cyber, natural, or regulatory.' },
+          { name: 'Language detection', desc: 'Character-script detection for Chinese (zh), Japanese (ja), Korean (ko), Russian (ru), Arabic (ar), Hindi (hi). Defaults to English (en).' },
+          { name: 'Source credibility', desc: 'Static classification: STATE_MEDIA (Xinhua, CGTN, RT, TASS, etc.), CAUTION (ZeroHedge, Infowars, Daily Mail, NY Post), or NONE (default). Flagged sources show a yellow warning icon (⚠).' },
+        ] as DocField[],
+      },
+      {
+        heading: 'UI indicators',
+        items: [
+          { name: 'Sentiment dot', desc: 'Green = BULLISH, Red = BEARISH, Gray = NEUTRAL. Opacity scales with confidence score (0.3–1.0).' },
+          { name: 'Threat badge', desc: 'LOW (green), MED (yellow), HIGH (red), CRIT (red bold). Appears next to article titles when threat_level is not LOW.' },
+          { name: 'Credibility warning', desc: 'Yellow ⚠ icon appears for STATE_MEDIA and CAUTION sources.' },
+          { name: 'LIVE indicator', desc: 'Green pulsing dot in the Global tab header when the WebSocket is connected. New articles pushed live appear in a separate "LIVE" section above the paginated DB feed.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Filtering & pagination',
+        items: [
+          { name: 'Source filter chips', desc: 'Toggle individual sources on/off in the Global tab. Only selected sources are shown. Clear to reset.' },
+          { name: 'Sentiment filter', desc: 'Filter by BULLISH, BEARISH, or NEUTRAL (stored in news.filters atom).' },
+          { name: 'Threat filter', desc: 'Filter by LOW, MEDIUM, HIGH, or CRITICAL (stored in news.filters atom).' },
+          { name: 'Pagination', desc: '50 articles per page. Prev/Next buttons at the bottom. Total count displayed.' },
         ] as DocField[],
       },
       {
         heading: 'How to use',
         items: [
-          'Global news is essential context — a market-wide risk-off event affects all positions.',
-          'Filter company news by clicking a symbol in WATCH — the NEWS panel updates to show that symbol\'s articles.',
-          'News articles are time-stamped; older articles provide background but do not drive intraday price action.',
+          'Global news provides macro context — a risk-off event or central bank announcement affects all positions.',
+          'Use source filter chips to focus on specific outlets (e.g. only Tier 1 wire services for unfiltered primary-source news).',
+          'Click a symbol in WATCH to auto-filter Company news to that ticker.',
+          'Sentiment dots + threat badges give at-a-glance signal strength. A BULLISH + LOW article from a Tier 1 source is high-confidence context.',
+          'The NLP pipeline is rule-based, not ML — treat sentiment and threat scores as directional hints, not definitive forecasts.',
+          'LIVE articles arrive via WebSocket and are deduplicated by URL. They appear for 5 minutes before being absorbed into the paginated DB feed.',
         ],
       },
     ],

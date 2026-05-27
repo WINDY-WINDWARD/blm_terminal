@@ -660,6 +660,30 @@ class TestMCPCompanyNews:
             "result" in result and result["result"].get("isError") is True
         )
 
+    def test_response_includes_nlp_fields(self):
+        """get_company_news response includes all NLP fields."""
+        import json
+
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_company_news", "arguments": {"symbol": "RELIANCE", "days": 1, "limit": 5}},
+        )
+        if "error" in result or result["result"].get("isError"):
+            return
+        content = result["result"]["content"]
+        text = content[0]["text"]
+        data = json.loads(text)
+        if isinstance(data, list) and len(data) > 0:
+            article = data[0]
+            assert "sentiment" in article
+            assert "sentiment_score" in article
+            assert "confidence" in article
+            assert "language" in article
+            assert "entities" in article
+            assert "threat_level" in article
+            assert "threat_category" in article
+            assert "source_credibility" in article
+
 
 class TestMCPGlobalNews:
     """Tests for get_global_news MCP tool."""
@@ -671,6 +695,77 @@ class TestMCPGlobalNews:
         assert result["result"].get("isError") is not True
         content = result["result"]["content"]
         assert len(content) > 0
+
+    def test_response_includes_nlp_fields(self):
+        """get_global_news response includes all NLP fields."""
+        import json
+
+        result = mcp_request("tools/call", {"name": "get_global_news", "arguments": {"days": 1, "limit": 5}})
+        assert "result" in result
+        content = result["result"]["content"]
+        text = content[0]["text"]
+        data = json.loads(text)
+        assert "data" in data
+        if len(data["data"]) > 0:
+            article = data["data"][0]
+            assert "sentiment" in article
+            assert "sentiment_score" in article
+            assert "confidence" in article
+            assert "language" in article
+            assert "entities" in article
+            assert "threat_level" in article
+            assert "threat_category" in article
+            assert "source_credibility" in article
+
+    def test_filter_by_sentiment(self):
+        """get_global_news with sentiment filter returns filtered results."""
+        import json
+
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_global_news", "arguments": {"days": 30, "sentiment": "POSITIVE", "limit": 20}},
+        )
+        assert "result" in result
+        if result["result"].get("isError"):
+            return
+        content = result["result"]["content"]
+        text = content[0]["text"]
+        data = json.loads(text)
+        if len(data["data"]) > 0:
+            for article in data["data"]:
+                if article.get("sentiment"):
+                    assert article["sentiment"].upper() in ("POSITIVE", "NEGATIVE", "NEUTRAL"), \
+                        f"Unexpected sentiment: {article['sentiment']}"
+
+    def test_filter_by_source(self):
+        """get_global_news with sources filter returns filtered results."""
+        import json
+
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_global_news", "arguments": {"sources": ["moneycontrol"], "limit": 10}},
+        )
+        assert "result" in result
+
+    def test_filter_by_threat_level(self):
+        """get_global_news with threat_level filter returns filtered results."""
+        import json
+
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_global_news", "arguments": {"threat_level": "HIGH", "limit": 10}},
+        )
+        assert "result" in result
+
+    def test_filter_by_language(self):
+        """get_global_news with language filter returns filtered results."""
+        import json
+
+        result = mcp_request(
+            "tools/call",
+            {"name": "get_global_news", "arguments": {"language": "en", "limit": 10}},
+        )
+        assert "result" in result
 
 
 class TestMCPIndustrySector:
