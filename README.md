@@ -1,12 +1,11 @@
 # BLM Terminal
 
-![Build](https://img.shields.io/badge/build-passing-brightgreen)
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-**A self-hosted financial terminal for the OpenAlgo ecosystem** — real-time quotes, candlestick charts, order entry, positions, NSE analytics, and a persistent data warehouse, all in a single browser tab.
+**A self-hosted financial terminal for NSE India** — real-time quotes, candlestick charts, order entry, positions, market analytics, fundamentals, news, and a persistent data warehouse, all in a single browser tab.
 
 ---
 
@@ -17,7 +16,6 @@
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
-- [Docker Deployment](#docker-deployment)
 - [Development](#development)
 - [Project Structure](#project-structure)
 
@@ -25,7 +23,7 @@
 
 ## Overview
 
-BLM Terminal is a full-stack trading dashboard that sits in front of an [OpenAlgo](https://github.com/marketcalls/openalgo) broker-agnostic API gateway. The frontend is a Next.js 16 App Router application that proxies all broker calls server-side, keeping API credentials out of the browser. A companion FastAPI service (`backend/`) independently archives NSE India market data and corporate filings into a local SQLite database, acting as a standalone analytics data warehouse.
+BLM Terminal is a full-stack trading dashboard built for NSE India. The frontend is a Next.js 16 App Router application that proxies all broker calls server-side via [OpenAlgo](https://github.com/marketcalls/openalgo), keeping API credentials out of the browser. A companion FastAPI service (`backend/`) independently fetches and archives NSE market data, corporate filings, screener fundamentals, MoneyControl news, and Morningstar fair values into a local SQLite database — acting as a standalone analytics data warehouse and MCP server.
 
 ---
 
@@ -36,14 +34,15 @@ BLM Terminal is a full-stack trading dashboard that sits in front of an [OpenAlg
 | **Real-time data** | Native WebSocket client for live tick streaming via OpenAlgo |
 | **Charts** | Lightweight candlestick charts (`lightweight-charts`) with OHLCV history |
 | **Order management** | Place, view, and track orders and positions in a single panel |
-| **Watchlist** | Persistent, editable watchlist backed by the Python analytics backend (SQLite), with multiple watchlist support |
-| **Notifications** | Real-time price alerts for watchlist stocks (52-week highs/lows, volume breakouts, top movers, deals, insider trades) |
-| **Morningstar** | Fair value data from Morningstar India, synced nightly to the stock universe |
-| **Market movers** | Top gainers / losers fetched from the Python analytics backend |
-| **Fundamentals & Deals** | NSE corporate filings, bulk/block deal data via the FastAPI service |
-| **Data warehouse** | Standalone FastAPI + SQLite backend — runs independently; archives OHLCV, fair values, and filing data with configurable TTL caching |
-| **Security** | All broker credentials stay server-side; compatible with SELinux contexts and Cloudflare tunnels |
-| **Home-lab friendly** | Docker Compose support with Portainer-ready configuration |
+| **Watchlist** | Persistent, editable watchlists backed by the Python backend (SQLite), with multiple watchlist support |
+| **Notifications** | Price alerts for watchlist stocks — 52-week highs/lows, volume breakouts, RSI, MACD, Bollinger Bands, top movers, deals, and insider trades |
+| **Market movers** | Top gainers/losers, volume surge stocks, 52-week breakouts |
+| **Fundamentals** | Screener.in financials — P/E, ROCE, ROE, quarterly results, and more |
+| **Deals** | NSE bulk/block deals and insider trade history via screener.in |
+| **News** | MoneyControl company and global news, with AI-powered summaries |
+| **Morningstar** | Fair value estimates from Morningstar India, synced nightly |
+| **MCP server** | FastAPI backend also exposes all 29 tools as an MCP server (streamable HTTP at `/api/mcp`) for AI assistant integration |
+| **Security** | All broker credentials stay server-side; never exposed to the browser |
 
 ---
 
@@ -145,49 +144,6 @@ NSE_CACHE_TTL_SECONDS=3600
 LOG_LEVEL=INFO
 ```
 
----
-
-## Docker Deployment
-
-A minimal Docker Compose setup for running both services together, suitable for Portainer or any home-lab environment. Create `docker-compose.yml` in the repo root:
-
-```yaml
-version: "3.9"
-
-services:
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile          # Next.js standalone build
-    ports:
-      - "3000:3000"
-    env_file: .env.local
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile          # Python FastAPI image
-    ports:
-      - "4455:4455"
-    env_file: ./backend/.env
-    volumes:
-      - backend_data:/app/data        # persist SQLite warehouse
-    restart: unless-stopped
-
-volumes:
-  backend_data:
-```
-
-### SELinux & Cloudflare Tunnels
-
-- Mount volumes with the `:z` flag (shared) or `:Z` flag (private) to satisfy SELinux relabelling:
-  `- backend_data:/app/data:Z`
-- Expose the frontend through a Cloudflare tunnel instead of opening ports publicly. Point the tunnel to `http://localhost:3000`; the backend never needs to be directly reachable from the internet.
-
----
 
 ## Development
 
