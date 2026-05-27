@@ -13,6 +13,25 @@ from datetime import datetime, timedelta
 from functools import partial
 from typing import Any
 
+
+def _safe_entities(v: Any) -> dict | None:
+    """Return entities as a dict regardless of whether it was stored as a
+    dict (post-backfill clean rows) or a JSON string (legacy corrupt rows).
+    Mirrors the NewsArticleOut field_validator so mcp_server tools never crash.
+    """
+    import json as _j
+    if v is None or isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        try:
+            result = _j.loads(v)
+            if isinstance(result, str):
+                result = _j.loads(result)
+            return result if isinstance(result, dict) else None
+        except (ValueError, TypeError):
+            return None
+    return None
+
 import numpy as np
 import pandas as pd
 from mcp.server import FastMCP
@@ -1138,7 +1157,7 @@ async def get_global_news(
                     "sentiment_score": a.sentiment_score,
                     "confidence": a.confidence,
                     "language": a.language,
-                    "entities": _json.loads(a.entities) if a.entities else None,
+                    "entities": _safe_entities(a.entities),
                     "threat_level": a.threat_level,
                     "threat_category": a.threat_category,
                     "source_credibility": a.source_credibility,
@@ -1229,7 +1248,7 @@ async def get_company_news(
                     "sentiment_score": a.sentiment_score,
                     "confidence": a.confidence,
                     "language": a.language,
-                    "entities": _json.loads(a.entities) if a.entities else None,
+                    "entities": _safe_entities(a.entities),
                     "threat_level": a.threat_level,
                     "threat_category": a.threat_category,
                     "source_credibility": a.source_credibility,
