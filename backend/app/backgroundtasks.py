@@ -455,6 +455,28 @@ def _seconds_until_next_cron(cron_expr: str) -> float:
     return (croniter(cron_expr, now).get_next(datetime) - now).total_seconds()
 
 
+def _report_job_waiting(job_key: str, cron_expr: str | None, message: str | None = None) -> float:
+    """Set job status to 'waiting' with a computed next_trigger_at, then return the
+    number of seconds until the next cron fire for the caller to sleep.
+
+    For ``@startup`` or ``None`` cron expressions, next_trigger_at is left NULL
+    (manual-only / one-shot behaviour).
+    """
+    if cron_expr is None or cron_expr == "@startup":
+        update_job_status_sync(job_key, "waiting", progress=100,
+                               message=message or "Manual only")
+        return 86400.0  # long idle
+
+    wait_secs = _seconds_until_next_cron(cron_expr)
+    next_trigger = datetime.now(timezone.utc) + timedelta(seconds=wait_secs)
+    update_job_status_sync(
+        job_key, "waiting", progress=100,
+        message=message or f"Next run in {wait_secs / 3600:.1f}h",
+        next_trigger=next_trigger,
+    )
+    return wait_secs
+
+
 def _stock_universe_sync() -> None:
     """Populate or refresh the stock universe table. Runs synchronously in a worker thread."""
     try:
@@ -628,9 +650,8 @@ def stock_universe_worker() -> None:
     logger.info("stock_universe_worker: startup gate released (_startup_stock_universe_done)")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron("0 0 * * *")
+        wait_secs = _report_job_waiting("job.stock_universe", "0 0 * * *")
         logger.info("stock_universe_worker: sleeping %.0fs until next cron (0 0 * * *)", wait_secs)
-        update_job_status_sync("job.stock_universe", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
@@ -924,9 +945,8 @@ def ticker_daily_update_worker() -> None:
         update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron("*/30 15,16,17,18,19,20 * * 1-5")
+        wait_secs = _report_job_waiting("job.ticker_daily_update", "*/30 15,16,17,18,19,20 * * 1-5")
         logger.info("ticker_daily_update_worker: sleeping %.0fs until next cron (*/30 15,16,17,18,19,20 * * 1-5)", wait_secs)
-        update_job_status_sync("job.ticker_daily_update", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
@@ -1254,9 +1274,8 @@ def ticker_scores_worker() -> None:
     logger.info("ticker_scores_worker: startup gate released (_startup_ticker_scores_done)")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron("0 0 * * *")
+        wait_secs = _report_job_waiting("job.ticker_scores", "0 0 * * *")
         logger.info("ticker_scores_worker: sleeping %.0fs until next cron (0 0 * * *)", wait_secs)
-        update_job_status_sync("job.ticker_scores", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
@@ -1308,9 +1327,8 @@ def ticker_indicators_worker() -> None:
     logger.info("ticker_indicators_worker: startup gate released (_startup_ticker_indicators_done)")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron("0 11 * * 1-5")
+        wait_secs = _report_job_waiting("job.ticker_indicators", "0 11 * * 1-5")
         logger.info("ticker_indicators_worker: sleeping %.0fs until next cron (0 11 * * 1-5)", wait_secs)
-        update_job_status_sync("job.ticker_indicators", "waiting", progress=100, message=f"Next run in {wait_secs/3600:.1f}h")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
@@ -1418,7 +1436,13 @@ def news_worker() -> None:
     while not _shutdown_event.is_set():
         is_backoff = current_interval > _seconds_until_next_cron(NEWS_CRON)
         logger.info("news_worker: next run in %.0f s (backoff: %s)", current_interval, is_backoff)
-        update_job_status_sync("job.news", "waiting", progress=0, message=f"Next run in {current_interval:.0f}s")
+        if is_backoff:
+            next_trig = datetime.now(timezone.utc) + timedelta(seconds=current_interval)
+            update_job_status_sync("job.news", "waiting", progress=0,
+                                   message=f"Next run in {current_interval:.0f}s (backoff)",
+                                   next_trigger=next_trig)
+        else:
+            _report_job_waiting("job.news", NEWS_CRON)
         if _sleep_interruptible(current_interval):
             break
         if not _shutdown_event.is_set():
@@ -1550,9 +1574,8 @@ def news_rss_worker() -> None:
 
     # Then run on cron schedule
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron(NEWS_RSS_CRON)
+        wait_secs = _report_job_waiting("job.news_rss", NEWS_RSS_CRON)
         logger.info("news_rss_worker: next run in %.0f s", wait_secs)
-        update_job_status_sync("job.news_rss", "waiting", progress=0, message=f"Next run in {wait_secs:.0f}s")
         if _sleep_interruptible(wait_secs):
             break
 
@@ -1674,8 +1697,7 @@ def watchlist_news_worker() -> None:
         update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron("*/5 * * * *")
-        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message=f"Next run in {wait_secs:.0f}s")
+        wait_secs = _report_job_waiting("job.watchlist_news", "*/5 * * * *")
         if _sleep_interruptible(wait_secs):
             break
         if not _shutdown_event.is_set():
@@ -1803,9 +1825,8 @@ def market_data_worker() -> None:
 
     while not _shutdown_event.is_set():
         if _is_market_open():
-            wait = _seconds_until_next_cron("*/5 * * * *")
+            wait = _report_job_waiting("job.market_data", "*/5 * * * *", f"Market open, next run soon")
             logger.info("market_data_worker: market is open, next run in %.0f s", wait)
-            update_job_status_sync("job.market_data", "waiting", progress=100, message=f"Market open, next run in {wait:.0f}s")
             if _sleep_interruptible(wait):
                 break
             if not _shutdown_event.is_set() and _is_market_open():
@@ -1997,14 +2018,10 @@ def results_calendar_worker() -> None:
         update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
-        wait_secs = _seconds_until_next_cron(_RESULTS_CALENDAR_CRON)
+        wait_secs = _report_job_waiting("job.results_calendar", _RESULTS_CALENDAR_CRON)
         logger.info(
             "results_calendar_worker: sleeping %.0f s until next cron (%s)",
             wait_secs, _RESULTS_CALENDAR_CRON,
-        )
-        update_job_status_sync(
-            "job.results_calendar", "waiting", progress=100,
-            message=f"Next run in {wait_secs / 3600:.1f}h",
         )
         if _sleep_interruptible(wait_secs):
             break
@@ -3019,14 +3036,12 @@ def watchlist_notification_worker() -> None:
         if _is_market_open():
             update_job_status_sync("job.notifications", "running", progress=50, message="Checking market events...")
             _notification_cycle_full()
-            wait = _seconds_until_next_cron("*/5 * * * *")
-            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"Next run in {wait:.0f}s")
+            wait = _report_job_waiting("job.notifications", "*/5 * * * *")
             _sleep_interruptible(wait)
         else:
             update_job_status_sync("job.notifications", "waiting", progress=0, message="Market closed, checking after-hours...")
             _notification_cycle_reduced()
-            wait = _seconds_until_next_cron("*/30 * * * *")
-            update_job_status_sync("job.notifications", "waiting", progress=100, message=f"After-hours, next run in {wait:.0f}s")
+            wait = _report_job_waiting("job.notifications", "*/30 * * * *")
             _sleep_interruptible(wait)
 
     update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
@@ -3356,8 +3371,7 @@ def global_scan_worker() -> None:
             break
         update_job_status_sync("job.global_scan", "running", progress=50, message="Scanning all NSE stocks...")
         _global_scan_cycle()
-        wait = _seconds_until_next_cron("*/30 * * * *")
-        update_job_status_sync("job.global_scan", "waiting", progress=100, message=f"Next scan in {wait:.0f}s")
+        wait = _report_job_waiting("job.global_scan", "*/30 * * * *")
         if _sleep_interruptible(wait):
             break
 

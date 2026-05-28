@@ -77,13 +77,38 @@ function formatCron(expr: string | null | undefined): string {
     '0 0 * * *':         'Daily midnight',
     '0 11 * * 1-5':      'Weekdays 11:00',
     '30 10,14 * * 1-5':  'Weekdays 10:30 & 14:30',
+    '0 8,14 * * 1-5':    'Weekdays 08:00 & 14:00',
     '*/30 15,16,17,18,19,20 * * 1-5': 'Weekdays every 30min 15:00–20:30',
     '*/5 * * * *':       'Every 5 min',
     '*/30 * * * *':      'Every 30 min',
     '0 */3 * * *':       'Every 3 hours',
     '30 20 * * *':       'Daily 20:30 UTC',
+    '0 23 * * *':        'Daily 23:00 IST',
+    '30 23 * * *':       'Daily 23:30 IST',
   };
   return map[expr] ?? expr;
+}
+
+function formatNextTrigger(dateStr: string | null, isManualOnly: boolean): string {
+  if (isManualOnly) return 'Manual only';
+  if (!dateStr) return '—';
+  const date = new Date(dateStr);
+  const now = Date.now();
+  const diffMs = date.getTime() - now;
+  if (diffMs <= 0) return 'Pending...';
+  const abs = date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 60) return `${abs} (in ${mins}m)`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${abs} (in ${hours}h)`;
+  const days = Math.round(hours / 24);
+  return `${abs} (in ${days}d)`;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -409,7 +434,7 @@ export default function JobsPage() {
                       </td>
                       <td className="py-2 px-2 text-white/70">{formatDate(job.last_triggered_at)}</td>
                       <td className="py-2 px-2 text-white/70">{formatDate(job.last_completed_at)}</td>
-                      <td className="py-2 px-2 text-white/70">{formatDate(job.next_trigger_at)}</td>
+                      <td className="py-2 px-2 text-white/70">{formatNextTrigger(job.next_trigger_at, job.cron_expression === '@startup')}</td>
                       <td className="py-2 px-2 text-terminal-red text-[10px] max-w-[150px] truncate" title={job.last_error || ''}>
                         {job.last_error || '—'}
                       </td>

@@ -43,25 +43,11 @@ from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
 from app.services.news_fetcher import news_fetcher
-from app.services.morningstar_client import init_client, close_client
 from app.services.nse_rate_limiter import NSEServiceUnavailableError
-from app.backgroundtasks import (
-    start_all_workers,
-    stop_all_workers,
-    _should_trigger_full_sync,
-    sync_all_fair_values,
-    sync_watchlist_fair_values,
-    _run_watchlist_scheduler,
-    _run_nightly_scheduler,
-    set_async_shutdown_event,
-    _is_first_run,
-    _set_first_run_complete,
-)
+from app.orchestrator import orchestrator
 from app import mcp_server
 
 logger = logging.getLogger(__name__)
-
-_background_tasks: list[asyncio.Task] = []
 
 # ---------------------------------------------------------------------------
 # Migrations
@@ -379,22 +365,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Database schema up to date")
     cleanup_task = await start_cache_cleanup()
-    await start_all_workers()
+
     await screener_client.init()
     await news_fetcher.init()
 
-    # Initialize Morningstar client and start fair value sync
-    await init_client()
-    # Only run immediate sync on first run
-    if _is_first_run("morningstar") and await _should_trigger_full_sync():
-        logger.info("Triggering immediate full fair value sync (first run + DB cold or stale)")
-        _background_tasks.append(asyncio.create_task(sync_all_fair_values()))
-        _background_tasks.append(asyncio.create_task(sync_watchlist_fair_values()))
-        _set_first_run_complete("morningstar")
-
-    # Start schedulers
-    _background_tasks.append(asyncio.create_task(_run_watchlist_scheduler()))
-    _background_tasks.append(asyncio.create_task(_run_nightly_scheduler()))
+    # Start all workers, schedulers, and the startup pipeline via the orchestrator.
+    # This replaces the previous scattered calls to start_all_workers(),
+    # init_client(), _run_watchlist_scheduler(), _run_nightly_scheduler(), and
+    # the Morningstar first-run sync block.
+    await orchestrator.start()
 
     if ai_summarizer.is_configured:
         logger.info(
@@ -420,21 +399,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         logger.info("Shutting down — cancelling background tasks...")
         cleanup_task.cancel()
-        set_async_shutdown_event()
-        for task in _background_tasks:
-            task.cancel()
-        if _background_tasks:
-            await asyncio.gather(*_background_tasks, return_exceptions=True)
-        _background_tasks.clear()
 
         logger.info("Shutting down — stopping workers and closing clients...")
-        stop_all_workers(timeout=10.0)
-
-        await ai_summarizer.close()
-        await nse_client.close()
-        await screener_client.close()
-        await news_fetcher.close()
-        await close_client()
+        await orchestrator.stop()
 
 
 # ---------------------------------------------------------------------------

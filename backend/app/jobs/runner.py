@@ -133,28 +133,41 @@ def update_job_status_sync(
 
 
 async def sync_job_to_db(job_key: str) -> None:
-    """Ensure job exists in database, create if not."""
+    """Ensure job exists in database, upserting metadata from the registry.
+
+    Creates the row if it doesn't exist, or updates cron_expression, description,
+    category, and is_manual_only if the definition has changed.  Does NOT overwrite
+    status, progress, or timestamps on an existing row.
+    """
+    job_def = JobRegistry.get(job_key)
+    if not job_def:
+        return
+
     async with AsyncSessionLocal() as db:
         existing = await db.execute(select(Job).where(Job.job_key == job_key))
-        if existing.scalar_one_or_none():
-            return
+        job = existing.scalar_one_or_none()
 
-        job_def = JobRegistry.get(job_key)
-        if not job_def:
-            return
+        if job is None:
+            job = Job(
+                job_key=job_def.job_key,
+                name=job_def.name,
+                description=job_def.description,
+                category=job_def.category,
+                cron_expression=job_def.cron_expression,
+                is_manual_only=job_def.is_manual_only,
+                status="idle",
+                progress_percent=0,
+                is_enabled=True,
+            )
+            db.add(job)
+        else:
+            # Upsert: refresh definition fields, but leave runtime state alone
+            job.name = job_def.name
+            job.description = job_def.description
+            job.category = job_def.category
+            job.cron_expression = job_def.cron_expression
+            job.is_manual_only = job_def.is_manual_only
 
-        job = Job(
-            job_key=job_def.job_key,
-            name=job_def.name,
-            description=job_def.description,
-            category=job_def.category,
-            cron_expression=job_def.cron_expression,
-            is_manual_only=job_def.is_manual_only,
-            status="idle",
-            progress_percent=0,
-            is_enabled=True,
-        )
-        db.add(job)
         await db.commit()
 
 

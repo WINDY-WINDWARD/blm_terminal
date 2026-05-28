@@ -226,10 +226,20 @@ class MarketWebSocketService {
       const res = await fetch('/api/py/ws-config');
       if (!res.ok) return null;
       const data = (await res.json()) as { marketWsUrl?: string };
-      return data.marketWsUrl ?? null;
+      const url = data.marketWsUrl ?? null;
+      if (url && url.includes('localhost')) {
+        console.warn('[marketWs] ws-config returned localhost, using window.location instead');
+        return this.localhostFallback();
+      }
+      return url;
     } catch {
-      return null;
+      return this.localhostFallback();
     }
+  }
+
+  private localhostFallback(): string {
+    const ws = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${ws}://${window.location.host}/ws/market`;
   }
 
   private openSocket(): void {

@@ -85,10 +85,20 @@ class NewsWebSocketService {
       const res = await fetch('/api/py/ws-config');
       if (!res.ok) return null;
       const data = (await res.json()) as { newsWsUrl?: string };
-      return data.newsWsUrl ?? null;
+      const url = data.newsWsUrl ?? null;
+      if (url && url.includes('localhost')) {
+        console.warn('[newsSocket] ws-config returned localhost, using window.location instead');
+        return this.localhostFallback();
+      }
+      return url;
     } catch {
-      return null;
+      return this.localhostFallback();
     }
+  }
+
+  private localhostFallback(): string {
+    const ws = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${ws}://${window.location.host}/ws/news`;
   }
 
   private openSocket(): void {
