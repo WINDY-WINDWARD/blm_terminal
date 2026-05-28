@@ -4,11 +4,10 @@ const next = require('next');
 const httpProxy = require('http-proxy');
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = process.env.HOSTNAME || '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000', 10);
 const backendUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
 
-const app = next({ dev, hostname, port });
+const app = next({ dev });
 const handle = app.getRequestHandler();
 
 const proxy = httpProxy.createProxyServer({
@@ -37,9 +36,9 @@ app.prepare().then(() => {
     }
   });
 
-  server.listen(port, hostname, (err) => {
+  server.listen(port, '0.0.0.0', (err) => {
     if (err) throw err;
-    console.log(`[server] Ready on http://${hostname}:${port} (${dev ? 'dev' : 'prod'})`);
+    console.log(`[server] Ready on http://0.0.0.0:${port} (${dev ? 'dev' : 'prod'})`);
     console.log(`[server] WS proxy → ${backendUrl}`);
   });
 });
