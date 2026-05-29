@@ -79,8 +79,14 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-function formatCron(expr: string | null | undefined): string {
-  if (!expr) return '—';
+const orchestratorScheduleLabels: Record<string, string> = {
+  'job.ticker_intraday_hourly_stale_check': 'Startup + nightly pipeline',
+  'job.ticker_weekly_monthly_update': 'Nightly pipeline (23:00 IST)',
+  'job.ticker_weekly_monthly_indicators': 'Nightly pipeline (23:00 IST)',
+};
+
+function formatCron(expr: string | null | undefined, jobKey: string): string {
+  if (!expr) return orchestratorScheduleLabels[jobKey] ?? '—';
   const map: Record<string, string> = {
     '@startup':          'Run once (startup)',
     '0 0 * * *':         'Daily midnight',
@@ -98,9 +104,17 @@ function formatCron(expr: string | null | undefined): string {
   return map[expr] ?? expr;
 }
 
-function formatNextTrigger(dateStr: string | null, isManualOnly: boolean): string {
+function formatNextTrigger(dateStr: string | null, isManualOnly: boolean, jobKey: string): string {
   if (isManualOnly) return 'Manual only';
-  if (!dateStr) return '—';
+  if (!dateStr) {
+    if (jobKey === 'job.ticker_intraday_hourly_stale_check') {
+      return 'At startup and 23:00 IST nightly';
+    }
+    if (jobKey === 'job.ticker_weekly_monthly_update' || jobKey === 'job.ticker_weekly_monthly_indicators') {
+      return 'With nightly pipeline at 23:00 IST';
+    }
+    return '—';
+  }
   const date = new Date(dateStr);
   const now = Date.now();
   const diffMs = date.getTime() - now;
@@ -414,7 +428,7 @@ export default function JobsPage() {
                       </td>
                       <td className="py-2 px-2 text-white/70">{job.category || '—'}</td>
                       <td className="py-2 px-2 text-white/60 text-[10px] whitespace-nowrap">
-                        {formatCron(job.cron_expression)}
+                        {formatCron(job.cron_expression, job.job_key)}
                       </td>
                       <td className="py-2 px-2">
                         <StatusBadge status={job.status} />
@@ -443,7 +457,7 @@ export default function JobsPage() {
                       </td>
                       <td className="py-2 px-2 text-white/70">{formatDate(job.last_triggered_at)}</td>
                       <td className="py-2 px-2 text-white/70">{formatDate(job.last_completed_at)}</td>
-                      <td className="py-2 px-2 text-white/70">{formatNextTrigger(job.next_trigger_at, job.cron_expression === '@startup')}</td>
+                      <td className="py-2 px-2 text-white/70">{formatNextTrigger(job.next_trigger_at, job.cron_expression === '@startup', job.job_key)}</td>
                       <td className="py-2 px-2 text-terminal-red text-[10px] max-w-[150px] truncate" title={job.last_error || ''}>
                         {job.last_error || '—'}
                       </td>

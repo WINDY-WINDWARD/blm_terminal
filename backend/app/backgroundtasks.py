@@ -689,18 +689,14 @@ def stock_universe_worker() -> None:
         logger.info("stock_universe_worker: stopped")
         return
 
-    # Check first_run for startup execution
+    # Startup sequencing is owned by the orchestrator pipeline. The worker only
+    # handles scheduled cron refreshes after startup completes.
     if _is_first_run("stock_universe"):
-        update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting initial sync...")
-        _stock_universe_sync()
+        logger.info("stock_universe_worker: orchestrator owns startup sync, skipping worker first-run execution")
         _set_first_run_complete("stock_universe")
     else:
         logger.info("stock_universe_worker: first_run=False, skipping startup execution")
-        update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for cron schedule")
-
-    # Unblock all workers that depend on stock universe data
-    _startup_stock_universe_done.set()
-    logger.info("stock_universe_worker: startup gate released (_startup_stock_universe_done)")
+    update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.stock_universe", "0 0 * * *")
@@ -782,14 +778,14 @@ def ticker_backfill_worker() -> None:
         logger.info("ticker_backfill_worker: stopped")
         return
 
-    _ticker_backfill_sync()
+    if _is_first_run("ticker_backfill"):
+        logger.info("ticker_backfill_worker: orchestrator owns startup backfill, skipping worker first-run execution")
+        _set_first_run_complete("ticker_backfill")
+    else:
+        logger.info("ticker_backfill_worker: first_run=False, startup already delegated to orchestrator")
 
-    # Unblock workers that depend on candle history
-    _startup_ticker_backfill_done.set()
-    logger.info("ticker_backfill_worker: startup gate released (_startup_ticker_backfill_done)")
-
-    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
-    logger.info("ticker_backfill_worker: backfill complete, idling until shutdown")
+    update_job_status_sync("job.ticker_backfill", "waiting", progress=0, message="Waiting for orchestrator startup / idle")
+    logger.info("ticker_backfill_worker: startup work delegated to orchestrator, idling until shutdown")
 
     while not _shutdown_event.is_set():
         _sleep_interruptible(3600)
@@ -971,31 +967,14 @@ def ticker_daily_update_worker() -> None:
         logger.info("ticker_daily_update_worker: stopped")
         return
 
-    # Check first_run for startup execution (will also check market hours inside sync)
+    # Startup sequencing is owned by the orchestrator. Daily update is a nightly
+    # stage there, so the worker should only handle its recurring cron schedule.
     if _is_first_run("ticker_daily_update"):
-        # Wait for candle backfill before attempting daily update
-        if _wait_for_startup_event(_startup_ticker_backfill_done, "ticker_backfill", "job.ticker_daily_update"):
-            update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
-            logger.info("ticker_daily_update_worker: stopped")
-            return
-        # Acquire pipeline lock for startup first-run: daily_update runs the
-        # full inline pipeline (candles → indicators → scores), so scan/notif
-        # workers that became unblocked by _startup_ticker_scores_done must
-        # still wait if the startup daily update fires concurrently.
-        # NOTE: No _startup_ticker_daily_update_done event is published here
-        # because no worker depends on it — the downstream gate is
-        # _startup_ticker_scores_done, set by ticker_scores_worker.
-        with _pipeline_lock:
-            _pipeline_idle.clear()
-            try:
-                update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
-                _ticker_daily_update_sync()
-            finally:
-                _pipeline_idle.set()
+        logger.info("ticker_daily_update_worker: orchestrator owns startup/nightly sequencing, skipping worker first-run execution")
         _set_first_run_complete("ticker_daily_update")
     else:
         logger.info("ticker_daily_update_worker: first_run=False, skipping startup execution")
-        update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
+    update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_daily_update", "*/30 15,16,17,18,19,20 * * 1-5")
@@ -1647,23 +1626,20 @@ def ticker_scores_worker() -> None:
         logger.info("ticker_scores_worker: stopped")
         return
 
-    # Check first_run for startup execution
+    # Startup sequencing is owned by the orchestrator pipeline. The worker waits
+    # for the upstream stage gate, then yields to the orchestrator instead of
+    # running its own first-run computation.
     if _is_first_run("ticker_scores"):
         # Wait for indicators to be computed before scoring
         if _wait_for_startup_event(_startup_ticker_indicators_done, "ticker_indicators", "job.ticker_scores"):
             update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
             logger.info("ticker_scores_worker: stopped")
             return
-        update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
-        _ticker_scores_sync()
+        logger.info("ticker_scores_worker: orchestrator owns startup score computation, skipping worker first-run execution")
         _set_first_run_complete("ticker_scores")
     else:
         logger.info("ticker_scores_worker: first_run=False, skipping startup computation")
-        update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for cron schedule")
-
-    # Unblock scan/notification workers that depend on scores
-    _startup_ticker_scores_done.set()
-    logger.info("ticker_scores_worker: startup gate released (_startup_ticker_scores_done)")
+    update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_scores", "0 0 * * *")
@@ -1700,23 +1676,20 @@ def ticker_indicators_worker() -> None:
         logger.info("ticker_indicators_worker: stopped")
         return
 
-    # Check first_run for startup execution
+    # Startup sequencing is owned by the orchestrator pipeline. The worker waits
+    # for the upstream stage gate, then yields to the orchestrator instead of
+    # running its own first-run computation.
     if _is_first_run("ticker_indicators"):
         # Wait for candle backfill to complete before computing indicators
         if _wait_for_startup_event(_startup_ticker_backfill_done, "ticker_backfill", "job.ticker_indicators"):
             update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
             logger.info("ticker_indicators_worker: stopped")
             return
-        update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting initial computation...")
-        _ticker_indicators_sync()
+        logger.info("ticker_indicators_worker: orchestrator owns startup indicator computation, skipping worker first-run execution")
         _set_first_run_complete("ticker_indicators")
     else:
         logger.info("ticker_indicators_worker: first_run=False, skipping startup computation")
-        update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for cron schedule")
-
-    # Unblock workers that depend on indicators
-    _startup_ticker_indicators_done.set()
-    logger.info("ticker_indicators_worker: startup gate released (_startup_ticker_indicators_done)")
+    update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_indicators", "0 11 * * 1-5")
