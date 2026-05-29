@@ -41,6 +41,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'SCREENER', desc: 'Stock screener with multi-timeframe filters' },
   { cmd: 'DOCS', desc: 'Panel documentation' },
   { cmd: 'AI', desc: 'Live market AI chat' },
+  { cmd: 'PORTFOLIO', desc: 'Portfolio optimizer (MPT)' },
 ];
 
 export function CommandBar() {

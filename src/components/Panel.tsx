@@ -21,6 +21,7 @@ import { ScreenerWidget } from './widgets/ScreenerWidget';
 import { AnnouncementsWidget } from './widgets/AnnouncementsWidget';
 import { DocsWidget } from './widgets/DocsWidget';
 import { AiWidget } from './widgets/AiWidget';
+import { PortfolioWidget } from './widgets/PortfolioWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -64,6 +65,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'SCREENER': return <ScreenerWidget />;
       case 'DOCS':    return <DocsWidget />;
       case 'AI':      return <AiWidget />;
+      case 'PORTFOLIO': return <PortfolioWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">

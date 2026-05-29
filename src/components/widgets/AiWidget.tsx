@@ -9,6 +9,17 @@ import remarkGfm from 'remark-gfm';
 import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 import { cn } from '@/lib/utils';
 
+// ─── Personas ─────────────────────────────────────────────────────────────────
+
+const PERSONAS = [
+  { id: 'value',    label: 'Value Analyst',    description: 'Graham/Buffett framework' },
+  { id: 'earnings', label: 'Earnings Analyst',  description: 'QoQ/YoY earnings forensics' },
+  { id: 'fno',      label: 'F&O Analyst',       description: 'Options strategy & derivatives' },
+  { id: 'macro',    label: 'Macro Analyst',     description: 'Sector rotation & India macro' },
+] as const;
+
+type PersonaId = (typeof PERSONAS)[number]['id'];
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ChatMessage {
@@ -342,6 +353,7 @@ export function AiWidget() {
   );
   const [activeKey, setActiveKey] = useState<number | null>(NEW_CHAT_KEY);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activePersona, setActivePersona] = useState<PersonaId | null>(null);
 
   // Derive current session's state for rendering — always safe to destructure
   const current = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
@@ -417,6 +429,7 @@ export function AiWidget() {
     async (id: number) => {
       setActiveKey(id);
       setSidebarOpen(false);
+      setActivePersona(null);
       setTimeout(() => inputRef.current?.focus(), 50);
 
       // Never clobber a live stream — the in-memory state IS the truth while streaming
@@ -477,6 +490,7 @@ export function AiWidget() {
     });
     setActiveKey(NEW_CHAT_KEY);
     setSidebarOpen(false);
+    setActivePersona(null);
     setTimeout(() => inputRef.current?.focus(), 50);
   }, [defaultModel]);
 
@@ -534,6 +548,7 @@ export function AiWidget() {
           exchange: exchange.toUpperCase(),
           model: sessionState.model || defaultModel,
           session_id: sessionKey, // null for new chats — backend creates the session
+          persona: activePersona,
         }),
       });
 
@@ -769,6 +784,30 @@ export function AiWidget() {
             );
           })}
           <div ref={messagesEndRef} />
+        </div>
+
+        {/* Persona selector */}
+        <div className="flex gap-1 px-2 py-1.5 border-t border-white/5 flex-wrap">
+          {PERSONAS.map((p) => (
+            <button
+              key={p.id}
+              title={p.description}
+              onClick={() => setActivePersona((prev) => (prev === p.id ? null : p.id))}
+              className={cn(
+                'px-2 py-0.5 rounded text-[10px] font-medium border transition-colors',
+                activePersona === p.id
+                  ? 'bg-blue-500/20 border-blue-400/50 text-blue-300'
+                  : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70 hover:border-white/20'
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+          {activePersona && (
+            <span className="ml-auto text-[10px] text-blue-400/70 self-center pr-1">
+              {PERSONAS.find((p) => p.id === activePersona)?.description}
+            </span>
+          )}
         </div>
 
         {/* Input area */}

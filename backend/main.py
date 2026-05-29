@@ -35,6 +35,8 @@ from app.routers import (
     system_config_router,
     stockuniverse_router,
     stockuniverse_errors_router,
+    valuation_router,
+    portfolio_router,
     watchlist_router,
     jobs_router,
 )
@@ -483,6 +485,8 @@ app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
+app.include_router(valuation_router, prefix="/api")
+app.include_router(portfolio_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 from app.routers.ticker import router as ticker_router

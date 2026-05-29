@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     exchange: str = Field(default="NSE", description="Active exchange.")
     model: str = Field(default="kimi-k2.5", description="Model ID on OpenCode Go.")
     session_id: int | None = Field(default=None, description="Existing session ID to continue; null to create new.")
+    persona: str | None = Field(default=None, description="Optional analyst persona key: value | earnings | fno | macro")
 
 
 class SessionSummary(BaseModel):
@@ -240,6 +241,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> Stre
                 symbol=symbol,
                 exchange=exchange,
                 model=request.model,
+                persona=request.persona,
             ):
                 # Track content and tool calls for persistence
                 try:

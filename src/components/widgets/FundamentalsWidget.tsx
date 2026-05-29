@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { activeSymbolAtom } from '@/store/terminalStore';
+import { cn } from '@/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,33 @@ interface CompanyFundamentals {
   screener_warehouse_id: string | null;
   ratios: ScreenerRatios;
   quarters: ScreenerQuarter[];
+}
+
+interface DcfAssumptions {
+  base_fcf_cr: number | null;
+  stage1_growth_pct: number;
+  stage2_growth_pct: number;
+  terminal_growth_pct: number;
+  wacc_pct: number;
+  projection_years: number;
+}
+
+interface ValuationResult {
+  symbol: string;
+  cmp: number | null;
+  currency: string;
+  graham_number: number | null;
+  graham_upside_pct: number | null;
+  dcf_value: number | null;
+  dcf_upside_pct: number | null;
+  dcf_assumptions: DcfAssumptions | null;
+  ddm_value: number | null;
+  ddm_upside_pct: number | null;
+  ev_ebitda_value: number | null;
+  ev_ebitda_upside_pct: number | null;
+  peg_value: number | null;
+  peg_upside_pct: number | null;
+  fetched_at: string;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -175,6 +203,9 @@ function RatioRow({ label, value }: { label: string; value: string | null | unde
 
 export function FundamentalsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
+  const [activeTab, setActiveTab] = useState<'ratios' | 'quarterly' | 'valuation'>('ratios');
+  const [wacc, setWacc] = useState(0.12);
+  const [terminalGrowth, setTerminalGrowth] = useState(0.05);
 
   const {
     data,
@@ -220,6 +251,21 @@ export function FundamentalsWidget() {
     },
     staleTime: 300_000,
     enabled: !!symbol,
+  });
+
+  const {
+    data: valuationData,
+    isLoading: valuationLoading,
+    refetch: refetchValuation,
+  } = useQuery<ValuationResult>({
+    queryKey: ['valuation', symbol, wacc, terminalGrowth],
+    queryFn: async () => {
+      const res = await fetch(`/api/py/valuation/${encodeURIComponent(symbol)}?wacc=${wacc}&terminal_growth=${terminalGrowth}`);
+      if (!res.ok) throw new Error('Valuation fetch failed');
+      return res.json();
+    },
+    enabled: !!symbol && activeTab === 'valuation',
+    staleTime: 1000 * 60 * 30,
   });
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -285,222 +331,340 @@ export function FundamentalsWidget() {
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-baseline gap-2 min-w-0">
-        <span className="text-terminal-amber font-bold text-[11px] uppercase truncate">
-          {name || symbol}
-        </span>
-        <span className="text-white text-[10px] flex-shrink-0">{symbol}</span>
-        <span className="ml-auto text-[9px] text-white/60 flex-shrink-0 uppercase tracking-widest">
-          Consolidated
-        </span>
+      <div className="flex-shrink-0 border-b border-terminal-gray">
+        <div className="px-3 py-1 flex items-baseline gap-2 min-w-0">
+          <span className="text-terminal-amber font-bold text-[11px] uppercase truncate">
+            {name || symbol}
+          </span>
+          <span className="text-white text-[10px] flex-shrink-0">{symbol}</span>
+          <span className="ml-auto text-[9px] text-white/60 flex-shrink-0 uppercase tracking-widest">
+            Consolidated
+          </span>
+        </div>
+        {/* Tab switcher */}
+        <div className="flex gap-0 border-t border-terminal-gray/30">
+          {(['ratios', 'quarterly', 'valuation'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'px-3 py-1 text-[10px] uppercase tracking-wider font-medium capitalize transition-colors',
+                activeTab === tab
+                  ? 'border-b-2 border-blue-400 text-blue-300'
+                  : 'text-white/30 hover:text-white/60'
+              )}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── Body ─────────────────────────────────────────────────────────── */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="flex-1 overflow-hidden min-h-0">
+        {/* ── Ratios Tab ─────────────────────────────────────────────────── */}
+        {activeTab === 'ratios' && (
+          <div className="h-full flex overflow-hidden">
+            <div className="flex-1 overflow-y-auto border-r border-terminal-gray px-2 py-1 min-w-0">
+              <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
+                Key Ratios
+              </div>
+              <table className="w-full border-collapse">
+                <tbody>
+                  {CORE_RATIO_KEYS.map(({ key, label }) => (
+                    <RatioRow key={key} label={label} value={ratios[key]} />
+                  ))}
 
-        {/* ── Left: Ratios ─────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto border-r border-terminal-gray px-2 py-1 min-w-0">
-          <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
-            Key Ratios
-          </div>
-          <table className="w-full border-collapse">
-            <tbody>
-              {CORE_RATIO_KEYS.map(({ key, label }) => (
-                <RatioRow key={key} label={label} value={ratios[key]} />
-              ))}
+                  {/* Extra quick_ratios */}
+                  {extraRatios.length > 0 && (
+                    <>
+                      <tr>
+                        <td
+                          colSpan={2}
+                          className="pt-2 pb-1 text-[9px] text-white/50 uppercase tracking-widest border-t border-terminal-gray/30"
+                        >
+                          More
+                        </td>
+                      </tr>
+                      {extraRatios.map(([key, val]) => (
+                        <RatioRow key={key} label={formatRatioLabel(key)} value={val} />
+                      ))}
+                    </>
+                  )}
+                </tbody>
+              </table>
+            </div>
 
-              {/* Extra quick_ratios */}
-              {extraRatios.length > 0 && (
-                <>
+            <div className="flex-1 overflow-y-auto px-2 py-1 min-w-0">
+              <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
+                Calculated Ratios
+              </div>
+              <table className="w-full border-collapse">
+                <tbody>
+                  {/* Row 0: Piotroski Score */}
+                  {(() => {
+                    const raw = ratios.piotroski_score;
+                    const score = parseNum(raw);
+                    const color =
+                      score === null ? 'text-white/40' :
+                      score >= 7    ? 'text-terminal-green' :
+                      score >= 4    ? 'text-terminal-amber' :
+                                      'text-terminal-red';
+                    return (
+                      <tr className="border-b border-terminal-gray/40">
+                        <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                          Piotroski Score
+                        </td>
+                        <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                          {score !== null ? (
+                            <span className={color}>{score.toFixed(0)} / 9</span>
+                          ) : (
+                            <span className="text-white/40 font-normal text-[9px]">N/A</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })()}
+
+                  {/* Row 1: Peter Lynch FV Ratio */}
+                  <tr className="border-b border-terminal-gray/40">
+                    <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                      Peter Lynch FV Ratio
+                    </td>
+                    <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                      {lynch.fairValueRatio !== null ? (
+                        <span className="text-terminal-amber">
+                          {lynch.fairValueRatio.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span
+                          className="text-white/40 font-normal text-[9px] cursor-help"
+                          title={`N/A — missing: ${lynch.ratioMissingKey}. Formula: (EPS Growth 5Y% + Div Yield%) / P/E`}
+                        >
+                          N/A {lynch.ratioMissingKey ? `(no ${lynch.ratioMissingKey})` : ''}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                  <tr className="border-b border-terminal-gray/40">
+                    <td
+                      colSpan={2}
+                      className="pb-1 text-[9px] text-white/40 font-mono"
+                    >
+                      = ({lynch.epsGrowth ?? '?'}% growth + {lynch.divYield ?? '0'}% yield) / {lynch.pe ?? '?'} PE
+                    </td>
+                  </tr>
+
+                  {/* Row 2: Peter Lynch FV Price */}
+                  <tr className="border-b border-terminal-gray/40">
+                    <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                      Peter Lynch FV
+                    </td>
+                    <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                      {lynch.fairValuePrice !== null ? (
+                        <span className="text-terminal-amber">
+                          ₹{lynch.fairValuePrice.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span
+                          className="text-white/40 font-normal text-[9px] cursor-help"
+                          title={`N/A — missing: ${lynch.priceMissingKey}. Formula: EPS Growth 5Y% × Latest EPS`}
+                        >
+                          N/A {lynch.priceMissingKey ? `(no ${lynch.priceMissingKey})` : ''}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
                   <tr>
                     <td
                       colSpan={2}
-                      className="pt-2 pb-1 text-[9px] text-white/50 uppercase tracking-widest border-t border-terminal-gray/30"
+                      className="pb-1 text-[9px] text-white/40 font-mono"
                     >
-                      More
+                      = {lynch.epsGrowth ?? '?'}% growth × ₹{lynch.latestEps ?? '?'} EPS{lynch.epsKey ? ` [${lynch.epsKey}]` : ''}
                     </td>
                   </tr>
-                  {extraRatios.map(([key, val]) => (
-                    <RatioRow key={key} label={formatRatioLabel(key)} value={val} />
-                  ))}
-                </>
-              )}
-            </tbody>
-          </table>
-        </div>
 
-        {/* ── Right: Quarterly Results ──────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto px-2 py-1 min-w-0">
-          <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
-            Quarterly Results
-          </div>
-
-          {quarters.length === 0 ? (
-            <span className="text-white text-[10px]">No quarterly data</span>
-          ) : (
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="text-[9px] text-white/60 uppercase">
-                  <th className="text-left pb-1 font-normal">Period</th>
-                  <th className="text-right pb-1 font-normal">Sales</th>
-                  <th className="text-right pb-1 font-normal">Net Profit</th>
-                  <th className="text-right pb-1 font-normal">EPS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {quarters.map((q) => (
-                  <tr
-                    key={q.period}
-                    className="border-b border-terminal-gray/40"
-                  >
-                    <td className="py-[3px] pr-2 text-white text-[10px] whitespace-nowrap">
-                      {q.period}
-                    </td>
-                    <td className="py-[3px] text-right text-terminal-amber text-[10px] font-bold whitespace-nowrap">
-                      {q.sales ?? <span className="text-white/60 font-normal">—</span>}
-                    </td>
-                    <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
-                      {q.net_profit != null ? (
-                        <span
-                          className={
-                            parseFloat(q.net_profit.replace(/,/g, '')) >= 0
-                              ? 'text-terminal-green'
-                              : 'text-terminal-red'
-                          }
-                        >
-                          {q.net_profit}
-                        </span>
-                      ) : (
-                        <span className="text-white/60 font-normal">—</span>
-                      )}
-                    </td>
-                    <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
-                      {q.eps != null ? (
-                        <span
-                          className={
-                            parseFloat(q.eps.replace(/,/g, '')) >= 0
-                              ? 'text-terminal-amber'
-                              : 'text-terminal-red'
-                          }
-                        >
-                          {q.eps}
-                        </span>
-                      ) : (
-                        <span className="text-white/60 font-normal">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {/* ── Calculated Ratios ──────────────────────────────────────── */}
-          <div className="text-[9px] text-white/60 uppercase tracking-widest mt-3 mb-1 border-t border-terminal-gray/40 pt-2">
-            Calculated Ratios
-          </div>
-          <table className="w-full border-collapse">
-            <tbody>
-              {/* Row 0: Piotroski Score */}
-              {(() => {
-                const raw = ratios.piotroski_score;
-                const score = parseNum(raw);
-                const color =
-                  score === null ? 'text-white/40' :
-                  score >= 7    ? 'text-terminal-green' :
-                  score >= 4    ? 'text-terminal-amber' :
-                                  'text-terminal-red';
-                return (
+                  {/* Row 3: Morningstar Fair Value */}
                   <tr className="border-b border-terminal-gray/40">
                     <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                      Piotroski Score
+                      MS Fair Value
                     </td>
                     <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                      {score !== null ? (
-                        <span className={color}>{score.toFixed(0)} / 9</span>
+                      {msFairValue != null ? (
+                        <span className="text-terminal-amber">₹{msFairValue.toFixed(2)}</span>
                       ) : (
-                        <span className="text-white/40 font-normal text-[9px]">N/A</span>
+                        <span className="text-white/40 font-normal">—</span>
                       )}
                     </td>
                   </tr>
-                );
-              })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
-              {/* Row 1: Peter Lynch FV Ratio */}
-              <tr className="border-b border-terminal-gray/40">
-                <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                  Peter Lynch FV Ratio
-                </td>
-                <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                  {lynch.fairValueRatio !== null ? (
-                    <span className="text-terminal-amber">
-                      {lynch.fairValueRatio.toFixed(2)}
-                    </span>
-                  ) : (
-                    <span
-                      className="text-white/40 font-normal text-[9px] cursor-help"
-                      title={`N/A — missing: ${lynch.ratioMissingKey}. Formula: (EPS Growth 5Y% + Div Yield%) / P/E`}
+        {/* ── Quarterly Tab ──────────────────────────────────────────────── */}
+        {activeTab === 'quarterly' && (
+          <div className="h-full overflow-y-auto px-2 py-1">
+            <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
+              Quarterly Results
+            </div>
+
+            {quarters.length === 0 ? (
+              <span className="text-white text-[10px]">No quarterly data</span>
+            ) : (
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="text-[9px] text-white/60 uppercase">
+                    <th className="text-left pb-1 font-normal">Period</th>
+                    <th className="text-right pb-1 font-normal">Sales</th>
+                    <th className="text-right pb-1 font-normal">Net Profit</th>
+                    <th className="text-right pb-1 font-normal">EPS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quarters.map((q) => (
+                    <tr
+                      key={q.period}
+                      className="border-b border-terminal-gray/40"
                     >
-                      N/A {lynch.ratioMissingKey ? `(no ${lynch.ratioMissingKey})` : ''}
-                    </span>
-                  )}
-                </td>
-              </tr>
-              <tr className="border-b border-terminal-gray/40">
-                <td
-                  colSpan={2}
-                  className="pb-1 text-[9px] text-white/40 font-mono"
-                >
-                  = ({lynch.epsGrowth ?? '?'}% growth + {lynch.divYield ?? '0'}% yield) / {lynch.pe ?? '?'} PE
-                </td>
-              </tr>
+                      <td className="py-[3px] pr-2 text-white text-[10px] whitespace-nowrap">
+                        {q.period}
+                      </td>
+                      <td className="py-[3px] text-right text-terminal-amber text-[10px] font-bold whitespace-nowrap">
+                        {q.sales ?? <span className="text-white/60 font-normal">—</span>}
+                      </td>
+                      <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
+                        {q.net_profit != null ? (
+                          <span
+                            className={
+                              parseFloat(q.net_profit.replace(/,/g, '')) >= 0
+                                ? 'text-terminal-green'
+                                : 'text-terminal-red'
+                            }
+                          >
+                            {q.net_profit}
+                          </span>
+                        ) : (
+                          <span className="text-white/60 font-normal">—</span>
+                        )}
+                      </td>
+                      <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
+                        {q.eps != null ? (
+                          <span
+                            className={
+                              parseFloat(q.eps.replace(/,/g, '')) >= 0
+                                ? 'text-terminal-amber'
+                                : 'text-terminal-red'
+                            }
+                          >
+                            {q.eps}
+                          </span>
+                        ) : (
+                          <span className="text-white/60 font-normal">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
 
-              {/* Row 2: Peter Lynch FV Price */}
-              <tr className="border-b border-terminal-gray/40">
-                <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                  Peter Lynch FV
-                </td>
-                <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                  {lynch.fairValuePrice !== null ? (
-                    <span className="text-terminal-amber">
-                      ₹{lynch.fairValuePrice.toFixed(2)}
-                    </span>
-                  ) : (
-                    <span
-                      className="text-white/40 font-normal text-[9px] cursor-help"
-                      title={`N/A — missing: ${lynch.priceMissingKey}. Formula: EPS Growth 5Y% × Latest EPS`}
-                    >
-                      N/A {lynch.priceMissingKey ? `(no ${lynch.priceMissingKey})` : ''}
-                    </span>
-                  )}
-                </td>
-              </tr>
-              <tr>
-                <td
-                  colSpan={2}
-                  className="pb-1 text-[9px] text-white/40 font-mono"
-                >
-                  = {lynch.epsGrowth ?? '?'}% growth × ₹{lynch.latestEps ?? '?'} EPS{lynch.epsKey ? ` [${lynch.epsKey}]` : ''}
-                </td>
-              </tr>
+        {/* ── Valuation Tab ────────────────────────────────────────────── */}
+        {activeTab === 'valuation' && (
+          <div className="h-full overflow-y-auto px-2 py-2 flex flex-col gap-2">
+            {/* Controls */}
+            <div className="flex items-center gap-2 text-[10px] text-white/40">
+              <span>WACC</span>
+              <select
+                value={wacc}
+                onChange={(e) => setWacc(parseFloat(e.target.value))}
+                className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
+              >
+                {[0.10, 0.11, 0.12, 0.13, 0.14, 0.15].map((v) => (
+                  <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
+                ))}
+              </select>
+              <span>Terminal g</span>
+              <select
+                value={terminalGrowth}
+                onChange={(e) => setTerminalGrowth(parseFloat(e.target.value))}
+                className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
+              >
+                {[0.03, 0.04, 0.05, 0.06, 0.07].map((v) => (
+                  <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
+                ))}
+              </select>
+              <button
+                onClick={() => refetchValuation()}
+                className="ml-auto text-[9px] px-1.5 py-0.5 border border-white/10 rounded hover:bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+              >
+                Refresh
+              </button>
+            </div>
 
-              {/* Row 3: Morningstar Fair Value */}
-              <tr className="border-b border-terminal-gray/40">
-                <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                  MS Fair Value
-                </td>
-                <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                  {msFairValue != null ? (
-                    <span className="text-terminal-amber">₹{msFairValue.toFixed(2)}</span>
-                  ) : (
-                    <span className="text-white/40 font-normal">—</span>
-                  )}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+            {/* Models table */}
+            {valuationLoading ? (
+              <div className="text-white/30 text-[11px]">Loading valuation models...</div>
+            ) : valuationData ? (
+              <>
+                <div className="text-[10px] text-white/30">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-white/30 text-left">
+                      <th className="pb-1">Model</th>
+                      <th className="pb-1 text-right">Fair Value</th>
+                      <th className="pb-1 text-right">vs CMP</th>
+                      <th className="pb-1 text-right">Signal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
+                      { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
+                      { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
+                      { label: 'EV/EBITDA (12x)', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
+                      { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
+                    ].map((row) => {
+                      const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
+                      const signalColor = signal === 'UNDERVALUED' ? 'text-green-400' : signal === 'OVERVALUED' ? 'text-red-400' : 'text-yellow-400';
+                      return (
+                        <tr key={row.label} className="border-t border-white/5">
+                          <td className="py-1 text-white/60">{row.label}</td>
+                          <td className="py-1 text-right text-white/80">
+                            {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
+                          </td>
+                          <td className={cn('py-1 text-right', row.upside !== null ? (row.upside > 0 ? 'text-green-400' : 'text-red-400') : 'text-white/30')}>
+                            {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
+                          </td>
+                          <td className={cn('py-1 text-right font-medium', signalColor)}>
+                            {signal ?? '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
 
+                {/* DCF assumptions footnote */}
+                {valuationData.dcf_assumptions && (
+                  <div className="text-[9px] text-white/25 mt-1 border-t border-white/5 pt-1">
+                    DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
+                    Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
+                    Terminal {valuationData.dcf_assumptions.terminal_growth_pct}% |
+                    WACC {valuationData.dcf_assumptions.wacc_pct}%
+                    {valuationData.dcf_assumptions.base_fcf_cr !== null &&
+                      ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-white/30 text-[11px]">No valuation data available</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

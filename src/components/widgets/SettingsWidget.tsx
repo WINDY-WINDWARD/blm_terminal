@@ -437,7 +437,7 @@ export function SettingsWidget() {
       {/* Tips */}
       <div className="flex flex-col gap-0.5 mt-auto">
         <div className="text-white text-[10px] border-t border-terminal-gray pt-2">
-          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS
+          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS · PORTFOLIO
         </div>
         <div className="text-white text-[10px]">
           Press / or Escape to focus command bar

@@ -303,21 +303,27 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'Two lists side-by-side: top gainers (highest % up) and top losers (highest % down) for the current session. Refreshes every 30 seconds.',
+        body: 'Two lists: top gainers (highest % up) and top losers (highest % down) for the current session. Refreshes every 60 seconds. Filter by market category (NIFTY 50, Bank NIFTY, F&O, etc.).',
       },
       {
         heading: 'Columns',
         items: [
           { name: 'Symbol', desc: 'NSE ticker.' },
-          { name: 'LTP', desc: 'Last traded price.' },
+          { name: 'CLOSE', desc: 'Last traded price (LTP).' },
           { name: 'CHG%', desc: 'Intraday % change from previous close.' },
-          { name: '1W / 1M / 3M', desc: 'Multi-timeframe return context (configurable).' },
+          { name: 'OPEN / HIGH / LOW', desc: 'Session open, intraday high, and intraday low prices.' },
+          { name: 'VOL', desc: 'Total traded quantity for the session.' },
+          { name: 'TRNVR', desc: 'Total turnover in ₹ Crores.' },
+          { name: 'CA', desc: 'Corporate Action ex-date (dividend, bonus, split, etc.). Hover for the purpose.' },
+          { name: '1W% / 1M% / 3M% / 6M% / 1Y% / 2Y% / 3Y% / 5Y%', desc: 'Price return over the stated period (from market WebSocket / NSE data).' },
+          { name: '52W HIGH / 52W LOW', desc: '52-week high and low prices (fetched via market WebSocket).' },
         ] as DocField[],
       },
       {
         heading: 'How to use',
         items: [
           'Click any symbol to set it as the global active symbol.',
+          'Toggle columns in SETTINGS → Movers Columns.',
           'Strong movers early in the session often sustain momentum; late-session movers may reverse.',
           'Cross-reference with BREAKOUTS to see if movers are also hitting 52-week levels.',
         ],
@@ -755,7 +761,55 @@ const DOCS_MAP: WidgetDoc[] = [
           'Click Stop to cancel a running response.',
           'Tool call badges appear while the AI is fetching data — green check when done.',
           'The AI follows an agentic loop: it can call multiple tools across turns to build a complete answer.',
-          'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
+      'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
+        ],
+      },
+    ],
+  },
+  // ─── Portfolio Optimizer ───────────────────────────────────────────────────────
+  {
+    command: 'PORTFOLIO',
+    title: 'Portfolio Optimizer',
+    summary:
+      'Modern Portfolio Theory optimizer using PyPortfolioOpt. Select watchlist stocks, choose an objective, and receive optimal allocation weights.',
+    sections: [
+      {
+        heading: 'Overview',
+        body: 'Build a statistically optimal portfolio from your watchlist stocks. The optimizer uses mean-variance optimization (Markowitz) or hierarchical risk parity to find weights that maximise risk-adjusted return.',
+      },
+      {
+        heading: 'Objectives',
+        items: [
+          { name: 'Max Sharpe', desc: 'Maximise the Sharpe ratio — best risk-adjusted return.' },
+          { name: 'Min Volatility', desc: 'Minimise portfolio volatility — most conservative allocation.' },
+          { name: 'Risk Parity', desc: 'Equal risk contribution from each asset — HRP algorithm.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Inputs',
+        items: [
+          { name: 'Stocks', desc: 'Select 3–30 symbols from your Default watchlist.' },
+          { name: 'Period', desc: 'Historical lookback: 1Y, 2Y, or 3Y of daily prices.' },
+          { name: 'Risk-free rate', desc: 'Fixed at 6.5% (approx RBI repo rate).' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Outputs',
+        items: [
+          { name: 'Optimal weights', desc: 'Horizontal bar chart showing allocation % per symbol.' },
+          { name: 'Expected return', desc: 'Annualised return of the optimised portfolio.' },
+          { name: 'Expected volatility', desc: 'Annualised standard deviation.' },
+          { name: 'Sharpe ratio', desc: 'Risk-adjusted return metric.' },
+          { name: 'Correlation heatmap', desc: 'Visual grid showing pairwise correlations.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Tips',
+        items: [
+          'Select at least 3 stocks — the optimizer requires a minimum for meaningful diversification.',
+          'Highly correlated stocks (e.g. all PSU banks) may produce extreme weights — this is mathematically correct.',
+          'Use Risk Parity when you want balanced risk contribution rather than pure return maximisation.',
+          'Results are cached for 15 minutes — click Optimize again to force a recompute.',
         ],
       },
     ],

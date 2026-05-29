@@ -28,8 +28,10 @@ const VALID_WIDGETS = [
   'NOTIF',
   'ANNC',
   'SCAN',
+  'SCREENER',
   'DOCS',
   'AI',
+  'PORTFOLIO',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
