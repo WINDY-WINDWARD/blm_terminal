@@ -127,7 +127,17 @@ def _ensure_prices(symbols: list[str], period: str) -> tuple[pd.DataFrame, list[
 
     # Drop failed symbols
     valid_cols = [c for c in prices.columns if c not in failed]
-    prices = prices[valid_cols].dropna(how="all").dropna()
+    prices = prices[valid_cols].dropna(how="all")
+    rows_before = len(prices)
+    prices = prices.dropna(how="any")
+    rows_after = len(prices)
+    if rows_before > rows_after:
+        logger.info(
+            "portfolio: dropped %d/%d rows with any NaN after backfill "
+            "(circuit breakers / trading halts / irregular listing dates)",
+            rows_before - rows_after,
+            rows_before,
+        )
 
     return prices, failed
 

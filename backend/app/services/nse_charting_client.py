@@ -55,9 +55,10 @@ INTERVAL_PARAMS: dict[str, tuple[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Module-level scripcode cache: symbol (e.g. "RELIANCE") → scripcode ("157")
+# Module-level scripcode cache: symbol → (scripcode, series) or None (known-bad)
+# Storing None for failed lookups prevents repeated 4-series probe on every call.
 # ---------------------------------------------------------------------------
-_scripcode_cache: dict[str, str] = {}
+_scripcode_cache: dict[str, tuple[str, str] | None] = {}
 
 # Timestamp of the last outbound HTTP request (for rate limiting)
 _last_request_time: float = 0.0
@@ -117,10 +118,14 @@ def get_scripcode(symbol: str, series: str | None = None) -> tuple[str, str]:
       2. Fallback loop: try each of _SERIES_FALLBACK in order.
       3. Raise ValueError if nothing resolves.
 
-    Results are cached in-process keyed by symbol.
+    Results are cached in-process keyed by symbol. Failed lookups are cached
+    as None to avoid repeating the full series-probe on subsequent calls.
     """
     if symbol in _scripcode_cache:
-        return _scripcode_cache[symbol]
+        cached = _scripcode_cache[symbol]
+        if cached is None:
+            raise ValueError(f"[nse_charting] no scripcode found for {symbol} (cached failure)")
+        return cached
 
     # Build ordered list of series suffixes to try
     to_try: list[str] = []
@@ -139,6 +144,8 @@ def get_scripcode(symbol: str, series: str | None = None) -> tuple[str, str]:
             logger.debug("[nse_charting] scripcode %s → %s (series=%s)", symbol, code, s)
             return code, s
 
+    # Cache the failure so we don't probe all 4 series again
+    _scripcode_cache[symbol] = None
     raise ValueError(f"[nse_charting] no scripcode found for {symbol} (tried {to_try})")
 
 
