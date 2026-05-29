@@ -5,6 +5,7 @@ from typing import Optional
 
 import pytz
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.schemas.ticker import (
@@ -393,7 +394,7 @@ async def get_screener_sectors() -> dict:
 
     Used by the frontend TQL autocomplete to populate sector value suggestions.
     """
-    sectors = screener_service.get_screener_sectors()
+    sectors = await run_in_threadpool(screener_service.get_screener_sectors)
     return {"sectors": sectors}
 
 
@@ -447,7 +448,8 @@ async def get_screener(
     # TQL takes precedence over legacy params
     if tql and tql.strip():
         try:
-            result = screener_service.run_screener_tql(
+            result = await run_in_threadpool(
+                screener_service.run_screener_tql,
                 tql.strip(), default_interval, sort_by, order, limit
             )
         except ValueError as exc:
@@ -533,7 +535,7 @@ async def get_screener(
     if min_data_points is not None:
         filters["min_data_points"] = min_data_points
 
-    result = screener_service.run_screener(filters, sort_by, order, limit)
+    result = await run_in_threadpool(screener_service.run_screener, filters, sort_by, order, limit)
     return ScreenerResponse(
         count=result["count"],
         returned=result["returned"],

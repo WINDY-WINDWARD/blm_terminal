@@ -104,12 +104,7 @@ function numCell(digits = 2) {
 }
 
 function returnCell(v: number | string | boolean | null | undefined): React.ReactNode {
-  if (v === null || v === undefined || typeof v !== 'number') return <span className="text-white/30">—</span>;
-  return (
-    <span className={v >= 0 ? 'text-terminal-green' : 'text-terminal-red'}>
-      {v >= 0 ? '+' : ''}{fmt(v)}%
-    </span>
-  );
+  return changeCell(v);
 }
 
 function boolCell(trueLabel = 'YES', falseLabel = '—') {
@@ -167,7 +162,7 @@ const DYNAMIC_COL_MAP: Record<string, Omit<ColDef, 'key'>> = {
   MACDSignal:   { label: 'MACD Sig',  align: 'right', minW: 64,  getValue: (r, iv) => getIv(r, iv, 'macd_signal'),      format: numCell(2) },
   MACDHist:     { label: 'MACD H',    align: 'right', minW: 60,  getValue: (r, iv) => getIv(r, iv, 'macd_histogram'),   format: numCell(2) },
   BBWidth:      { label: 'BB Wid',    align: 'right', minW: 56,  getValue: (r, iv) => getIv(r, iv, 'bb_width'),         format: numCell(2) },
-  BBSqueeze:    { label: 'Squeeze',   align: 'right', minW: 56,  getValue: (r, iv) => getIv(r, iv, 'bb_squeeze') !== null ? Boolean(r.indicators_by_interval?.[iv]?.['bb_squeeze']) : null, format: boolCell('SQ') },
+  BBSqueeze:    { label: 'Squeeze',   align: 'right', minW: 56,  getValue: (r, iv) => { const v = r.indicators_by_interval?.[iv]?.['bb_squeeze']; return v !== undefined && v !== null ? Boolean(v) : null; }, format: boolCell('SQ') },
   HV20:         { label: 'HV20',      align: 'right', minW: 50,  getValue: (r, iv) => getIv(r, iv, 'hv_20'),            format: numCell(1) },
   HV60:         { label: 'HV60',      align: 'right', minW: 50,  getValue: (r, iv) => getIv(r, iv, 'hv_60'),            format: numCell(1) },
   Sharpe60:     { label: 'Sharpe60',  align: 'right', minW: 60,  getValue: (r, iv) => getIv(r, iv, 'sharpe_60'),        format: numCell(2) },
@@ -482,11 +477,12 @@ export function ScreenerWidget() {
 
   const handleHeaderClick = useCallback((key: string) => {
     setSortKey((prev) => {
-      if (prev === key) { setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); return prev; }
+      if (prev === key) return prev;
       setSortDir('asc');
       return key;
     });
-  }, []);
+    if (sortKey === key) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
+  }, [sortKey]);
 
   const handleRowClick = useCallback((symbol: string) => {
     setActiveSymbol(symbol);
