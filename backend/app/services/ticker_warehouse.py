@@ -171,6 +171,11 @@ def _nse_equity_history_sync(symbol: str, start_date: str, end_date: str, _attem
 def _backfill_symbol_charting(symbol: str, days: int) -> int:
     """Backfill using NSE charting API (deep history in one request).
 
+    Looks up the symbol's NSE series from stock_universe DB first so the
+    charting API uses the correct suffix (e.g. -BE instead of -EQ).
+    If the symbol is not in stock_universe, the charting client falls back
+    through its own series preference loop (EQ → BE → SM → ST).
+
     Args:
         symbol: NSE ticker.
         days:  How many calendar days of history to request.
@@ -180,15 +185,27 @@ def _backfill_symbol_charting(symbol: str, days: int) -> int:
     """
     from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
 
+    # Look up the correct series from stock_universe (e.g. 'BE' for BODALCHEM)
+    discovered_series: str | None = None
+    with _get_session() as db:
+        row = db.execute(
+            select(StockUniverse.series).where(StockUniverse.symbol == symbol)
+        ).scalar_one_or_none()
+        if row:
+            discovered_series = row
+
     today = date.today()
     start_dt = today - timedelta(days=days + 30)
     from_ts = int(datetime.combine(start_dt, datetime.min.time(), tzinfo=timezone.utc).timestamp())
     to_ts = int(datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc).timestamp())
 
-    logger.info(f"backfill_symbol_charting: fetching {symbol} from {start_dt} to {today}")
+    logger.info(
+        f"backfill_symbol_charting: fetching {symbol} (series={discovered_series!r}) "
+        f"from {start_dt} to {today}"
+    )
 
     try:
-        candles = fetch_candles(symbol, "D", from_ts=from_ts, to_ts=to_ts)
+        candles = fetch_candles(symbol, "D", from_ts=from_ts, to_ts=to_ts, series=discovered_series)
     except Exception as exc:
         logger.warning(f"backfill_symbol_charting: charting API failed for {symbol}: {exc}")
         return 0

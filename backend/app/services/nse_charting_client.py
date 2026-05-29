@@ -39,6 +39,9 @@ _DEFAULT_USER_AGENT = (
 # Rate-limit: minimum seconds between consecutive requests
 _REQUEST_DELAY_SECONDS = 1.0
 
+# Series suffix fallback order — mirrors NSEClient.SERIES_PREFERENCE
+_SERIES_FALLBACK: list[str] = ["EQ", "BE", "SM", "ST"]
+
 # Interval → (chartType, timeInterval) mapping
 INTERVAL_PARAMS: dict[str, tuple[str, str]] = {
     "1m":  ("I", "1"),
@@ -83,37 +86,60 @@ def _build_headers(symbol: str) -> dict[str, str]:
 # Scripcode resolution
 # ---------------------------------------------------------------------------
 
-def get_scripcode(symbol: str) -> str:
-    """Return the NSE charting scripcode for *symbol* (e.g. "RELIANCE" → "1333").
+def _lookup_scripcode_for_nse_symbol(nse_symbol: str, symbol: str) -> str | None:
+    """Single attempt: resolve nse_symbol (e.g. 'RELIANCE-EQ') to a scripcode.
 
-    Result is cached in-process. Raises ValueError if not found.
+    Returns scripcode string on success, None if not found.
     """
-    if symbol in _scripcode_cache:
-        return _scripcode_cache[symbol]
-
-    nse_symbol = f"{symbol}-EQ"
     url = f"{_BASE_URL}{_SYMBOLS_ENDPOINT}"
     params = {"symbol": nse_symbol, "segment": ""}
-
     _rate_limit()
     try:
         resp = requests.get(url, params=params, headers=_build_headers(symbol), timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        raise ValueError(f"[nse_charting] scripcode lookup failed for {symbol}: {exc}") from exc
+        logger.debug("[nse_charting] scripcode HTTP error for %s: %s", nse_symbol, exc)
+        return None
 
     entries = data.get("data", [])
     if not entries:
-        raise ValueError(f"[nse_charting] no scripcode found for {symbol}")
-
+        return None
     code = str(entries[0].get("scripcode", ""))
-    if not code:
-        raise ValueError(f"[nse_charting] empty scripcode for {symbol}")
+    return code if code else None
 
-    _scripcode_cache[symbol] = code
-    logger.debug("[nse_charting] scripcode %s → %s", symbol, code)
-    return code
+
+def get_scripcode(symbol: str, series: str | None = None) -> tuple[str, str]:
+    """Return (scripcode, resolved_series) for *symbol*.
+
+    Resolution order:
+      1. If *series* is provided, try ``{symbol}-{series}`` first.
+      2. Fallback loop: try each of _SERIES_FALLBACK in order.
+      3. Raise ValueError if nothing resolves.
+
+    Results are cached in-process keyed by symbol.
+    """
+    if symbol in _scripcode_cache:
+        return _scripcode_cache[symbol]
+
+    # Build ordered list of series suffixes to try
+    to_try: list[str] = []
+    if series and series not in _SERIES_FALLBACK:
+        to_try.append(series)
+    elif series:
+        to_try = [series] + [s for s in _SERIES_FALLBACK if s != series]
+    else:
+        to_try = list(_SERIES_FALLBACK)
+
+    for s in to_try:
+        nse_symbol = f"{symbol}-{s}"
+        code = _lookup_scripcode_for_nse_symbol(nse_symbol, symbol)
+        if code:
+            _scripcode_cache[symbol] = (code, s)
+            logger.debug("[nse_charting] scripcode %s → %s (series=%s)", symbol, code, s)
+            return code, s
+
+    raise ValueError(f"[nse_charting] no scripcode found for {symbol} (tried {to_try})")
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +151,7 @@ def fetch_candles(
     interval: str,
     from_ts: int = 0,
     to_ts: Optional[int] = None,
+    series: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch OHLCV candles from NSE charting API.
 
@@ -133,6 +160,8 @@ def fetch_candles(
         interval: One of the INTERVAL_PARAMS keys ("1h", "W", "M", etc.).
         from_ts:  Start time as Unix *seconds* (0 = all available history).
         to_ts:    End time as Unix *seconds* (None → current time).
+        series:   NSE series hint (e.g. "EQ", "BE"). If None, tries EQ first
+                  then falls back through BE, SM, ST automatically.
 
     Returns:
         List of dicts: [{time_ms, open, high, low, close, volume}, ...]
@@ -149,14 +178,14 @@ def fetch_candles(
     if to_ts is None:
         to_ts = int(datetime.now(timezone.utc).timestamp())
 
-    scripcode = get_scripcode(symbol)
+    scripcode, resolved_series = get_scripcode(symbol, series=series)
 
     url = f"{_BASE_URL}{_HISTORY_ENDPOINT}"
     params = {
         "token": scripcode,
         "fromDate": str(from_ts),
         "toDate": str(to_ts),
-        "symbol": f"{symbol}-EQ",
+        "symbol": f"{symbol}-{resolved_series}",
         "symbolType": "Equity",
         "chartType": chart_type,
         "timeInterval": time_interval,
@@ -205,15 +234,16 @@ async def fetch_candles_async(
     interval: str,
     from_ts: int = 0,
     to_ts: Optional[int] = None,
+    series: str | None = None,
 ) -> list[dict[str, Any]]:
     """Async wrapper around fetch_candles — runs in a thread pool executor."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
-        None, lambda: fetch_candles(symbol, interval, from_ts, to_ts)
+        None, lambda: fetch_candles(symbol, interval, from_ts, to_ts, series)
     )
 
 
-async def get_scripcode_async(symbol: str) -> str:
+async def get_scripcode_async(symbol: str, series: str | None = None) -> tuple[str, str]:
     """Async wrapper around get_scripcode."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: get_scripcode(symbol))
+    return await loop.run_in_executor(None, lambda: get_scripcode(symbol, series))
