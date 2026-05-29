@@ -1063,6 +1063,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     from app.services.indicators import compute_intraday_indicators_for_all_rows
     from app.services.ticker_warehouse import backfill_intraday_symbol, get_last_trading_day, get_watchlist_symbols
 
+    ist = pytz.timezone("Asia/Kolkata")
     symbols = get_watchlist_symbols()
     if not symbols:
         logger.info("[hourly_stale_check] no watchlist symbols to inspect")
@@ -1075,7 +1076,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
         return
 
     last_trading_day = get_last_trading_day()
-    now_ist = datetime.now(_IST)
+    now_ist = datetime.now(ist)
     target_date = last_trading_day
 
     session_slots = [
@@ -1091,7 +1092,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     # During the active session only expect candles up to the latest elapsed slot.
     # After market close, expect the full session through 15:15.
     if target_date == now_ist.date() and now_ist.weekday() < 5:
-        slots_elapsed = [slot for slot in session_slots if now_ist >= _IST.localize(slot)]
+        slots_elapsed = [slot for slot in session_slots if now_ist >= ist.localize(slot)]
         expected_latest = slots_elapsed[-1] if slots_elapsed else None
     else:
         expected_latest = session_slots[-1]
