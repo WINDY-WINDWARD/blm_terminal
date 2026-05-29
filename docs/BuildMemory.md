@@ -144,3 +144,38 @@ Data source:    screener+yfinance
 
 All three features built, tested, and verified.
 
+---
+
+## Round 3: Charting-First Daily Backfill for 3Y Portfolio Lookback
+
+### Problem
+- `nsepython.equity_history()` has a ~11 month maximum per call.
+- Portfolio optimizer requests 3Y (1200 days) of history, but equity_history could only return ~1Y even with chunked calls.
+- `DEFAULT_BACKFILL_DAYS = 365` in nightly backfill also only stored ~1Y in DB.
+
+### Solution
+- Added `_backfill_symbol_charting(symbol, days)` to `backend/app/services/ticker_warehouse.py`.
+- Calls `nse_charting_client.fetch_candles(symbol, "D", from_ts, to_ts)` — the charting API returns **deep history** (e.g. 7,801 daily candles for RELIANCE from 1995→2026) in a **single HTTP request**.
+- Refactored `backfill_symbol()` to try charting first, then fallback to legacy `_backfill_symbol_equity_history()`.
+- `portfolio.py` needs **no changes** — `_ensure_prices()` already calls `backfill_symbol(sym, days=800/1200)` which now transparently returns 2Y/3Y data.
+
+### Key Decisions
+- **Value approximation**: `close * volume` (charting API does not provide traded-value field). Confirmed by user as acceptable.
+- **Source label**: `"equity_history"` for both charting and equity_history rows. Keeps consistency with existing DB schema and downstream code.
+- **Data path**: Portfolio optimizer continues to call `backfill_symbol()` only. No direct charting API calls in portfolio.py — single code path, no duplication.
+
+### Files Modified
+- `backend/app/services/ticker_warehouse.py` — added `_backfill_symbol_charting()`, extracted `_backfill_symbol_equity_history()`, refactored `backfill_symbol()`
+
+### Smoke Test
+```
+$ backfill_symbol('RELIANCE', days=1200)
+→ Backfilled 831 rows for RELIANCE (3Y+ request)
+```
+
+### Status
+- [x] Charting-first daily backfill implemented
+- [x] 3Y portfolio lookback now works (1200 days → 831 trading days in DB)
+- [x] Legacy equity_history fallback preserved for resilience
+- [x] No changes needed in portfolio.py or valuation.py
+

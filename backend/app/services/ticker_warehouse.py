@@ -168,28 +168,98 @@ def _nse_equity_history_sync(symbol: str, start_date: str, end_date: str, _attem
     return pd.DataFrame()
 
 
-def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
-    """
-    Backfill OHLCV data for a single symbol.
+def _backfill_symbol_charting(symbol: str, days: int) -> int:
+    """Backfill using NSE charting API (deep history in one request).
 
-    Fetches `days` trading days of history via equity_history() API.
-    The API has a ~11 month limit, so we split into 2 requests if needed.
+    Args:
+        symbol: NSE ticker.
+        days:  How many calendar days of history to request.
 
     Returns:
-        Number of rows inserted/updated.
+        Number of rows inserted/updated (0 on failure).
     """
+    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+
+    today = date.today()
+    start_dt = today - timedelta(days=days + 30)
+    from_ts = int(datetime.combine(start_dt, datetime.min.time(), tzinfo=timezone.utc).timestamp())
+    to_ts = int(datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc).timestamp())
+
+    logger.info(f"backfill_symbol_charting: fetching {symbol} from {start_dt} to {today}")
+
+    try:
+        candles = fetch_candles(symbol, "D", from_ts=from_ts, to_ts=to_ts)
+    except Exception as exc:
+        logger.warning(f"backfill_symbol_charting: charting API failed for {symbol}: {exc}")
+        return 0
+
+    if not candles:
+        logger.warning(f"backfill_symbol_charting: no candles returned for {symbol}")
+        return 0
+
+    rows = []
+    for c in candles:
+        ts_ms = c.get("time_ms")
+        if not ts_ms:
+            continue
+        dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+        close_val = float(c.get("close", 0))
+        volume_val = int(c.get("volume", 0))
+        # Approximate traded value: close * volume
+        value_val = close_val * volume_val
+        rows.append({
+            "symbol": symbol,
+            "date": dt,
+            "series": TICKER_SERIES_FILTER,
+            "open": float(c.get("open", 0)),
+            "high": float(c.get("high", 0)),
+            "low": float(c.get("low", 0)),
+            "close": close_val,
+            "volume": volume_val,
+            "value": value_val,
+            "source": "equity_history",
+            "created_at": datetime.now(),
+        })
+
+    if not rows:
+        return 0
+
+    with _get_session() as db:
+        stmt = sqlite_insert(TickerDaily).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol", "date", "series"],
+            set_={
+                "open": stmt.excluded.open,
+                "high": stmt.excluded.high,
+                "low": stmt.excluded.low,
+                "close": stmt.excluded.close,
+                "volume": stmt.excluded.volume,
+                "value": stmt.excluded.value,
+                "source": stmt.excluded.source,
+                "created_at": stmt.excluded.created_at,
+            },
+        )
+        db.execute(stmt)
+        db.commit()
+
+    logger.info(f"backfill_symbol_charting: upserted {len(rows)} rows for {symbol}")
+    return len(rows)
+
+
+def _backfill_symbol_equity_history(symbol: str, days: int) -> int:
+    """Legacy backfill using nsepython.equity_history (shallow history, chunked)."""
     today = date.today()
     start_dt = today - timedelta(days=days + 50)
     start_date = start_dt.strftime("%d-%m-%Y")
     end_date = today.strftime("%d-%m-%Y")
 
-    logger.info(f"backfill_symbol: fetching {symbol} from {start_date} to {end_date}")
+    logger.info(f"backfill_symbol_equity: fetching {symbol} from {start_date} to {end_date}")
 
     df = _nse_equity_history_sync(symbol, start_date, end_date)
 
     if df.empty:
         mid_date = (today - timedelta(days=180)).strftime("%d-%m-%Y")
-        logger.info(f"backfill_symbol: trying split at {mid_date}")
+        logger.info(f"backfill_symbol_equity: trying split at {mid_date}")
         df1 = _nse_equity_history_sync(symbol, start_date, mid_date)
         time.sleep(REQUEST_DELAY_SECONDS)
         df2 = _nse_equity_history_sync(symbol, mid_date, end_date)
@@ -201,11 +271,11 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
             df = df1
 
     if df.empty:
-        logger.warning(f"backfill_symbol: empty result for {symbol}")
+        logger.warning(f"backfill_symbol_equity: empty result for {symbol}")
         return 0
 
     if "CH_SERIES" not in df.columns:
-        logger.warning(f"backfill_symbol: invalid response for {symbol}")
+        logger.warning(f"backfill_symbol_equity: invalid response for {symbol}")
         return 0
 
     df = df.rename(
@@ -223,7 +293,7 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
     required_cols = ["date", "open", "high", "low", "close", "volume", "value"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
-        logger.warning(f"backfill_symbol: missing columns {missing} for {symbol}")
+        logger.warning(f"backfill_symbol_equity: missing columns {missing} for {symbol}")
         return 0
 
     df["symbol"] = symbol
@@ -267,16 +337,38 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
         db.execute(stmt)
         db.commit()
 
-    logger.info(f"backfill_symbol: upserted {len(rows)} rows for {symbol}")
-
-    # Compute indicators for the latest candle now that data is stored.
-    # Full per-candle backfill is handled separately by _ticker_indicators_sync.
-    try:
-        compute_indicators_for_latest_candle(symbol)
-    except Exception as e:
-        logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
-
+    logger.info(f"backfill_symbol_equity: upserted {len(rows)} rows for {symbol}")
     return len(rows)
+
+
+def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
+    """
+    Backfill OHLCV data for a single symbol.
+
+    Primary: NSE charting API (deep history, single request).
+    Fallback: nsepython.equity_history (legacy, chunked, ~11 month limit).
+
+    Returns:
+        Number of rows inserted/updated.
+    """
+    # Try charting API first — deep history in one shot
+    rows = _backfill_symbol_charting(symbol, days)
+    if rows > 0:
+        # Compute indicators for the latest candle
+        try:
+            compute_indicators_for_latest_candle(symbol)
+        except Exception as e:
+            logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
+        return rows
+
+    # Fallback to legacy equity_history
+    rows = _backfill_symbol_equity_history(symbol, days)
+    if rows > 0:
+        try:
+            compute_indicators_for_latest_candle(symbol)
+        except Exception as e:
+            logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
+    return rows
 
 
 def bulk_update_via_bhavcopy(date_str: str) -> int:
