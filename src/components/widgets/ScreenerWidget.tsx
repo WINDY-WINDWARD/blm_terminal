@@ -14,6 +14,7 @@ import {
   getSuggestions,
   applySuggestion,
   validateTql,
+  getFieldInfo,
   type TqlSuggestion,
 } from '@/lib/screenerTql';
 
@@ -128,6 +129,7 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
   const [suggestions, setSuggestions] = useState<TqlSuggestion[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [fieldHint, setFieldHint] = useState<string | null>(null);
   const validationError = validateTql(value);
 
   const updateSuggestions = useCallback(
@@ -136,6 +138,9 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
       setSuggestions(s);
       setSelectedIdx(0);
       setDropdownOpen(s.length > 0);
+      // Update field hint bar
+      const info = getFieldInfo(text, cursor);
+      setFieldHint(info ? `${info.name}: ${info.hint}` : null);
     },
     [sectors]
   );
@@ -279,6 +284,13 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Field hint bar — shown when operator or value context is active */}
+      {fieldHint && (
+        <div className="mt-1 px-2 py-0.5 text-[9px] text-white/40 leading-snug border-l-2 border-blue-500/30 pl-2 bg-blue-500/5 rounded-r">
+          {fieldHint}
+        </div>
       )}
     </div>
   );
