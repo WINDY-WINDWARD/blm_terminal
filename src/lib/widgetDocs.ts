@@ -937,18 +937,73 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'Example Queries',
         items: [
+          // Momentum / breakout
           'RSI > 60 AND Change > 1',
+          'RSI > 60 AND Volume > 2 AND Return1w > 3',
+          'MomentumScore > 80 AND RSI > 55 AND RSI < 75',
+          'MomentumScore > 70 AND Return1m > 10 AND Return3m > 20',
+          'From52wHigh > -5 AND Volume > 2',
+          'From52wHigh > -3 AND MomentumScore > 65',
+          'Return1w > 5 AND Return1m > 10 AND Return3m > 20',
+          'Change > 3 AND Volume > 3',
+          'Change > 5 AND From52wHigh > -10',
+
+          // Oversold / reversal
           'RSI < 35 AND Volume > 2',
+          'RSI < 30 AND From52wLow < 10',
+          'RSI < 40 AND MACDHist > 0',
+          'RSI < 45 AND MACD > MACDSignal',
+
+          // Sector filters
           'Sector = "Banks" AND Return1m > 5',
+          'Sector = "Banks" AND RSI > 55 AND RSI < 70',
+          'Sector = "Pharma" AND MomentumScore > 60 AND PE < 30',
           'Sector IN ("Banks", "IT") AND MomentumScore > 60',
-          '1h:RSI > 65 AND W:RSI > 55',
+          'Sector IN ("FMCG", "Consumer Durables") AND Return3m > 15',
+          'Sector = "IT" AND From52wHigh > -10 AND Volume > 1.5',
+          'Sector = "Auto" AND RSI > 55 AND Return1m > 5',
+
+          // Volatility / squeeze setups
           'BBSqueeze AND ATR < 2',
-          'NOT BBSqueeze AND RSI > 50 AND Volume > 1.5',
-          'From52wHigh > -3 AND Volume > 2',
+          'BBSqueeze AND Volume > 1.5 AND MomentumScore > 50',
+          'NOT BBSqueeze AND BBWidth > 10 AND Volume > 2',
+          'HV20 < 20 AND MomentumScore > 60',
+          'HV20 < 25 AND Sharpe60 > 1',
+          'ATR < 2 AND RSI > 55 AND Volume > 1.5',
+
+          // Multi-timeframe
+          '1h:RSI > 65 AND W:RSI > 55',
+          '1h:RSI > 60 AND 1d:RSI > 55 AND W:RSI > 50',
+          'W:MACD > 0 AND 1d:RSI > 55',
+          'W:RSI > 60 AND M:RSI > 55 AND Return3m > 15',
+          '1h:BBSqueeze AND 1d:RSI > 50',
+
+          // Value / fundamentals
+          'PE < 15 AND Return1y > 20',
+          'PE < 20 AND MomentumScore > 60',
           '(Return1m > 10 OR Return3m > 20) AND PE < 30',
-          'Change > 3 AND Volume > 3 AND Sector = "Pharma"',
-          'MomentumScore > 75 AND DataPoints > 200',
+          'PE > 0 AND PE < 12 AND Sector = "Banks"',
+          'Sharpe126 > 1 AND PE < 25 AND Return1y > 15',
+
+          // Quality / risk-adjusted
           'Sharpe60 > 1 AND HV20 < 25',
+          'Sharpe60 > 1.5 AND MomentumScore > 65',
+          'Sharpe126 > 1 AND Return1y > 20 AND PE < 30',
+          'HV60 < 20 AND Return1y > 15 AND DataPoints > 200',
+
+          // Universe hygiene
+          'DataPoints > 200 AND MomentumScore > 70',
+          'DataPoints > 240 AND RSI > 60 AND Volume > 1.5',
+
+          // Complex / combined
+          'RSI > 55 AND MACD > 0 AND Volume > 1.5 AND Return1m > 5',
+          '(Sector = "Banks" OR Sector = "IT") AND RSI > 60 AND Volume > 2',
+          'NOT BBSqueeze AND RSI > 55 AND Volume > 2 AND Return1m > 5',
+          'BBSqueeze AND HV20 < 20 AND MomentumScore > 55',
+          'From52wHigh > -5 AND Volume > 3 AND RSI > 50 AND RSI < 70',
+          'Change > 2 AND Volume > 2 AND MomentumScore > 65 AND DataPoints > 200',
+          '(Return1w > 3 AND Return1m > 8) AND RSI < 70 AND PE < 40',
+          'Sector = "Pharma" AND From52wHigh > -15 AND Volume > 1.5 AND RSI > 50',
         ],
       },
       {
