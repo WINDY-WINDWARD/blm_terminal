@@ -800,12 +800,36 @@ def get_warehouse_status() -> dict:
                     )
                 ).scalar() or 0
 
+            # Universe coverage — tracked for W and M (which are now universe-scoped)
+            iv_universe_covered = 0
+            iv_universe_symbols_with_indicators = 0
+            if interval in ("W", "M"):
+                universe_symbol_list = list(universe_symbols)
+                iv_universe_covered = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(universe_symbol_list),
+                    )
+                ).scalar() or 0
+
+                iv_universe_symbols_with_indicators = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(universe_symbol_list),
+                        TickerIntraday.indicators_updated_at.isnot(None),
+                    )
+                ).scalar() or 0
+
             intraday_stats[interval] = {
                 "total_rows": iv_total,
                 "watchlist_covered": iv_watchlist_covered,
                 "watchlist_current": iv_watchlist_current,
                 "symbols_with_indicators": iv_symbols_with_indicators,
                 "latest_timestamp": iv_latest_ts,
+                "universe_covered": iv_universe_covered,
+                "universe_symbols_with_indicators": iv_universe_symbols_with_indicators,
             }
 
         return {
@@ -899,7 +923,7 @@ def get_watchlist_symbols() -> list[str]:
 
 
 def get_all_universe_symbols() -> list[str]:
-    """Get all symbols from stock_universe that are EQ series."""
+    """Get all symbols from stock_universe (all series, not filtered to EQ)."""
     with _get_session() as db:
         symbols = db.execute(
             select(StockUniverse.symbol)

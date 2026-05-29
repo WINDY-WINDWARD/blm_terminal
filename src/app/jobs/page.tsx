@@ -47,6 +47,8 @@ interface IntradayIntervalStatus {
   watchlist_current: number;
   symbols_with_indicators: number;
   latest_timestamp: string | null;
+  universe_covered: number;
+  universe_symbols_with_indicators: number;
 }
 
 interface TickerStatus {
@@ -111,7 +113,7 @@ function formatNextTrigger(dateStr: string | null, isManualOnly: boolean, jobKey
       return 'At startup and 23:00 IST nightly';
     }
     if (jobKey === 'job.ticker_weekly_monthly_update' || jobKey === 'job.ticker_weekly_monthly_indicators') {
-      return 'With nightly pipeline at 23:00 IST';
+      return 'Startup + nightly pipeline at 23:00 IST';
     }
     return '—';
   }
@@ -673,13 +675,22 @@ export default function JobsPage() {
                         const stat = tickerStatus.intraday_stats[key];
                         if (!stat) return null;
                         const watchlistTotal = tickerStatus.watchlist_symbols_total;
+                        const universeTotal = tickerStatus.universe_count;
+                        const is1h = key === '1h';
+                        const isUniverseInterval = key === 'W' || key === 'M';
+
                         const coveredPct = watchlistTotal > 0
                           ? (stat.watchlist_covered / watchlistTotal) * 100
                           : 0;
                         const indicatorsPct = stat.watchlist_covered > 0
                           ? (stat.symbols_with_indicators / stat.watchlist_covered) * 100
                           : 0;
-                        const is1h = key === '1h';
+                        const universeCoveredPct = universeTotal > 0
+                          ? (stat.universe_covered / universeTotal) * 100
+                          : 0;
+                        const universeIndicatorsPct = stat.universe_covered > 0
+                          ? (stat.universe_symbols_with_indicators / stat.universe_covered) * 100
+                          : 0;
                         const currentPct = is1h && watchlistTotal > 0
                           ? (stat.watchlist_current / watchlistTotal) * 100
                           : 0;
@@ -702,6 +713,35 @@ export default function JobsPage() {
                                   {stat.total_rows.toLocaleString()}
                                 </span>
                               </div>
+                              {isUniverseInterval && (
+                                <>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[10px] text-white/50">Universe</span>
+                                    <span className="text-xs font-bold text-terminal-green">
+                                      {stat.universe_covered.toLocaleString()}/{universeTotal.toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                    <div
+                                      className="h-full bg-terminal-green transition-all"
+                                      style={{ width: `${universeCoveredPct}%` }}
+                                    />
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[10px] text-white/50">Univ. Indicators</span>
+                                    <span className="text-xs font-bold text-terminal-green">
+                                      {stat.universe_symbols_with_indicators.toLocaleString()}/{stat.universe_covered.toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                    <div
+                                      className="h-full bg-terminal-green/60 transition-all"
+                                      style={{ width: `${universeIndicatorsPct}%` }}
+                                    />
+                                  </div>
+                                  <div className="border-t border-terminal-gray/20 pt-1" />
+                                </>
+                              )}
                               <div className="flex justify-between items-center">
                                 <span className="text-[10px] text-white/50">Watchlist</span>
                                 <span className="text-xs font-bold text-blue-400">
@@ -723,14 +763,14 @@ export default function JobsPage() {
                                 </div>
                               )}
                               <div className="flex justify-between items-center">
-                                <span className="text-[10px] text-white/50">Indicators</span>
-                                <span className="text-xs font-bold text-terminal-green">
+                                <span className="text-[10px] text-white/50">WL Indicators</span>
+                                <span className="text-xs font-bold text-blue-400">
                                   {stat.symbols_with_indicators}/{stat.watchlist_covered}
                                 </span>
                               </div>
                               <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
                                 <div
-                                  className="h-full bg-terminal-green transition-all"
+                                  className="h-full bg-blue-400/60 transition-all"
                                   style={{ width: `${indicatorsPct}%` }}
                                 />
                               </div>

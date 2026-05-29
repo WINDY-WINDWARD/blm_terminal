@@ -60,6 +60,9 @@ class IntradayIntervalStatus(BaseModel):
     watchlist_current: int
     symbols_with_indicators: int
     latest_timestamp: datetime | None
+    # Universe-level coverage (populated for W and M only; 0 for 1h)
+    universe_covered: int = 0
+    universe_symbols_with_indicators: int = 0
 
 
 class TickerStatusResponse(BaseModel):

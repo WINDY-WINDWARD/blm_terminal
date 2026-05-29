@@ -139,7 +139,7 @@ def register_all_jobs() -> None:
         JobDefinition(
             job_key="job.ticker_weekly_monthly_update",
             name="ticker_weekly_monthly_update",
-            description="Backfill W/M candles from NSE charting API for all watchlist symbols (nightly orchestrator stage)",
+            description="Backfill W/M candles from NSE charting API for all universe symbols (startup + nightly orchestrator stage)",
             category="data_warehouse",
             cron_expression=None,
             callable=_ticker_intraday_update_sync,
@@ -1004,26 +1004,36 @@ def ticker_daily_update_worker() -> None:
 # Intraday / Weekly / Monthly candle worker
 # ---------------------------------------------------------------------------
 
-def _ticker_intraday_update_sync(intervals: list[str] = None) -> None:
-    """Synchronous core: backfill intraday candles for all watchlist symbols.
+def _ticker_intraday_update_sync(intervals: list[str] = None, scope: str = "watchlist") -> None:
+    """Synchronous core: backfill intraday candles for watchlist or all universe symbols.
 
     Args:
         intervals: List of intervals to backfill (e.g. ["1h"], ["W", "M"]).
             Defaults to ["1h", "W", "M"] for backward compatibility.
+        scope: "watchlist" (default) — only symbols in any watchlist.
+               "universe" — all symbols in stock_universe (for W/M nightly/startup runs).
 
-    Called from workers/orchestrator. Loops all watchlist symbols,
-    calls backfill_intraday_symbol() for each, logs counts. 1 s delay between
-    symbols to avoid NSE charting API rate limits.
+    Called from workers/orchestrator. Loops symbols, calls backfill_intraday_symbol()
+    for each, logs counts. 1 s delay between symbols to avoid NSE charting API rate limits.
     """
-    from app.services.ticker_warehouse import backfill_intraday_symbol, get_watchlist_symbols
+    from app.services.ticker_warehouse import (
+        backfill_intraday_symbol,
+        get_all_universe_symbols,
+        get_watchlist_symbols,
+    )
 
     intervals = intervals or ["1h", "W", "M"]
-    symbols = get_watchlist_symbols()
+    if scope == "universe":
+        symbols = get_all_universe_symbols()
+        scope_label = "universe"
+    else:
+        symbols = get_watchlist_symbols()
+        scope_label = "watchlist"
     if not symbols:
-        logger.info("[intraday_worker] no watchlist symbols to backfill")
+        logger.info("[intraday_worker] no %s symbols to backfill", scope_label)
         return
 
-    logger.info("[intraday_worker] starting backfill for %d symbols, intervals=%s", len(symbols), intervals)
+    logger.info("[intraday_worker] starting backfill for %d %s symbols, intervals=%s", len(symbols), scope_label, intervals)
     total: dict[str, int] = {iv: 0 for iv in intervals}
     errors = 0
 

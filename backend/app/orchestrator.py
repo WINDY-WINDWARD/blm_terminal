@@ -247,6 +247,27 @@ class Orchestrator:
                 await update_job_status(pipeline_job_key, "running", progress=15,
                                         message="Stage 1/7 complete — stock universe synced")
 
+            # ── Stage 1b: W/M candle backfill for full universe (startup only) ──
+            # Nightly pipeline handles this in Stage 5a; running both would double
+            # the work (~2000 symbols × 1 s delay) on every nightly run.
+            if mode == PipelineMode.STARTUP:
+                if _shutdown_event.is_set():
+                    return
+                logger.info("Orchestrator [%s] Stage 1b: ticker_weekly_monthly_update (universe scope)", mode.value)
+                if _is_job_enabled("job.ticker_weekly_monthly_update"):
+                    await update_job_status(pipeline_job_key, "running", progress=16,
+                                            message="Stage 1b/7: Backfilling W/M candles for all universe symbols...")
+                    await loop.run_in_executor(None, _run_pipeline_stage,
+                                               lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe"),
+                                               _pipeline_lock, _pipeline_idle)
+                    await update_job_status(pipeline_job_key, "running", progress=17,
+                                            message="Stage 1b/7 complete — universe W/M candles synced")
+                else:
+                    await update_job_status(pipeline_job_key, "running", progress=17,
+                                            message="Stage 1b/7 skipped — job.ticker_weekly_monthly_update disabled")
+                    logger.info("Orchestrator [%s] Stage 1b skipped: job.ticker_weekly_monthly_update disabled", mode.value)
+                logger.info("Orchestrator [%s] Stage 1b complete", mode.value)
+
             # ── Stage 2 (nightly only): Daily update / bhavcopy ───────────
             if mode == PipelineMode.NIGHTLY:
                 if _shutdown_event.is_set():
@@ -350,9 +371,9 @@ class Orchestrator:
                 logger.info("Orchestrator [%s] Stage 5a: ticker_weekly_monthly_update", mode.value)
                 if _is_job_enabled("job.ticker_weekly_monthly_update"):
                     await update_job_status(pipeline_job_key, "running", progress=76,
-                                            message="Stage 5a/7: Backfilling W/M candles...")
+                                            message="Stage 5a/7: Backfilling W/M candles for all universe symbols...")
                     await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_update_sync(["W", "M"]),
+                                               lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe"),
                                                _pipeline_lock, _pipeline_idle)
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=82,
