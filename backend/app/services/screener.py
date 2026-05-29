@@ -83,17 +83,18 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
 
     # Read intraday indicators for 1h / W / M
     ind_intraday: dict[str, dict] = {}
-    with _SyncSessionLocal() as db:
-        for interval in ("1h", "W", "M"):
-            iv_row = db.execute(
-                select(TickerIntraday)
-                .where(TickerIntraday.symbol == symbol)
-                .where(TickerIntraday.interval == interval)
-                .order_by(TickerIntraday.timestamp.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if iv_row:
-                ind_intraday[interval] = {
+    try:
+        with _SyncSessionLocal() as db:
+            for interval in ("1h", "W", "M"):
+                iv_row = db.execute(
+                    select(TickerIntraday)
+                    .where(TickerIntraday.symbol == symbol)
+                    .where(TickerIntraday.interval == interval)
+                    .order_by(TickerIntraday.timestamp.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if iv_row:
+                    ind_intraday[interval] = {
                     "rsi_14":         iv_row.rsi_14,
                     "macd":           iv_row.macd,
                     "macd_signal":    iv_row.macd_signal,
@@ -111,6 +112,8 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
                     "sharpe_60":      iv_row.sharpe_60,
                     "sharpe_126":     iv_row.sharpe_126,
                 }
+    except Exception:
+        pass  # ticker_intraday may not exist yet — fall back to daily-only indicators
 
     # Flatten indicators by interval for easy filtering
     indicators_by_interval = {"1d": ind_daily, **ind_intraday}
@@ -462,6 +465,93 @@ def run_screener(
         "filters_applied": list(filters.keys()),
         "results": results,
     }
+
+
+def run_screener_tql(
+    tql: str,
+    default_interval: str = "1d",
+    sort_by: str = "symbol",
+    order: str = "asc",
+    limit: int = 50,
+    use_cache: bool = True,
+) -> dict:
+    """Run screener using a TQL (Ticker Query Language) query string.
+
+    Args:
+        tql: TQL query e.g. ``RSI > 60 AND Sector = "Banks"``
+        default_interval: Interval used for un-prefixed indicator fields (1d / 1h / W / M)
+        sort_by: Field to sort by
+        order: asc or desc
+        limit: Max results
+
+    Returns:
+        Dict with count, returned, filters_applied, results (same shape as run_screener)
+    """
+    from app.services.tql_parser import parse_tql, evaluate, TQLSyntaxError  # local import to avoid cycles
+
+    try:
+        ast = parse_tql(tql)
+    except TQLSyntaxError as e:
+        raise ValueError(f"TQL syntax error: {e}") from e
+
+    global _screener_cache
+    current_time = time.time()
+    if use_cache and _screener_cache["data"] is not None:
+        if current_time - _screener_cache["timestamp"] < SCREENER_CACHE_TTL:
+            all_data = _screener_cache["data"]
+        else:
+            all_data = None
+    else:
+        all_data = None
+
+    if all_data is None:
+        symbols = _get_all_symbols_with_data()
+        all_data = [_get_symbol_data(s) for s in symbols]
+        _screener_cache = {"data": all_data, "timestamp": current_time}
+
+    filtered = []
+    for data in all_data:
+        if data is None:
+            continue
+        try:
+            if evaluate(ast, data, default_interval):
+                filtered.append(data)
+        except Exception:
+            pass  # malformed data row — skip silently
+
+    sorted_results = _sort_results(filtered, sort_by, order)
+    results = sorted_results[:limit]
+
+    return {
+        "count": len(filtered),
+        "returned": len(results),
+        "filters_applied": [f"tql:{tql[:60]}"],
+        "results": results,
+    }
+
+
+def get_screener_sectors(use_cache: bool = True) -> list[str]:
+    """Return sorted list of distinct sector values from cached screener data."""
+    global _screener_cache
+    current_time = time.time()
+    if use_cache and _screener_cache["data"] is not None:
+        if current_time - _screener_cache["timestamp"] < SCREENER_CACHE_TTL:
+            all_data = _screener_cache["data"]
+        else:
+            all_data = None
+    else:
+        all_data = None
+
+    if all_data is None:
+        symbols = _get_all_symbols_with_data()
+        all_data = [_get_symbol_data(s) for s in symbols]
+        _screener_cache = {"data": all_data, "timestamp": current_time}
+
+    sectors: set[str] = set()
+    for d in all_data:
+        if d and d.get("sector"):
+            sectors.add(d["sector"])
+    return sorted(sectors)
 
 
 def invalidate_cache() -> None:

@@ -387,6 +387,16 @@ class ScreenerResponse(BaseModel):
     results: list[dict]
 
 
+@router.get("/screener/sectors")
+async def get_screener_sectors() -> dict:
+    """Return the list of distinct sector values present in the screener cache.
+
+    Used by the frontend TQL autocomplete to populate sector value suggestions.
+    """
+    sectors = screener_service.get_screener_sectors()
+    return {"sectors": sectors}
+
+
 @router.get("/screener", response_model=ScreenerResponse)
 async def get_screener(
     pct_change_today_min: Optional[float] = Query(None, description="Min % change today"),
@@ -422,6 +432,8 @@ async def get_screener(
     momentum_score_min: Optional[float] = Query(None, description="Min momentum score"),
     min_data_points: Optional[int] = Query(None, description="Min data points required"),
     filters_json: Optional[str] = Query(None, description='JSON dict of additional filters (e.g. {"rsi_1h_min":70,"rsi_W_min":60})'),
+    tql: Optional[str] = Query(None, description='Ticker Query Language expression e.g. RSI > 60 AND Sector = "Banks"'),
+    default_interval: str = Query("1d", description="Default interval for un-prefixed TQL indicator fields (1d, 1h, W, M)"),
     sort_by: str = Query("symbol", description="Sort field"),
     order: str = Query("asc", description="Sort order"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
@@ -430,7 +442,23 @@ async def get_screener(
 
     Legacy individual query params (rsi_min, atr_pct_max, etc.) continue to work.
     Use ``filters_json`` to pass cross-timeframe filters like ``{"rsi_1h_min":70}``.
+    Pass ``tql`` for a Ticker Query Language expression — takes precedence over all other filter params.
     """
+    # TQL takes precedence over legacy params
+    if tql and tql.strip():
+        try:
+            result = screener_service.run_screener_tql(
+                tql.strip(), default_interval, sort_by, order, limit
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return ScreenerResponse(
+            count=result["count"],
+            returned=result["returned"],
+            filters_applied=result["filters_applied"],
+            results=result["results"],
+        )
+
     filters = {}
     if filters_json:
         import json

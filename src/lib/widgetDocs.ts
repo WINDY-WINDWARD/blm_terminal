@@ -860,6 +860,110 @@ const DOCS_MAP: WidgetDoc[] = [
       },
     ],
   },
+
+  // ─── SCREENER ────────────────────────────────────────────────────────────────
+  {
+    command: 'SCREENER',
+    title: 'Stock Screener (TQL)',
+    summary: 'Filter the entire NSE universe using Ticker Query Language (TQL). Type a query in the bar and press Enter or Run.',
+    sections: [
+      {
+        heading: 'Ticker Query Language (TQL)',
+        body: 'TQL is a plain-English filter expression. Combine conditions with AND, OR, NOT, and parentheses. Each condition is FIELD OPERATOR VALUE. Use Tab/↑↓ to navigate autocomplete suggestions.',
+      },
+      {
+        heading: 'Operators',
+        items: [
+          { name: '>  <  >=  <=', desc: 'Numeric comparisons. Example: RSI > 60' },
+          { name: '=  !=',        desc: 'Equality / inequality. Works for numbers and strings. Example: Sector = "Banks"' },
+          { name: 'IN (...)',     desc: 'Match any value in a list. Example: Sector IN ("Banks", "IT", "Pharma")' },
+          { name: 'AND',          desc: 'Both conditions must be true.' },
+          { name: 'OR',           desc: 'Either condition must be true.' },
+          { name: 'NOT',          desc: 'Negate a condition. Example: NOT BBSqueeze' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Interval Prefix',
+        body: 'By default, indicator fields use the active interval tab (Daily / 1h / Weekly / Monthly). Override per-field with a prefix: 1h:RSI, W:ATR, M:MACD.',
+        items: [
+          { name: '1d:RSI', desc: 'Daily RSI (same as RSI when Daily tab is active)' },
+          { name: '1h:RSI', desc: 'Hourly RSI' },
+          { name: 'W:ATR',  desc: 'Weekly ATR %' },
+          { name: 'M:MACD', desc: 'Monthly MACD' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Indicator Fields',
+        items: [
+          { name: 'RSI',          desc: 'RSI(14). Oversold < 30, overbought > 70.' },
+          { name: 'ATR',          desc: 'ATR as % of price. Low = compressed, high = volatile.' },
+          { name: 'MACD',         desc: 'MACD line value.' },
+          { name: 'MACDSignal',   desc: 'MACD signal line.' },
+          { name: 'MACDHist',     desc: 'MACD histogram (MACD − Signal).' },
+          { name: 'BBWidth',      desc: 'Bollinger Band width (% of middle band).' },
+          { name: 'BBSqueeze',    desc: 'Boolean — true when bands are in a squeeze.' },
+          { name: 'HV20',         desc: 'Historical volatility over 20 days.' },
+          { name: 'HV60',         desc: 'Historical volatility over 60 days.' },
+          { name: 'Sharpe60',     desc: 'Sharpe ratio over 60 trading days.' },
+          { name: 'Sharpe126',    desc: 'Sharpe ratio over 126 trading days.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Price & Return Fields',
+        items: [
+          { name: 'Change',        desc: 'Today\'s % price change (open → last).' },
+          { name: 'Close',         desc: 'Last traded price.' },
+          { name: 'Volume',        desc: 'Volume ratio: today\'s volume ÷ 20-day average.' },
+          { name: 'Return1w',      desc: '1-week return %.' },
+          { name: 'Return1m',      desc: '1-month return %.' },
+          { name: 'Return3m',      desc: '3-month return %.' },
+          { name: 'Return6m',      desc: '6-month return %.' },
+          { name: 'Return1y',      desc: '1-year return %.' },
+          { name: 'From52wHigh',   desc: '% below the 52-week high (usually negative). Example: From52wHigh > -5 means within 5% of 52w high.' },
+          { name: 'From52wLow',    desc: '% above the 52-week low.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Fundamental & Meta Fields',
+        items: [
+          { name: 'PE',            desc: 'Price-to-earnings ratio.' },
+          { name: 'MomentumScore', desc: 'Composite momentum score (0–100).' },
+          { name: 'Sector',        desc: 'NSE sector string. Use quotes: Sector = "Banks".' },
+          { name: 'Industry',      desc: 'Industry sub-category (partial match).' },
+          { name: 'Symbol',        desc: 'Ticker symbol. Example: Symbol = "RELIANCE".' },
+          { name: 'DataPoints',    desc: 'Number of daily candles available. Use DataPoints > 200 to filter out recently listed stocks.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Example Queries',
+        items: [
+          'RSI > 60 AND Change > 1',
+          'RSI < 35 AND Volume > 2',
+          'Sector = "Banks" AND Return1m > 5',
+          'Sector IN ("Banks", "IT") AND MomentumScore > 60',
+          '1h:RSI > 65 AND W:RSI > 55',
+          'BBSqueeze AND ATR < 2',
+          'NOT BBSqueeze AND RSI > 50 AND Volume > 1.5',
+          'From52wHigh > -3 AND Volume > 2',
+          '(Return1m > 10 OR Return3m > 20) AND PE < 30',
+          'Change > 3 AND Volume > 3 AND Sector = "Pharma"',
+          'MomentumScore > 75 AND DataPoints > 200',
+          'Sharpe60 > 1 AND HV20 < 25',
+        ],
+      },
+      {
+        heading: 'Tips',
+        items: [
+          'Press Tab to accept the highlighted autocomplete suggestion.',
+          'Press Enter or click Run to execute the query.',
+          'The active interval tab sets the default for un-prefixed indicator fields — switch tabs to rerun on a different timeframe.',
+          'Results are sorted by clicking any column header. Sorting happens client-side on the returned page.',
+          'Click any row to set that symbol as the active chart symbol.',
+          'The screener cache refreshes every 5 minutes — click Refresh to force an update.',
+        ],
+      },
+    ],
+  },
 ];
 
 // ─── Lookup helper ────────────────────────────────────────────────────────────
