@@ -189,6 +189,7 @@ class Orchestrator:
             _stock_universe_sync,
             _ticker_backfill_sync,
             _ticker_daily_update_sync,
+            _ticker_intraday_hourly_stale_check_sync,
             _ticker_indicators_sync,
             _ticker_scores_sync,
             _ticker_intraday_update_sync,
@@ -221,13 +222,13 @@ class Orchestrator:
                 return
             logger.info("Orchestrator [%s] Stage 1: stock_universe", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=5,
-                                    message="Stage 1/6: Syncing stock universe...")
+                                    message="Stage 1/7: Syncing stock universe...")
             await loop.run_in_executor(None, _stock_universe_sync)
             # Set gate so worker cron loops can proceed
             _startup_stock_universe_done.set()
             logger.info("Orchestrator [%s] Stage 1 complete", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=15,
-                                    message="Stage 1/6 complete — stock universe synced")
+                                    message="Stage 1/7 complete — stock universe synced")
 
             # ── Stage 2 (nightly only): Daily update / bhavcopy ───────────
             if mode == PipelineMode.NIGHTLY:
@@ -235,79 +236,91 @@ class Orchestrator:
                     return
                 logger.info("Orchestrator [%s] Stage 2a: ticker_daily_update", mode.value)
                 await update_job_status(pipeline_job_key, "running", progress=18,
-                                        message="Stage 2a/6: Downloading bhavcopy...")
+                                        message="Stage 2a/7: Downloading bhavcopy...")
                 # Acquire pipeline lock so scan/notif workers pause
                 await loop.run_in_executor(None, _run_pipeline_stage,
                                            _ticker_daily_update_sync, _pipeline_lock, _pipeline_idle)
                 logger.info("Orchestrator [%s] Stage 2a complete", mode.value)
                 await update_job_status(pipeline_job_key, "running", progress=28,
-                                        message="Stage 2a/6 complete — bhavcopy downloaded")
+                                        message="Stage 2a/7 complete — bhavcopy downloaded")
 
             # ── Stage 2b: Backfill ─────────────────────────────────────────
             if _shutdown_event.is_set():
                 return
             logger.info("Orchestrator [%s] Stage 2b: ticker_backfill", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=30,
-                                    message="Stage 2b/6: Backfilling OHLCV history...")
+                                    message="Stage 2b/7: Backfilling OHLCV history...")
             await loop.run_in_executor(None, _ticker_backfill_sync)
             _startup_ticker_backfill_done.set()
             logger.info("Orchestrator [%s] Stage 2b complete", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=40,
-                                    message="Stage 2b/6 complete — backfill done")
+                                    message="Stage 2b/7 complete — backfill done")
+
+            # ── Stage 2c: Hourly 1h stale-check ────────────────────────────
+            if _shutdown_event.is_set():
+                return
+            logger.info("Orchestrator [%s] Stage 2c: ticker_intraday_hourly_stale_check", mode.value)
+            await update_job_status(pipeline_job_key, "running", progress=42,
+                                    message="Stage 2c/7: Checking 1h intraday gaps...")
+            await loop.run_in_executor(None, _run_pipeline_stage,
+                                       _ticker_intraday_hourly_stale_check_sync, _pipeline_lock, _pipeline_idle)
+            logger.info("Orchestrator [%s] Stage 2c complete", mode.value)
+            await update_job_status(pipeline_job_key, "running", progress=48,
+                                    message="Stage 2c/7 complete — 1h candles reconciled")
 
             # ── Stage 3: Indicators ────────────────────────────────────────
             if _shutdown_event.is_set():
                 return
             logger.info("Orchestrator [%s] Stage 3: ticker_indicators", mode.value)
-            await update_job_status(pipeline_job_key, "running", progress=42,
-                                    message="Stage 3/6: Computing indicators...")
+            await update_job_status(pipeline_job_key, "running", progress=50,
+                                    message="Stage 3/7: Computing indicators...")
             # Acquire pipeline lock — indicators modify data read by scan/notif
             await loop.run_in_executor(None, _run_pipeline_stage,
                                        _ticker_indicators_sync, _pipeline_lock, _pipeline_idle)
             _startup_ticker_indicators_done.set()
             logger.info("Orchestrator [%s] Stage 3 complete", mode.value)
-            await update_job_status(pipeline_job_key, "running", progress=55,
-                                    message="Stage 3/6 complete — indicators computed")
+            await update_job_status(pipeline_job_key, "running", progress=62,
+                                    message="Stage 3/7 complete — indicators computed")
 
             # ── Stage 4: Scores ────────────────────────────────────────────
             if _shutdown_event.is_set():
                 return
             logger.info("Orchestrator [%s] Stage 4: ticker_scores", mode.value)
-            await update_job_status(pipeline_job_key, "running", progress=58,
-                                    message="Stage 4/6: Computing momentum scores...")
+            await update_job_status(pipeline_job_key, "running", progress=64,
+                                    message="Stage 4/7: Computing momentum scores...")
             # Acquire pipeline lock — scores modify data read by scan/notif
             await loop.run_in_executor(None, _run_pipeline_stage,
                                        _ticker_scores_sync, _pipeline_lock, _pipeline_idle)
             _startup_ticker_scores_done.set()
             logger.info("Orchestrator [%s] Stage 4 complete", mode.value)
-            await update_job_status(pipeline_job_key, "running", progress=70,
-                                    message="Stage 4/6 complete — scores computed")
+            await update_job_status(pipeline_job_key, "running", progress=74,
+                                    message="Stage 4/7 complete — scores computed")
 
             # ── Stage 5 (nightly only): Weekly + Monthly candles ─────────────
             if mode == PipelineMode.NIGHTLY:
                 if _shutdown_event.is_set():
                     return
                 logger.info("Orchestrator [%s] Stage 5a: ticker_weekly_monthly_update", mode.value)
-                await update_job_status(pipeline_job_key, "running", progress=72,
-                                        message="Stage 5a/6: Backfilling W/M candles...")
+                await update_job_status(pipeline_job_key, "running", progress=76,
+                                        message="Stage 5a/7: Backfilling W/M candles...")
                 await loop.run_in_executor(None, _run_pipeline_stage,
                                            lambda: _ticker_intraday_update_sync(["W", "M"]),
                                            _pipeline_lock, _pipeline_idle)
                 logger.info("Orchestrator [%s] Stage 5a complete", mode.value)
-                await update_job_status(pipeline_job_key, "running", progress=80,
-                                        message="Stage 5a/6 complete — W/M candles synced")
+                await update_job_status(pipeline_job_key, "running", progress=82,
+                                        message="Stage 5a/7 complete — W/M candles synced")
 
                 if _shutdown_event.is_set():
                     return
                 logger.info("Orchestrator [%s] Stage 5b: ticker_weekly_monthly_indicators", mode.value)
-                await update_job_status(pipeline_job_key, "running", progress=82,
-                                        message="Stage 5b/6: Computing W/M indicators...")
+                await update_job_status(pipeline_job_key, "running", progress=84,
+                                        message="Stage 5b/7: Computing W/M indicators...")
                 await loop.run_in_executor(None, _run_pipeline_stage,
                                            lambda: _ticker_intraday_indicators_sync(["W", "M"]),
                                            _pipeline_lock, _pipeline_idle)
                 logger.info("Orchestrator [%s] Stage 5b complete", mode.value)
                 await update_job_status(pipeline_job_key, "running", progress=88,
-                                        message="Stage 5b/6 complete — W/M indicators computed")
+                                        message="Stage 5b/7 complete — W/M indicators computed")
 
             # ── Stage 6: Scan + Notif (immediate cycle) ────────────────────
             # Pipeline is now idle (_pipeline_idle already set by the lock helper).
@@ -316,7 +329,7 @@ class Orchestrator:
                 return
             logger.info("Orchestrator [%s] Stage 6: scan + notif", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=90,
-                                    message="Stage 6/6: Running scan and notifications...")
+                                    message="Stage 6/7: Running scan and notifications...")
             await asyncio.gather(
                 loop.run_in_executor(None, _global_scan_cycle),
                 loop.run_in_executor(None, _notification_cycle_full),

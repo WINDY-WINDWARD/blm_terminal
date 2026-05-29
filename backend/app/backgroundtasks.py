@@ -2,6 +2,7 @@ import asyncio
 import logging
 import threading
 import time
+from datetime import time as dt_time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, timezone
 from typing import Any, Optional
@@ -124,6 +125,15 @@ def register_all_jobs() -> None:
             category="data_warehouse",
             cron_expression="30 9,10,11,12,13,14,15 * * 1-5",
             callable=_ticker_intraday_indicators_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_intraday_hourly_stale_check",
+            name="ticker_intraday_hourly_stale_check",
+            description="Check watchlist 1h candles for gaps and backfill stale symbols (startup/nightly orchestrator stage)",
+            category="data_warehouse",
+            cron_expression=None,
+            callable=_ticker_intraday_hourly_stale_check_sync,
             is_async=False,
         ),
         JobDefinition(
@@ -596,6 +606,12 @@ def _stock_universe_sync() -> None:
                 _bulk_insert_stock_universe(session, batch)
                 session.commit()
 
+        update_job_status_sync(
+            "job.stock_universe",
+            "idle",
+            progress=100,
+            message="Stock universe sync complete",
+        )
         logger.info("stock_universe_sync: complete")
     except Exception:
         logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
@@ -1049,6 +1065,143 @@ def _ticker_intraday_update_sync(intervals: list[str] = None) -> None:
     logger.info(
         "[intraday_worker] done — %s, %d errors",
         ", ".join(f"{iv}:{n}" for iv, n in total.items()),
+        errors,
+    )
+
+
+def _ticker_intraday_hourly_stale_check_sync() -> None:
+    """Backfill stale 1h candles for watchlist symbols and recompute indicators.
+
+    This stage is orchestrator-managed and runs at startup + nightly. A symbol
+    is considered stale when its latest 1h candle for the last trading session
+    is older than the latest expected hourly slot for that session.
+
+    Expected slots are 09:15, 10:15, 11:15, 12:15, 13:15, 14:15, 15:15 IST.
+    After backfilling a stale symbol, recompute its 1h indicators immediately so
+    downstream pipeline stages see fresh data.
+    """
+    from app.models.ticker import TickerIntraday
+    from app.services.indicators import compute_intraday_indicators_for_all_rows
+    from app.services.ticker_warehouse import backfill_intraday_symbol, get_last_trading_day, get_watchlist_symbols
+
+    symbols = get_watchlist_symbols()
+    if not symbols:
+        logger.info("[hourly_stale_check] no watchlist symbols to inspect")
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "idle",
+            progress=100,
+            message="No watchlist symbols to inspect",
+        )
+        return
+
+    last_trading_day = get_last_trading_day()
+    now_ist = datetime.now(_IST)
+    target_date = last_trading_day
+
+    session_slots = [
+        datetime.combine(target_date, dt_time(9, 15)),
+        datetime.combine(target_date, dt_time(10, 15)),
+        datetime.combine(target_date, dt_time(11, 15)),
+        datetime.combine(target_date, dt_time(12, 15)),
+        datetime.combine(target_date, dt_time(13, 15)),
+        datetime.combine(target_date, dt_time(14, 15)),
+        datetime.combine(target_date, dt_time(15, 15)),
+    ]
+
+    # During the active session only expect candles up to the latest elapsed slot.
+    # After market close, expect the full session through 15:15.
+    if target_date == now_ist.date() and now_ist.weekday() < 5:
+        slots_elapsed = [slot for slot in session_slots if now_ist >= _IST.localize(slot)]
+        expected_latest = slots_elapsed[-1] if slots_elapsed else None
+    else:
+        expected_latest = session_slots[-1]
+
+    if expected_latest is None:
+        logger.info("[hourly_stale_check] before first hourly slot; nothing to do")
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "idle",
+            progress=100,
+            message="Before first hourly slot",
+        )
+        return
+
+    stale_symbols: list[str] = []
+    with _SyncSessionLocal() as db:
+        for symbol in symbols:
+            latest_ts = db.execute(
+                select(func.max(TickerIntraday.timestamp))
+                .where(
+                    TickerIntraday.symbol == symbol,
+                    TickerIntraday.interval == "1h",
+                    func.date(TickerIntraday.timestamp) == target_date.isoformat(),
+                )
+            ).scalar()
+            if latest_ts is None or latest_ts < expected_latest:
+                stale_symbols.append(symbol)
+
+    total = len(stale_symbols)
+    if total == 0:
+        logger.info(
+            "[hourly_stale_check] all %d watchlist symbols current through %s",
+            len(symbols),
+            expected_latest.strftime("%Y-%m-%d %H:%M"),
+        )
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "idle",
+            progress=100,
+            message="All watchlist symbols current",
+        )
+        return
+
+    logger.info(
+        "[hourly_stale_check] backfilling %d/%d stale symbols through %s",
+        total,
+        len(symbols),
+        expected_latest.strftime("%Y-%m-%d %H:%M"),
+    )
+
+    total_rows = 0
+    indicator_updates = 0
+    errors = 0
+
+    for idx, symbol in enumerate(stale_symbols, start=1):
+        if _shutdown_event.is_set():
+            logger.info("[hourly_stale_check] shutdown requested, aborting")
+            break
+
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "running",
+            progress=int((idx - 1) / total * 100),
+            message=f"Backfilling {symbol} ({idx}/{total})",
+        )
+        try:
+            counts = backfill_intraday_symbol(symbol, ["1h"])
+            total_rows += counts.get("1h", 0)
+            indicator_updates += compute_intraday_indicators_for_all_rows(symbol, "1h")
+            logger.debug("[hourly_stale_check] %s → %s", symbol, counts)
+        except Exception as exc:
+            logger.warning("[hourly_stale_check] %s failed: %s", symbol, exc)
+            errors += 1
+        time.sleep(1.0)
+
+    update_job_status_sync(
+        "job.ticker_intraday_hourly_stale_check",
+        "idle",
+        progress=100,
+        message=(
+            f"Checked {total} stale symbols — rows:{total_rows}, "
+            f"indicator updates:{indicator_updates}, errors:{errors}"
+        ),
+    )
+    logger.info(
+        "[hourly_stale_check] complete — stale:%d rows:%d indicator_updates:%d errors:%d",
+        total,
+        total_rows,
+        indicator_updates,
         errors,
     )
 

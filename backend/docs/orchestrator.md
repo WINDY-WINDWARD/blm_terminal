@@ -34,6 +34,7 @@ A single `Orchestrator` class lives in `app/orchestrator.py` and owns the entire
 - `orchestrator.run_pipeline(mode)` — executes the ordered pipeline with an asyncio lock to prevent overlap.
 - Two new registry jobs (`job.pipeline.startup` and `job.pipeline.nightly`) allow manual triggering via the existing `POST /api/jobs/{job_key}/trigger` endpoint.
 - A new hourly startup gate (`_startup_ticker_hourly_done`) ensures `ticker_intraday_hourly_indicators_worker` waits for `ticker_intraday_hourly_update_worker` to finish its first candle backfill before computing 1h indicators.
+- **1h stale-check + backfill** is now part of both startup and nightly pipelines (Stage 2c), so watchlist hourly candles are reconciled before the daily indicators/scores stages run.
 - **Weekly/Monthly (W/M) candles + indicators** are now part of the nightly pipeline (Stage 5a/5b), not standalone workers. This guarantees fresh W/M data before the nightly scan runs.
 
 `main.py` is now ~20 lines of lifespan logic instead of ~45, with a single import.
@@ -52,7 +53,7 @@ A single `Orchestrator` class lives in `app/orchestrator.py` and owns the entire
 
 5. **Main.py was becoming a coordinator.** The FastAPI entry point was accumulating too much knowledge about background task internals. The Orchestrator moves that responsibility into a dedicated module.
 
-6. **Observability.** With a single pipeline job in the registry, the UI can now show "Startup pipeline running — Stage 3/6" instead of requiring the operator to infer state from five separate job rows.
+6. **Observability.** With a single pipeline job in the registry, the UI can now show "Startup pipeline running — Stage 3/7" instead of requiring the operator to infer state from five separate job rows.
 
 ---
 
@@ -70,7 +71,7 @@ This means the Orchestrator and the workers are fully compatible: whichever path
 
 ### Pipeline Stages
 
-Both pipelines follow the same six stages. The nightly pipeline additionally downloads the NSE bhavcopy before backfill and syncs W/M candles + indicators after scores.
+Both pipelines follow the same seven-stage structure. The nightly pipeline additionally downloads the NSE bhavcopy before backfill and syncs W/M candles + indicators after scores.
 
 #### STARTUP Pipeline
 
@@ -80,6 +81,9 @@ Stage 1  ──►  stock_universe
 
 Stage 2  ──►  ticker_backfill
               (one-year OHLCV history for every symbol)
+
+Stage 2c ──►  ticker_intraday_hourly_stale_check
+              (reconcile missing/stale 1h candles for watchlist symbols)
 
 Stage 3  ──►  ticker_indicators
               (RSI, MACD, Bollinger, ATR, HV per candle)
@@ -93,7 +97,7 @@ Stage 6  ──►  global_scan  +  watchlist_notif
                (concurrent immediate cycle)
 ```
 
-> **Note:** The hourly intraday pipeline (`ticker_intraday_hourly_update` → `ticker_intraday_hourly_indicators`) runs **independently** of the daily pipeline above. It is not managed by the Orchestrator but is spawned by `start_all_workers()` with its own `_startup_ticker_hourly_done` gate. It fetches 1h candles at :15 past each trading hour (09:15–15:15 IST) and computes indicators at :30 past each hour.
+> **Note:** The hourly intraday workers (`ticker_intraday_hourly_update` → `ticker_intraday_hourly_indicators`) still run independently during market hours. In addition, the Orchestrator now runs `ticker_intraday_hourly_stale_check` at startup and nightly so missing 1h candles are reconciled before daily indicator/score stages.
 
 #### NIGHTLY Pipeline (23:00 IST)
 
@@ -106,6 +110,9 @@ Stage 2a ──►  ticker_daily_update
 
 Stage 2b ──►  ticker_backfill
               (deep gap-fill / catch-up for any symbols still stale)
+
+Stage 2c ──►  ticker_intraday_hourly_stale_check
+              (reconcile missing/stale 1h watchlist candles and recompute 1h indicators)
 
 Stage 3  ──►  ticker_indicators
               (recompute indicators on the new candles)
@@ -158,6 +165,7 @@ An asyncio-level `asyncio.Lock` inside the Orchestrator prevents two pipeline ru
 | `ticker_daily_update_worker` | Self | Every 30 min 15:30–20:00 IST |
 | `ticker_intraday_hourly_update_worker` | Self | At :15 past each trading hour 09:15–15:15 IST weekdays |
 | `ticker_intraday_hourly_indicators_worker` | Self | At :30 past each trading hour 09:30–15:30 IST weekdays; waits `_startup_ticker_hourly_done` |
+| `ticker_intraday_hourly_stale_check` | Orchestrator stage | Startup + 23:00 IST nightly |
 | `global_scan_worker` | Self | Every 30 min (waits on pipeline idle) |
 | `watchlist_notification_worker` | Self | Every 5 min market hours / 30 min after hours |
 | `news_worker` | Self | Every 5 min |
@@ -171,7 +179,7 @@ An asyncio-level `asyncio.Lock` inside the Orchestrator prevents two pipeline ru
 
 **Pipelined stages** (stages 1–6) are executed by the Orchestrator but the underlying work is delegated to the same synchronous functions the workers use. **Independent workers** are spawned by `start_all_workers()` and continue to run their own loops unaffected.
 
-> **Note:** `ticker_weekly_monthly_update` and `ticker_weekly_monthly_indicators` are **not** standalone workers. They are orchestrator pipeline stages (5a/5b) that call the same underlying sync functions (`_ticker_intraday_update_sync(["W","M"])` and `_ticker_intraday_indicators_sync(["W","M"])`) with interval filtering.
+> **Note:** `ticker_intraday_hourly_stale_check`, `ticker_weekly_monthly_update`, and `ticker_weekly_monthly_indicators` are **not** standalone workers. They are orchestrator pipeline stages that call the same underlying intraday sync/indicator functions with interval-aware logic.
 
 ### Manual Triggering
 
@@ -239,6 +247,9 @@ Because they are registered as `is_async=True` with the Orchestrator's `run_pipe
                │                      Stage 2b: ticker_backfill
                │                               │
                ▼                               ▼
+    Stage 2c: 1h stale-check         Stage 2c: 1h stale-check
+               │                               │
+               ▼                               ▼
     Stage 3: ticker_indicators       Stage 3: ticker_indicators
                │                               │
                ▼                               ▼
@@ -291,7 +302,9 @@ No new endpoints were added. The existing `POST /api/jobs/{job_key}/trigger` end
 
 5. **Independent workers are unaffected.** News, market data, results calendar, fair-value, and **hourly intraday** workers run on their own threads and asyncio tasks. They do not participate in the daily pipeline and are never blocked by it. The hourly intraday workers do have their own internal ordering: `ticker_intraday_hourly_indicators_worker` waits on `_startup_ticker_hourly_done` set by `ticker_intraday_hourly_update_worker`.
 
-6. **W/M are always fresh before scan.** Because W/M candle sync and indicator recompute are Stage 5a/5b of the nightly pipeline, the nightly scan (Stage 6) always sees the most recent weekly and monthly bars — even after holidays or long weekends.
+6. **1h gaps are reconciled before indicators.** Because Stage 2c runs at both startup and nightly, watchlist symbols with missing hourly candles are backfilled and their 1h indicators are recomputed before the broader daily indicator/score pipeline continues.
+
+7. **W/M are always fresh before scan.** Because W/M candle sync and indicator recompute are Stage 5a/5b of the nightly pipeline, the nightly scan (Stage 6) always sees the most recent weekly and monthly bars — even after holidays or long weekends.
 
 ---
 
@@ -299,7 +312,7 @@ No new endpoints were added. The existing `POST /api/jobs/{job_key}/trigger` end
 
 | File | Action | Role |
 |------|--------|------|
-| `backend/app/orchestrator.py` | **Modified** | Added Stage 5a/5b (W/M sync + indicators), updated docstring, imports, stage labels 1/6 |
+| `backend/app/orchestrator.py` | **Modified** | Added Stage 2c (1h stale-check) and Stage 5a/5b (W/M sync + indicators), updated docstring/imports/stage labels |
 | `backend/main.py` | **Unchanged** | Lifespan already calls `orchestrator.start()` / `orchestrator.stop()` |
 | `backend/app/backgroundtasks.py` | **Modified** | Refactored `_ticker_intraday_update_sync()` and `_ticker_intraday_indicators_sync()` to accept `intervals` param; replaced old intraday workers with `ticker_intraday_hourly_update_worker` and `ticker_intraday_hourly_indicators_worker`; renamed gate to `_startup_ticker_hourly_done`; updated `register_all_jobs()` and `start_all_workers()` |
 | `backend/alembic/versions/d8e1ed7addfa_cleanup_old_intraday_jobs.py` | **Created** | Deletes orphaned `job.ticker_intraday_update` / `job.ticker_intraday_indicators` rows and their `first_run.*` SystemConfig flags |
