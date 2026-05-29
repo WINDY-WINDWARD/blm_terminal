@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useRef,
   useEffect,
+  useMemo,
   KeyboardEvent,
 } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -15,6 +16,8 @@ import {
   applySuggestion,
   validateTql,
   getFieldInfo,
+  extractFieldsFromTql,
+  TQL_FIELDS,
   type TqlSuggestion,
 } from '@/lib/screenerTql';
 
@@ -31,8 +34,10 @@ interface ScreenerResult {
   sector?: string | null;
   industry?: string | null;
   pe?: number | null;
+  fair_value?: number | null;
   data_points?: number;
   momentum_score?: number | null;
+  pos_52w?: Record<string, number | boolean | null>;
 }
 
 interface ScreenerResponse {
@@ -44,27 +49,30 @@ interface ScreenerResponse {
 
 type IntervalTab = '1d' | '1h' | 'W' | 'M';
 type SortDirection = 'asc' | 'desc';
-type SortColumn =
-  | 'symbol'
-  | 'close'
-  | 'change_today'
-  | 'rsi'
-  | 'atr_percent'
-  | 'sector'
-  | 'momentum_score';
+
+// ─── Column system ────────────────────────────────────────────────────────────
+
+interface ColDef {
+  key: string;
+  label: string;
+  align: 'left' | 'right';
+  minW?: number;           // px
+  getValue: (row: ScreenerResult, interval: IntervalTab) => number | string | boolean | null | undefined;
+  format?: (v: number | string | boolean | null | undefined) => React.ReactNode;
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const INTERVAL_TABS: { key: IntervalTab; label: string }[] = [
   { key: '1d', label: 'Daily' },
   { key: '1h', label: '1h' },
-  { key: 'W', label: 'Weekly' },
-  { key: 'M', label: 'Monthly' },
+  { key: 'W',  label: 'Weekly' },
+  { key: 'M',  label: 'Monthly' },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatNumber(value: number | null | undefined, digits = 2): string {
+function fmt(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '—';
   return value.toLocaleString('en-IN', {
     minimumFractionDigits: digits,
@@ -72,45 +80,135 @@ function formatNumber(value: number | null | undefined, digits = 2): string {
   });
 }
 
-function getIndicatorValue(
-  row: ScreenerResult,
-  interval: IntervalTab,
-  key: string
-): number | null {
-  const byInterval = row.indicators_by_interval;
-  if (!byInterval) return null;
-  const iv = byInterval[interval];
+function getIv(row: ScreenerResult, interval: IntervalTab, key: string): number | null {
+  const iv = row.indicators_by_interval?.[interval];
   if (!iv) return null;
-  const val = iv[key];
-  if (val === null || val === undefined || Number.isNaN(val)) return null;
-  return typeof val === 'number' ? val : null;
+  const v = iv[key];
+  return typeof v === 'number' && !Number.isNaN(v) ? v : null;
 }
 
-function getIndicatorBool(
-  row: ScreenerResult,
-  interval: IntervalTab,
-  key: string
-): boolean {
-  const byInterval = row.indicators_by_interval;
-  if (!byInterval) return false;
-  const iv = byInterval[interval];
-  if (!iv) return false;
-  return Boolean(iv[key]);
+function changeCell(v: number | string | boolean | null | undefined): React.ReactNode {
+  if (v === null || v === undefined || typeof v !== 'number') return <span className="text-white/30">—</span>;
+  return (
+    <span className={v >= 0 ? 'text-terminal-green' : 'text-terminal-red'}>
+      {v >= 0 ? '+' : ''}{fmt(v)}%
+    </span>
+  );
 }
 
-function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
-  const aNull = a === null || a === undefined || (typeof a === 'number' && Number.isNaN(a));
-  const bNull = b === null || b === undefined || (typeof b === 'number' && Number.isNaN(b));
-  if (aNull && bNull) return 0;
-  if (aNull) return 1;
-  if (bNull) return -1;
-  if (typeof a === 'number' && typeof b === 'number') {
-    return direction === 'asc' ? a - b : b - a;
-  }
-  if (typeof a === 'string' && typeof b === 'string') {
-    return direction === 'asc' ? a.localeCompare(b) : b.localeCompare(a);
-  }
-  return 0;
+function numCell(digits = 2) {
+  return (v: number | string | boolean | null | undefined): React.ReactNode => {
+    if (v === null || v === undefined || typeof v !== 'number') return <span className="text-white/30">—</span>;
+    return <span className="text-white/70">{fmt(v, digits)}</span>;
+  };
+}
+
+function returnCell(v: number | string | boolean | null | undefined): React.ReactNode {
+  if (v === null || v === undefined || typeof v !== 'number') return <span className="text-white/30">—</span>;
+  return (
+    <span className={v >= 0 ? 'text-terminal-green' : 'text-terminal-red'}>
+      {v >= 0 ? '+' : ''}{fmt(v)}%
+    </span>
+  );
+}
+
+function boolCell(trueLabel = 'YES', falseLabel = '—') {
+  return (v: number | string | boolean | null | undefined): React.ReactNode =>
+    v ? (
+      <span className="bg-yellow-600 text-black px-1 rounded text-[9px] font-bold">{trueLabel}</span>
+    ) : (
+      <span className="text-white/20">{falseLabel}</span>
+    );
+}
+
+// ─── Fixed columns (always shown) ────────────────────────────────────────────
+
+const FIXED_COLS: ColDef[] = [
+  {
+    key: 'symbol',
+    label: 'Symbol',
+    align: 'left',
+    minW: 72,
+    getValue: (r) => r.symbol,
+    format: (v) => <span className="font-bold text-white">{String(v)}</span>,
+  },
+  {
+    key: 'close',
+    label: 'LTP',
+    align: 'right',
+    minW: 60,
+    getValue: (r) => r.close,
+    format: numCell(2),
+  },
+  {
+    key: 'change_today',
+    label: 'Chg %',
+    align: 'right',
+    minW: 60,
+    getValue: (r) => r.change_today,
+    format: changeCell,
+  },
+  {
+    key: 'fair_value',
+    label: 'MS FV',
+    align: 'right',
+    minW: 60,
+    getValue: (r) => r.fair_value ?? null,
+    format: numCell(2),
+  },
+];
+
+// ─── Dynamic column catalogue (one entry per TQL field that can be a column) ──
+
+const DYNAMIC_COL_MAP: Record<string, Omit<ColDef, 'key'>> = {
+  RSI:          { label: 'RSI',       align: 'right', minW: 50,  getValue: (r, iv) => getIv(r, iv, 'rsi_14'),          format: numCell(1) },
+  ATR:          { label: 'ATR %',     align: 'right', minW: 52,  getValue: (r, iv) => getIv(r, iv, 'atr_percent'),      format: numCell(2) },
+  MACD:         { label: 'MACD',      align: 'right', minW: 60,  getValue: (r, iv) => getIv(r, iv, 'macd'),             format: numCell(2) },
+  MACDSignal:   { label: 'MACD Sig',  align: 'right', minW: 64,  getValue: (r, iv) => getIv(r, iv, 'macd_signal'),      format: numCell(2) },
+  MACDHist:     { label: 'MACD H',    align: 'right', minW: 60,  getValue: (r, iv) => getIv(r, iv, 'macd_histogram'),   format: numCell(2) },
+  BBWidth:      { label: 'BB Wid',    align: 'right', minW: 56,  getValue: (r, iv) => getIv(r, iv, 'bb_width'),         format: numCell(2) },
+  BBSqueeze:    { label: 'Squeeze',   align: 'right', minW: 56,  getValue: (r, iv) => getIv(r, iv, 'bb_squeeze') !== null ? Boolean(r.indicators_by_interval?.[iv]?.['bb_squeeze']) : null, format: boolCell('SQ') },
+  HV20:         { label: 'HV20',      align: 'right', minW: 50,  getValue: (r, iv) => getIv(r, iv, 'hv_20'),            format: numCell(1) },
+  HV60:         { label: 'HV60',      align: 'right', minW: 50,  getValue: (r, iv) => getIv(r, iv, 'hv_60'),            format: numCell(1) },
+  Sharpe60:     { label: 'Sharpe60',  align: 'right', minW: 60,  getValue: (r, iv) => getIv(r, iv, 'sharpe_60'),        format: numCell(2) },
+  Sharpe126:    { label: 'Sharpe126', align: 'right', minW: 64,  getValue: (r, iv) => getIv(r, iv, 'sharpe_126'),       format: numCell(2) },
+  Volume:       { label: 'Vol Ratio', align: 'right', minW: 60,  getValue: (r) => r.volume_ratio ?? null,               format: numCell(2) },
+  Return1w:     { label: '1W %',      align: 'right', minW: 52,  getValue: (r) => r.returns?.['1w'] ?? null,            format: returnCell },
+  Return1m:     { label: '1M %',      align: 'right', minW: 52,  getValue: (r) => r.returns?.['1m'] ?? null,            format: returnCell },
+  Return3m:     { label: '3M %',      align: 'right', minW: 52,  getValue: (r) => r.returns?.['3m'] ?? null,            format: returnCell },
+  Return6m:     { label: '6M %',      align: 'right', minW: 52,  getValue: (r) => r.returns?.['6m'] ?? null,            format: returnCell },
+  Return1y:     { label: '1Y %',      align: 'right', minW: 52,  getValue: (r) => r.returns?.['1y'] ?? null,            format: returnCell },
+  From52wHigh:  { label: '52H %',     align: 'right', minW: 52,  getValue: (r) => (r.pos_52w?.['pct_from_52w_high'] as number | null) ?? null, format: numCell(1) },
+  From52wLow:   { label: '52L %',     align: 'right', minW: 52,  getValue: (r) => (r.pos_52w?.['pct_from_52w_low'] as number | null) ?? null,  format: numCell(1) },
+  PE:           { label: 'PE',        align: 'right', minW: 48,  getValue: (r) => r.pe ?? null,                         format: numCell(1) },
+  MomentumScore:{ label: 'Mom.',      align: 'right', minW: 48,  getValue: (r) => r.momentum_score ?? null,             format: numCell(1) },
+  Sector:       { label: 'Sector',    align: 'left',  minW: 80,  getValue: (r) => r.sector ?? null,                     format: (v) => <span className="text-white/50">{v ? String(v) : '—'}</span> },
+  Industry:     { label: 'Industry',  align: 'left',  minW: 90,  getValue: (r) => r.industry ?? null,                   format: (v) => <span className="text-white/40 truncate">{v ? String(v) : '—'}</span> },
+  DataPoints:   { label: 'Pts',       align: 'right', minW: 40,  getValue: (r) => r.data_points ?? null,                format: numCell(0) },
+};
+
+// ─── CSV export ───────────────────────────────────────────────────────────────
+
+function exportCsv(results: ScreenerResult[], cols: ColDef[], interval: IntervalTab) {
+  const header = cols.map((c) => c.label).join(',');
+  const rows = results.map((row) =>
+    cols
+      .map((c) => {
+        const v = c.getValue(row, interval);
+        if (v === null || v === undefined) return '';
+        if (typeof v === 'string') return `"${v.replace(/"/g, '""')}"`;
+        return String(v);
+      })
+      .join(',')
+  );
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `screener_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ─── TQL Input with autocomplete ─────────────────────────────────────────────
@@ -138,7 +236,6 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
       setSuggestions(s);
       setSelectedIdx(0);
       setDropdownOpen(s.length > 0);
-      // Update field hint bar
       const info = getFieldInfo(text, cursor);
       setFieldHint(info ? `${info.name}: ${info.hint}` : null);
     },
@@ -153,72 +250,46 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (dropdownOpen) {
-      if (e.key === 'ArrowDown') {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIdx((i) => Math.min(i + 1, suggestions.length - 1)); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setSelectedIdx((i) => Math.max(i - 1, 0)); return; }
+      if (e.key === 'Escape')    { setDropdownOpen(false); return; }
+      if (e.key === 'Tab' || (e.key === 'Enter' && suggestions[selectedIdx])) {
         e.preventDefault();
-        setSelectedIdx((i) => Math.min(i + 1, suggestions.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Tab' || e.key === 'Enter') {
-        if (e.key === 'Tab' || dropdownOpen) {
-          e.preventDefault();
-          const s = suggestions[selectedIdx];
-          if (s) {
-            const cursor = inputRef.current?.selectionStart ?? value.length;
-            const { text, cursor: newCursor } = applySuggestion(value, cursor, s);
-            onChange(text);
-            setDropdownOpen(false);
-            // restore cursor after React re-render
-            requestAnimationFrame(() => {
-              if (inputRef.current) {
-                inputRef.current.setSelectionRange(newCursor, newCursor);
-                updateSuggestions(text, newCursor);
-              }
-            });
-            return;
-          }
-        }
-        if (e.key === 'Enter') {
+        const s = suggestions[selectedIdx];
+        if (s) {
+          const cursor = inputRef.current?.selectionStart ?? value.length;
+          const { text, cursor: nc } = applySuggestion(value, cursor, s);
+          onChange(text);
           setDropdownOpen(false);
-          if (!validationError) onSubmit();
-          return;
+          requestAnimationFrame(() => {
+            if (inputRef.current) {
+              inputRef.current.setSelectionRange(nc, nc);
+              updateSuggestions(text, nc);
+            }
+          });
         }
-      }
-      if (e.key === 'Escape') {
-        setDropdownOpen(false);
         return;
       }
-    } else {
-      if (e.key === 'Enter' && !validationError) {
-        onSubmit();
-      }
+    }
+    if (e.key === 'Enter' && !validationError) {
+      setDropdownOpen(false);
+      onSubmit();
     }
   };
 
-  const handleFocus = () => {
-    const cursor = inputRef.current?.selectionStart ?? value.length;
-    updateSuggestions(value, cursor);
-  };
-
-  const handleBlur = () => {
-    // slight delay so click on suggestion registers
-    setTimeout(() => setDropdownOpen(false), 150);
-  };
+  const handleFocus = () => updateSuggestions(value, inputRef.current?.selectionStart ?? value.length);
+  const handleBlur  = () => setTimeout(() => setDropdownOpen(false), 150);
 
   const applySuggestionClick = (s: TqlSuggestion) => {
     const cursor = inputRef.current?.selectionStart ?? value.length;
-    const { text, cursor: newCursor } = applySuggestion(value, cursor, s);
+    const { text, cursor: nc } = applySuggestion(value, cursor, s);
     onChange(text);
     setDropdownOpen(false);
     requestAnimationFrame(() => {
       if (inputRef.current) {
         inputRef.current.focus();
-        inputRef.current.setSelectionRange(newCursor, newCursor);
-        updateSuggestions(text, newCursor);
+        inputRef.current.setSelectionRange(nc, nc);
+        updateSuggestions(text, nc);
       }
     });
   };
@@ -286,7 +357,7 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
         </ul>
       )}
 
-      {/* Field hint bar — shown when operator or value context is active */}
+      {/* Field hint bar */}
       {fieldHint && (
         <div className="mt-1 px-2 py-0.5 text-[9px] text-white/40 leading-snug border-l-2 border-blue-500/30 pl-2 bg-blue-500/5 rounded-r">
           {fieldHint}
@@ -307,8 +378,9 @@ export function ScreenerWidget() {
   const [submittedTql, setSubmittedTql] = useState('');
   const [tqlError, setTqlError] = useState<string | null>(null);
 
-  const [sortColumn, setSortColumn] = useState<SortColumn>('symbol');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  // Sort state — key is ColDef.key string
+  const [sortKey, setSortKey] = useState<string>('symbol');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Fetch sectors once for autocomplete
   const { data: sectorsData } = useQuery<{ sectors: string[] }>({
@@ -322,21 +394,38 @@ export function ScreenerWidget() {
   });
   const sectors = sectorsData?.sectors ?? [];
 
-  // Build query string for screener API
+  // Derive dynamic columns from the submitted TQL
+  const dynamicCols = useMemo<ColDef[]>(() => {
+    const fields = extractFieldsFromTql(submittedTql);
+    return fields
+      .filter((f) => f in DYNAMIC_COL_MAP)
+      .map((f) => ({ key: f, ...DYNAMIC_COL_MAP[f] }));
+  }, [submittedTql]);
+
+  // All visible columns = fixed + dynamic (dedup by key)
+  const allCols = useMemo<ColDef[]>(() => {
+    const dynKeys = new Set(dynamicCols.map((c) => c.key));
+    // Remove from fixed any that somehow duplicate (shouldn't happen)
+    const fixed = FIXED_COLS.filter((c) => !dynKeys.has(c.key));
+    return [...fixed, ...dynamicCols];
+  }, [dynamicCols]);
+
+  // Build query params for the screener API
   const buildParams = useCallback((): string => {
     const params = new URLSearchParams();
     if (submittedTql.trim()) {
       params.set('tql', submittedTql.trim());
       params.set('default_interval', activeInterval);
     }
-    params.set('sort_by', sortColumn);
-    params.set('order', sortDirection);
-    params.set('limit', '100');
+    // Backend sort is best-effort — client will re-sort anyway
+    params.set('sort_by', 'symbol');
+    params.set('order', 'asc');
+    params.set('limit', '200');
     return params.toString();
-  }, [submittedTql, activeInterval, sortColumn, sortDirection]);
+  }, [submittedTql, activeInterval]);
 
   const { data, isLoading, isError, error, refetch } = useQuery<ScreenerResponse>({
-    queryKey: ['screener-tql', submittedTql, activeInterval, sortColumn, sortDirection],
+    queryKey: ['screener-tql', submittedTql, activeInterval],
     queryFn: async () => {
       const qs = buildParams();
       const res = await fetch(`/api/py/ticker/screener?${qs}`);
@@ -351,18 +440,38 @@ export function ScreenerWidget() {
     retry: false,
   });
 
-  // Surface API errors back to the TQL input
   useEffect(() => {
-    if (isError && error instanceof Error) {
-      setTqlError(error.message);
-    } else {
-      setTqlError(null);
-    }
+    if (isError && error instanceof Error) setTqlError(error.message);
+    else setTqlError(null);
   }, [isError, error]);
+
+  // Client-side sort
+  const sortedResults = useMemo(() => {
+    const rows = data?.results ?? [];
+    if (!sortKey) return rows;
+    const col = allCols.find((c) => c.key === sortKey);
+    if (!col) return rows;
+    return [...rows].sort((a, b) => {
+      const av = col.getValue(a, activeInterval);
+      const bv = col.getValue(b, activeInterval);
+      const an = av === null || av === undefined;
+      const bn = bv === null || bv === undefined;
+      if (an && bn) return 0;
+      if (an) return 1;
+      if (bn) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      const as = String(av); const bs = String(bv);
+      return sortDir === 'asc' ? as.localeCompare(bs) : bs.localeCompare(as);
+    });
+  }, [data, sortKey, sortDir, allCols, activeInterval]);
 
   const handleSubmit = useCallback(() => {
     setTqlError(null);
     setSubmittedTql(tqlInput);
+    setSortKey('symbol');
+    setSortDir('asc');
   }, [tqlInput]);
 
   const handleClear = useCallback(() => {
@@ -371,40 +480,21 @@ export function ScreenerWidget() {
     setTqlError(null);
   }, []);
 
-  const handleHeaderClick = useCallback(
-    (column: SortColumn) => {
-      if (sortColumn === column) {
-        setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-      } else {
-        setSortColumn(column);
-        setSortDirection('asc');
-      }
-    },
-    [sortColumn]
-  );
+  const handleHeaderClick = useCallback((key: string) => {
+    setSortKey((prev) => {
+      if (prev === key) { setSortDir((d) => d === 'asc' ? 'desc' : 'asc'); return prev; }
+      setSortDir('asc');
+      return key;
+    });
+  }, []);
 
-  const handleRowClick = useCallback(
-    (symbol: string) => {
-      setActiveSymbol(symbol);
-      setActiveExchange('NSE');
-    },
-    [setActiveSymbol, setActiveExchange]
-  );
+  const handleRowClick = useCallback((symbol: string) => {
+    setActiveSymbol(symbol);
+    setActiveExchange('NSE');
+  }, [setActiveSymbol, setActiveExchange]);
 
-  const getSortIndicator = (column: SortColumn) =>
-    sortColumn !== column ? '' : sortDirection === 'asc' ? ' ▲' : ' ▼';
-
-  const results = data?.results ?? [];
-
-  const columns: { key: SortColumn; label: string; align: 'left' | 'right' }[] = [
-    { key: 'symbol',         label: 'Symbol',   align: 'left' },
-    { key: 'close',          label: 'LTP',      align: 'right' },
-    { key: 'change_today',   label: 'Change %', align: 'right' },
-    { key: 'rsi',            label: 'RSI',      align: 'right' },
-    { key: 'atr_percent',    label: 'ATR %',    align: 'right' },
-    { key: 'sector',         label: 'Sector',   align: 'left' },
-    { key: 'momentum_score', label: 'Mom.',     align: 'right' },
-  ];
+  const sortIndicator = (key: string) =>
+    sortKey !== key ? '' : sortDir === 'asc' ? ' ▲' : ' ▼';
 
   // ─── Render ──────────────────────────────────────────────────────────────────
 
@@ -418,11 +508,17 @@ export function ScreenerWidget() {
             Screener
           </span>
           <span className="text-white/20 text-[9px]">TQL</span>
-          {isLoading && (
-            <span className="text-white/30 text-[10px] animate-pulse">loading…</span>
-          )}
+          {isLoading && <span className="text-white/30 text-[10px] animate-pulse">loading…</span>}
         </div>
         <div className="flex items-center gap-1.5">
+          {sortedResults.length > 0 && (
+            <button
+              onClick={() => exportCsv(sortedResults, allCols, activeInterval)}
+              className="text-[10px] px-2 py-0.5 rounded border border-white/10 hover:bg-white/5 transition-colors text-white/60"
+            >
+              CSV
+            </button>
+          )}
           {submittedTql && (
             <button
               onClick={handleClear}
@@ -468,7 +564,7 @@ export function ScreenerWidget() {
           error={tqlError}
         />
         <div className="mt-1 text-[9px] text-white/20 flex gap-3">
-          <span>Tab/↑↓ to navigate, Enter or Run to execute</span>
+          <span>Tab/↑↓ to navigate · Enter or Run to execute</span>
           {submittedTql && (
             <span className="text-white/30 truncate">
               active: <span className="text-terminal-amber/60">{submittedTql}</span>
@@ -478,20 +574,18 @@ export function ScreenerWidget() {
       </div>
 
       {/* Stats bar */}
-      <div className="shrink-0 px-2 py-0.5 text-[10px] text-white/30 border-b border-white/10 flex justify-between">
-        <span>
-          {data ? `${data.returned} / ${data.count} results` : '—'}
-        </span>
-        <span className="text-white/20 text-[9px]">
-          {data?.filters_applied?.length
-            ? data.filters_applied.join(', ')
-            : 'no filters — showing all'}
-        </span>
+      <div className="shrink-0 px-2 py-0.5 text-[10px] text-white/30 border-b border-white/10 flex justify-between items-center">
+        <span>{data ? `${data.returned} / ${data.count} results` : '—'}</span>
+        {dynamicCols.length > 0 && (
+          <span className="text-[9px] text-white/20">
+            columns: {dynamicCols.map((c) => c.label).join(', ')}
+          </span>
+        )}
       </div>
 
-      {/* Results table */}
+      {/* Results table — horizontal scroll */}
       <div className="flex-1 overflow-auto">
-        {results.length === 0 ? (
+        {sortedResults.length === 0 ? (
           <div className="h-full flex items-center justify-center text-white/30 text-[10px]">
             {isLoading
               ? 'Loading…'
@@ -500,71 +594,50 @@ export function ScreenerWidget() {
               : 'Enter a TQL query above and press Run.'}
           </div>
         ) : (
-          <table className="w-full text-[10px]">
-            <thead className="sticky top-0 bg-terminal-bg z-10">
-              <tr className="border-b border-white/10">
-                {columns.map((col) => (
-                  <th
-                    key={col.key}
-                    onClick={() => handleHeaderClick(col.key)}
-                    className={`py-1 px-1 cursor-pointer select-none hover:text-white transition-colors ${
-                      col.align === 'left' ? 'text-left' : 'text-right'
-                    } text-white/50`}
-                  >
-                    {col.label}
-                    <span className="text-terminal-amber">{getSortIndicator(col.key)}</span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((row) => {
-                const rsi   = getIndicatorValue(row, activeInterval, 'rsi_14');
-                const atr   = getIndicatorValue(row, activeInterval, 'atr_percent');
-                const bbSq  = getIndicatorBool(row, activeInterval, 'bb_squeeze');
-                const change = row.change_today ?? null;
-
-                return (
+          <div className="overflow-x-auto h-full">
+            <table className="text-[10px] border-collapse" style={{ minWidth: 'max-content' }}>
+              <thead className="sticky top-0 bg-terminal-bg z-10">
+                <tr className="border-b border-white/10">
+                  {allCols.map((col) => (
+                    <th
+                      key={col.key}
+                      onClick={() => handleHeaderClick(col.key)}
+                      style={{ minWidth: col.minW ?? 48 }}
+                      className={`py-1 px-2 cursor-pointer select-none hover:text-white transition-colors whitespace-nowrap ${
+                        col.align === 'left' ? 'text-left' : 'text-right'
+                      } text-white/50`}
+                    >
+                      {col.label}
+                      <span className="text-terminal-amber">{sortIndicator(col.key)}</span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedResults.map((row) => (
                   <tr
                     key={row.symbol}
                     onClick={() => handleRowClick(row.symbol)}
                     className="border-b border-white/5 hover:bg-white/5 cursor-pointer transition-colors"
                   >
-                    <td className="py-1 px-1 text-left font-bold text-white">
-                      {row.symbol}
-                    </td>
-                    <td className="py-1 px-1 text-right text-white/70">
-                      {formatNumber(row.close)}
-                    </td>
-                    <td className="py-1 px-1 text-right">
-                      {change !== null && !Number.isNaN(change) ? (
-                        <span className={change >= 0 ? 'text-terminal-green' : 'text-terminal-red'}>
-                          {change >= 0 ? '+' : ''}{formatNumber(change, 2)}%
-                        </span>
-                      ) : (
-                        <span className="text-white/30">—</span>
-                      )}
-                    </td>
-                    <td className="py-1 px-1 text-right text-white/70">
-                      {formatNumber(rsi)}
-                    </td>
-                    <td className="py-1 px-1 text-right text-white/70">
-                      {formatNumber(atr)}
-                    </td>
-                    <td className="py-1 px-1 text-left text-white/50">
-                      {bbSq ? (
-                        <span className="bg-yellow-600 text-black px-1 rounded text-[9px] font-bold mr-1">SQ</span>
-                      ) : null}
-                      {row.sector ?? '—'}
-                    </td>
-                    <td className="py-1 px-1 text-right text-white/70">
-                      {formatNumber(row.momentum_score)}
-                    </td>
+                    {allCols.map((col) => {
+                      const v = col.getValue(row, activeInterval);
+                      return (
+                        <td
+                          key={col.key}
+                          className={`py-1 px-2 whitespace-nowrap ${col.align === 'left' ? 'text-left' : 'text-right'}`}
+                        >
+                          {col.format ? col.format(v) : (
+                            <span className="text-white/70">{v !== null && v !== undefined ? String(v) : '—'}</span>
+                          )}
+                        </td>
+                      );
+                    })}
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

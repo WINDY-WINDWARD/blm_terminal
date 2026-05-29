@@ -136,6 +136,8 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
                 pass
         pe = stock.symbol_pe
 
+    fair_value = stock.fair_value if stock else None
+
     return {
         "symbol": symbol,
         "close": current_close,
@@ -148,6 +150,7 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
         "sector": sector,
         "industry": industry,
         "pe": pe,
+        "fair_value": fair_value,
         "data_points": len(rows),
     }
 

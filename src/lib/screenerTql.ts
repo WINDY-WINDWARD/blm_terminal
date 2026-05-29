@@ -713,3 +713,38 @@ export function validateTql(text: string): string | null {
   }
   return null;
 }
+
+// ─── Field extraction ─────────────────────────────────────────────────────────
+
+/**
+ * Parse a submitted TQL string and return the unique field names referenced,
+ * in order of first appearance. Interval prefixes are stripped.
+ * Fields that are always shown as fixed columns are excluded.
+ *
+ * Used by ScreenerWidget to derive dynamic result columns.
+ */
+const FIXED_FIELDS = new Set(['symbol', 'close', 'change']);
+
+export function extractFieldsFromTql(tql: string): string[] {
+  if (!tql.trim()) return [];
+  const tokens = tokenise(tql);
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const tok of tokens) {
+    if (tok.type !== 'FIELD') continue;
+    // strip interval prefix
+    const raw = tok.value.includes(':') ? tok.value.split(':')[1] : tok.value;
+    const lower = raw.toLowerCase();
+    if (FIXED_FIELDS.has(lower)) continue;
+    // verify it's a known TQL field
+    const fieldDef = TQL_FIELDS.find((f) => f.name.toLowerCase() === lower);
+    if (!fieldDef) continue;
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push(fieldDef.name); // canonical casing
+    }
+  }
+
+  return result;
+}
