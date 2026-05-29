@@ -38,6 +38,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'NOTIF', desc: 'Notifications generated' },
   { cmd: 'ANNC', desc: 'NSE announcements feed' },
   { cmd: 'SCAN', desc: 'Global market scanner' },
+  { cmd: 'SCREENER', desc: 'Stock screener with multi-timeframe filters' },
   { cmd: 'DOCS', desc: 'Panel documentation' },
   { cmd: 'AI', desc: 'Live market AI chat' },
 ];
@@ -249,7 +250,7 @@ export function CommandBar() {
       {/* WS connection indicator */}
       <div
         className="flex items-center gap-1 flex-shrink-0"
-        title={wsConnected ? 'OpenAlgo WS Connected' : 'OpenAlgo WS Disconnected'}
+        title={wsConnected ? 'Market Data Connected' : 'Market Data Disconnected'}
       >
         <span
           className={`inline-block w-2 h-2 rounded-full ${

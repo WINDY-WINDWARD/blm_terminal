@@ -41,6 +41,14 @@ interface SymbolErrors {
   unknown: ErrorCategory;
 }
 
+interface IntradayIntervalStatus {
+  total_rows: number;
+  watchlist_covered: number;
+  watchlist_current: number;
+  symbols_with_indicators: number;
+  latest_timestamp: string | null;
+}
+
 interface TickerStatus {
   total_rows: number;
   symbols_covered: number;
@@ -56,6 +64,7 @@ interface TickerStatus {
   watchlist_symbols_total: number;
   watchlist_symbols_current: number;
   days_behind_breakdown: Record<string, number>;
+  intraday_stats: Record<string, IntradayIntervalStatus>;
 }
 
 function formatDate(dateStr: string | null): string {
@@ -318,7 +327,7 @@ export default function JobsPage() {
 
   return (
     <div className="h-screen overflow-y-auto bg-terminal-bg text-white font-mono p-4">
-      <div className="max-w-6xl mx-auto">
+      <div className="w-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-4 border-b border-terminal-gray pb-2">
           <div>
@@ -635,7 +644,105 @@ export default function JobsPage() {
                   </div>
                 </div>
 
-                {/* Row 4: Backfill progress */}
+                {/* Row 4: Intraday warehouse stats */}
+                {tickerStatus.intraday_stats && (
+                  <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider mb-3">
+                      Intraday Data Warehouse
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      {([
+                        { key: '1h', label: '1H Candles' },
+                        { key: 'W', label: 'Weekly' },
+                        { key: 'M', label: 'Monthly' },
+                      ] as const).map(({ key, label }) => {
+                        const stat = tickerStatus.intraday_stats[key];
+                        if (!stat) return null;
+                        const watchlistTotal = tickerStatus.watchlist_symbols_total;
+                        const coveredPct = watchlistTotal > 0
+                          ? (stat.watchlist_covered / watchlistTotal) * 100
+                          : 0;
+                        const indicatorsPct = stat.watchlist_covered > 0
+                          ? (stat.symbols_with_indicators / stat.watchlist_covered) * 100
+                          : 0;
+                        const is1h = key === '1h';
+                        const currentPct = is1h && watchlistTotal > 0
+                          ? (stat.watchlist_current / watchlistTotal) * 100
+                          : 0;
+                        const currentColor = is1h
+                          ? stat.watchlist_current === watchlistTotal
+                            ? 'text-terminal-green'
+                            : stat.watchlist_current > 0
+                            ? 'text-terminal-amber'
+                            : 'text-terminal-red'
+                          : '';
+                        return (
+                          <div key={key} className="bg-black/20 rounded p-3">
+                            <div className="text-[10px] text-white/40 uppercase tracking-wider mb-2">
+                              {label}
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-white/50">Rows</span>
+                                <span className="text-sm font-bold text-white">
+                                  {stat.total_rows.toLocaleString()}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-white/50">Watchlist</span>
+                                <span className="text-xs font-bold text-blue-400">
+                                  {stat.watchlist_covered}/{watchlistTotal}
+                                </span>
+                              </div>
+                              <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-400 transition-all"
+                                  style={{ width: `${coveredPct}%` }}
+                                />
+                              </div>
+                              {is1h && (
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] text-white/50">Current</span>
+                                  <span className={`text-xs font-bold ${currentColor}`}>
+                                    {stat.watchlist_current}/{watchlistTotal}
+                                  </span>
+                                </div>
+                              )}
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-white/50">Indicators</span>
+                                <span className="text-xs font-bold text-terminal-green">
+                                  {stat.symbols_with_indicators}/{stat.watchlist_covered}
+                                </span>
+                              </div>
+                              <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                <div
+                                  className="h-full bg-terminal-green transition-all"
+                                  style={{ width: `${indicatorsPct}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between items-center pt-1">
+                                <span className="text-[10px] text-white/50">Latest</span>
+                                <span className="text-[10px] text-white/70">
+                                  {stat.latest_timestamp
+                                    ? new Date(stat.latest_timestamp).toLocaleString('en-IN', {
+                                        day: '2-digit',
+                                        month: 'short',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        hour12: false,
+                                      })
+                                    : '—'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Row 5: Backfill progress */}
                 <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-[10px] text-white/60 uppercase tracking-wider">

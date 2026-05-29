@@ -1,8 +1,17 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
-import type { TickData } from '@/lib/socket';
 import type { FundsData } from '@/lib/openalgo';
 import type { NewsArticle } from '@/lib/newsSocket';
+
+/** Live tick data shape — LTP-centric, populated by marketWs SymbolData */
+export interface TickData {
+  symbol: string;
+  exchange: string;
+  ltp: number;
+  pChange?: number;
+  yearHigh?: number;
+  yearLow?: number;
+}
 
 // ─── Per-Tab Storage (sessionStorage) ─────────────────────────────────────────
 
@@ -123,7 +132,7 @@ export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchan
 
 // ─── Other Atoms ─────────────────────────────────────────────────────────────
 
-/** Live tick data keyed by "SYMBOL.EXCHANGE" — updated by wsService */
+/** Live tick data keyed by "SYMBOL.EXCHANGE" — updated by marketWs */
 export const tickDataAtom = atom<Record<string, TickData>>({});
 
 /** WebSocket connection status */

@@ -1,15 +1,23 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { activeSymbolAtom, activeExchangeAtom, focusedPanelAtom } from '@/store/terminalStore';
-import { wsService } from '@/lib/socket';
-import type { TickData } from '@/lib/socket';
 
-// Backend OHLCV candle row
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Interval = '1m' | '5m' | '15m' | '1h' | 'D' | 'W' | 'M';
+
+const COMING_SOON_INTERVALS: Interval[] = ['1m', '5m', '15m'];
+const INTRADAY_STORED_INTERVALS: Interval[] = ['1h', 'W', 'M'];
+const ALL_INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', 'D', 'W', 'M'];
+
+// Backend daily OHLCV candle
 interface BackendCandle {
   Date: string; // "YYYY-MM-DD"
   open: number;
@@ -25,24 +33,30 @@ interface BackendOHLCVResponse {
   count: number;
 }
 
-async function fetchBackendOHLCV(
-  symbol: string,
-  fromDate: string,
-  toDate: string,
-): Promise<BackendOHLCVResponse> {
-  // fromDate / toDate in DD-MM-YYYY for the backend
-  const params = new URLSearchParams({ from_date: fromDate, to_date: toDate });
-  const res = await fetch(`/api/py/ticker/ohlcv/${symbol}?${params.toString()}`);
-  if (!res.ok) throw new Error(`Backend error ${res.status}`);
-  return res.json() as Promise<BackendOHLCVResponse>;
+// Intraday / weekly / monthly candle from new endpoint
+interface IntradayCandle {
+  timestamp: number; // Unix milliseconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
-type Interval = '1m' | '5m' | '15m' | '1h' | 'D';
-const INTRADAY_INTERVALS: Interval[] = ['1m', '5m', '15m', '1h'];
+interface IntradayOHLCVResponse {
+  symbol: string;
+  interval: string;
+  candles: IntradayCandle[];
+  count: number;
+}
 
 interface ChartWidgetProps {
   panelId: string;
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /** Format date as DD-MM-YYYY for the backend ticker API. */
 function toBackendDate(date: Date): string {
@@ -59,32 +73,48 @@ function getDailyDateRange(): { fromDate: string; toDate: string } {
   return { fromDate: toBackendDate(start), toDate: toBackendDate(end) };
 }
 
-/**
- * Get the candle period in seconds for a given interval.
- */
-function getCandlePeriodSeconds(interval: Interval): number {
-  switch (interval) {
-    case '1m': return 60;
-    case '5m': return 300;
-    case '15m': return 900;
-    case '1h': return 3600;
-    case 'D': return 86400;
-  }
+/** Returns true if current time is within NSE trading hours (09:15–15:30 IST Mon–Fri). */
+function isMarketHours(): boolean {
+  const nowUtc = Date.now();
+  // IST = UTC + 5:30 = UTC + 330 min
+  const nowIst = new Date(nowUtc + 5.5 * 60 * 60 * 1000);
+  const day = nowIst.getUTCDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  const hhmm = nowIst.getUTCHours() * 100 + nowIst.getUTCMinutes();
+  return hhmm >= 915 && hhmm <= 1530;
 }
 
-/**
- * Calculate the candle timestamp for a given Unix timestamp and interval.
- */
-function alignToCandle(timestampSeconds: number, periodSeconds: number): number {
-  return Math.floor(timestampSeconds / periodSeconds) * periodSeconds;
+async function fetchBackendOHLCV(
+  symbol: string,
+  fromDate: string,
+  toDate: string,
+): Promise<BackendOHLCVResponse> {
+  const params = new URLSearchParams({ from_date: fromDate, to_date: toDate });
+  const res = await fetch(`/api/py/ticker/ohlcv/${symbol}?${params.toString()}`);
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return res.json() as Promise<BackendOHLCVResponse>;
 }
+
+async function fetchIntradayOHLCV(
+  symbol: string,
+  interval: Interval,
+): Promise<IntradayOHLCVResponse> {
+  const res = await fetch(
+    `/api/py/ticker/intraday/${encodeURIComponent(symbol)}?interval=${interval}`,
+  );
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return res.json() as Promise<IntradayOHLCVResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export function ChartWidget({ panelId }: ChartWidgetProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
 
-  // Global active symbol — single source of truth across all widgets
   const [symbol, setSymbol] = useAtom(activeSymbolAtom);
   const [exchange, setExchange] = useAtom(activeExchangeAtom);
   const [focusedPanel] = useAtom(focusedPanelAtom);
@@ -93,47 +123,63 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const [inputExchange, setInputExchange] = useState(exchange);
   const [interval, setInterval] = useState<Interval>('D');
 
-  const isIntraday = (INTRADAY_INTERVALS as Interval[]).includes(interval);
+  const isComingSoon = (COMING_SOON_INTERVALS as Interval[]).includes(interval);
+  const isIntradayStored = (INTRADAY_STORED_INTERVALS as Interval[]).includes(interval);
+  const isDaily = interval === 'D';
 
-  // Candle state for aggregating ticks based on selected timeframe
-  interface PartialCandle {
-    time: number;
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-  }
-  const partialCandleRef = useRef<PartialCandle | null>(null);
-  const lastCumulativeVolumeRef = useRef<number | null>(null);
-  const lastHistBarTimeRef = useRef<number | null>(null);
-
-  // Sync input fields when global symbol changes (e.g. WatchWidget / TopWidget click)
+  // Sync input fields when global symbol changes
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: syncs form inputs to external prop changes
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInputSymbol(symbol);
     setInputExchange(exchange);
   }, [symbol, exchange]);
 
   const { fromDate, toDate } = getDailyDateRange();
-
   const queryClient = useQueryClient();
 
-  // Fetch daily OHLCV from backend warehouse (only when interval === 'D')
-  const { data: histData, isLoading, isError } = useQuery({
+  // ---------- Daily OHLCV (existing pipeline) ----------
+  const {
+    data: histData,
+    isLoading: dailyLoading,
+    isError: dailyError,
+  } = useQuery({
     queryKey: ['backend-ohlcv', symbol, fromDate, toDate],
     queryFn: () => fetchBackendOHLCV(symbol, fromDate, toDate),
-    enabled: !isIntraday,
+    enabled: isDaily,
     staleTime: 5 * 60_000,
+    refetchInterval: isDaily && isMarketHours() ? 60_000 : false,
     retry: 1,
     select: (data) => ({ ...data, _symbol: symbol }),
   });
 
+  // ---------- Intraday / Weekly / Monthly (new endpoint) ----------
+  const {
+    data: intradayData,
+    isLoading: intradayLoading,
+    isError: intradayError,
+  } = useQuery({
+    queryKey: ['intraday-ohlcv', symbol, interval],
+    queryFn: () => fetchIntradayOHLCV(symbol, interval),
+    enabled: isIntradayStored,
+    staleTime: 30_000,
+    refetchInterval: isIntradayStored
+      ? interval === '1h' && isMarketHours()
+        ? 60_000
+        : 5 * 60_000
+      : false,
+    retry: 1,
+    select: (data) => ({ ...data, _symbol: symbol }),
+  });
+
+  const isLoading = (isDaily && dailyLoading) || (isIntradayStored && intradayLoading);
+  const isError = (isDaily && dailyError) || (isIntradayStored && intradayError);
+
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['backend-ohlcv', symbol] });
+    void queryClient.invalidateQueries({ queryKey: ['intraday-ohlcv', symbol] });
   };
 
-  // Build chart (once on mount)
+  // ---------- Build chart (once on mount) ----------
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
@@ -149,8 +195,14 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       crosshair: { mode: 1 },
       timeScale: { timeVisible: true, secondsVisible: false },
       localization: {
-        locale: 'en-IN', timeFormatter: (t: number) =>
-          new Date(t * 1000).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false })
+        locale: 'en-IN',
+        timeFormatter: (t: number) =>
+          new Date(t * 1000).toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          }),
       },
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
@@ -182,36 +234,27 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       chartRef.current = null;
       seriesRef.current = null;
     };
-  }, []); // intentionally empty — chart created once
+  }, []);
 
-  // Clear chart and reset refs immediately when symbol or exchange changes
+  // Clear chart when symbol, exchange, or interval changes
   useEffect(() => {
     if (seriesRef.current) {
       seriesRef.current.setData([]);
     }
-    partialCandleRef.current = null;
-    lastCumulativeVolumeRef.current = null;
-    lastHistBarTimeRef.current = null;
-  }, [symbol, exchange]);
+  }, [symbol, exchange, interval]);
 
-  // Populate chart with historical data (daily from backend)
-  // Depends on histData AND symbol — the select() tag ensures histData is a new
-  // object reference when the symbol changes, so this effect fires reliably.
+  // ---------- Render daily bars ----------
   useEffect(() => {
     if (!seriesRef.current) return;
-    if (isIntraday) return; // handled by the intraday overlay
-
+    if (!isDaily) return;
     if (!histData?.candles?.length) {
       seriesRef.current.setData([]);
       return;
     }
-
-    // Guard: skip if the tagged symbol doesn't match current
     if (histData._symbol !== symbol) return;
 
     const bars = histData.candles
       .map((candle) => ({
-        // Date is "YYYY-MM-DD" — convert to Unix seconds (midnight UTC)
         time: (new Date(candle.Date + 'T00:00:00Z').getTime() / 1000) as Time,
         open: candle.open,
         high: candle.high,
@@ -222,112 +265,34 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
 
     seriesRef.current.setData(bars);
     chartRef.current?.timeScale().fitContent();
+  }, [histData, symbol, isDaily]);
 
-    lastHistBarTimeRef.current = bars[bars.length - 1].time as number;
-    partialCandleRef.current = null;
-    lastCumulativeVolumeRef.current = null;
-  }, [histData, symbol, isIntraday]);
-
-  // Reset candle refs when interval changes; clear chart on intraday
+  // ---------- Render intraday / W / M bars ----------
   useEffect(() => {
-    partialCandleRef.current = null;
-    lastCumulativeVolumeRef.current = null;
-    lastHistBarTimeRef.current = null;
-    if (isIntraday && seriesRef.current) {
+    if (!seriesRef.current) return;
+    if (!isIntradayStored) return;
+    if (!intradayData?.candles?.length) {
       seriesRef.current.setData([]);
+      return;
     }
-  }, [interval, isIntraday]);
+    if (intradayData._symbol !== symbol) return;
 
-  // WebSocket: subscribe to live ticks for last-candle update (mode 2)
-  //
-  // OpenAlgo Mode-2 tick fields:
-  //   data.ltp    = last traded price (the actual current price)
-  //   data.open   = day open (9:15 AM) — correct only for daily candles
-  //   data.high   = day running high   — correct only for daily candles
-  //   data.low    = day running low    — correct only for daily candles
-  //   data.close  = previous day's close (NOT the current price — never use this)
-  //   data.volume = cumulative day volume (must compute delta for intraday candles)
-  const handleTick = useCallback(
-    (data: TickData) => {
-      if (data.symbol !== symbol || data.exchange !== exchange) return;
-      if (!seriesRef.current) return;
+    const bars = intradayData.candles
+      .map((candle) => ({
+        // NSE charting timestamps are Unix ms — divide by 1000 for lightweight-charts
+        time: Math.floor(candle.timestamp / 1000) as Time,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      }))
+      .sort((a, b) => (a.time as number) - (b.time as number));
 
-      const periodSeconds = getCandlePeriodSeconds(interval);
-      const tickSeconds = data.timestamp
-        ? Math.floor(new Date(data.timestamp).getTime() / 1000)
-        : Math.floor(Date.now() / 1000);
-      const candleTime = alignToCandle(tickSeconds, periodSeconds);
+    seriesRef.current.setData(bars);
+    chartRef.current?.timeScale().fitContent();
+  }, [intradayData, symbol, isIntradayStored]);
 
-      if (interval === 'D') {
-        const dailyCandleTime = lastHistBarTimeRef.current ?? candleTime;
-        const dailyBar = {
-          time: dailyCandleTime,
-          open: data.open ?? data.ltp,
-          high: data.high ?? data.ltp,
-          low: data.low ?? data.ltp,
-          close: data.ltp,
-          volume: data.volume ?? 0,
-        };
-        partialCandleRef.current = dailyBar;
-        seriesRef.current.update({
-          time: dailyBar.time as Time,
-          open: dailyBar.open,
-          high: dailyBar.high,
-          low: dailyBar.low,
-          close: dailyBar.close,
-        });
-      } else {
-        const cumVol = data.volume ?? 0;
-        const prevCumVol = lastCumulativeVolumeRef.current ?? cumVol;
-        const volDelta = Math.max(0, cumVol - prevCumVol);
-        lastCumulativeVolumeRef.current = cumVol;
-
-        if (!partialCandleRef.current || partialCandleRef.current.time !== candleTime) {
-          if (partialCandleRef.current) {
-            seriesRef.current.update({
-              time: partialCandleRef.current.time as Time,
-              open: partialCandleRef.current.open,
-              high: partialCandleRef.current.high,
-              low: partialCandleRef.current.low,
-              close: partialCandleRef.current.close,
-            });
-          }
-          partialCandleRef.current = {
-            time: candleTime,
-            open: data.ltp,
-            high: data.ltp,
-            low: data.ltp,
-            close: data.ltp,
-            volume: volDelta,
-          };
-        } else {
-          partialCandleRef.current.high = Math.max(partialCandleRef.current.high, data.ltp);
-          partialCandleRef.current.low = Math.min(partialCandleRef.current.low, data.ltp);
-          partialCandleRef.current.close = data.ltp;
-          partialCandleRef.current.volume += volDelta;
-        }
-
-        seriesRef.current.update({
-          time: partialCandleRef.current.time as Time,
-          open: partialCandleRef.current.open,
-          high: partialCandleRef.current.high,
-          low: partialCandleRef.current.low,
-          close: partialCandleRef.current.close,
-        });
-      }
-    },
-    [symbol, exchange, interval]
-  );
-
-  useEffect(() => {
-    wsService.subscribe(symbol, exchange, 2);
-    const unsub = wsService.onTick(handleTick);
-    return () => {
-      unsub();
-      wsService.unsubscribe(symbol, exchange, 2);
-    };
-  }, [symbol, exchange, handleTick]);
-
+  // ---------- Toolbar / form handlers ----------
   const handleSymbolSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const s = inputSymbol.trim().toUpperCase();
@@ -341,7 +306,6 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     setInterval(newInterval);
   };
 
-  const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', 'D'];
   const isFocused = focusedPanel === panelId;
 
   return (
@@ -374,24 +338,32 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
         </button>
 
         <div className="flex gap-0.5 ml-1">
-          {INTERVALS.map((iv) => (
-            <button
-              key={iv}
-              type="button"
-              onClick={() => handleIntervalChange(iv)}
-              className={`px-1.5 py-0.5 text-[10px] border ${
-                interval === iv
-                  ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
-                  : 'bg-black text-white/60 border-terminal-gray hover:text-terminal-amber'
-              }`}
-            >
-              {iv}
-            </button>
-          ))}
+          {ALL_INTERVALS.map((iv) => {
+            const soon = (COMING_SOON_INTERVALS as Interval[]).includes(iv);
+            return (
+              <button
+                key={iv}
+                type="button"
+                onClick={() => !soon && handleIntervalChange(iv)}
+                disabled={soon}
+                title={soon ? 'Coming soon' : undefined}
+                className={`px-1.5 py-0.5 text-[10px] border ${
+                  interval === iv
+                    ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
+                    : soon
+                    ? 'bg-black text-white/20 border-terminal-gray cursor-not-allowed'
+                    : 'bg-black text-white/60 border-terminal-gray hover:text-terminal-amber'
+                }`}
+              >
+                {iv}
+                {soon && <span className="text-[8px] align-super ml-0.5">*</span>}
+              </button>
+            );
+          })}
         </div>
 
-        {!isIntraday && isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
-        {!isIntraday && isError && <span className="text-terminal-red text-[10px] ml-1">FETCH ERR</span>}
+        {isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
+        {isError && <span className="text-terminal-red text-[10px] ml-1">FETCH ERR</span>}
 
         <button
           type="button"
@@ -422,12 +394,12 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
         )}
       </form>
 
-      {/* Chart canvas fills remaining height */}
+      {/* Chart canvas */}
       <div ref={chartContainerRef} className="flex-1 w-full min-h-0 relative">
-        {isIntraday && (
+        {isComingSoon && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-10">
             <p className="text-terminal-amber font-mono text-xs text-center px-4">
-              Intraday charts are scoped for future development.
+              {interval} charts are scoped for future development.
             </p>
           </div>
         )}

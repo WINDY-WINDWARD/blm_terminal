@@ -319,14 +319,11 @@ export function SettingsWidget() {
             }`}
           />
           <span className={wsConnected ? 'text-terminal-green' : 'text-terminal-red'}>
-            WebSocket: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
+            Market WS: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
           </span>
         </div>
         <div className="text-white text-[10px]">
           OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
-        </div>
-        <div className="text-white text-[10px]">
-          WebSocket: {process.env.NEXT_PUBLIC_OPENALGO_WS_URL ?? 'ws://localhost:8765'}
         </div>
       </div>
 

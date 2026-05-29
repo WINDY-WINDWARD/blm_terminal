@@ -17,6 +17,7 @@ import { NewsWidget } from './widgets/NewsWidget';
 import { AnalysisWidget } from './widgets/AnalysisWidget';
 import { NotifWidget } from './widgets/NotifWidget';
 import { ScanWidget } from './widgets/ScanWidget';
+import { ScreenerWidget } from './widgets/ScreenerWidget';
 import { AnnouncementsWidget } from './widgets/AnnouncementsWidget';
 import { DocsWidget } from './widgets/DocsWidget';
 import { AiWidget } from './widgets/AiWidget';
@@ -60,6 +61,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'NOTIF':   return <NotifWidget />;
       case 'ANNC':    return <AnnouncementsWidget />;
       case 'SCAN':    return <ScanWidget />;
+      case 'SCREENER': return <ScreenerWidget />;
       case 'DOCS':    return <DocsWidget />;
       case 'AI':      return <AiWidget />;
       default:

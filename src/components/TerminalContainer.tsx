@@ -10,7 +10,7 @@ import {
   wsConnectedAtom,
   cleanupOldLocalStorage,
 } from '@/store/terminalStore';
-import { wsService } from '@/lib/socket';
+import { marketWsService } from '@/lib/marketWs';
 
 const VALID_WIDGETS = [
   'TOP',
@@ -44,13 +44,11 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     cleanupOldLocalStorage();
   }, []);
 
-  // Connect WebSocket on mount and track connection state
+  // Track market WebSocket connection state
   useEffect(() => {
-    wsService.connect();
-    const unsub = wsService.onConnectionChange((connected) => setWsConnected(connected));
+    const unsub = marketWsService.onConnectionChange((connected) => setWsConnected(connected));
     return () => {
       unsub();
-      wsService.disconnect();
     };
   }, [setWsConnected]);
 

@@ -1,8 +1,9 @@
 """Router for ticker warehouse endpoints."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
+import pytz
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
@@ -128,6 +129,7 @@ async def get_status() -> TickerStatusResponse:
         watchlist_symbols_total=status_data["watchlist_symbols_total"],
         watchlist_symbols_current=status_data["watchlist_symbols_current"],
         days_behind_breakdown=status_data["days_behind_breakdown"],
+        intraday_stats=status_data["intraday_stats"],
     )
 
 
@@ -333,9 +335,26 @@ async def get_momentum_leaderboard(
 
 
 @router.get("/indicators/{symbol}")
-async def get_indicators(symbol: str) -> dict:
-    """Get technical indicators for a symbol (RSI, MACD, Bollinger Bands, ATR, etc.)."""
-    return indicators_service.get_indicators(symbol.upper())
+async def get_indicators(
+    symbol: str,
+    interval: str = Query("1d", description="Interval: 1d (default), 1h, W, M"),
+) -> dict:
+    """Get technical indicators for a symbol (RSI, MACD, Bollinger Bands, ATR, etc.).
+
+    Interval:
+      - 1d: reads from ticker_daily (original behaviour)
+      - 1h, W, M: reads from ticker_intraday with computed indicators
+    """
+    sym = symbol.upper()
+    iv = interval.lower()
+    if iv == "1d":
+        return indicators_service.get_indicators(sym)
+    if iv in ("1h", "w", "m"):
+        return indicators_service.get_intraday_indicators(sym, iv)
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Invalid interval '{interval}'. Must be one of: 1d, 1h, W, M",
+    )
 
 
 class StreakResponse(BaseModel):
@@ -402,12 +421,25 @@ async def get_screener(
     above_sma50: Optional[bool] = Query(None, description="Price above SMA50"),
     momentum_score_min: Optional[float] = Query(None, description="Min momentum score"),
     min_data_points: Optional[int] = Query(None, description="Min data points required"),
+    filters_json: Optional[str] = Query(None, description='JSON dict of additional filters (e.g. {"rsi_1h_min":70,"rsi_W_min":60})'),
     sort_by: str = Query("symbol", description="Sort field"),
     order: str = Query("asc", description="Sort order"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
 ) -> ScreenerResponse:
-    """Run screener with filters."""
+    """Run screener with filters.
+
+    Legacy individual query params (rsi_min, atr_pct_max, etc.) continue to work.
+    Use ``filters_json`` to pass cross-timeframe filters like ``{"rsi_1h_min":70}``.
+    """
     filters = {}
+    if filters_json:
+        import json
+        try:
+            extra = json.loads(filters_json)
+            if isinstance(extra, dict):
+                filters.update(extra)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid filters_json: must be a JSON object")
     if pct_change_today_min is not None:
         filters["pct_change_today_min"] = pct_change_today_min
     if pct_change_today_max is not None:
@@ -479,4 +511,101 @@ async def get_screener(
         returned=result["returned"],
         filters_applied=result["filters_applied"],
         results=result["results"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Intraday / Weekly / Monthly OHLCV endpoint
+# ---------------------------------------------------------------------------
+
+_IST = pytz.timezone("Asia/Kolkata")
+_VALID_INTRADAY_INTERVALS = {"1h", "W", "M"}
+
+
+def _is_market_hours() -> bool:
+    """Return True if current IST time is within NSE trading hours (09:15–15:30 Mon–Fri)."""
+    now_ist = datetime.now(_IST)
+    if now_ist.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    market_open  = now_ist.replace(hour=9,  minute=15, second=0, microsecond=0)
+    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now_ist <= market_close
+
+
+class IntradayCandleRow(BaseModel):
+    timestamp: int   # Unix milliseconds
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class IntradayOHLCVResponse(BaseModel):
+    symbol: str
+    interval: str
+    candles: list[IntradayCandleRow]
+    count: int
+
+
+@router.get("/intraday/{symbol}", response_model=IntradayOHLCVResponse)
+async def get_intraday_ohlcv(
+    symbol: str,
+    interval: str = Query(..., description="Interval: 1h, W, or M"),
+    from_ts: Optional[int] = Query(None, description="Start time (Unix ms)"),
+    to_ts: Optional[int] = Query(None, description="End time (Unix ms)"),
+) -> IntradayOHLCVResponse:
+    """Get intraday/weekly/monthly OHLCV candles for a symbol.
+
+    During market hours (IST 09:15–15:30 Mon–Fri) the NSE charting API is
+    queried live and the result is upserted into ticker_intraday before being
+    returned. Outside market hours the stored data is returned directly.
+    """
+    symbol = symbol.upper()
+
+    if interval not in _VALID_INTRADAY_INTERVALS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid interval '{interval}'. Must be one of: {sorted(_VALID_INTRADAY_INTERVALS)}",
+        )
+
+    # During market hours: fetch fresh data from NSE and upsert
+    if _is_market_hours():
+        from app.services.nse_charting_client import fetch_candles_async
+
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        if interval == "1h":
+            from datetime import timedelta
+            fetch_from = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+        else:
+            fetch_from = 0  # all history
+
+        try:
+            rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=now_ts)
+            ticker_warehouse.upsert_intraday(symbol, interval, rows)
+        except ValueError as exc:
+            # Log but don't fail — fall through to cached data
+            import logging
+            logging.getLogger(__name__).warning(
+                "[intraday] live fetch failed for %s/%s: %s — serving from cache", symbol, interval, exc
+            )
+
+    candles = ticker_warehouse.get_intraday(symbol, interval, from_ts=from_ts, to_ts=to_ts)
+    candle_rows = [
+        IntradayCandleRow(
+            timestamp=c["timestamp"],
+            open=c["open"],
+            high=c["high"],
+            low=c["low"],
+            close=c["close"],
+            volume=c["volume"],
+        )
+        for c in candles
+    ]
+
+    return IntradayOHLCVResponse(
+        symbol=symbol,
+        interval=interval,
+        candles=candle_rows,
+        count=len(candle_rows),
     )

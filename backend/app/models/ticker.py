@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Date, DateTime, Float, Integer, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, Date, DateTime, Float, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -95,4 +95,59 @@ class TickerScore(Base):
 
     __table_args__ = (
         UniqueConstraint("symbol", name="uq_ticker_scores_symbol"),
+    )
+
+
+class TickerIntraday(Base):
+    """ORM model for intraday/weekly/monthly OHLCV candles from NSE charting API.
+
+    Stores 1h, W, and M intervals. Uses a UTC DateTime timestamp instead of
+    a Date column so that hourly candles can be distinguished by time-of-day.
+    """
+
+    __tablename__ = "ticker_intraday"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # UTC datetime of candle open
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, index=True)
+    # "1h", "W", "M"
+    interval: Mapped[str] = mapped_column(String(4), nullable=False)
+
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, server_default="nse_charting")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    # --- Technical indicators (computed post-backfill, NULL until first run) ---
+    rsi_14: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_signal: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_histogram: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_middle: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_upper: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_lower: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_width: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_squeeze: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+    atr_14: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    atr_percent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    vwma_20: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_20: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_60: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_60: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_126: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    indicators_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("symbol", "timestamp", "interval", name="uq_ticker_intraday_sym_ts_interval"),
+        Index("ix_ticker_intraday_symbol_interval", "symbol", "interval"),
     )

@@ -7,7 +7,7 @@ from typing import Optional
 
 from sqlalchemy import select, func, and_, or_
 
-from app.models.ticker import TickerDaily
+from app.models.ticker import TickerDaily, TickerIntraday
 from app.models.stockuniverse import StockUniverse
 from app.database import _SyncSessionLocal
 from app.services import returns as returns_service
@@ -60,9 +60,9 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
     avg_vol_20 = sum(volumes[-21:-1]) / 20 if len(volumes) > 20 else 0
     volume_ratio = volumes[-1] / avg_vol_20 if avg_vol_20 > 0 else 0
 
-    # Read indicators directly from the latest ticker_daily row (no extra DB round-trip)
+    # Read indicators from the latest ticker_daily row (daily)
     latest_row = rows_sorted[-1]
-    ind = {
+    ind_daily = {
         "rsi_14":         latest_row.rsi_14,
         "macd":           latest_row.macd,
         "macd_signal":    latest_row.macd_signal,
@@ -80,6 +80,40 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
         "sharpe_60":      latest_row.sharpe_60,
         "sharpe_126":     latest_row.sharpe_126,
     }
+
+    # Read intraday indicators for 1h / W / M
+    ind_intraday: dict[str, dict] = {}
+    with _SyncSessionLocal() as db:
+        for interval in ("1h", "W", "M"):
+            iv_row = db.execute(
+                select(TickerIntraday)
+                .where(TickerIntraday.symbol == symbol)
+                .where(TickerIntraday.interval == interval)
+                .order_by(TickerIntraday.timestamp.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if iv_row:
+                ind_intraday[interval] = {
+                    "rsi_14":         iv_row.rsi_14,
+                    "macd":           iv_row.macd,
+                    "macd_signal":    iv_row.macd_signal,
+                    "macd_histogram": iv_row.macd_histogram,
+                    "bb_middle":      iv_row.bb_middle,
+                    "bb_upper":       iv_row.bb_upper,
+                    "bb_lower":       iv_row.bb_lower,
+                    "bb_width":       iv_row.bb_width,
+                    "bb_squeeze":     iv_row.bb_squeeze == "Y" if iv_row.bb_squeeze else False,
+                    "atr_14":         iv_row.atr_14,
+                    "atr_percent":    iv_row.atr_percent,
+                    "vwma_20":        iv_row.vwma_20,
+                    "hv_20":          iv_row.hv_20,
+                    "hv_60":          iv_row.hv_60,
+                    "sharpe_60":      iv_row.sharpe_60,
+                    "sharpe_126":     iv_row.sharpe_126,
+                }
+
+    # Flatten indicators by interval for easy filtering
+    indicators_by_interval = {"1d": ind_daily, **ind_intraday}
 
     with _SyncSessionLocal() as db:
         stock = db.execute(
@@ -106,7 +140,8 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
         "returns": returns,
         "pos_52w": pos_52w,
         "volume_ratio": volume_ratio,
-        "indicators": ind,
+        "indicators": ind_daily,  # backward-compatible alias for daily
+        "indicators_by_interval": indicators_by_interval,
         "sector": sector,
         "industry": industry,
         "pe": pe,
@@ -114,14 +149,29 @@ def _get_symbol_data(symbol: str) -> Optional[dict]:
     }
 
 
+def _get_interval_indicator(data: dict, interval: str, key: str):
+    """Read an indicator key from a specific interval's indicator dict."""
+    by_interval = data.get("indicators_by_interval", {})
+    ind = by_interval.get(interval, {})
+    return ind.get(key)
+
+
 def _apply_filters(symbol_data: list[dict], filters: dict) -> list[dict]:
-    """Apply filter criteria to symbol data."""
+    """Apply filter criteria to symbol data.
+
+    Supports cross-timeframe filtering via interval-prefixed keys:
+      rsi_1d_min, rsi_1h_min, rsi_W_min, rsi_M_min, atr_pct_1h_max, etc.
+
+    Legacy unprefixed keys (rsi_min, atr_pct_max, bb_squeeze) are treated as
+    aliases for the daily (1d) interval for backward compatibility.
+    """
     results = []
 
     for data in symbol_data:
         if data is None:
             continue
 
+        symbol = data.get("symbol", "")
         returns = data.get("returns", {})
         pos_52w = data.get("pos_52w", {})
         pos_ath = data.get("pos_ath", {})
@@ -228,30 +278,59 @@ def _apply_filters(symbol_data: list[dict], filters: dict) -> list[dict]:
             if not filters["is_52w_low"] and pos_52w.get("is_52w_low"):
                 continue
 
-        if "atr_pct_max" in filters:
-            atr_pct = ind.get("atr_percent")
-            if atr_pct is None or atr_pct > filters["atr_pct_max"]:
-                continue
+        # --- cross-timeframe indicator filters ---
+        # Build a flat map of all filter keys that touch indicators
+        _indicator_filter_map = {
+            # legacy aliases → daily
+            "atr_pct_max": ("1d", "atr_percent"),
+            "atr_pct_min": ("1d", "atr_percent"),
+            "rsi_min":     ("1d", "rsi_14"),
+            "rsi_max":     ("1d", "rsi_14"),
+            "bb_squeeze":  ("1d", "bb_squeeze"),
+            # explicit interval-prefixed
+            "atr_pct_1d_max": ("1d", "atr_percent"),
+            "atr_pct_1d_min": ("1d", "atr_percent"),
+            "atr_pct_1h_max": ("1h", "atr_percent"),
+            "atr_pct_1h_min": ("1h", "atr_percent"),
+            "atr_pct_W_max":  ("W",  "atr_percent"),
+            "atr_pct_W_min":  ("W",  "atr_percent"),
+            "atr_pct_M_max":  ("M",  "atr_percent"),
+            "atr_pct_M_min":  ("M",  "atr_percent"),
+            "rsi_1d_min":     ("1d", "rsi_14"),
+            "rsi_1d_max":     ("1d", "rsi_14"),
+            "rsi_1h_min":     ("1h", "rsi_14"),
+            "rsi_1h_max":     ("1h", "rsi_14"),
+            "rsi_W_min":      ("W",  "rsi_14"),
+            "rsi_W_max":      ("W",  "rsi_14"),
+            "rsi_M_min":      ("M",  "rsi_14"),
+            "rsi_M_max":      ("M",  "rsi_14"),
+            "bb_squeeze_1d":  ("1d", "bb_squeeze"),
+            "bb_squeeze_1h":  ("1h", "bb_squeeze"),
+            "bb_squeeze_W":   ("W",  "bb_squeeze"),
+            "bb_squeeze_M":   ("M",  "bb_squeeze"),
+        }
 
-        if "atr_pct_min" in filters:
-            atr_pct = ind.get("atr_percent")
-            if atr_pct is None or atr_pct < filters["atr_pct_min"]:
+        _indicator_filter_passed = True
+        for key, (interval, ind_key) in _indicator_filter_map.items():
+            if key not in filters:
                 continue
+            val = _get_interval_indicator(data, interval, ind_key)
+            threshold = filters[key]
+            if "min" in key:
+                if val is None or val < threshold:
+                    _indicator_filter_passed = False
+                    break
+            elif "max" in key:
+                if val is None or val > threshold:
+                    _indicator_filter_passed = False
+                    break
+            elif "squeeze" in key:
+                if threshold and not val:
+                    _indicator_filter_passed = False
+                    break
 
-        if "rsi_min" in filters:
-            rsi = ind.get("rsi_14")
-            if rsi is None or rsi < filters["rsi_min"]:
-                continue
-
-        if "rsi_max" in filters:
-            rsi = ind.get("rsi_14")
-            if rsi is None or rsi > filters["rsi_max"]:
-                continue
-
-        if "bb_squeeze" in filters:
-            squeeze = ind.get("bb_squeeze", False)
-            if filters["bb_squeeze"] and not squeeze:
-                continue
+        if not _indicator_filter_passed:
+            continue
 
         if "pe_min" in filters:
             pe = data.get("pe")

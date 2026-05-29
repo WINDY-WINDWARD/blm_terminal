@@ -10,7 +10,7 @@ This module is used by background workers and the ticker router.
 
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Generator, Optional
 
@@ -23,7 +23,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.models.ticker import TickerDaily
+from app.models.ticker import TickerDaily, TickerIntraday
 from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
 from app.database import _SyncSessionLocal
@@ -644,6 +644,61 @@ def get_warehouse_status() -> dict:
             else:
                 days_behind_breakdown["3+"] += 1
 
+        # --- Intraday stats (1h / W / M) ---
+        intraday_stats: dict[str, dict] = {}
+        today = datetime.now().date()
+        today_0915 = datetime.combine(today, datetime.min.time().replace(hour=9, minute=15))
+
+        for interval in ("1h", "W", "M"):
+            iv_total = db.execute(
+                select(func.count(TickerIntraday.id))
+                .where(TickerIntraday.interval == interval)
+            ).scalar() or 0
+
+            iv_latest_ts = db.execute(
+                select(func.max(TickerIntraday.timestamp))
+                .where(TickerIntraday.interval == interval)
+            ).scalar()
+
+            iv_watchlist_covered = 0
+            iv_watchlist_current = 0
+            iv_symbols_with_indicators = 0
+            if watchlist_symbols_list:
+                iv_watchlist_covered = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(watchlist_symbols_list),
+                    )
+                ).scalar() or 0
+
+                if interval == "1h":
+                    iv_watchlist_current = db.execute(
+                        select(func.count(func.distinct(TickerIntraday.symbol)))
+                        .where(
+                            TickerIntraday.interval == interval,
+                            TickerIntraday.symbol.in_(watchlist_symbols_list),
+                            TickerIntraday.timestamp >= today_0915,
+                        )
+                    ).scalar() or 0
+
+                iv_symbols_with_indicators = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(watchlist_symbols_list),
+                        TickerIntraday.indicators_updated_at.isnot(None),
+                    )
+                ).scalar() or 0
+
+            intraday_stats[interval] = {
+                "total_rows": iv_total,
+                "watchlist_covered": iv_watchlist_covered,
+                "watchlist_current": iv_watchlist_current,
+                "symbols_with_indicators": iv_symbols_with_indicators,
+                "latest_timestamp": iv_latest_ts,
+            }
+
         return {
             "total_rows": total_rows,
             "symbols_covered": symbols_covered,
@@ -659,6 +714,7 @@ def get_warehouse_status() -> dict:
             "watchlist_symbols_total": watchlist_total,
             "watchlist_symbols_current": watchlist_current,
             "days_behind_breakdown": days_behind_breakdown,
+            "intraday_stats": intraday_stats,
         }
 
 
@@ -740,3 +796,171 @@ def get_all_universe_symbols() -> list[str]:
             select(StockUniverse.symbol)
         ).scalars().all()
         return list(symbols)
+
+
+# ---------------------------------------------------------------------------
+# Intraday / Weekly / Monthly OHLCV  (ticker_intraday table)
+# ---------------------------------------------------------------------------
+
+def upsert_intraday(
+    symbol: str,
+    interval: str,
+    rows: list[dict],
+    db: Optional[Session] = None,
+) -> int:
+    """Upsert intraday/weekly/monthly candle rows for *symbol* + *interval*.
+
+    Args:
+        symbol:   NSE ticker (e.g. "RELIANCE").
+        interval: "1h", "W", or "M".
+        rows:     List of dicts from nse_charting_client.fetch_candles():
+                  [{time_ms, open, high, low, close, volume}, ...]
+        db:       Optional existing sync Session; if None a new one is opened.
+
+    Returns:
+        Number of rows upserted.
+    """
+    if not rows:
+        return 0
+
+    def _do_upsert(session: Session) -> int:
+        records = []
+        for r in rows:
+            ts_utc = datetime.fromtimestamp(r["time_ms"] / 1000, tz=pytz.utc).replace(tzinfo=None)
+            records.append({
+                "symbol":    symbol,
+                "timestamp": ts_utc,
+                "interval":  interval,
+                "open":      r["open"],
+                "high":      r["high"],
+                "low":       r["low"],
+                "close":     r["close"],
+                "volume":    r["volume"],
+                "source":    "nse_charting",
+            })
+
+        stmt = sqlite_insert(TickerIntraday).values(records)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol", "timestamp", "interval"],
+            set_={
+                "open":   stmt.excluded.open,
+                "high":   stmt.excluded.high,
+                "low":    stmt.excluded.low,
+                "close":  stmt.excluded.close,
+                "volume": stmt.excluded.volume,
+                "source": stmt.excluded.source,
+            },
+        )
+        session.execute(stmt)
+        session.commit()
+        return len(records)
+
+    if db is not None:
+        return _do_upsert(db)
+    with _get_session() as session:
+        return _do_upsert(session)
+
+
+def get_intraday(
+    symbol: str,
+    interval: str,
+    from_ts: Optional[int] = None,
+    to_ts: Optional[int] = None,
+    db: Optional[Session] = None,
+) -> list[dict]:
+    """Retrieve stored intraday/weekly/monthly candles for *symbol* + *interval*.
+
+    Args:
+        symbol:   NSE ticker.
+        interval: "1h", "W", or "M".
+        from_ts:  Start filter as Unix *milliseconds* (inclusive). None = no filter.
+        to_ts:    End filter as Unix *milliseconds* (inclusive). None = no filter.
+        db:       Optional existing sync Session.
+
+    Returns:
+        List of dicts [{timestamp (unix ms), open, high, low, close, volume}]
+        ordered oldest → newest.
+    """
+    def _do_get(session: Session) -> list[dict]:
+        stmt = (
+            select(TickerIntraday)
+            .where(
+                and_(
+                    TickerIntraday.symbol == symbol,
+                    TickerIntraday.interval == interval,
+                )
+            )
+            .order_by(TickerIntraday.timestamp)
+        )
+
+        if from_ts is not None:
+            from_dt = datetime.fromtimestamp(from_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            stmt = stmt.where(TickerIntraday.timestamp >= from_dt)
+        if to_ts is not None:
+            to_dt = datetime.fromtimestamp(to_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            stmt = stmt.where(TickerIntraday.timestamp <= to_dt)
+
+        rows = session.execute(stmt).scalars().all()
+        return [
+            {
+                "timestamp": int(r.timestamp.replace(tzinfo=pytz.utc).timestamp() * 1000),
+                "open":   r.open,
+                "high":   r.high,
+                "low":    r.low,
+                "close":  r.close,
+                "volume": r.volume,
+            }
+            for r in rows
+        ]
+
+    if db is not None:
+        return _do_get(db)
+    with _get_session() as session:
+        return _do_get(session)
+
+
+def backfill_intraday_symbol(
+    symbol: str,
+    intervals: Optional[list[str]] = None,
+    db: Optional[Session] = None,
+) -> dict[str, int]:
+    """Backfill intraday/weekly/monthly candles for a single symbol.
+
+    Calls the NSE charting API for each interval and upserts into ticker_intraday.
+
+    History depth:
+      - "1h": last 90 days
+      - "W", "M": all available history (fromDate=0)
+
+    Args:
+        symbol:    NSE ticker.
+        intervals: List of intervals to backfill. Defaults to ["1h", "W", "M"].
+        db:        Optional existing sync Session.
+
+    Returns:
+        Dict mapping interval → number of rows upserted.
+    """
+    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+
+    if intervals is None:
+        intervals = ["1h", "W", "M"]
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    counts: dict[str, int] = {}
+
+    for iv in intervals:
+        if iv == "1h":
+            from_ts = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+        else:
+            from_ts = 0  # all history
+
+        try:
+            rows = fetch_candles(symbol, iv, from_ts=from_ts, to_ts=now_ts)
+            n = upsert_intraday(symbol, iv, rows, db=db)
+            counts[iv] = n
+            logger.info("[intraday] %s/%s → %d rows upserted", symbol, iv, n)
+        except Exception as exc:
+            logger.warning("[intraday] backfill failed %s/%s: %s", symbol, iv, exc)
+            counts[iv] = 0
+
+    return counts

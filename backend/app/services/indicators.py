@@ -19,7 +19,7 @@ from typing import Optional
 
 from sqlalchemy import select, text
 
-from app.models.ticker import TickerDaily
+from app.models.ticker import TickerDaily, TickerIntraday
 from app.database import _SyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -555,4 +555,242 @@ def get_indicators(symbol: str) -> dict:
         **{k: v for k, v in ind.items()},
         "bb_squeeze":     ind.get("bb_squeeze") == "Y",
         "obv":            obv,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Intraday / Weekly / Monthly indicator functions (ticker_intraday table)
+# ---------------------------------------------------------------------------
+
+_INDICATOR_UPDATE_SQL = """
+UPDATE ticker_intraday SET
+    rsi_14               = :rsi_14,
+    macd                 = :macd,
+    macd_signal          = :macd_signal,
+    macd_histogram       = :macd_histogram,
+    bb_middle            = :bb_middle,
+    bb_upper             = :bb_upper,
+    bb_lower             = :bb_lower,
+    bb_width             = :bb_width,
+    bb_squeeze           = :bb_squeeze,
+    atr_14               = :atr_14,
+    atr_percent          = :atr_percent,
+    vwma_20              = :vwma_20,
+    hv_20                = :hv_20,
+    hv_60                = :hv_60,
+    sharpe_60            = :sharpe_60,
+    sharpe_126           = :sharpe_126,
+    indicators_updated_at = :indicators_updated_at
+WHERE id = :id
+"""
+
+
+def _build_indicator_update(row_id: int, ind: dict, now_str: str) -> dict:
+    """Build a single update dict for the indicator UPDATE statement."""
+    return {
+        "id":                   row_id,
+        "indicators_updated_at": now_str,
+        "rsi_14":               ind.get("rsi_14"),
+        "macd":                 ind.get("macd"),
+        "macd_signal":          ind.get("macd_signal"),
+        "macd_histogram":       ind.get("macd_histogram"),
+        "bb_middle":            ind.get("bb_middle"),
+        "bb_upper":             ind.get("bb_upper"),
+        "bb_lower":             ind.get("bb_lower"),
+        "bb_width":             ind.get("bb_width"),
+        "bb_squeeze":           ind.get("bb_squeeze"),
+        "atr_14":               ind.get("atr_14"),
+        "atr_percent":          ind.get("atr_percent"),
+        "vwma_20":              ind.get("vwma_20"),
+        "hv_20":                ind.get("hv_20"),
+        "hv_60":                ind.get("hv_60"),
+        "sharpe_60":            ind.get("sharpe_60"),
+        "sharpe_126":           ind.get("sharpe_126"),
+    }
+
+
+def compute_intraday_indicators_for_all_rows(symbol: str, interval: str) -> int:
+    """Full historical backfill — compute indicators for every intraday candle row.
+
+    For each row at index i, the window is rows[0:i+1].  Rows that lack
+    enough lookback get NULL for the indicator.  Returns number of rows
+    updated.
+    """
+    symbol = symbol.upper()
+    interval = interval.lower()
+    with _SyncSessionLocal() as db:
+        rows = list(
+            db.execute(
+                select(TickerIntraday)
+                .where(TickerIntraday.symbol == symbol)
+                .where(TickerIntraday.interval == interval)
+                .order_by(TickerIntraday.timestamp.asc())
+            ).scalars()
+        )
+
+    if not rows:
+        return 0
+
+    now_str = datetime.now().isoformat()
+    closes  = [r.close  for r in rows]
+    highs   = [r.high   for r in rows]
+    lows    = [r.low    for r in rows]
+    volumes = [r.volume for r in rows]
+
+    updates: list[dict] = []
+    for i, row in enumerate(rows):
+        if i + 1 < MIN_ROWS_REQUIRED:
+            updates.append({
+                "id": row.id,
+                "indicators_updated_at": now_str,
+                "rsi_14": None, "macd": None, "macd_signal": None,
+                "macd_histogram": None, "bb_middle": None, "bb_upper": None,
+                "bb_lower": None, "bb_width": None, "bb_squeeze": None,
+                "atr_14": None, "atr_percent": None, "vwma_20": None,
+                "hv_20": None, "hv_60": None, "sharpe_60": None, "sharpe_126": None,
+            })
+            continue
+
+        ind = _compute_from_window(
+            closes[: i + 1],
+            highs[: i + 1],
+            lows[: i + 1],
+            volumes[: i + 1],
+        )
+        updates.append(_build_indicator_update(row.id, ind, now_str))
+
+    if not updates:
+        return 0
+
+    with _SyncSessionLocal() as db:
+        db.execute(text(_INDICATOR_UPDATE_SQL), updates)
+        db.commit()
+
+    return len(updates)
+
+
+def compute_intraday_indicators_for_latest_candle(symbol: str, interval: str) -> bool:
+    """Incremental update — compute indicators for the most recent intraday candle only.
+
+    Loads the last 260 rows (enough for every lookback), computes indicators
+    for the tail row, and writes them back.  Used after each new candle
+    insert.  Returns True if successful.
+    """
+    symbol = symbol.upper()
+    interval = interval.lower()
+    with _SyncSessionLocal() as db:
+        rows = list(
+            db.execute(
+                select(TickerIntraday)
+                .where(TickerIntraday.symbol == symbol)
+                .where(TickerIntraday.interval == interval)
+                .order_by(TickerIntraday.timestamp.asc())
+            ).scalars()
+        )
+
+    if len(rows) < MIN_ROWS_REQUIRED:
+        return False
+
+    closes  = [r.close  for r in rows]
+    highs   = [r.high   for r in rows]
+    lows    = [r.low    for r in rows]
+    volumes = [r.volume for r in rows]
+
+    ind = _compute_from_window(closes, highs, lows, volumes)
+    latest = rows[-1]
+    now = datetime.now()
+
+    with _SyncSessionLocal() as db:
+        db.execute(
+            text(_INDICATOR_UPDATE_SQL),
+            _build_indicator_update(latest.id, ind, now.isoformat()),
+        )
+        db.commit()
+
+    return True
+
+
+def get_intraday_indicators(symbol: str, interval: str) -> dict:
+    """Return the latest computed indicators for a symbol at a given interval.
+
+    Reads indicator columns from the most recent ticker_intraday row.
+    Falls back to on-the-fly computation if indicators have not been backfilled.
+    """
+    symbol = symbol.upper()
+    interval = interval.lower()
+
+    with _SyncSessionLocal() as db:
+        rows = list(
+            db.execute(
+                select(TickerIntraday)
+                .where(TickerIntraday.symbol == symbol)
+                .where(TickerIntraday.interval == interval)
+                .order_by(TickerIntraday.timestamp.desc())
+                .limit(260)
+            ).scalars()
+        )
+
+    if not rows:
+        return {"symbol": symbol, "interval": interval, "error": "No data available", "data_points": 0}
+
+    latest = rows[0]
+
+    # --- OBV from latest ~252 rows (always on-the-fly) ---
+    sorted_rows = list(reversed(rows))
+    obv_closes  = [r.close  for r in sorted_rows if r.close  is not None]
+    obv_volumes = [r.volume for r in sorted_rows if r.volume is not None]
+    obv = _calculate_obv(obv_closes, obv_volumes)
+
+    if latest.indicators_updated_at is not None:
+        return {
+            "symbol":          symbol,
+            "interval":        interval,
+            "data_points":     len(rows),
+            "latest_timestamp": latest.timestamp.isoformat() if latest.timestamp else None,
+            "close":           latest.close,
+            "rsi_14":          latest.rsi_14,
+            "macd":            latest.macd,
+            "macd_signal":     latest.macd_signal,
+            "macd_histogram":  latest.macd_histogram,
+            "bb_middle":       latest.bb_middle,
+            "bb_upper":        latest.bb_upper,
+            "bb_lower":        latest.bb_lower,
+            "bb_width":        latest.bb_width,
+            "bb_squeeze":      latest.bb_squeeze == "Y" if latest.bb_squeeze else False,
+            "atr_14":          latest.atr_14,
+            "atr_percent":     latest.atr_percent,
+            "vwma_20":         latest.vwma_20,
+            "hv_20":           latest.hv_20,
+            "hv_60":           latest.hv_60,
+            "sharpe_60":       latest.sharpe_60,
+            "sharpe_126":      latest.sharpe_126,
+            "obv":             obv,
+        }
+
+    # Fallback: compute on-the-fly
+    all_rows = list(reversed(rows))
+    if len(all_rows) < MIN_ROWS_REQUIRED:
+        return {
+            "symbol":      symbol,
+            "interval":    interval,
+            "error":       f"Insufficient data ({len(all_rows)} rows, need {MIN_ROWS_REQUIRED}+)",
+            "data_points": len(all_rows),
+        }
+
+    closes  = [r.close  for r in all_rows if r.close  is not None]
+    highs   = [r.high   for r in all_rows if r.high   is not None]
+    lows    = [r.low    for r in all_rows if r.low    is not None]
+    volumes = [r.volume for r in all_rows if r.volume is not None]
+
+    ind = _compute_from_window(closes, highs, lows, volumes)
+
+    return {
+        "symbol":          symbol,
+        "interval":        interval,
+        "data_points":     len(all_rows),
+        "latest_timestamp": latest.timestamp.isoformat() if latest.timestamp else None,
+        "close":           latest.close,
+        **{k: v for k, v in ind.items()},
+        "bb_squeeze":      ind.get("bb_squeeze") == "Y",
+        "obv":             obv,
     }
