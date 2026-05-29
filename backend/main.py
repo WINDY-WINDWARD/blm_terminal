@@ -143,7 +143,7 @@ def _run_migrations_sync() -> None:
                 )
                 raise
 
-        elif "overlap" in err:
+        elif "overlap" in err or "multiple head" in err:
             # Multiple Alembic branches with overlapping migrations.
             # Upgrade each head independently to avoid the merge conflict.
             logger.warning("migrations: overlapping branches — upgrading each head individually")

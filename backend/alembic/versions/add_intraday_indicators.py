@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision = "add_intraday_indicators"
-down_revision = "470ce9fa8403"
+down_revision = "add_ticker_intraday"
 branch_labels = None
 depends_on = None
 
