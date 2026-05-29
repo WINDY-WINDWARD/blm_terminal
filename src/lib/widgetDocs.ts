@@ -393,11 +393,36 @@ const DOCS_MAP: WidgetDoc[] = [
         ] as DocField[],
       },
       {
+        heading: 'Calculated Ratios',
+        items: [
+          { name: 'Piotroski Score', desc: '9-point quality score. ≥7 = strong, 4–6 = average, <4 = weak.' },
+          { name: 'Peter Lynch FV', desc: 'Fair value from EPS growth × EPS. Compare to current price.' },
+          { name: 'Peter Lynch FV Ratio', desc: '(EPS Growth + Div Yield) / P/E. >1.0 suggests undervaluation.' },
+          { name: 'MS Fair Value', desc: 'Morningstar fair value estimate when available.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Valuation Tab',
+        items: [
+          { name: 'Graham Number', desc: '√(22.5 × EPS × Book Value). Conservative floor price from screener.in or computed.' },
+          { name: 'DCF (10Y)', desc: 'Discounted cash flow with 2-stage growth. Requires FCF; auto-growth from revenue/earnings growth.' },
+          { name: 'DDM', desc: 'Dividend Discount Model. Only shown when dividend > 0.' },
+          { name: 'EV/EBITDA', desc: 'Enterprise value at sector median multiple. Uses screener EBITDA when available.' },
+          { name: 'PEG Fair Value', desc: 'Forward EPS × earnings growth rate (Lynch rule).' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Valuation Controls',
+        body: 'Adjust WACC (10–15%) and terminal growth (3–7%) via dropdowns. Changing them triggers a re-fetch. Signal coloring: UNDERVALUED (>+15%) green, FAIR (±15%) yellow, OVERVALUED (<-15%) red.',
+      },
+      {
         heading: 'How to use',
         items: [
           'Compare P/E and ROCE against sector peers for context.',
           'Declining margins QoQ despite rising revenue can be an early warning.',
           'Screener.in data has a ~1-day lag; not suitable for intraday decisions.',
+          'Valuation models use screener.in data first; yfinance fills gaps for FCF, forward EPS, and shares outstanding.',
+          'Not all models compute for every stock — DDM requires dividends, DCF requires FCF.',
         ],
       },
     ],
@@ -745,6 +770,15 @@ const DOCS_MAP: WidgetDoc[] = [
         ] as DocField[],
       },
       {
+        heading: 'Research Agent Personas',
+        items: [
+          { name: 'Value Analyst', desc: 'Graham/Buffett framework — margin of safety, moat assessment, Graham Number, ROCE/ROE quality, red flags.' },
+          { name: 'Earnings Analyst', desc: 'QoQ/YoY earnings forensics — revenue/profit trends, EPS trajectory, margin analysis, earnings quality.' },
+          { name: 'F&O Analyst', desc: 'Options strategy & derivatives — trend assessment, IV context, CE/PE bias, hedging suggestions, risk management.' },
+          { name: 'Macro Analyst', desc: 'Sector rotation & India macro — market breadth, FII/DII flows, RBI policy, sector positioning, macro tailwinds/headwinds.' },
+        ] as DocField[],
+      },
+      {
         heading: 'Models',
         items: [
           { name: 'M2.5 Free', desc: 'Zero cost — for development and testing only. Do not use with sensitive data.' },
@@ -761,7 +795,8 @@ const DOCS_MAP: WidgetDoc[] = [
           'Click Stop to cancel a running response.',
           'Tool call badges appear while the AI is fetching data — green check when done.',
           'The AI follows an agentic loop: it can call multiple tools across turns to build a complete answer.',
-      'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
+          'Select a persona before asking for focused, disciplined analysis on a specific framework.',
+          'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
         ],
       },
     ],
@@ -778,6 +813,14 @@ const DOCS_MAP: WidgetDoc[] = [
         body: 'Build a statistically optimal portfolio from your watchlist stocks. The optimizer uses mean-variance optimization (Markowitz) or hierarchical risk parity to find weights that maximise risk-adjusted return.',
       },
       {
+        heading: 'Data Source',
+        body: 'Historical prices come from the local ticker_daily warehouse (SQLite DB populated by nightly NSE backfill). If data is missing or insufficient, the optimizer automatically triggers an NSE backfill via nsepython before computing. No external Yahoo Finance calls are made.',
+      },
+      {
+        heading: 'Watchlist Selection',
+        body: 'Choose any watchlist from the dropdown at the top of the left panel. Symbols load dynamically when you switch watchlists. Only one watchlist can be active at a time.',
+      },
+      {
         heading: 'Objectives',
         items: [
           { name: 'Max Sharpe', desc: 'Maximise the Sharpe ratio — best risk-adjusted return.' },
@@ -788,8 +831,8 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'Inputs',
         items: [
-          { name: 'Stocks', desc: 'Select 3–30 symbols from your Default watchlist.' },
-          { name: 'Period', desc: 'Historical lookback: 1Y, 2Y, or 3Y of daily prices.' },
+          { name: 'Stocks', desc: 'Select 3–30 symbols from the active watchlist.' },
+          { name: 'Period', desc: 'Historical lookback: 1Y, 2Y, or 3Y of daily prices from the DB.' },
           { name: 'Risk-free rate', desc: 'Fixed at 6.5% (approx RBI repo rate).' },
         ] as DocField[],
       },
@@ -801,6 +844,7 @@ const DOCS_MAP: WidgetDoc[] = [
           { name: 'Expected volatility', desc: 'Annualised standard deviation.' },
           { name: 'Sharpe ratio', desc: 'Risk-adjusted return metric.' },
           { name: 'Correlation heatmap', desc: 'Visual grid showing pairwise correlations.' },
+          { name: 'Per-symbol stats', desc: 'Individual annual return, volatility, and Sharpe for each selected stock.' },
         ] as DocField[],
       },
       {
@@ -808,8 +852,10 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           'Select at least 3 stocks — the optimizer requires a minimum for meaningful diversification.',
           'Highly correlated stocks (e.g. all PSU banks) may produce extreme weights — this is mathematically correct.',
+          'If max_sharpe fails (no asset exceeds risk-free rate), the optimizer falls back to equal weights.',
           'Use Risk Parity when you want balanced risk contribution rather than pure return maximisation.',
           'Results are cached for 15 minutes — click Optimize again to force a recompute.',
+          'Symbols with no price data after backfill appear in the "Failed" list and are excluded from optimization.',
         ],
       },
     ],
