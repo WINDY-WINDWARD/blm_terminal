@@ -1,7 +1,11 @@
+> **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+
+---
+
 # BLM Terminal — Agent Implementation Handoff
 
 **For**: AI coding agent  
-**Project root**: `/mnt/d/500GB/p1/Projects/blm_terminal`  
+**Project root**: `/Users/glubglub/Documents/blm_terminal` *(corrected from stale Windows path)*  
 **Read PLAN.md first**: `docs/PLAN.md` — this handoff assumes you've read it.
 
 ---

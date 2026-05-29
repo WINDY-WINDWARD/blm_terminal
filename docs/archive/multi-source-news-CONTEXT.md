@@ -1,3 +1,7 @@
+> **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+
+---
+
 # Context Document - Multi-Source News System
 
 **Project:** BLM Terminal Enhancement

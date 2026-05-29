@@ -1,3 +1,7 @@
+> **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+
+---
+
 # Build Memory Doc — BLM Terminal Feature Expansion
 
 **Started**: 2026-05-30  
