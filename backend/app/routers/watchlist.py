@@ -3,13 +3,14 @@
 from typing import List, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, func
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.watchlist import Watchlist as WatchlistModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.schemas.watchlist import (
+    WatchlistBulkReplace,
     WatchlistCreate,
     WatchlistItemCreate,
     WatchlistItemOut,
@@ -170,6 +171,51 @@ async def remove_watchlist_item(
     await db.delete(item)
     await db.commit()
     return {"ok": True}
+
+
+@router.post(
+    "/watchlists/{watchlist_id}/items/bulk-replace",
+    tags=["watchlist"],
+)
+async def bulk_replace_watchlist_items(
+    watchlist_id: int,
+    body: WatchlistBulkReplace,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Atomically replace all items in a watchlist with a new set of symbols.
+
+    Deletes all existing items for the watchlist, then inserts new rows for
+    each symbol in the payload.  Operates in a single transaction.
+    """
+    watchlist = await db.get(WatchlistModel, watchlist_id)
+    if watchlist is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Watchlist {watchlist_id} not found",
+        )
+
+    # Delete existing items
+    await db.execute(
+        delete(WatchlistItemModel).where(
+            WatchlistItemModel.watchlist_id == watchlist_id
+        )
+    )
+
+    # Insert new items (deduped and uppercased by the schema validator)
+    for sym in body.symbols:
+        item = WatchlistItemModel(
+            watchlist_id=watchlist_id,
+            symbol=sym,
+            exchange=body.exchange,
+        )
+        db.add(item)
+
+    await db.commit()
+    return {
+        "ok": True,
+        "watchlist_id": watchlist_id,
+        "items_added": len(body.symbols),
+    }
 
 
 # Legacy endpoints for backward compatibility (GET/POST/DELETE on /watchlist)

@@ -5,7 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-WATCHLIST_NAME_REGEX = re.compile(r"^[A-Za-z-]+$")
+WATCHLIST_NAME_REGEX = re.compile(r"^[A-Za-z0-9-]+$")
 
 
 class WatchlistCreate(BaseModel):
@@ -72,3 +72,31 @@ class WatchlistItemOut(BaseModel):
     symbol: str
     exchange: str
     created_at: datetime
+
+
+class WatchlistBulkReplace(BaseModel):
+    """Input schema for atomically replacing all items in a watchlist."""
+
+    symbols: list[str] = Field(..., min_length=1, max_length=100)
+    exchange: str = Field(default="NSE")
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def upper_and_dedupe(cls, v: object) -> list[str]:
+        if not isinstance(v, list):
+            raise ValueError("must be a list of strings")
+        cleaned = [str(item).strip().upper() for item in v if isinstance(item, (str, int))]
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for sym in cleaned:
+            if sym and sym not in seen:
+                seen.add(sym)
+                deduped.append(sym)
+        return deduped
+
+    @field_validator("exchange", mode="before")
+    @classmethod
+    def upper_strip_exchange(cls, v: object) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v.strip().upper()
