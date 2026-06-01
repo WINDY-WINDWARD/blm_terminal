@@ -20,21 +20,43 @@ This README explains how to run the backend locally and lists all available endp
 - `app/models/` — ORM models (`corporatefilings.py`, `news.py`, `stockuniverse.py`, `watchlist.py`, `notification.py`)
 - `app/schemas/` — Pydantic v2 request/response schemas (one file per domain)
 - `app/routers/` — API routers:
+  - `markets.py` — market snapshots (gainers, losers, deals, breakouts, 52w, volume)
+  - `market_ws.py` — WebSocket `/ws/market` for live tick streaming
   - `corporatefilings.py` — NSE quarterly results CSV cache
-  - `nonpersistence.py` — short-lived market snapshots (gainers, deals, breakouts, etc.)
+  - `nonpersistence.py` — additional short-lived market snapshots
   - `stockuniverse.py` — DB-backed stock universe CRUD
   - `watchlist.py` — persistent watchlist (used by Next.js `/api/watchlist` proxy)
   - `news.py` — news fetching and caching
-  - `screener.py` — Screener.in fundamentals proxy
+  - `news_ws.py` — WebSocket `/ws/news` for live news streaming
+  - `screener.py` — Screener.in fundamentals proxy + TQL scan
   - `ai_summarizer.py` — OpenAI-backed summarizer
+  - `ai_chat.py` — AI chat endpoints
   - `notifications.py` — watchlist price alerts (read, dismiss)
   - `morningstar.py` — Morningstar fair value proxy
-- `app/services/` — outbound HTTP clients:
-  - `nse_client.py` — NSE session bootstrap + HTTP helpers
+  - `announcements.py` — NSE corporate announcements
+  - `valuation.py` — stock valuation data
+  - `portfolio.py` — portfolio data
+  - `ticker.py` — ticker warehouse data
+  - `jobs.py` — background job monitoring
+  - `system_config.py` — system configuration KV store
+  - `mcp_server.py` — FastMCP server mounted at `/api/mcp`
+- `app/services/` — outbound HTTP clients and utilities:
+  - `nse_client.py` / `nse_client_async.py` — NSE session bootstrap + HTTP helpers (sync + async)
+  - `nse_rate_limiter.py` — circuit breaker + rate limiting for NSE API
+  - `nse_charting_client.py` — NSE OHLCV intraday charting data
   - `screener_client.py` — Screener.in scraper
-  - `news_fetcher.py` — news aggregation
-  - `moneycontrol_client.py` — MoneyControl data
+  - `news_fetcher.py` / `news_aggregator.py` — news fetching + multi-source aggregation
+  - `news_sources.py` / `rss_parser.py` — news source definitions + RSS parsing
+  - `moneycontrol_client.py` — MoneyControl market/stock data
   - `morningstar_client.py` — Morningstar India fair values (uses `rookiepy` for browser cookies)
+  - `ai_summarizer.py` / `ai_chat_service.py` — LLM summarization and chat
+  - `indicators.py` / `momentum.py` / `returns.py` — technical indicators and return calculations
+  - `ticker_warehouse.py` — tick data warehouse
+  - `tql_parser.py` — TQL (Terminal Query Language) parser for scan widget
+  - `nlp_service.py` — NLP for news entity extraction and sentiment
+  - `cache.py` — in-memory caching layer
+  - `cookie_loader.py` — cookie loading for authenticated scrapers
+- `app/orchestrator.py` — central background worker manager
 - `app/mcp_server.py` — MCP tool definitions (streamable HTTP, mounted at `/api/mcp`)
 - `app/backgroundtasks.py` — scheduled tasks: fair value sync, notification worker, stock universe sync
 - `alembic/` — Alembic migration environment (`env.py`, `versions/`)
@@ -294,16 +316,15 @@ The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides pr
 **Path:** `/api/mcp`  
 **Startup:** The MCP server shares the same lifespan as the FastAPI app — migrations, cache cleanup, stock-universe scheduler, and screener session initialization all run once at startup.
 
-### Available MCP Tools (29)
+### Available MCP Tools (32)
 
 | Tool | Description |
 |---|---|
 | `health_check` | Service health status |
 | `get_top_gainers` | Today's top gainers on NSE |
 | `get_top_losers` | Today's top losers on NSE |
-| `get_bulk_deals` | Bulk deals for a symbol |
-| `get_block_deals` | Block deals for a symbol |
-| `get_high_short_interest` | Stocks with high short interest |
+| `get_bulk_deals` | Bulk deals for one or multiple symbols |
+| `get_block_deals` | Block deals for one or multiple symbols |
 | `get_largedeal_snapshot` | Full largedeal snapshot (bulk/short/block) |
 | `get_change_ranges` | Percentage changes over multiple timeframes |
 | `get_symbol_data` | Live symbol data from NSE |
@@ -313,15 +334,26 @@ The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides pr
 | `get_corporate_filings` | Quarterly financial results as CSV (structured) |
 | `screener_search` | Search screener.in for companies |
 | `screener_company` | Company fundamentals from screener.in (requires auth) |
-| `screener_trades` | Insider trades from screener.in (requires auth) |
-| `get_company_quarterly_results` | Full quarterly results from screener.in (requires auth) |
-| `morningstar_search` | Search Morningstar to resolve symbol to Morningstar ID |
+| `screener_trades` | Insider trades, bulk/block deals from screener.in (requires auth) |
 | `list_stock_universe` | All stock universe records |
-| `get_stock_universe` | Single stock universe record by symbol |
+| `get_stock_universe` | Single or bulk stock universe records by symbol |
 | `search_stock_universe` | Search stock universe by prefix |
-| `get_company_news` | Company-specific news from MoneyControl — auto-resolves MC URL from symbol |
+| `list_watchlist` | Get all items in the default watchlist |
+| `get_watchlist_symbols` | Distinct symbols from the default watchlist |
+| `remove_watchlist_item` | Remove an item from the default watchlist by ID |
+| `list_watchlists` | List all user-created watchlists |
+| `get_watchlist_items` | All items in a specific watchlist by ID |
+| `get_notifications` | Unread notifications for a watchlist |
+| `get_global_notifications` | Unread global NSE scan alerts across all stocks |
+| `get_morningstar_fairvalue` | Morningstar fair value estimate for one or multiple symbols |
+| `get_global_news` | Latest global news from MoneyControl and RSS sources |
+| `get_company_news` | Company-specific news with NLP analysis |
+| `list_industries` | All NSE industries with market cap, PE, and sentiment |
+| `list_sectors` | All NSE sectors with market cap, PE, and sentiment |
+| `get_industry_stocks` | All stocks in a given industry by slug |
+| `get_sector_stocks` | All stocks in a given sector by slug |
 
-**Note:** AI endpoints (`/api/ai-summarizer/*`) are **not** exposed via MCP in v1.
+**Note:** AI chat endpoints (`/api/ai/*`) are **not** exposed via MCP.
 
 ### Testing MCP
 

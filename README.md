@@ -42,7 +42,7 @@ BLM Terminal is a full-stack trading dashboard built for NSE India. The frontend
 | **Deals** | NSE bulk/block deals and insider trade history via screener.in |
 | **News** | MoneyControl company and global news, with AI-powered summaries |
 | **Morningstar** | Fair value estimates from Morningstar India, synced nightly |
-| **MCP server** | FastAPI backend also exposes all 29 tools as an MCP server (streamable HTTP at `/api/mcp`) for AI assistant integration |
+| **MCP server** | FastAPI backend also exposes all 32 tools as an MCP server (streamable HTTP at `/api/mcp`) for AI assistant integration |
 | **Security** | All broker credentials stay server-side; never exposed to the browser |
 
 ---
@@ -189,7 +189,9 @@ src/
 │   ├── widgets/              # ChartWidget, OrderWidget, PosWidget, WatchWidget, …
 │   └── …                     # CommandBar, GridSystem, LiveTicker, Panel, ErrorBoundary
 ├── lib/                      # Shared utilities and singletons
-│   ├── socket.ts             # Native WebSocket singleton (wsService)
+│   ├── socket.ts             # (not used — replaced by marketWs.ts and newsSocket.ts)
+│   ├── marketWs.ts           # Native WebSocket singleton for market ticks (wsService)
+│   ├── newsSocket.ts         # Native WebSocket singleton for live news feed
 │   ├── cache.ts              # In-memory TTL cache (Map-backed, fixed-window rate limiter)
 │   └── …                     # openalgo.ts, openalgo-server.ts, prisma.ts, logger.ts
 └── store/
@@ -211,7 +213,7 @@ prisma/
                               # (watchlist & notifications live in the Python backend DB)
 blm-mcp-bundle/              # Claude Desktop MCP plugin
 ├── server/index.js           # Node.js proxy (stdio → HTTP)
-├── manifest.json             # Plugin manifest with 29 tools
+├── manifest.json             # Plugin manifest with 32 tools
 ├── build.js                  # Cross-platform build script
 └── README.md                # Usage instructions
 ```
@@ -220,7 +222,7 @@ blm-mcp-bundle/              # Claude Desktop MCP plugin
 
 ## Claude Desktop Integration
 
-BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 29 backend tools directly to Claude. This allows Claude to query NSE market data, screener.in fundamentals, watchlists, news, and Morningstar fair values without needing the Next.js frontend.
+BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 32 backend tools directly to Claude. This allows Claude to query NSE market data, screener.in fundamentals, watchlists, news, and Morningstar fair values without needing the Next.js frontend.
 
 ### Quick Start
 

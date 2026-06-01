@@ -80,6 +80,7 @@ export type PanelCount = 2 | 4 | 6 | 8;
 export interface PanelSplitSizes {
   rowSizes: number[];
   colSizes: number[][];
+  mergedColSizes?: number[];
 }
 
 export const PANEL_LAYOUTS: Record<PanelCount, { rows: number; cols: number }> = {
@@ -121,6 +122,112 @@ export const panelCountAtom = atomWithStorage<PanelCount>('terminal.panelCount',
 export const panelSizesAtom = atomWithStorage<PanelSplitSizes | null>('terminal.panelSizes', null, tabStorage);
 
 export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1', tabStorage);
+
+// ─── Panel Selection & Merging ────────────────────────────────────────────────
+
+/** Panels currently selected with Ctrl+Click (ephemeral — not persisted) */
+export const selectedPanelsAtom = atom<string[]>([]);
+
+export interface MergedGroup {
+  panels: string[];
+  primary: string;
+}
+
+/** Map from primary panel ID to its merge group (persisted per tab) */
+export const mergedGroupsAtom = atomWithStorage<Record<string, MergedGroup>>(
+  'terminal.mergedGroups',
+  {},
+  tabStorage,
+);
+
+/**
+ * Returns the MergedGroup that contains `panelId`, or `undefined` if none.
+ */
+export function getMergedGroupForPanel(
+  panelId: string,
+  mergedGroups: Record<string, MergedGroup>,
+): MergedGroup | undefined {
+  for (const group of Object.values(mergedGroups)) {
+    if (group.panels.includes(panelId)) {
+      return group;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Validates whether a set of selected panel IDs can be merged.
+ * Rules:
+ *   - Must be at least 2 panels.
+ *   - Must be an even number of panels.
+ *   - Must form a solid rectangle (no L-shapes, no gaps).
+ *   - No panel may already belong to an existing merge group.
+ */
+export function validateMergeSelection(
+  panelIds: string[],
+  panelCount: PanelCount,
+  mergedGroups: Record<string, MergedGroup>,
+): { valid: boolean; error?: string } {
+  if (panelIds.length < 2) {
+    return { valid: false, error: 'Select at least 2 panels' };
+  }
+
+  if (panelIds.length % 2 !== 0) {
+    return { valid: false, error: 'Select an even number of panels' };
+  }
+
+  const validPanelIds = new Set(
+    Array.from({ length: panelCount }, (_, index) => `panel-${index + 1}`),
+  );
+
+  for (const panelId of panelIds) {
+    if (!validPanelIds.has(panelId)) {
+      return { valid: false, error: 'Selected panels must be in the current layout' };
+    }
+  }
+
+  for (const panelId of panelIds) {
+    for (const group of Object.values(mergedGroups)) {
+      if (group.panels.includes(panelId)) {
+        return { valid: false, error: 'Selected panels must not already be merged' };
+      }
+    }
+  }
+
+  const layout = PANEL_LAYOUTS[panelCount];
+  const positions = panelIds.map((id) => {
+    const num = Number(id.split('-')[1]);
+    const zeroBasedIndex = num - 1;
+    const row = Math.floor(zeroBasedIndex / layout.cols);
+    const col = zeroBasedIndex % layout.cols;
+    return { id, row, col };
+  });
+
+  const rows = positions.map((p) => p.row);
+  const cols = positions.map((p) => p.col);
+  const minRow = Math.min(...rows);
+  const maxRow = Math.max(...rows);
+  const minCol = Math.min(...cols);
+  const maxCol = Math.max(...cols);
+
+  const expectedCount = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+  if (expectedCount !== panelIds.length) {
+    return { valid: false, error: 'Selection must form a solid rectangle' };
+  }
+
+  const selectedSet = new Set(panelIds);
+  for (let r = minRow; r <= maxRow; r++) {
+    for (let c = minCol; c <= maxCol; c++) {
+      const expectedNum = r * layout.cols + c + 1;
+      const expectedId = `panel-${expectedNum}`;
+      if (!selectedSet.has(expectedId)) {
+        return { valid: false, error: 'Selection must form a solid rectangle' };
+      }
+    }
+  }
+
+  return { valid: true };
+}
 
 // ─── Global Active Symbol ─────────────────────────────────────────────────────
 

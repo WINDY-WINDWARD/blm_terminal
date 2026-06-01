@@ -7,7 +7,7 @@ Guidelines for AI coding agents working in this repository.
 ## Project Overview
 
 Financial terminal UI: **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, **Jotai** (with `atomWithStorage`), native **WebSocket** for real-time data.
-Widgets: Chart, Watch, Movers, Order, Pos, Settings, Deals, Largedeals, Breakouts, Fundamentals, News, Analysis, Notif.
+Widgets: Chart, Watch, Movers, Order, Pos, Settings, Deals, Largedeals, Breakouts, Fundamentals, News, Analysis, Notif, Ai, Announcements, Portfolio, Scan, Screener, Docs.
 Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy; manages its own SQLite DB via Alembic.
 Local persistence: **Prisma + SQLite** (`better-sqlite3`) for `TopMoverSymbol`, `UserSettings`.
 
@@ -52,18 +52,31 @@ src/
 │   ├── watchlist/route.ts      # single watchlist
 │   ├── watchlists/route.ts     # multiple watchlists
 │   ├── notifications/route.ts  # GET/POST
-│   └── notifications/[id]/route.ts  # PUT/DELETE
-├── components/widgets/  # ChartWidget, WatchWidget, MoversWidget, OrderWidget, PosWidget, SettingsWidget, DealsWidget, LargedealsWidget, BreakoutsWidget, FundamentalsWidget, NewsWidget, AnalysisWidget, NotifWidget
-├── lib/        # api-config, cache, logger, openalgo-server, openalgo, prisma, rate-limiter, socket, utils
+│   ├── notifications/[id]/route.ts  # PUT/DELETE
+│   ├── announcements/route.ts  # NSE corporate announcements
+│   ├── event-calendar/route.ts # Event calendar
+│   ├── filing-xml/route.ts     # Corporate filing XML
+│   ├── jobs/route.ts           # Background job monitoring
+│   └── stockuniverse/errors/route.ts  # Stock universe error tracking
+├── components/widgets/  # ChartWidget, WatchWidget, MoversWidget, OrderWidget, PosWidget, SettingsWidget, DealsWidget, LargedealsWidget, BreakoutsWidget, FundamentalsWidget, NewsWidget, AnalysisWidget, NotifWidget, AiWidget, AnnouncementsWidget, PortfolioWidget, ScanWidget, ScreenerWidget, DocsWidget
+├── lib/        # api-config, cache, logger, marketWs, newsSocket, openalgo-server, openalgo, rate-limiter, screenerTql, utils, widgetDocs
 └── store/terminalStore.ts  # all Jotai atoms
 backend/  # FastAPI (Python ≥ 3.11)
-├── app/routers/   # markets, news, screener, stockuniverse, watchlist, ai_summarizer, notifications, corporatefilings, morningstar
-├── app/services/  # nse_client, screener_client, moneycontrol_client, morningstar_client
+├── app/routers/   # markets, market_ws, news, news_ws, screener, stockuniverse, watchlist,
+│                  # ai_summarizer, ai_chat, notifications, corporatefilings, morningstar,
+│                  # announcements, valuation, portfolio, ticker, jobs, system_config,
+│                  # nonpersistence, mcp_server
+├── app/services/  # nse_client, nse_client_async, nse_rate_limiter, nse_charting_client,
+│                  # screener_client, moneycontrol_client, morningstar_client,
+│                  # news_fetcher, news_aggregator, news_sources, rss_parser,
+│                  # ai_summarizer, ai_chat_service, indicators, momentum, returns,
+│                  # ticker_warehouse, tql_parser, nlp_service, cache, cookie_loader
 ├── app/models/, app/schemas/
-├── app/backgroundtasks.py  # fair value sync, notification worker
+├── app/orchestrator.py  # central background worker manager
+├── app/backgroundtasks.py  # fair value sync, notification worker, stock universe sync
 └── tests/
 prisma/schema.prisma
-blm-mcp-bundle/  # Claude Desktop MCP plugin (29 tools)
+blm-mcp-bundle/  # Claude Desktop MCP plugin (32 tools)
 ```
 
 ---
@@ -78,7 +91,7 @@ blm-mcp-bundle/  # Claude Desktop MCP plugin (29 tools)
   }
   ```
 - Use `import type` for type-only imports.
-- `socket.io-client` in package.json but **not used** — use native WebSocket in `src/lib/socket.ts`.
+- `socket.io-client` in package.json but **not used** — use native WebSocket via `src/lib/marketWs.ts` (market ticks) and `src/lib/newsSocket.ts` (news feed).
 
 ### Imports
 - `@/` alias for cross-directory; relative `./` only within same directory.
@@ -108,7 +121,7 @@ blm-mcp-bundle/  # Claude Desktop MCP plugin (29 tools)
 ### Data Fetching
 - Use `useQuery`/`useMutation` from `@tanstack/react-query`. Never raw `useEffect + useState`.
 - Force refresh: `queryClient.invalidateQueries()` or `queryClient.refetchQueries()`.
-- WebSocket: use `wsService` singleton from `src/lib/socket.ts`.
+- WebSocket: use `wsService` singleton from `src/lib/marketWs.ts`.
 
 ### Error Handling
 - Proxy routes return `{ error: string }`. Components read `data.error`.
@@ -129,7 +142,7 @@ blm-mcp-bundle/  # Claude Desktop MCP plugin (29 tools)
 ```
 # Server-only (never NEXT_PUBLIC_)
 OPENALGO_URL, OPENALGO_API_KEY, OPENALGO_TIMEOUT_MS, RATE_LIMIT_PER_MINUTE
-PYTHON_BACKEND_URL=http://localhost:8000
+PYTHON_BACKEND_URL=http://localhost:4455
 
 # Client-safe
 NEXT_PUBLIC_OPENALGO_WS_URL, NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE

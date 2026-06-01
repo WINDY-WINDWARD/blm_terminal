@@ -74,48 +74,55 @@ If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows,
 - The `REMOTE_PATH` must be `/api/mcp/mcp` (FastMCP's default `/mcp` nested under `/api/mcp`)
 - Restart Claude Desktop after editing the config
 
-## Available Tools (29)
+## Available Tools (32)
 
-### Market Data (12)
+### Market Data (11)
 - `health_check` - Service health status
 - `get_top_gainers` - Today's top-gaining NSE equities
 - `get_top_losers` - Today's top-losing NSE equities
-- `get_bulk_deals` - Bulk deals for a symbol
-- `get_block_deals` - Block deals for a symbol
-- `get_high_short_interest` - High short interest stocks
-- `get_largedeal_snapshot` - Recent large deals snapshot
+- `get_bulk_deals` - Bulk deals for one or multiple symbols
+- `get_block_deals` - Block deals for one or multiple symbols
+- `get_largedeal_snapshot` - Recent large deals snapshot (bulk/short/block)
 - `get_change_ranges` - Multi-timeframe % changes
 - `get_symbol_data` - Live quote data (LTP, 52wk high/low, etc.)
 - `get_52week_low_stocks` - New 52-week low stocks
 - `get_52week_high_stocks` - New 52-week high stocks
 - `get_volume_gainers` - Volume gainers
 
-### Screener.in (4)
+### Corporate Data (1)
+- `get_corporate_filings` - Quarterly financial results as pipe-delimited CSV
+
+### Screener.in (3)
 - `screener_search` - Search companies by name/symbol
 - `screener_company` - Get fundamentals (P/E, ROCE, ROE, etc.)
 - `screener_trades` - Insider trades, bulk/block deals
-- `get_company_quarterly_results` - Full quarterly results
 
 ### Morningstar (1)
-- `morningstar_search` - Resolve symbol to Morningstar ID
+- `get_morningstar_fairvalue` - Fair value estimate for one or multiple symbols
 
 ### Stock Universe (3)
 - `list_stock_universe` - All stocks in DB
-- `get_stock_universe` - Single stock details
+- `get_stock_universe` - Single or bulk stock details
 - `search_stock_universe` - Search by prefix
 
-### Watchlist (3)
-- `list_watchlist` - Get all watchlist items
-- `add_watchlist_item` - Add symbol to watchlist
-- `remove_watchlist_item` - Remove by ID
+### Watchlist (5)
+- `list_watchlist` - Get all default watchlist items
+- `get_watchlist_symbols` - Distinct symbols from default watchlist
+- `remove_watchlist_item` - Remove item by ID
+- `list_watchlists` - List all user-created watchlists
+- `get_watchlist_items` - All items in a specific watchlist
+
+### Notifications (2)
+- `get_notifications` - Unread alerts for a watchlist
+- `get_global_notifications` - Global NSE scan alerts across all stocks
 
 ### News (2)
-- `get_global_news` - Global MoneyControl news
-- `get_company_news` - Symbol-specific news
+- `get_global_news` - Global news from MoneyControl and RSS sources
+- `get_company_news` - Symbol-specific news with NLP analysis
 
 ### Industries/Sectors (4)
-- `list_industries` - All industries
-- `list_sectors` - All sectors
+- `list_industries` - All industries with market cap, PE, sentiment
+- `list_sectors` - All sectors with market cap, PE, sentiment
 - `get_industry_stocks` - Stocks in an industry
 - `get_sector_stocks` - Stocks in a sector
 
