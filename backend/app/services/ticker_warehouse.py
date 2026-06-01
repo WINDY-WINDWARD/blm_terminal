@@ -931,6 +931,109 @@ def get_all_universe_symbols() -> list[str]:
         return list(symbols)
 
 
+def get_reference_latest_timestamp(
+    symbol: str,
+    interval: str,
+) -> Optional[datetime]:
+    """Fetch the latest candle timestamp for a reference symbol from NSE charting API.
+
+    Returns naive UTC datetime (matching DB schema), or None on failure/empty.
+    """
+    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+
+    try:
+        candles = fetch_candles(symbol, interval, from_ts=0)
+    except Exception as exc:
+        logger.warning("[wm_ref] failed to fetch reference %s/%s: %s", symbol, interval, exc)
+        return None
+
+    if not candles:
+        logger.warning("[wm_ref] no candles for reference %s/%s", symbol, interval)
+        return None
+
+    latest_ms = candles[-1]["time_ms"]
+    return datetime.fromtimestamp(latest_ms / 1000, tz=pytz.utc).replace(tzinfo=None)
+
+
+def get_symbols_needing_intraday_backfill(
+    intervals: list[str],
+    symbols: list[str],
+    reference_symbol: str = "ADANIENT",
+    fallback_symbol: str = "RELIANCE",
+) -> Optional[dict[str, list[str]]]:
+    """Get symbols whose W/M candles are stale compared to a reference symbol.
+
+    Queries the NSE charting API for the reference symbol's latest candle per
+    interval, then compares each symbol's stored max timestamp against it.
+
+    Args:
+        intervals:      List of intervals to check (e.g. ["W", "M"]).
+        symbols:        Candidate symbols to evaluate.
+        reference_symbol: Primary reference symbol (default ADANIENT).
+        fallback_symbol:  Fallback if primary fails (default RELIANCE).
+
+    Returns:
+        None  → reference fetch failed for both symbols.
+        {}    → all symbols are up to date.
+        {"W": [...], "M": [...]} → stale symbols per interval.
+    """
+    if not symbols:
+        return {}
+
+    reference_ts: dict[str, datetime] = {}
+    for iv in intervals:
+        ts = get_reference_latest_timestamp(reference_symbol, iv)
+        if ts is None:
+            ts = get_reference_latest_timestamp(fallback_symbol, iv)
+        if ts is None:
+            logger.warning(
+                "[wm_stale] reference fetch failed for both %s and %s on interval %s",
+                reference_symbol, fallback_symbol, iv,
+            )
+            return None
+        reference_ts[iv] = ts
+        logger.info("[wm_stale] reference %s/%s latest = %s", reference_symbol, iv, ts)
+
+    symbol_set = set(symbols)
+
+    with _get_session() as db:
+        rows = db.execute(
+            select(
+                TickerIntraday.symbol,
+                TickerIntraday.interval,
+                func.max(TickerIntraday.timestamp).label("max_ts"),
+            )
+            .where(
+                TickerIntraday.symbol.in_(symbol_set),
+                TickerIntraday.interval.in_(intervals),
+            )
+            .group_by(TickerIntraday.symbol, TickerIntraday.interval)
+        ).fetchall()
+
+    max_ts_by_sym_iv: dict[tuple[str, str], datetime] = {
+        (row[0], row[1]): row[2] for row in rows
+    }
+
+    stale_map: dict[str, list[str]] = {}
+    for iv in intervals:
+        ref_ts = reference_ts[iv]
+        stale_symbols: list[str] = []
+        for sym in symbols:
+            max_ts = max_ts_by_sym_iv.get((sym, iv))
+            if max_ts is None or max_ts < ref_ts:
+                stale_symbols.append(sym)
+        if stale_symbols:
+            stale_map[iv] = stale_symbols
+
+    total_stale = sum(len(s) for s in stale_map.values())
+    logger.info(
+        "[wm_stale] %d/%d symbols need backfill across intervals %s",
+        total_stale, len(symbols), intervals,
+    )
+
+    return stale_map
+
+
 # ---------------------------------------------------------------------------
 # Intraday / Weekly / Monthly OHLCV  (ticker_intraday table)
 # ---------------------------------------------------------------------------
@@ -1052,10 +1155,30 @@ def get_intraday(
         return _do_get(session)
 
 
+def _symbol_has_intraday_data(
+    symbol: str,
+    interval: str,
+    db: Optional[Session] = None,
+) -> bool:
+    """Check if a symbol already has stored intraday rows for a given interval."""
+    def _check(session: Session) -> bool:
+        count = session.execute(
+            select(func.count(TickerIntraday.id))
+            .where(TickerIntraday.symbol == symbol, TickerIntraday.interval == interval)
+        ).scalar() or 0
+        return count > 0
+
+    if db is not None:
+        return _check(db)
+    with _get_session() as session:
+        return _check(session)
+
+
 def backfill_intraday_symbol(
     symbol: str,
     intervals: Optional[list[str]] = None,
     db: Optional[Session] = None,
+    from_ts_overrides: Optional[dict[str, int]] = None,
 ) -> dict[str, int]:
     """Backfill intraday/weekly/monthly candles for a single symbol.
 
@@ -1069,6 +1192,10 @@ def backfill_intraday_symbol(
         symbol:    NSE ticker.
         intervals: List of intervals to backfill. Defaults to ["1h", "W", "M"].
         db:        Optional existing sync Session.
+        from_ts_overrides: Optional dict mapping interval → from_ts (Unix seconds).
+            When provided and the symbol already has data for that interval,
+            the override is used instead of the default. New symbols (no rows)
+            always get from_ts=0 to ensure full history.
 
     Returns:
         Dict mapping interval → number of rows upserted.
@@ -1086,6 +1213,14 @@ def backfill_intraday_symbol(
             from_ts = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
         else:
             from_ts = 0  # all history
+
+        # Apply override for W/M if symbol already has data
+        if from_ts_overrides and iv in from_ts_overrides:
+            has_data = _symbol_has_intraday_data(symbol, iv, db=db)
+            if has_data:
+                from_ts = from_ts_overrides[iv]
+            else:
+                from_ts = 0  # new symbol needs full history
 
         try:
             rows = fetch_candles(symbol, iv, from_ts=from_ts, to_ts=now_ts)

@@ -1004,7 +1004,14 @@ def ticker_daily_update_worker() -> None:
 # Intraday / Weekly / Monthly candle worker
 # ---------------------------------------------------------------------------
 
-def _ticker_intraday_update_sync(intervals: list[str] = None, scope: str = "watchlist") -> None:
+def _ticker_intraday_update_sync(
+    intervals: list[str] = None,
+    scope: str = "watchlist",
+    smart: bool = False,
+    reference_symbol: str = "ADANIENT",
+    fallback_symbol: str = "RELIANCE",
+    from_ts_overrides: Optional[dict[str, int]] = None,
+) -> None:
     """Synchronous core: backfill intraday candles for watchlist or all universe symbols.
 
     Args:
@@ -1012,6 +1019,13 @@ def _ticker_intraday_update_sync(intervals: list[str] = None, scope: str = "watc
             Defaults to ["1h", "W", "M"] for backward compatibility.
         scope: "watchlist" (default) — only symbols in any watchlist.
                "universe" — all symbols in stock_universe (for W/M nightly/startup runs).
+        smart: If True, only backfill symbols whose latest stored candle is older
+            than the reference symbol's latest candle. Skips up-to-date symbols.
+        reference_symbol: Primary reference for smart staleness check.
+        fallback_symbol: Fallback reference if primary fails.
+        from_ts_overrides: Optional dict mapping interval → from_ts (Unix seconds).
+            When provided, existing symbols get the override window; new symbols
+            always fetch full history (from_ts=0).
 
     Called from workers/orchestrator. Loops symbols, calls backfill_intraday_symbol()
     for each, logs counts. 1 s delay between symbols to avoid NSE charting API rate limits.
@@ -1019,6 +1033,7 @@ def _ticker_intraday_update_sync(intervals: list[str] = None, scope: str = "watc
     from app.services.ticker_warehouse import (
         backfill_intraday_symbol,
         get_all_universe_symbols,
+        get_symbols_needing_intraday_backfill,
         get_watchlist_symbols,
     )
 
@@ -1033,15 +1048,50 @@ def _ticker_intraday_update_sync(intervals: list[str] = None, scope: str = "watc
         logger.info("[intraday_worker] no %s symbols to backfill", scope_label)
         return
 
-    logger.info("[intraday_worker] starting backfill for %d %s symbols, intervals=%s", len(symbols), scope_label, intervals)
+    # Smart mode: filter to only stale symbols
+    symbol_intervals: dict[str, list[str]]
+    if smart:
+        stale_map = get_symbols_needing_intraday_backfill(
+            intervals, symbols, reference_symbol=reference_symbol, fallback_symbol=fallback_symbol
+        )
+        if stale_map is None:
+            logger.warning(
+                "[intraday_worker] smart mode: reference fetch failed, falling back to full %s scope",
+                scope_label,
+            )
+            symbol_intervals = {sym: intervals for sym in symbols}
+        elif not stale_map:
+            logger.info(
+                "[intraday_worker] smart mode: all %d %s symbols up to date for intervals %s",
+                len(symbols), scope_label, intervals,
+            )
+            return
+        else:
+            symbol_intervals = {}
+            for iv, syms in stale_map.items():
+                for sym in syms:
+                    symbol_intervals.setdefault(sym, []).append(iv)
+            logger.info(
+                "[intraday_worker] smart mode: %d/%d %s symbols need backfill for intervals %s",
+                len(symbol_intervals), len(symbols), scope_label, intervals,
+            )
+    else:
+        symbol_intervals = {sym: intervals for sym in symbols}
+
+    symbols_to_process = list(symbol_intervals.keys())
     total: dict[str, int] = {iv: 0 for iv in intervals}
     errors = 0
 
-    for sym in symbols:
+    for idx, sym in enumerate(symbols_to_process, start=1):
         if _shutdown_event.is_set():
             break
+
+        needed = symbol_intervals.get(sym, intervals)
+        if not needed:
+            continue
+
         try:
-            counts = backfill_intraday_symbol(sym, intervals)
+            counts = backfill_intraday_symbol(sym, needed, from_ts_overrides=from_ts_overrides)
             for iv, n in counts.items():
                 if iv in total:
                     total[iv] = total.get(iv, 0) + n

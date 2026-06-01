@@ -115,8 +115,13 @@ def get_scripcode(symbol: str, series: str | None = None) -> tuple[str, str]:
 
     Resolution order:
       1. If *series* is provided, try ``{symbol}-{series}`` first.
-      2. Fallback loop: try each of _SERIES_FALLBACK in order.
-      3. Raise ValueError if nothing resolves.
+      2. If symbol already ends with a known series suffix (e.g. BODALCHEM-BE),
+         try the symbol as-is first (don't double-append), then try the base
+         symbol with other standard series.
+      3. If symbol ends with a non-standard suffix (e.g. 5PAISA-RE), strip it
+         and try the base symbol with standard series fallbacks.
+      4. Plain symbol — standard fallback loop through _SERIES_FALLBACK.
+      5. Raise ValueError if nothing resolves.
 
     Results are cached in-process keyed by symbol. Failed lookups are cached
     as None to avoid repeating the full series-probe on subsequent calls.
@@ -127,26 +132,62 @@ def get_scripcode(symbol: str, series: str | None = None) -> tuple[str, str]:
             raise ValueError(f"[nse_charting] no scripcode found for {symbol} (cached failure)")
         return cached
 
-    # Build ordered list of series suffixes to try
-    to_try: list[str] = []
-    if series and series not in _SERIES_FALLBACK:
-        to_try.append(series)
-    elif series:
-        to_try = [series] + [s for s in _SERIES_FALLBACK if s != series]
-    else:
-        to_try = list(_SERIES_FALLBACK)
+    # Detect if symbol already embeds a series suffix
+    parts = symbol.rsplit("-", 1)
+    symbol_has_known_series = len(parts) == 2 and parts[1] in _SERIES_FALLBACK
+    symbol_has_other_suffix = len(parts) == 2 and parts[1] not in _SERIES_FALLBACK
 
-    for s in to_try:
-        nse_symbol = f"{symbol}-{s}"
+    # Build ordered list of candidate (nse_symbol, resolved_series)
+    candidates: list[tuple[str, str]] = []
+
+    # 1. Caller-supplied series hint
+    if series and series not in _SERIES_FALLBACK:
+        candidates.append((f"{symbol}-{series}", series))
+    elif series:
+        for s in [series] + [s for s in _SERIES_FALLBACK if s != series]:
+            candidates.append((f"{symbol}-{s}", s))
+
+    if symbol_has_known_series:
+        # 2a. Symbol already has known series suffix (e.g. BODALCHEM-BE)
+        known_s = parts[1]
+        candidates.append((symbol, known_s))
+        # Also try other series on the base symbol
+        base = parts[0]
+        for s in _SERIES_FALLBACK:
+            if s != known_s:
+                candidates.append((f"{base}-{s}", s))
+
+    elif symbol_has_other_suffix:
+        # 2b. Non-standard suffix (e.g. 5PAISA-RE) — try base + standard series
+        base = parts[0]
+        for s in _SERIES_FALLBACK:
+            candidates.append((f"{base}-{s}", s))
+
+    else:
+        # 3. Plain symbol — standard fallback loop
+        for s in _SERIES_FALLBACK:
+            candidates.append((f"{symbol}-{s}", s))
+
+    # Deduplicate while preserving order
+    seen: set[tuple[str, str]] = set()
+    deduped: list[tuple[str, str]] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            deduped.append(c)
+
+    for nse_symbol, resolved_s in deduped:
         code = _lookup_scripcode_for_nse_symbol(nse_symbol, symbol)
         if code:
-            _scripcode_cache[symbol] = (code, s)
-            logger.debug("[nse_charting] scripcode %s → %s (series=%s)", symbol, code, s)
-            return code, s
+            _scripcode_cache[symbol] = (code, resolved_s)
+            logger.debug("[nse_charting] scripcode %s → %s (series=%s)", symbol, code, resolved_s)
+            return code, resolved_s
 
-    # Cache the failure so we don't probe all 4 series again
+    # Cache the failure so we don't probe all series again
     _scripcode_cache[symbol] = None
-    raise ValueError(f"[nse_charting] no scripcode found for {symbol} (tried {to_try})")
+    raise ValueError(
+        f"[nse_charting] no scripcode found for {symbol} (tried {[c[0] for c in deduped]})"
+    )
 
 
 # ---------------------------------------------------------------------------

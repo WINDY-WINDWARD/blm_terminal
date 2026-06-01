@@ -256,9 +256,9 @@ class Orchestrator:
                 logger.info("Orchestrator [%s] Stage 1b: ticker_weekly_monthly_update (universe scope)", mode.value)
                 if _is_job_enabled("job.ticker_weekly_monthly_update"):
                     await update_job_status(pipeline_job_key, "running", progress=16,
-                                            message="Stage 1b/7: Backfilling W/M candles for all universe symbols...")
+                                            message="Stage 1b/7: Backfilling W/M candles for stale universe symbols...")
                     await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe"),
+                                               lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe", smart=True),
                                                _pipeline_lock, _pipeline_idle)
                     await update_job_status(pipeline_job_key, "running", progress=17,
                                             message="Stage 1b/7 complete — universe W/M candles synced")
@@ -371,9 +371,17 @@ class Orchestrator:
                 logger.info("Orchestrator [%s] Stage 5a: ticker_weekly_monthly_update", mode.value)
                 if _is_job_enabled("job.ticker_weekly_monthly_update"):
                     await update_job_status(pipeline_job_key, "running", progress=76,
-                                            message="Stage 5a/7: Backfilling W/M candles for all universe symbols...")
+                                            message="Stage 5a/7: Refreshing W/M candles for all universe symbols...")
+                    now_utc = datetime.now(timezone.utc)
+                    wm_from_ts_overrides = {
+                        "W": int((now_utc - timedelta(days=30)).timestamp()),
+                        "M": int((now_utc - timedelta(days=90)).timestamp()),
+                    }
                     await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe"),
+                                               lambda: _ticker_intraday_update_sync(
+                                                   ["W", "M"], scope="universe",
+                                                   from_ts_overrides=wm_from_ts_overrides,
+                                               ),
                                                _pipeline_lock, _pipeline_idle)
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=82,
