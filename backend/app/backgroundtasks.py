@@ -1008,8 +1008,6 @@ def _ticker_intraday_update_sync(
     intervals: list[str] = None,
     scope: str = "watchlist",
     smart: bool = False,
-    reference_symbol: str = "ADANIENT",
-    fallback_symbol: str = "RELIANCE",
     from_ts_overrides: Optional[dict[str, int]] = None,
 ) -> None:
     """Synchronous core: backfill intraday candles for watchlist or all universe symbols.
@@ -1020,9 +1018,9 @@ def _ticker_intraday_update_sync(
         scope: "watchlist" (default) — only symbols in any watchlist.
                "universe" — all symbols in stock_universe (for W/M nightly/startup runs).
         smart: If True, only backfill symbols whose latest stored candle is older
-            than the reference symbol's latest candle. Skips up-to-date symbols.
-        reference_symbol: Primary reference for smart staleness check.
-        fallback_symbol: Fallback reference if primary fails.
+            than the DB consensus (most common latest timestamp). Skips up-to-date
+            symbols. Uses DB consensus to avoid false positives from live API
+            returning incomplete current periods.
         from_ts_overrides: Optional dict mapping interval → from_ts (Unix seconds).
             When provided, existing symbols get the override window; new symbols
             always fetch full history (from_ts=0).
@@ -1051,12 +1049,10 @@ def _ticker_intraday_update_sync(
     # Smart mode: filter to only stale symbols
     symbol_intervals: dict[str, list[str]]
     if smart:
-        stale_map = get_symbols_needing_intraday_backfill(
-            intervals, symbols, reference_symbol=reference_symbol, fallback_symbol=fallback_symbol
-        )
+        stale_map = get_symbols_needing_intraday_backfill(intervals, symbols)
         if stale_map is None:
             logger.warning(
-                "[intraday_worker] smart mode: reference fetch failed, falling back to full %s scope",
+                "[intraday_worker] smart mode: consensus check failed, falling back to full %s scope",
                 scope_label,
             )
             symbol_intervals = {sym: intervals for sym in symbols}

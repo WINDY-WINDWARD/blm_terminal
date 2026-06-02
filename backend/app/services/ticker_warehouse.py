@@ -31,6 +31,8 @@ from app.services.indicators import compute_indicators_for_latest_candle
 
 logger = logging.getLogger(__name__)
 
+TICKER_FAILURE_THRESHOLD = 3
+
 NSE_HISTORICAL_URL = "https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData"
 
 TICKER_SERIES_FILTER = "EQ"
@@ -923,96 +925,89 @@ def get_watchlist_symbols() -> list[str]:
 
 
 def get_all_universe_symbols() -> list[str]:
-    """Get all symbols from stock_universe (all series, not filtered to EQ)."""
+    """Get all symbols from stock_universe, excluding removed and ticker-disabled."""
     with _get_session() as db:
         symbols = db.execute(
-            select(StockUniverse.symbol)
+            select(StockUniverse.symbol).where(
+                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+            )
         ).scalars().all()
         return list(symbols)
-
-
-def get_reference_latest_timestamp(
-    symbol: str,
-    interval: str,
-) -> Optional[datetime]:
-    """Fetch the latest candle timestamp for a reference symbol from NSE charting API.
-
-    Returns naive UTC datetime (matching DB schema), or None on failure/empty.
-    """
-    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
-
-    try:
-        candles = fetch_candles(symbol, interval, from_ts=0)
-    except Exception as exc:
-        logger.warning("[wm_ref] failed to fetch reference %s/%s: %s", symbol, interval, exc)
-        return None
-
-    if not candles:
-        logger.warning("[wm_ref] no candles for reference %s/%s", symbol, interval)
-        return None
-
-    latest_ms = candles[-1]["time_ms"]
-    return datetime.fromtimestamp(latest_ms / 1000, tz=pytz.utc).replace(tzinfo=None)
 
 
 def get_symbols_needing_intraday_backfill(
     intervals: list[str],
     symbols: list[str],
-    reference_symbol: str = "ADANIENT",
-    fallback_symbol: str = "RELIANCE",
 ) -> Optional[dict[str, list[str]]]:
-    """Get symbols whose W/M candles are stale compared to a reference symbol.
+    """Get symbols whose W/M candles are stale compared to DB consensus.
 
-    Queries the NSE charting API for the reference symbol's latest candle per
-    interval, then compares each symbol's stored max timestamp against it.
+    Computes the most common latest timestamp across all *stored* symbols per
+    interval (DB consensus). Symbols whose max timestamp is before that consensus
+    are considered stale. New symbols (no rows) are always stale.
+
+    This avoids the pitfall of using a live API reference, which can return an
+    *incomplete* current period (e.g. current week just started on Monday)
+    while the DB only contains *completed* periods (last week). That mismatch
+    caused every symbol to appear stale and triggered a full universe re-fetch.
 
     Args:
-        intervals:      List of intervals to check (e.g. ["W", "M"]).
-        symbols:        Candidate symbols to evaluate.
-        reference_symbol: Primary reference symbol (default ADANIENT).
-        fallback_symbol:  Fallback if primary fails (default RELIANCE).
+        intervals: List of intervals to check (e.g. ["W", "M"]).
+        symbols:   Candidate symbols to evaluate.
 
     Returns:
-        None  → reference fetch failed for both symbols.
+        None  → DB query failed.
         {}    → all symbols are up to date.
         {"W": [...], "M": [...]} → stale symbols per interval.
     """
     if not symbols:
         return {}
 
-    reference_ts: dict[str, datetime] = {}
-    for iv in intervals:
-        ts = get_reference_latest_timestamp(reference_symbol, iv)
-        if ts is None:
-            ts = get_reference_latest_timestamp(fallback_symbol, iv)
-        if ts is None:
-            logger.warning(
-                "[wm_stale] reference fetch failed for both %s and %s on interval %s",
-                reference_symbol, fallback_symbol, iv,
-            )
-            return None
-        reference_ts[iv] = ts
-        logger.info("[wm_stale] reference %s/%s latest = %s", reference_symbol, iv, ts)
-
     symbol_set = set(symbols)
 
     with _get_session() as db:
-        rows = db.execute(
-            select(
-                TickerIntraday.symbol,
-                TickerIntraday.interval,
-                func.max(TickerIntraday.timestamp).label("max_ts"),
-            )
-            .where(
-                TickerIntraday.symbol.in_(symbol_set),
-                TickerIntraday.interval.in_(intervals),
-            )
-            .group_by(TickerIntraday.symbol, TickerIntraday.interval)
-        ).fetchall()
+        try:
+            rows = db.execute(
+                select(
+                    TickerIntraday.symbol,
+                    TickerIntraday.interval,
+                    func.max(TickerIntraday.timestamp).label("max_ts"),
+                )
+                .where(
+                    TickerIntraday.symbol.in_(symbol_set),
+                    TickerIntraday.interval.in_(intervals),
+                )
+                .group_by(TickerIntraday.symbol, TickerIntraday.interval)
+            ).fetchall()
+        except Exception as exc:
+            logger.warning("[wm_stale] DB query failed: %s", exc)
+            return None
 
     max_ts_by_sym_iv: dict[tuple[str, str], datetime] = {
         (row[0], row[1]): row[2] for row in rows
     }
+
+    # Build consensus reference timestamp per interval: the most common max_ts
+    from collections import Counter
+
+    reference_ts: dict[str, datetime] = {}
+    for iv in intervals:
+        timestamps = [
+            max_ts_by_sym_iv[(sym, iv)]
+            for sym in symbols
+            if (sym, iv) in max_ts_by_sym_iv and max_ts_by_sym_iv[(sym, iv)] is not None
+        ]
+        if not timestamps:
+            # No symbol has data for this interval → all are stale
+            reference_ts[iv] = None
+            logger.info("[wm_stale] no stored data for interval %s", iv)
+            continue
+
+        most_common_ts, count = Counter(timestamps).most_common(1)[0]
+        reference_ts[iv] = most_common_ts
+        logger.info(
+            "[wm_stale] consensus ref %s = %s (shared by %d/%d symbols)",
+            iv, most_common_ts, count, len(timestamps),
+        )
 
     stale_map: dict[str, list[str]] = {}
     for iv in intervals:
@@ -1020,8 +1015,13 @@ def get_symbols_needing_intraday_backfill(
         stale_symbols: list[str] = []
         for sym in symbols:
             max_ts = max_ts_by_sym_iv.get((sym, iv))
-            if max_ts is None or max_ts < ref_ts:
+            if max_ts is None:
+                # No stored data → definitely needs backfill
                 stale_symbols.append(sym)
+            elif ref_ts is not None and max_ts < ref_ts:
+                # Older than consensus → stale
+                stale_symbols.append(sym)
+            # max_ts >= ref_ts  → up to date (including symbols ahead of consensus)
         if stale_symbols:
             stale_map[iv] = stale_symbols
 
@@ -1155,6 +1155,36 @@ def get_intraday(
         return _do_get(session)
 
 
+def _increment_ticker_failure(symbol: str) -> None:
+    """Increment ticker failure count; disable symbol at threshold."""
+    with _get_session() as db:
+        row = db.get(StockUniverse, symbol)
+        if row is None:
+            return
+        row.ticker_failure_count = (row.ticker_failure_count or 0) + 1
+        count = row.ticker_failure_count
+        if count >= TICKER_FAILURE_THRESHOLD and row.review_status != "ticker_error":
+            row.review_status = "ticker_error"
+            logger.warning(
+                "[ticker_failure] %s disabled after %d failures (review_status=ticker_error)",
+                symbol, count,
+            )
+        db.commit()
+
+
+def _reset_ticker_failure(symbol: str) -> None:
+    """Reset ticker failure count and clear ticker_error status if set."""
+    with _get_session() as db:
+        row = db.get(StockUniverse, symbol)
+        if row is None:
+            return
+        if row.ticker_failure_count != 0 or row.review_status == "ticker_error":
+            row.ticker_failure_count = 0
+            if row.review_status == "ticker_error":
+                row.review_status = None
+            db.commit()
+
+
 def _symbol_has_intraday_data(
     symbol: str,
     interval: str,
@@ -1230,5 +1260,14 @@ def backfill_intraday_symbol(
         except Exception as exc:
             logger.warning("[intraday] backfill failed %s/%s: %s", symbol, iv, exc)
             counts[iv] = 0
+
+    # Track success/failure for the symbol
+    total_attempted = sum(counts.values())
+    if total_attempted == 0:
+        # All intervals failed — increment failure counter
+        _increment_ticker_failure(symbol)
+    else:
+        # At least one interval succeeded — reset failure counter
+        _reset_ticker_failure(symbol)
 
     return counts

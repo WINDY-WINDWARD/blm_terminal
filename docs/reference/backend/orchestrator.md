@@ -97,7 +97,7 @@ Stage 6  ──►  global_scan  +  watchlist_notif
                (concurrent immediate cycle)
 ```
 
-> **Note:** The hourly intraday workers (`ticker_intraday_hourly_update` → `ticker_intraday_hourly_indicators`) still run independently during market hours. In addition, the Orchestrator now runs `ticker_intraday_hourly_stale_check` at startup and nightly so missing 1h candles are reconciled before daily indicator/score stages.
+> **Note:** The hourly intraday workers (`ticker_intraday_hourly_update` → `ticker_intraday_hourly_indicators`) still run independently during market hours. In addition, the Orchestrator runs `ticker_intraday_hourly_stale_check` at startup and nightly so missing 1h candles are reconciled before daily indicator/score stages. The W/M startup stage uses DB consensus (not a live NSE reference symbol) to avoid false staleness when the live API returns the current incomplete period.
 
 #### NIGHTLY Pipeline (23:00 IST)
 
@@ -121,7 +121,7 @@ Stage 4  ──►  ticker_scores
               (recompute momentum scores on the new indicators)
 
 Stage 5a ──►  ticker_weekly_monthly_update
-              (backfill W/M candles for all watchlist symbols)
+              (startup: backfill only stale/missing universe symbols using DB consensus; nightly: refresh all universe symbols with a bounded W/M window)
 
 Stage 5b ──►  ticker_weekly_monthly_indicators
               (recompute indicators on W/M candles)

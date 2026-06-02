@@ -180,6 +180,12 @@ curl http://localhost:4455/api/market/bulk-deals/TCS
 - `GET /api/stockuniverse` — return all stock universe records (JSON array of objects)
 - `GET /api/stockuniverse/{symbol}` — return a single record for `symbol` (404 if not found)
 - `GET /api/stockuniverse/search/{prefix}` — search by symbol/company prefix
+- `GET /api/stockuniverse/errors` — grouped stock-universe error records, including `ticker_error`
+- `PUT /api/stockuniverse/errors/{symbol}/reset-ticker` — clear `ticker_error` and reset the ticker failure counter
+
+Ticker backfill notes:
+- Weekly/monthly startup backfill uses DB consensus to decide which symbols are stale.
+- Symbols that fail ticker backfill 3 times are marked `ticker_error` and excluded from future ticker runs until reset.
 
 Examples:
 
@@ -187,6 +193,7 @@ Examples:
 curl http://localhost:4455/api/stockuniverse
 curl http://localhost:4455/api/stockuniverse/RELIANCE
 curl http://localhost:4455/api/stockuniverse/search/INF
+curl http://localhost:4455/api/stockuniverse/errors
 ```
 
 5) Watchlist (DB-backed, used by Next.js frontend)
@@ -310,13 +317,13 @@ curl http://localhost:3000/api/py/market/top-gainers
 
 ## MCP Server (Model Context Protocol)
 
-The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides programmatic access to the same read-only data via the MCP protocol, suitable for LLM integrations.
+The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides programmatic access to market data plus portfolio and watchlist actions via the MCP protocol, suitable for LLM integrations.
 
 **Transport:** Streamable HTTP (mounted inside FastAPI)  
 **Path:** `/api/mcp`  
 **Startup:** The MCP server shares the same lifespan as the FastAPI app — migrations, cache cleanup, stock-universe scheduler, and screener session initialization all run once at startup.
 
-### Available MCP Tools (32)
+### Available MCP Tools (37)
 
 | Tool | Description |
 |---|---|
@@ -331,13 +338,18 @@ The backend exposes a streamable HTTP MCP server at `/api/mcp`. This provides pr
 | `get_52week_low_stocks` | 52-week low stocks snapshot |
 | `get_52week_high_stocks` | 52-week high stocks snapshot |
 | `get_volume_gainers` | Volume gainers snapshot |
-| `get_corporate_filings` | Quarterly financial results as CSV (structured) |
+| `get_high_short_interest` | Stocks flagged for high short-selling interest |
+| `get_company_quarterly_results` | Quarterly financial results as CSV (structured) |
 | `screener_search` | Search screener.in for companies |
 | `screener_company` | Company fundamentals from screener.in (requires auth) |
 | `screener_trades` | Insider trades, bulk/block deals from screener.in (requires auth) |
 | `list_stock_universe` | All stock universe records |
 | `get_stock_universe` | Single or bulk stock universe records by symbol |
 | `search_stock_universe` | Search stock universe by prefix |
+| `optimize_portfolio` | Optimize a portfolio from NSE symbols and return weights/statistics |
+| `create_watchlist` | Create a new named watchlist |
+| `add_watchlist_item` | Add a single symbol to a watchlist |
+| `bulk_replace_watchlist` | Replace all items in a watchlist with a new symbol set |
 | `list_watchlist` | Get all items in the default watchlist |
 | `get_watchlist_symbols` | Distinct symbols from the default watchlist |
 | `remove_watchlist_item` | Remove an item from the default watchlist by ID |
