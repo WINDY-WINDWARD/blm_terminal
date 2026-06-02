@@ -26,6 +26,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: string[];
+  isError?: boolean;
 }
 
 interface ModelOption {
@@ -116,6 +117,7 @@ interface MessageBubbleProps {
   msg: ChatMessage;
   isLastAssistant?: boolean;
   toolsDone?: boolean;
+  onRetry?: () => void;
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -186,9 +188,10 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-function MessageBubble({ msg, isLastAssistant, toolsDone }: MessageBubbleProps) {
+function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry }: MessageBubbleProps) {
   const isUser = msg.role === 'user';
   const toolCalls = msg.toolCalls ?? [];
+  const hasError = !isUser && msg.isError;
   return (
     <div className={cn('flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
       {!isUser && toolCalls.length > 0 && (
@@ -203,7 +206,9 @@ function MessageBubble({ msg, isLastAssistant, toolsDone }: MessageBubbleProps) 
           'rounded px-2 py-1.5 text-xs font-mono leading-relaxed break-words max-w-full',
           isUser
             ? 'bg-blue-900/40 text-blue-100 border border-blue-800/50 whitespace-pre-wrap'
-            : 'bg-terminal-gray/30 text-terminal-amber border border-terminal-amber/10',
+            : hasError
+              ? 'bg-red-900/20 text-red-300 border border-red-500/30'
+              : 'bg-terminal-gray/30 text-terminal-amber border border-terminal-amber/10',
         )}
       >
         {isUser ? (
@@ -214,9 +219,20 @@ function MessageBubble({ msg, isLastAssistant, toolsDone }: MessageBubbleProps) 
           <span className="opacity-40 animate-pulse">▋</span>
         )}
       </div>
-      <span className="text-[10px] text-terminal-amber/30 px-1">
-        {isUser ? 'you' : 'blm ai'}
-      </span>
+      <div className="flex items-center gap-2 px-1">
+        <span className="text-[10px] text-terminal-amber/30">
+          {isUser ? 'you' : 'blm ai'}
+        </span>
+        {hasError && isLastAssistant && onRetry && (
+          <button
+            onClick={onRetry}
+            className="text-[10px] text-terminal-amber/50 hover:text-terminal-amber underline underline-offset-2"
+            title="Resend last message"
+          >
+            retry
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -495,17 +511,23 @@ export function AiWidget() {
   }, [defaultModel]);
 
   /** Send a message. Fully scoped to sessionKey — safe to switch sessions during streaming. */
-  const sendMessage = useCallback(async () => {
+  const sendMessage = useCallback(async (forcedInput?: string, replaceLastAssistant?: boolean) => {
     // Capture session key and current state AT CALL TIME — these become
     // immutable locals so the stream closure never reads stale React state.
     const sessionKey = activeKey;
     const sessionState = sessionMap.get(sessionKey) ?? emptySessionState(defaultModel);
-    const trimmed = sessionState.input.trim();
+    const trimmed = (forcedInput ?? sessionState.input).trim();
 
     if (!trimmed || sessionState.isStreaming) return;
 
     const userMessage: ChatMessage = { role: 'user', content: trimmed };
-    const historyWithUser = [...sessionState.messages, userMessage];
+    // If retrying after an error, strip the last assistant message so we don't duplicate
+    const priorMessages = replaceLastAssistant
+      ? sessionState.messages.filter(
+          (_, i, arr) => !(arr[i].role === 'assistant' && i === arr.length - 1)
+        )
+      : sessionState.messages;
+    const historyWithUser = [...priorMessages, userMessage];
 
     const abort = new AbortController();
 
@@ -554,10 +576,18 @@ export function AiWidget() {
 
       if (!res.ok || !res.body) {
         const text = await res.text();
+        // Proxy now returns JSON { error: string } for non-OK responses
+        let displayError = text.slice(0, 200);
+        try {
+          const parsed = JSON.parse(text) as { error?: string };
+          if (parsed.error) displayError = parsed.error.slice(0, 200);
+        } catch {
+          /* not JSON — use raw text */
+        }
         writeStreamState({
           messages: [
             ...historyWithUser,
-            { role: 'assistant', content: `Error: ${res.status} — ${text.slice(0, 200)}` },
+            { role: 'assistant', content: `Error: ${res.status} — ${displayError}`, isError: true },
           ],
           isStreaming: false,
           abortController: null,
@@ -639,8 +669,10 @@ export function AiWidget() {
             writeStreamState({
               messages: [
                 ...historyWithUser,
-                { role: 'assistant', content: assistantContent },
+                { role: 'assistant', content: assistantContent, isError: true },
               ],
+              isStreaming: false,
+              abortController: null,
             });
           } else if (event.type === 'done') {
             streamDone = true;
@@ -661,7 +693,7 @@ export function AiWidget() {
       writeStreamState({
         messages: [
           ...historyWithUser,
-          { role: 'assistant', content: `Error: ${msg}` },
+          { role: 'assistant', content: `Error: ${msg}`, isError: true },
         ],
         isStreaming: false,
         abortController: null,
@@ -691,6 +723,14 @@ export function AiWidget() {
     current.abortController?.abort();
     // isStreaming/abortController cleared in the AbortError catch path of sendMessage
   }, [current]);
+
+  /** Retry the last user message (useful after an error response). */
+  const retryLastMessage = useCallback(() => {
+    const state = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
+    const lastUser = [...state.messages].reverse().find((m) => m.role === 'user');
+    if (!lastUser) return;
+    void sendMessage(lastUser.content, true);
+  }, [activeKey, sessionMap, defaultModel, sendMessage]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -780,6 +820,7 @@ export function AiWidget() {
                 msg={msg}
                 isLastAssistant={isLastAssistant}
                 toolsDone={isLastAssistant ? toolsDone : undefined}
+                onRetry={isLastAssistant ? retryLastMessage : undefined}
               />
             );
           })}

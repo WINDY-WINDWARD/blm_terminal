@@ -199,34 +199,43 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> Stre
         (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
     )
 
-    # Resolve or create session
-    if request.session_id is not None:
-        result = await db.execute(
-            select(ChatSession).where(ChatSession.id == request.session_id)
-        )
-        session = result.scalar_one_or_none()
-        if session is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-    else:
-        session = ChatSession(
-            title=_make_title(last_user_content),
-            model=request.model,
-            symbol=symbol,
-            exchange=exchange,
-        )
-        db.add(session)
-        await db.flush()  # get the id
+    # ------------------------------------------------------------------
+    # Resolve or create session + persist user message.
+    # Wrapped in try/except so that DB lock errors are surfaced as an SSE
+    # error event rather than an unhandled 500.
+    # ------------------------------------------------------------------
+    session_id: int | None = None
+    try:
+        if request.session_id is not None:
+            result = await db.execute(
+                select(ChatSession).where(ChatSession.id == request.session_id)
+            )
+            session = result.scalar_one_or_none()
+            if session is None:
+                return _sse_error_response("Session not found")
+        else:
+            session = ChatSession(
+                title=_make_title(last_user_content),
+                model=request.model,
+                symbol=symbol,
+                exchange=exchange,
+            )
+            db.add(session)
+            await db.flush()  # get the id
 
-    session_id = session.id
+        session_id = session.id
 
-    # Persist the user message
-    user_msg_record = ChatMessageRecord(
-        session_id=session_id,
-        role="user",
-        content=last_user_content,
-    )
-    db.add(user_msg_record)
-    await db.commit()
+        # Persist the user message
+        user_msg_record = ChatMessageRecord(
+            session_id=session_id,
+            role="user",
+            content=last_user_content,
+        )
+        db.add(user_msg_record)
+        await db.commit()
+    except Exception as exc:
+        logger.warning("Chat DB pre-flight failed: %s", exc)
+        return _sse_error_response(f"Database error: {exc}")
 
     async def _event_generator() -> AsyncGenerator[str, None]:
         # First event: tell the frontend which session this belongs to
@@ -284,6 +293,22 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> Stre
 
     return StreamingResponse(
         _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse_error_response(message: str) -> StreamingResponse:
+    """Return a minimal SSE stream containing a single error event."""
+    async def _generator() -> AsyncGenerator[str, None]:
+        yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(
+        _generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
