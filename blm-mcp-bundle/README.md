@@ -1,6 +1,6 @@
 # BLM MCP Bundle
 
-Claude Desktop plugin that proxies tool calls to the BLM Analytics backend.
+Claude Desktop plugin that proxies tool calls to the BLM Analytics backend, including portfolio optimization and watchlist save actions.
 
 ## Prerequisites
 
@@ -74,7 +74,7 @@ If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows,
 - The `REMOTE_PATH` must be `/api/mcp/mcp` (FastMCP's default `/mcp` nested under `/api/mcp`)
 - Restart Claude Desktop after editing the config
 
-## Available Tools (32)
+## Available Tools (37)
 
 ### Market Data (11)
 - `health_check` - Service health status
@@ -89,8 +89,9 @@ If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows,
 - `get_52week_high_stocks` - New 52-week high stocks
 - `get_volume_gainers` - Volume gainers
 
-### Corporate Data (1)
-- `get_corporate_filings` - Quarterly financial results as pipe-delimited CSV
+### Corporate Data (2)
+- `get_high_short_interest` - Stocks flagged for high short-selling interest
+- `get_company_quarterly_results` - Quarterly financial results as pipe-delimited CSV
 
 ### Screener.in (3)
 - `screener_search` - Search companies by name/symbol
@@ -104,6 +105,12 @@ If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows,
 - `list_stock_universe` - All stocks in DB
 - `get_stock_universe` - Single or bulk stock details
 - `search_stock_universe` - Search by prefix
+
+### Portfolio (4)
+- `optimize_portfolio` - Optimize a portfolio and return weights, risk, and correlation stats
+- `create_watchlist` - Create a new watchlist for saving results
+- `add_watchlist_item` - Add one symbol to a watchlist
+- `bulk_replace_watchlist` - Replace a watchlist with a new optimized symbol set
 
 ### Watchlist (5)
 - `list_watchlist` - Get all default watchlist items

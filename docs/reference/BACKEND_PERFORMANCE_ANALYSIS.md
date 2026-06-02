@@ -103,7 +103,7 @@ backend/
 │   ├── config.py                    # Pydantic-settings singleton
 │   ├── database.py                  # Async + Sync SQLAlchemy engines + sessions
 │   ├── backgroundtasks.py           # 4 daemon worker threads
-│   ├── mcp_server.py                # MCP tool definitions (28 tools) — ⚠️ has duplicate _nse_lock
+│   ├── mcp_server.py                # MCP tool definitions (37 tools) — ⚠️ has duplicate _nse_lock
 │   ├── routers/
 │   │   ├── nonpersistence.py        # NSE live data endpoints (CRITICAL BOTTLENECK)
 │   │   ├── corporatefilings.py      # NSE quarterly filings

@@ -55,6 +55,7 @@ Your analysis framework:
 4. MANAGEMENT: Check promoter holding %, pledge %, insider transactions via screener_trades.
 5. GROWTH CONTEXT: 5-year revenue and profit CAGR, Piotroski F-Score.
 6. RED FLAGS: Declining ROCE, rising debt, promoter pledging >20%, frequent equity dilution, poor cash conversion.
+7. PORTFOLIO CONSTRUCTION: When asked to build a value portfolio, select 8–15 stocks with strong quality scores (ROCE >15%, ROE >15%, D/E <1), then use `optimize_portfolio(objective='max_sharpe')` to find the optimal weight distribution. Save the result with `create_watchlist` and `bulk_replace_watchlist`.
 
 Always cite the specific data you retrieved. State your conclusion: BUY / HOLD / AVOID with clear reasoning. Be intellectually honest — if data is insufficient, say so. Do not confuse activity with productivity.""",
 
@@ -104,6 +105,7 @@ Your analysis framework:
    - Weak INR → IT exporters gain, importers lose
    - Strong capex cycle → Capital Goods, Infrastructure, Cement
 5. POSITIONING: State which 2-3 sectors to overweight and which to underweight with clear macro rationale.
+6. PORTFOLIO CONSTRUCTION: Translate sector rotation views into concrete portfolios. Use `list_sectors` and `get_sector_stocks` to identify top-ranked stocks per sector, then use `optimize_portfolio(objective='risk_parity')` for a balanced sector-rotated portfolio. Save with `create_watchlist` and `bulk_replace_watchlist`.
 
 Use get_global_news with threat_level filters to identify macro risks. Be explicit about the difference between short-term (1-3 months) and medium-term (6-12 months) views.""",
 }
@@ -389,6 +391,106 @@ BLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_watchlist_symbols",
+            "description": "Fetch distinct symbols from the default watchlist as a flat list.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_watchlist_item",
+            "description": "Delete a watchlist item from the default watchlist by its numeric ID. Returns {ok: true} on success.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer", "description": "Numeric ID of the watchlist item to remove."},
+                },
+                "required": ["item_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "optimize_portfolio",
+            "description": "Run portfolio optimization on a list of NSE symbols. Supports mean-variance (max_sharpe, min_volatility) and hierarchical risk parity (risk_parity). Returns weights, expected return/volatility/Sharpe, correlation matrix, and per-symbol stats.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of NSE ticker symbols (no .NS suffix). Requires 3–30 symbols.",
+                    },
+                    "period": {
+                        "type": "string",
+                        "enum": ["1y", "2y", "3y"],
+                        "description": "Lookback period: '1y', '2y' (default), or '3y'.",
+                    },
+                    "objective": {
+                        "type": "string",
+                        "enum": ["max_sharpe", "min_volatility", "risk_parity"],
+                        "description": "Optimization goal: 'max_sharpe' (default), 'min_volatility', or 'risk_parity'.",
+                    },
+                    "risk_free_rate": {
+                        "type": "number",
+                        "description": "Annual risk-free rate as decimal (default 0.065 ≈ RBI repo rate).",
+                    },
+                },
+                "required": ["symbols"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_watchlist",
+            "description": "Create a new named watchlist. Returns the created watchlist with its id and creation timestamp.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Watchlist name — alphanumeric and hyphens only (e.g. 'Tech-Buys', 'Portfolio-2024')."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_watchlist_item",
+            "description": "Add a single symbol/exchange pair to a named watchlist. Idempotent — returns the existing row if already present.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "watchlist_id": {"type": "integer", "description": "Numeric watchlist ID — use list_watchlists() to enumerate valid IDs."},
+                    "symbol": {"type": "string", "description": "NSE ticker symbol (e.g. 'RELIANCE', 'TCS')."},
+                    "exchange": {"type": "string", "description": "Exchange (default 'NSE')."},
+                },
+                "required": ["watchlist_id", "symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bulk_replace_watchlist",
+            "description": "Atomically replace all items in a watchlist with a new set of symbols. Use this to save an optimized portfolio — it deletes all existing items and inserts the new set in a single transaction.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "watchlist_id": {"type": "integer", "description": "Numeric watchlist ID to overwrite."},
+                    "symbols": {"type": "array", "items": {"type": "string"}, "description": "List of NSE ticker symbols to set as the new portfolio."},
+                    "exchange": {"type": "string", "description": "Exchange for all symbols (default 'NSE')."},
+                },
+                "required": ["watchlist_id", "symbols"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_notifications",
             "description": _desc("get_notifications"),
             "parameters": {
@@ -541,6 +643,9 @@ BLM_TOOLS_ANTHROPIC: list[dict[str, Any]] = [
 
 async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
     from app.mcp_server import (
+        add_watchlist_item,
+        bulk_replace_watchlist,
+        create_watchlist,
         get_52week_high_stocks,
         get_52week_low_stocks,
         get_block_deals,
@@ -561,12 +666,15 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         get_top_losers,
         get_volume_gainers,
         get_watchlist_items,
+        get_watchlist_symbols,
         health_check,
         list_industries,
         list_sectors,
         list_stock_universe,
         list_watchlist,
         list_watchlists,
+        optimize_portfolio,
+        remove_watchlist_item,
         screener_company,
         screener_search,
         screener_trades,
@@ -574,6 +682,10 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
     )
 
     dispatch: dict[str, Any] = {
+        "add_watchlist_item": add_watchlist_item,
+        "bulk_replace_watchlist": bulk_replace_watchlist,
+        "create_watchlist": create_watchlist,
+        "get_watchlist_symbols": get_watchlist_symbols,
         "health_check": health_check,
         "get_top_gainers": get_top_gainers,
         "get_top_losers": get_top_losers,
@@ -604,6 +716,8 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "list_sectors": list_sectors,
         "get_industry_stocks": get_industry_stocks,
         "get_sector_stocks": get_sector_stocks,
+        "optimize_portfolio": optimize_portfolio,
+        "remove_watchlist_item": remove_watchlist_item,
     }
 
     fn = dispatch.get(name)
@@ -652,6 +766,7 @@ You help traders and investors cut through large volumes of market data to ident
 - **Sector rotation**: Industry and sector PE, advance/decline, sentiment, top stocks by market cap
 - **News & catalysts**: Company-specific news, earnings announcements, macro events affecting the market
 - **Watchlist analysis**: Review held positions, flag signals across watched stocks
+- **Portfolio optimization**: Build and optimize portfolios using mean-variance (max Sharpe, min volatility) or hierarchical risk parity. Fetch a watchlist's symbols, run `optimize_portfolio`, interpret the weights and risk metrics, and save the result as a new or existing watchlist using `create_watchlist` and `bulk_replace_watchlist`.
 
 ## Output Format
 - Lead with the key insight or number — not a preamble.

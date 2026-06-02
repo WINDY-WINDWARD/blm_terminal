@@ -955,6 +955,173 @@ async def get_watchlist_items(watchlist_id: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Portfolio Optimization
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def optimize_portfolio(
+    symbols: list[str],
+    period: str = "2y",
+    objective: str = "max_sharpe",
+    risk_free_rate: float = 0.065,
+) -> dict[str, Any]:
+    """Run portfolio optimization on a list of NSE symbols using mean-variance or hierarchical risk parity.
+
+    Args:
+        symbols: List of NSE ticker symbols (no .NS suffix needed). Requires at least 3 symbols.
+        period: Lookback period — '1y', '2y' (default), or '3y'.
+        objective: Optimization goal — 'max_sharpe' (default), 'min_volatility', or 'risk_parity'.
+        risk_free_rate: Annual risk-free rate as decimal (default 0.065 ≈ RBI repo rate).
+
+    Returns weights per symbol, expected annual return/volatility, Sharpe ratio,
+    a correlation matrix, and per-symbol individual stats.
+    """
+    from app.routers.portfolio import _run_optimization_sync, PortfolioOptimizeRequest
+
+    request = PortfolioOptimizeRequest(
+        symbols=symbols,
+        period=period,
+        objective=objective,
+        risk_free_rate=risk_free_rate,
+    )
+    try:
+        result = await asyncio.to_thread(_run_optimization_sync, request)
+        return result.model_dump(mode="json")
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Watchlist Management
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def create_watchlist(name: str) -> dict[str, Any]:
+    """Create a new named watchlist.
+
+    Args:
+        name: Watchlist name — alphanumeric and hyphens only (e.g. 'Tech-Buys', 'Portfolio-2024').
+
+    Returns the created watchlist with its id and creation timestamp.
+    """
+    async with AsyncSessionLocal() as db:
+        watchlist = WatchlistModel(name=name)
+        db.add(watchlist)
+        await db.commit()
+        await db.refresh(watchlist)
+        return {
+            "id": watchlist.id,
+            "name": watchlist.name,
+            "createdAt": watchlist.created_at.isoformat() if watchlist.created_at else None,
+        }
+
+
+@mcp.tool()
+async def add_watchlist_item(
+    watchlist_id: int,
+    symbol: str,
+    exchange: str = "NSE",
+) -> dict[str, Any]:
+    """Add a single symbol/exchange pair to a named watchlist. Idempotent — returns the existing row if already present.
+
+    Args:
+        watchlist_id: Numeric ID of the watchlist — use list_watchlists() to enumerate valid IDs.
+        symbol: NSE ticker symbol (e.g. 'RELIANCE', 'TCS').
+        exchange: Exchange (default 'NSE').
+
+    Returns the watchlist item with its id, or the existing item if already present.
+    Raises ValueError if the watchlist does not exist.
+    """
+    async with AsyncSessionLocal() as db:
+        watchlist = await db.get(WatchlistModel, watchlist_id)
+        if watchlist is None:
+            raise ValueError(f"Watchlist {watchlist_id} not found")
+
+        sym = symbol.upper().strip()
+        exc = exchange.upper().strip()
+        existing = await db.execute(
+            select(WatchlistItemModel).where(
+                WatchlistItemModel.watchlist_id == watchlist_id,
+                WatchlistItemModel.symbol == sym,
+                WatchlistItemModel.exchange == exc,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            return {
+                "id": row.id,
+                "watchlistId": row.watchlist_id,
+                "symbol": row.symbol,
+                "exchange": row.exchange,
+                "createdAt": row.created_at.isoformat() if row.created_at else None,
+            }
+
+        item = WatchlistItemModel(watchlist_id=watchlist_id, symbol=sym, exchange=exc)
+        db.add(item)
+        await db.commit()
+        await db.refresh(item)
+        return {
+            "id": item.id,
+            "watchlistId": item.watchlist_id,
+            "symbol": item.symbol,
+            "exchange": item.exchange,
+            "createdAt": item.created_at.isoformat() if item.created_at else None,
+        }
+
+
+@mcp.tool()
+async def bulk_replace_watchlist(
+    watchlist_id: int,
+    symbols: list[str],
+    exchange: str = "NSE",
+) -> dict[str, Any]:
+    """Atomically replace all items in a watchlist with a new set of symbols.
+
+    Use this to save an optimized portfolio — it DELETES all existing items
+    and inserts the new set in a single transaction.
+
+    Args:
+        watchlist_id: Numeric ID of the watchlist to overwrite.
+        symbols: List of NSE ticker symbols to set as the new portfolio.
+        exchange: Exchange for all symbols (default 'NSE').
+
+    Returns {ok: true, watchlist_id, items_added} on success.
+    Raises ValueError if the watchlist does not exist.
+    """
+    async with AsyncSessionLocal() as db:
+        watchlist = await db.get(WatchlistModel, watchlist_id)
+        if watchlist is None:
+            raise ValueError(f"Watchlist {watchlist_id} not found")
+
+        await db.execute(
+            delete(WatchlistItemModel).where(
+                WatchlistItemModel.watchlist_id == watchlist_id
+            )
+        )
+
+        exc = exchange.upper().strip()
+        seen: set[str] = set()
+        for sym in symbols:
+            s = sym.upper().strip()
+            if s and s not in seen:
+                seen.add(s)
+                db.add(
+                    WatchlistItemModel(
+                        watchlist_id=watchlist_id, symbol=s, exchange=exc
+                    )
+                )
+
+        await db.commit()
+        return {
+            "ok": True,
+            "watchlist_id": watchlist_id,
+            "items_added": len(seen),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Notifications Endpoints
 # ---------------------------------------------------------------------------
 
