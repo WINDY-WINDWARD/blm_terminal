@@ -2,6 +2,7 @@ import asyncio
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import time as dt_time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, timezone
@@ -17,7 +18,8 @@ from app.services.nse_client import NSEClient, SymbolNotFoundError
 from app.services import ticker_warehouse
 from app.services import indicators
 from app.models import stockuniverse
-from app.models.ticker import TickerScore
+from app.models.ticker import TickerScore, TickerScreenerSnapshot, TickerIntraday
+from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
 from app.models.notification import Notification, GlobalNotification
@@ -716,7 +718,15 @@ def stock_universe_worker() -> None:
 
 
 def _ticker_backfill_sync() -> None:
-    """Perform the ticker backfill synchronization."""
+    """Perform the ticker backfill synchronization.
+
+    Processes up to 10 symbols concurrently using a thread pool. Each batch
+    of 10 is submitted together; results are collected before moving to the
+    next batch. One REQUEST_DELAY_SECONDS sleep is applied per batch (not per
+    symbol) to stay within NSE rate limits while improving throughput ~10x.
+    """
+    _BATCH_SIZE = 10
+
     symbols = ticker_warehouse.get_symbols_needing_backfill()
     total = len(symbols)
     if total == 0:
@@ -724,30 +734,41 @@ def _ticker_backfill_sync() -> None:
         update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="All symbols up to date")
         return
 
-    logger.info(f"ticker_backfill_sync: {total} symbols need backfill")
+    logger.info(f"ticker_backfill_sync: {total} symbols need backfill (batch_size={_BATCH_SIZE})")
 
-    for i, symbol in enumerate(symbols):
+    processed = 0
+    for batch_start in range(0, total, _BATCH_SIZE):
         if _shutdown_event.is_set():
             break
 
-        if i % 10 == 0:
-            progress = int((i / total) * 100)
-            update_job_status_sync(
-                "job.ticker_backfill",
-                "running",
-                progress=progress,
-                message=f"Backfilling {symbol} ({i+1}/{total})",
-            )
+        batch = symbols[batch_start : batch_start + _BATCH_SIZE]
 
-        if i > 0 and i % 50 == 0:
-            logger.info(f"ticker_backfill_sync: refreshing session after {i} symbols")
+        # Refresh NSE session every 50 cumulative symbols
+        if processed > 0 and (processed // 50) != ((processed - len(batch)) // 50):
+            logger.info(f"ticker_backfill_sync: refreshing session after {processed} symbols")
             ticker_warehouse._refresh_nse_session()
 
-        try:
-            ticker_warehouse.backfill_symbol(symbol, days=365)
-        except Exception as e:
-            logger.warning(f"ticker_backfill_sync: failed for {symbol}: {e}")
+        progress = int((batch_start / total) * 100)
+        update_job_status_sync(
+            "job.ticker_backfill",
+            "running",
+            progress=progress,
+            message=f"Backfilling {batch[0]}..{batch[-1]} ({batch_start + 1}-{min(batch_start + _BATCH_SIZE, total)}/{total})",
+        )
 
+        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
+            future_to_symbol = {
+                pool.submit(ticker_warehouse.backfill_symbol, sym, 365): sym
+                for sym in batch
+            }
+            for future in as_completed(future_to_symbol):
+                sym = future_to_symbol[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.warning(f"ticker_backfill_sync: failed for {sym}: {e}")
+
+        processed += len(batch)
         time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
 
     update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
@@ -1077,24 +1098,34 @@ def _ticker_intraday_update_sync(
     symbols_to_process = list(symbol_intervals.keys())
     total: dict[str, int] = {iv: 0 for iv in intervals}
     errors = 0
+    _BATCH_SIZE = 10
 
-    for idx, sym in enumerate(symbols_to_process, start=1):
+    for batch_start in range(0, len(symbols_to_process), _BATCH_SIZE):
         if _shutdown_event.is_set():
             break
 
-        needed = symbol_intervals.get(sym, intervals)
-        if not needed:
-            continue
+        batch = symbols_to_process[batch_start : batch_start + _BATCH_SIZE]
 
-        try:
-            counts = backfill_intraday_symbol(sym, needed, from_ts_overrides=from_ts_overrides)
-            for iv, n in counts.items():
-                if iv in total:
-                    total[iv] = total.get(iv, 0) + n
-            logger.debug("[intraday_worker] %s → %s", sym, counts)
-        except Exception as exc:
-            logger.warning("[intraday_worker] %s failed: %s", sym, exc)
-            errors += 1
+        def _run_intraday(sym: str) -> dict:
+            needed = symbol_intervals.get(sym, intervals)
+            if not needed:
+                return {}
+            return backfill_intraday_symbol(sym, needed, from_ts_overrides=from_ts_overrides)
+
+        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
+            future_to_sym = {pool.submit(_run_intraday, sym): sym for sym in batch}
+            for future in as_completed(future_to_sym):
+                sym = future_to_sym[future]
+                try:
+                    counts = future.result()
+                    for iv, n in counts.items():
+                        if iv in total:
+                            total[iv] = total.get(iv, 0) + n
+                    logger.debug("[intraday_worker] %s → %s", sym, counts)
+                except Exception as exc:
+                    logger.warning("[intraday_worker] %s failed: %s", sym, exc)
+                    errors += 1
+
         time.sleep(1.0)
 
     logger.info(
@@ -1304,11 +1335,18 @@ def _ticker_indicators_sync() -> None:
     strictly newer than its indicators_updated_at timestamp (i.e. a new candle
     arrived but indicators haven't been recomputed for the full history yet).
 
-    Processes in batches of 100 with a 1 s inter-batch delay and prints
-    progress to stdout.  Triggers _ticker_indicator_notification_cycle() after
-    completing.
+    Processes in batches of 100 with a configurable inter-batch delay (env
+    `INDICATOR_INTER_BATCH_SLEEP_S`, default 0).  Triggers
+    _ticker_indicator_notification_cycle() after completing.
     """
+    from app.config import settings
     from app.models.ticker import TickerDaily
+
+    logger.info(
+        "ticker_indicators_sync: scanning ticker_daily for stale/null symbols "
+        "(this can take ~1-2 min on a large universe)…"
+    )
+    scan_start = time.monotonic()
 
     with _SyncSessionLocal() as db:
         # Symbols with any row where indicators_updated_at IS NULL (never backfilled)
@@ -1339,17 +1377,30 @@ def _ticker_indicators_sync() -> None:
         stale_symbols = {row[0] for row in stale_result.fetchall()}
 
     symbols = list(null_symbols | stale_symbols)
+    scan_elapsed = time.monotonic() - scan_start
 
     total = len(symbols)
+    logger.info(
+        "ticker_indicators_sync: scan complete in %.1fs — %d null, %d stale, %d to process",
+        scan_elapsed, len(null_symbols), len(stale_symbols), total,
+    )
+
     if total == 0:
         logger.info("ticker_indicators_sync: all symbols already have per-candle indicators")
         update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="All symbols up to date")
         _ticker_indicator_notification_cycle()
         return
 
-    logger.info(f"ticker_indicators_sync: backfilling indicators for {total} symbols")
+    logger.info("ticker_indicators_sync: backfilling indicators for %d symbols", total)
 
     BATCH_SIZE = 100
+    PROGRESS_EVERY = 10  # log per-symbol progress every N symbols
+    PIPELINE_UPDATE_EVERY = 25  # also nudge job.pipeline.startup bar
+    HEARTBEAT_EVERY_S = 10.0
+    last_log_idx = 0
+    last_heartbeat = time.monotonic()
+    pipeline_start_time = time.monotonic()
+
     for i in range(0, total, BATCH_SIZE):
         if _shutdown_event.is_set():
             logger.info("ticker_indicators_sync: shutdown requested, aborting")
@@ -1358,11 +1409,40 @@ def _ticker_indicators_sync() -> None:
         batch = symbols[i:i + BATCH_SIZE]
         for j, symbol in enumerate(batch):
             global_idx = i + j + 1
-            print(f"\rticker_indicators_sync: [{global_idx}/{total}] {symbol}   ", end="", flush=True)
             try:
                 indicators.compute_indicators_for_all_rows(symbol)
             except Exception as e:
-                logger.warning(f"ticker_indicators_sync: failed for {symbol}: {e}")
+                logger.warning("ticker_indicators_sync: failed for %s: %s", symbol, e)
+
+            # Per-symbol progress (every N) — replaces the old in-place
+            # print() that was invisible to log files.
+            if global_idx % PROGRESS_EVERY == 0 or global_idx == total:
+                batch_elapsed = time.monotonic() - pipeline_start_time
+                rate = global_idx / batch_elapsed if batch_elapsed > 0 else 0
+                logger.info(
+                    "ticker_indicators_sync: [%d/%d] %s (%.1fs elapsed, %.1f sym/s)",
+                    global_idx, total, symbol, batch_elapsed, rate,
+                )
+                last_log_idx = global_idx
+
+            # Pipeline-level progress (also nudge the user-visible bar)
+            if global_idx % PIPELINE_UPDATE_EVERY == 0 or global_idx == total:
+                pct = 50 + int((global_idx / total) * 12)  # 50% → 62% range
+                update_job_status_sync(
+                    "job.pipeline.startup", "running", progress=pct,
+                    message=f"Stage 3/7: Computing indicators... {global_idx}/{total}",
+                )
+
+            # 10s heartbeat: ensures we never go silent for too long even if
+            # a single batch of slow symbols dominates.
+            now = time.monotonic()
+            if now - last_heartbeat > HEARTBEAT_EVERY_S:
+                batch_elapsed = now - pipeline_start_time
+                logger.info(
+                    "ticker_indicators_sync: heartbeat — [%d/%d] in progress (%.1fs elapsed)",
+                    global_idx, total, batch_elapsed,
+                )
+                last_heartbeat = now
 
         progress = int(((i + len(batch)) / total) * 100)
         update_job_status_sync(
@@ -1373,12 +1453,12 @@ def _ticker_indicators_sync() -> None:
         )
 
         if i + BATCH_SIZE < total:
-            if _sleep_interruptible(1.0):
+            sleep_s = settings.indicator_inter_batch_sleep_s
+            if sleep_s > 0 and _sleep_interruptible(sleep_s):
                 break
 
-    print()  # newline after in-place progress output
     update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="Indicator backfill complete")
-    logger.info("ticker_indicators_sync: complete")
+    logger.info("ticker_indicators_sync: complete (%d symbols in %.1fs)", total, time.monotonic() - pipeline_start_time)
 
     _ticker_indicator_notification_cycle()
 
@@ -1530,8 +1610,27 @@ def _ticker_scores_sync() -> None:
             {
                 "symbol": r.symbol,
                 "date": r.date,
+                "open": r.open,
+                "high": r.high,
+                "low": r.low,
                 "close": r.close,
                 "volume": r.volume,
+                "rsi_14": r.rsi_14,
+                "macd": r.macd,
+                "macd_signal": r.macd_signal,
+                "macd_histogram": r.macd_histogram,
+                "bb_middle": r.bb_middle,
+                "bb_upper": r.bb_upper,
+                "bb_lower": r.bb_lower,
+                "bb_width": r.bb_width,
+                "bb_squeeze": r.bb_squeeze,
+                "atr_14": r.atr_14,
+                "atr_percent": r.atr_percent,
+                "vwma_20": r.vwma_20,
+                "hv_20": r.hv_20,
+                "hv_60": r.hv_60,
+                "sharpe_60": r.sharpe_60,
+                "sharpe_126": r.sharpe_126,
             }
             for r in all_rows
         ])
@@ -1660,11 +1759,243 @@ def _ticker_scores_sync() -> None:
             db.execute(insert_stmt)
             db.commit()
 
+        # Phase B: also write pre-computed screener snapshot so TQL→SQL
+        # queries are O(1) reads against a small denormalized table instead
+        # of window-function scans over ticker_daily/ticker_intraday.
+        try:
+            _screener_snapshot_sync(df, today_date, now)
+        except Exception:
+            logger.exception("ticker_scores_sync: screener snapshot failed (non-fatal)")
+
         logger.info("ticker_scores_sync: complete, cached %d symbols", len(results))
         update_job_status_sync("job.ticker_scores", "waiting", progress=100, message=f"Cached {len(results)} symbols")
 
     except Exception:
         logger.exception("ticker_scores_sync: unhandled exception")
+
+
+# Phase B: fields to copy from latest 1h/W/M ticker_intraday row into snapshot.
+# Each value is (snapshot_column_name, intraday_column_name).
+_INTRADAY_COLS: list[tuple[str, str]] = [
+    ("intraday_close", "close"),
+    ("rsi", "rsi_14"),
+    ("macd", "macd"),
+    ("macd_signal", "macd_signal"),
+    ("macd_histogram", "macd_histogram"),
+    ("bb_middle", "bb_middle"),
+    ("bb_upper", "bb_upper"),
+    ("bb_lower", "bb_lower"),
+    ("bb_width", "bb_width"),
+    ("bb_squeeze", "bb_squeeze"),
+    ("atr", "atr_14"),
+    ("atr_percent", "atr_percent"),
+    ("vwma_20", "vwma_20"),
+    ("hv_20", "hv_20"),
+    ("hv_60", "hv_60"),
+    ("sharpe_60", "sharpe_60"),
+    ("sharpe_126", "sharpe_126"),
+]
+
+
+def _screener_snapshot_sync(
+    daily_df: pd.DataFrame,
+    today_date: date,
+    now: datetime,
+) -> None:
+    """Build/refresh ticker_screener_snapshot from in-memory 252d daily data
+    plus 2 supplementary queries (latest 1h/W/M intraday + stock_universe).
+
+    Called from _ticker_scores_sync() right after the ticker_scores upsert.
+    Snapshot is one row per symbol with all screener fields denormalized.
+    TQL→SQL queries read this table via INNER JOIN with ticker_scores.
+    """
+    update_job_status_sync(
+        "job.ticker_scores", "running", progress=95,
+        message="Building screener snapshot...",
+    )
+
+    # 1. Reduce 252d window to the latest row per symbol
+    daily_df_sorted = daily_df.sort_values(["symbol", "date"], ascending=[True, False])
+    latest_per_sym = daily_df_sorted.groupby("symbol", as_index=False).first()
+
+    # 2. Compute 52w high/low from the same 252d window (per symbol)
+    def _agg_52w(g: pd.DataFrame) -> pd.Series:
+        return pd.Series({
+            "high_52w": g["high"].max(),
+            "low_52w": g["low"].min(),
+        })
+
+    # SQLite + SQLAlchemy return date columns as ISO strings via raw execute();
+    # convert to Python date objects so the snapshot upsert doesn't fail with
+    # "SQLite Date type only accepts Python date objects as input".
+    if len(latest_per_sym) > 0 and not isinstance(latest_per_sym["date"].iloc[0], date):
+        latest_per_sym["date"] = pd.to_datetime(latest_per_sym["date"]).dt.date
+    w52 = (
+        daily_df_sorted.groupby("symbol", as_index=False)
+        .apply(_agg_52w, include_groups=False)
+        .reset_index(drop=True)
+    )
+    latest_per_sym = latest_per_sym.merge(w52, on="symbol", how="left")
+    last_close = latest_per_sym["close"].astype(float)
+    latest_per_sym["pct_from_52w_high"] = (
+        (last_close - latest_per_sym["high_52w"]) / latest_per_sym["high_52w"] * 100
+    )
+    latest_per_sym["pct_from_52w_low"] = (
+        (last_close - latest_per_sym["low_52w"]) / latest_per_sym["low_52w"] * 100
+    )
+    latest_per_sym["pct_from_52w_high"] = latest_per_sym["pct_from_52w_high"].round(2)
+    latest_per_sym["pct_from_52w_low"] = latest_per_sym["pct_from_52w_low"].round(2)
+
+    # 3. Latest 1h/W/M from ticker_intraday — one query per interval
+    symbols = latest_per_sym["symbol"].tolist()
+    intraday_latest: dict[tuple[str, str], dict] = {}
+    # Map source column name → ORM attribute for SELECT
+    intraday_attr_map = {
+        "close": TickerIntraday.close,
+        "rsi_14": TickerIntraday.rsi_14,
+        "macd": TickerIntraday.macd,
+        "macd_signal": TickerIntraday.macd_signal,
+        "macd_histogram": TickerIntraday.macd_histogram,
+        "bb_middle": TickerIntraday.bb_middle,
+        "bb_upper": TickerIntraday.bb_upper,
+        "bb_lower": TickerIntraday.bb_lower,
+        "bb_width": TickerIntraday.bb_width,
+        "bb_squeeze": TickerIntraday.bb_squeeze,
+        "atr_14": TickerIntraday.atr_14,
+        "atr_percent": TickerIntraday.atr_percent,
+        "vwma_20": TickerIntraday.vwma_20,
+        "hv_20": TickerIntraday.hv_20,
+        "hv_60": TickerIntraday.hv_60,
+        "sharpe_60": TickerIntraday.sharpe_60,
+        "sharpe_126": TickerIntraday.sharpe_126,
+    }
+    intraday_value_cols = [c[1] for c in _INTRADAY_COLS]
+    with _SyncSessionLocal() as db:
+        for iv in ("1h", "W", "M"):
+            stmt = (
+                select(TickerIntraday.symbol, *[intraday_attr_map[c] for c in intraday_value_cols])
+                .where(TickerIntraday.symbol.in_(symbols))
+                .where(TickerIntraday.interval == iv)
+                .order_by(TickerIntraday.symbol, TickerIntraday.timestamp.desc())
+            )
+            # Reduce to latest per symbol (rows already sorted desc)
+            seen: set[str] = set()
+            for row in db.execute(stmt).all():
+                sym = row[0]
+                if sym in seen:
+                    continue
+                seen.add(sym)
+                rec = dict(zip(intraday_value_cols, row[1:]))
+                intraday_latest[(sym, iv)] = rec
+
+    # 4. Sector/industry/PE/market_cap/fair_value from stock_universe
+    universe_meta: dict[str, dict] = {}
+    with _SyncSessionLocal() as db:
+        stmt = select(
+            StockUniverse.symbol,
+            StockUniverse.symbol_pe,
+            StockUniverse.industry,
+            StockUniverse.fair_value,
+            StockUniverse.high_52w,
+            StockUniverse.low_52w,
+        ).where(StockUniverse.symbol.in_(symbols))
+        for sym, pe, industry, fv, h52, l52 in db.execute(stmt).all():
+            # industry field stores the description (e.g. "Banks", "IT - Software");
+            # treat it as the sector for TQL Sector filtering (legacy behavior).
+            universe_meta[sym] = {
+                "pe": pe,
+                "sector": industry,  # TQL "Sector" maps to industry description
+                "industry": industry,
+                "fair_value": fv,
+            }
+
+    # 5. Assemble snapshot rows
+    snapshot_rows: list[dict] = []
+    for _, r in latest_per_sym.iterrows():
+        sym = r["symbol"]
+        meta = universe_meta.get(sym, {})
+
+        row: dict = {
+            "symbol": sym,
+            "last_date": r["date"],
+            "compute_date": today_date,
+            "computed_at": now,
+            "last_close": float(r["close"]),
+            "last_volume": int(r["volume"]),
+            "last_open": float(r["open"]),
+            "last_high": float(r["high"]),
+            "last_low": float(r["low"]),
+            # 1d indicators (sourced from TickerDaily)
+            "rsi_1d": r["rsi_14"],
+            "macd_1d": r["macd"],
+            "macd_signal_1d": r["macd_signal"],
+            "macd_histogram_1d": r["macd_histogram"],
+            "bb_middle_1d": r["bb_middle"],
+            "bb_upper_1d": r["bb_upper"],
+            "bb_lower_1d": r["bb_lower"],
+            "bb_width_1d": r["bb_width"],
+            "bb_squeeze_1d": r["bb_squeeze"],
+            "atr_1d": r["atr_14"],
+            "atr_percent_1d": r["atr_percent"],
+            "vwma_20_1d": r["vwma_20"],
+            "hv_20": r["hv_20"],
+            "hv_60": r["hv_60"],
+            "sharpe_60": r["sharpe_60"],
+            "sharpe_126": r["sharpe_126"],
+            "high_52w": r["high_52w"],
+            "low_52w": r["low_52w"],
+            "pct_from_52w_high": r["pct_from_52w_high"],
+            "pct_from_52w_low": r["pct_from_52w_low"],
+            "sector": meta.get("sector"),
+            "industry": meta.get("industry"),
+            "pe": meta.get("pe"),
+            "market_cap": None,  # Not in stock_universe; reserved for future
+            "fair_value": meta.get("fair_value"),
+        }
+
+        # Add 1h/W/M intraday columns
+        for iv in ("1h", "W", "M"):
+            iv_row = intraday_latest.get((sym, iv), {})
+            for snap_col, src_col in _INTRADAY_COLS:
+                row[f"{snap_col}_{iv}"] = iv_row.get(src_col)
+
+        snapshot_rows.append(row)
+
+    # 6. Bulk upsert (ON CONFLICT(symbol) DO UPDATE)
+    set_dict = {col: sqlite_insert(TickerScreenerSnapshot).excluded[col] for col in [
+        "last_date", "compute_date", "computed_at",
+        "last_close", "last_volume", "last_open", "last_high", "last_low",
+        "rsi_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
+        "bb_middle_1d", "bb_upper_1d", "bb_lower_1d", "bb_width_1d",
+        "bb_squeeze_1d", "atr_1d", "atr_percent_1d", "vwma_20_1d",
+        "hv_20", "hv_60", "sharpe_60", "sharpe_126",
+        "high_52w", "low_52w", "pct_from_52w_high", "pct_from_52w_low",
+        "sector", "industry", "pe", "market_cap", "fair_value",
+        "intraday_close_1h", "rsi_1h", "macd_1h", "macd_signal_1h",
+        "macd_histogram_1h", "bb_middle_1h", "bb_upper_1h", "bb_lower_1h",
+        "bb_width_1h", "bb_squeeze_1h", "atr_1h", "atr_percent_1h",
+        "vwma_20_1h", "hv_20_1h", "hv_60_1h", "sharpe_60_1h", "sharpe_126_1h",
+        "intraday_close_W", "rsi_W", "macd_W", "macd_signal_W",
+        "macd_histogram_W", "bb_middle_W", "bb_upper_W", "bb_lower_W",
+        "bb_width_W", "bb_squeeze_W", "atr_W", "atr_percent_W",
+        "vwma_20_W", "hv_20_W", "hv_60_W", "sharpe_60_W", "sharpe_126_W",
+        "intraday_close_M", "rsi_M", "macd_M", "macd_signal_M",
+        "macd_histogram_M", "bb_middle_M", "bb_upper_M", "bb_lower_M",
+        "bb_width_M", "bb_squeeze_M", "atr_M", "atr_percent_M",
+        "vwma_20_M", "hv_20_M", "hv_60_M", "sharpe_60_M", "sharpe_126_M",
+    ]}
+    with _SyncSessionLocal() as db:
+        ins = sqlite_insert(TickerScreenerSnapshot).values(snapshot_rows)
+        ins = ins.on_conflict_do_update(
+            index_elements=["symbol"],
+            set_=set_dict,
+        )
+        db.execute(ins)
+        db.commit()
+    logger.info(
+        "screener_snapshot_sync: wrote %d rows to ticker_screener_snapshot",
+        len(snapshot_rows),
+    )
 
 
 def ticker_scores_worker() -> None:

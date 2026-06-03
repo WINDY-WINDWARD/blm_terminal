@@ -98,6 +98,125 @@ class TickerScore(Base):
     )
 
 
+class TickerScreenerSnapshot(Base):
+    """Pre-computed denormalized screener row per symbol.
+
+    One row per symbol holding every field the TQL screener can filter on,
+    plus 1h/W/M latest closes for interval-prefixed indicator queries.
+    Refreshed nightly + post-bhavcopy by extending _ticker_scores_sync().
+
+    Joins with TickerScore for period returns and momentum.
+    """
+
+    __tablename__ = "ticker_screener_snapshot"
+
+    # --- identity ---
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    compute_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+    # --- last daily OHLCV ---
+    last_close: Mapped[float] = mapped_column(Float, nullable=False)
+    last_volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    last_open: Mapped[float] = mapped_column(Float, nullable=False)
+    last_high: Mapped[float] = mapped_column(Float, nullable=False)
+    last_low: Mapped[float] = mapped_column(Float, nullable=False)
+
+    # --- 1d indicators (TickerDaily columns) ---
+    rsi_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_signal_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_histogram_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_middle_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_upper_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_lower_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_width_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_squeeze_1d: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+    atr_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    atr_percent_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    vwma_20_1d: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_20: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_60: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_60: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_126: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # --- 52-week distance (computed from 252d window) ---
+    high_52w: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    low_52w: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pct_from_52w_high: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pct_from_52w_low: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # --- universe fields ---
+    sector: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    industry: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    pe: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    market_cap: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fair_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # --- 1h indicators (TickerIntraday where interval='1h') ---
+    intraday_close_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rsi_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_signal_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_histogram_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_middle_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_upper_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_lower_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_width_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_squeeze_1h: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+    atr_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    atr_percent_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    vwma_20_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_20_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_60_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_60_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_126_1h: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # --- W indicators (TickerIntraday where interval='W') ---
+    intraday_close_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rsi_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_signal_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_histogram_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_middle_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_upper_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_lower_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_width_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_squeeze_W: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+    atr_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    atr_percent_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    vwma_20_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_20_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_60_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_60_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_126_W: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # --- M indicators (TickerIntraday where interval='M') ---
+    intraday_close_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rsi_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_signal_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    macd_histogram_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_middle_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_upper_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_lower_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_width_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    bb_squeeze_M: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+    atr_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    atr_percent_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    vwma_20_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_20_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hv_60_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_60_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sharpe_126_M: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("ix_snapshot_sector_pe", "sector", "pe"),
+        Index("ix_snapshot_compute_date", "compute_date"),
+    )
+
+
 class TickerIntraday(Base):
     """ORM model for intraday/weekly/monthly OHLCV candles from NSE charting API.
 

@@ -343,6 +343,337 @@ LIMIT ?
     return sql, binds
 
 
+# ─── Phase B: snapshot-based builders ──────────────────────────────────────────
+#
+# When ticker_screener_snapshot is populated, TQL/legacy queries can read
+# from a single small denormalized table instead of joining 4 tables +
+# lateral subqueries.  The result row shape is identical to build_tql_query
+# so callers don't need to change.
+#
+# Snapshot columns are aliased to match the CTE query's row shape:
+#   snap.last_close AS close, snap.rsi_1d AS rsi_14, etc.
+
+# Map snapshot column name → alias used in result row (must match CTE variant)
+_SNAP_ALIASES = {
+    "last_date": "date",
+    "last_open": "open",
+    "last_close": "close",
+    "rsi_1d": "rsi_14",
+    "atr_percent_1d": "atr_percent",
+    "macd_1d": "macd",
+    "macd_signal_1d": "macd_signal",
+    "macd_histogram_1d": "macd_histogram",
+    "bb_middle_1d": "bb_middle",
+    "bb_upper_1d": "bb_upper",
+    "bb_lower_1d": "bb_lower",
+    "bb_width_1d": "bb_width",
+    "bb_squeeze_1d": "bb_squeeze",
+    "atr_1d": "atr_14",
+    "vwma_20_1d": "vwma_20",
+    "pct_from_52w_high": "from_52w_high",
+    "pct_from_52w_low": "from_52w_low",
+}
+
+
+def _snapshot_select_clause() -> str:
+    """Build the SELECT clause for a snapshot-based query.
+
+    Aliases snapshot columns to match the CTE-based query's row shape so
+    ``_row_to_dict`` works unchanged.
+    """
+    return """
+    snap.symbol,
+    snap.last_date AS date,
+    snap.last_open AS open,
+    snap.last_close AS close,
+    ROUND((snap.last_close - snap.last_open) / NULLIF(snap.last_open, 0) * 100, 2) AS change_today,
+    ts.return_1w, ts.return_1m, ts.return_3m, ts.return_6m, ts.return_1y,
+    ts.momentum_score, ts.momentum_rank, ts.volume_ratio_20d,
+    snap.rsi_1d AS rsi_14, snap.atr_percent_1d AS atr_percent,
+    snap.macd_1d AS macd, snap.macd_signal_1d AS macd_signal,
+    snap.macd_histogram_1d AS macd_histogram,
+    snap.bb_middle_1d AS bb_middle, snap.bb_upper_1d AS bb_upper,
+    snap.bb_lower_1d AS bb_lower, snap.bb_width_1d AS bb_width,
+    snap.bb_squeeze_1d AS bb_squeeze, snap.atr_1d AS atr_14,
+    snap.vwma_20_1d AS vwma_20,
+    snap.hv_20, snap.hv_60, snap.sharpe_60, snap.sharpe_126,
+    snap.sector, snap.industry, snap.pe, snap.fair_value,
+    snap.high_52w, snap.low_52w,
+    snap.pct_from_52w_high AS from_52w_high,
+    snap.pct_from_52w_low AS from_52w_low
+"""
+
+
+def _snapshot_field_sql_expression(field: str, default_interval: str) -> tuple[str, set[str]]:
+    """Like _field_sql_expression, but reads from `snap` (and interval columns).
+
+    For 1h/W/M indicator fields, the snapshot already has them inline as
+    ``rsi_1h``, ``rsi_W``, etc. — no lateral join needed.
+    """
+    iv_prefix, name = _split_field(field)
+    interval = _norm_interval(iv_prefix) if iv_prefix else _norm_interval(default_interval)
+    name_lower = name.lower()
+
+    if name_lower in _INDICATOR_COLUMNS:
+        col = _INDICATOR_COLUMNS[name_lower]
+        # snapshot column names are {rsi, atr, macd, ...}_{1d, 1h, W, M}.
+        # _INDICATOR_COLUMNS maps TQL name → ticker_daily/intraday column name
+        # (e.g. "rsi" → "rsi_14").  Strip the trailing "_14" suffix so the
+        # lookup matches the snapshot column (e.g. "rsi_1d" not "rsi_14_1d").
+        if col.endswith("_14"):
+            short = col[:-3]
+        else:
+            short = col
+        if interval == "1d":
+            return f"snap.{short}_1d", set()
+        if interval == "1h":
+            return f"snap.{short}_1h", set()
+        if interval == "w":
+            return f"snap.{short}_W", set()
+        if interval == "m":
+            return f"snap.{short}_M", set()
+        raise ValueError(f"Unknown interval: {interval!r}")
+
+    if name_lower in _FALLBACK_COLUMN:
+        col = _FALLBACK_COLUMN[name_lower]
+        if name_lower in {"change", "close"}:
+            return "snap.last_close", set()  # change_today is computed in SELECT
+        if name_lower == "volume":
+            return "ts.volume_ratio_20d", set()
+        if name_lower in {"sector", "industry"}:
+            return f"snap.{col}", set()
+        if name_lower == "pe":
+            return "snap.pe", set()
+        if name_lower == "momentumscore":
+            return "ts.momentum_score", set()
+        if name_lower.startswith("return"):
+            return f"ts.{col}", set()
+        if name_lower in {"from52whigh", "from52wlow"}:
+            return f"snap.pct_{col}", set()
+        if name_lower == "symbol":
+            return "snap.symbol", set()
+
+    raise ValueError(f"Unknown TQL field: {field!r}")
+
+
+def _snapshot_node_to_where(
+    node: Any, default_interval: str, intervals: set[str], binds: list[Any]
+) -> str:
+    """Recursive AST → SQL for snapshot-based queries.  Mirrors _node_to_where."""
+    if isinstance(node, AndNode):
+        l = _snapshot_node_to_where(node.left, default_interval, intervals, binds)
+        r = _snapshot_node_to_where(node.right, default_interval, intervals, binds)
+        return f"({l} AND {r})"
+
+    if isinstance(node, OrNode):
+        l = _snapshot_node_to_where(node.left, default_interval, intervals, binds)
+        r = _snapshot_node_to_where(node.right, default_interval, intervals, binds)
+        return f"({l} OR {r})"
+
+    if isinstance(node, NotNode):
+        return f"(NOT {_snapshot_node_to_where(node.expr, default_interval, intervals, binds)})"
+
+    if isinstance(node, CompareNode):
+        if node.field.lower() == "bbsqueeze" and node.op == "=" and node.value is True:
+            sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
+            intervals.update(ints)
+            return f"({sql} IS NOT NULL AND {sql} = 'Y')"
+        sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
+        intervals.update(ints)
+        lit, vals = _literal_sql(node.value)
+        binds.extend(vals)
+        return f"({sql} {node.op} {lit})"
+
+    if isinstance(node, InNode):
+        sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
+        intervals.update(ints)
+        parts: list[str] = []
+        for v in node.values:
+            lit, vals = _literal_sql(v)
+            binds.extend(vals)
+            parts.append(lit)
+        return f"({sql} IN ({', '.join(parts)}))"
+
+    raise ValueError(f"Unknown AST node: {type(node).__name__}")
+
+
+def _snapshot_sort_sql(sort_by: str, order: str) -> str:
+    """Snapshot-aware sort: same field whitelist but read from snap instead of td."""
+    snap_sort: dict[str, str] = {
+        "symbol":            "snap.symbol",
+        "close":             "snap.last_close",
+        "change_today":      "change_today",  # alias in SELECT
+        "pct_change_1w":     "ts.return_1w",
+        "pct_change_1m":     "ts.return_1m",
+        "pct_change_3m":     "ts.return_3m",
+        "pct_change_6m":     "ts.return_6m",
+        "pct_change_1y":     "ts.return_1y",
+        "volume_ratio":      "ts.volume_ratio_20d",
+        "pct_from_52w_high": "snap.pct_from_52w_high",
+        "pct_from_52w_low":  "snap.pct_from_52w_low",
+        "atr_percent":       "snap.atr_percent_1d",
+        "rsi":               "snap.rsi_1d",
+        "momentum_score":    "ts.momentum_score",
+    }
+    expr = snap_sort.get(sort_by, "snap.symbol")
+    direction = "DESC" if order.lower() == "desc" else "ASC"
+    return f"{expr} {direction} NULLS LAST, snap.symbol ASC"
+
+
+def build_snapshot_tql_query(
+    tql: str,
+    default_interval: str = "1d",
+    sort_by: str = "symbol",
+    order: str = "asc",
+    limit: int = 50,
+) -> tuple[str, list[Any]]:
+    """Phase B: read directly from ticker_screener_snapshot.
+
+    Faster than ``build_tql_query`` (no window functions, no lateral joins,
+    no stock_universe JOIN) when the snapshot is populated.  Returns the
+    same row shape so callers can use it as a drop-in replacement.
+    """
+    ast = parse_tql(tql)
+    intervals: set[str] = set()
+    binds: list[Any] = []
+    where = _snapshot_node_to_where(ast, default_interval, intervals, binds)
+    sort_expr = _snapshot_sort_sql(sort_by, order)
+    select = _snapshot_select_clause()
+    sql = f"""
+SELECT
+{select}
+FROM ticker_screener_snapshot snap
+INNER JOIN ticker_scores ts ON ts.symbol = snap.symbol
+WHERE {where}
+ORDER BY {sort_expr}
+LIMIT ?
+"""
+    binds.append(limit)
+    return sql, binds
+
+
+def build_snapshot_legacy_query(
+    filters: dict,
+    sort_by: str = "symbol",
+    order: str = "asc",
+    limit: int = 50,
+) -> tuple[str, list[Any]]:
+    """Phase B: legacy-filter variant of build_snapshot_tql_query."""
+    where, binds = _legacy_where_snapshot(filters)
+    sort_expr = _snapshot_sort_sql(sort_by, order)
+    select = _snapshot_select_clause()
+    sql = f"""
+SELECT
+{select}
+FROM ticker_screener_snapshot snap
+INNER JOIN ticker_scores ts ON ts.symbol = snap.symbol
+WHERE {where}
+ORDER BY {sort_expr}
+LIMIT ?
+"""
+    binds.append(limit)
+    return sql, binds
+
+
+def _legacy_where_snapshot(filters: dict) -> tuple[str, list[Any]]:
+    """Legacy filter → WHERE for snapshot-based queries.
+
+    Same filters as ``_legacy_where`` but every column reference is rewritten
+    to the snapshot alias (``snap.last_close`` instead of ``td.close``, etc.).
+    """
+    parts: list[str] = []
+    binds: list[Any] = []
+
+    if "pct_change_today_min" in filters:
+        parts.append("(snap.last_close - snap.last_open) / NULLIF(snap.last_open, 0) * 100 >= ?")
+        binds.append(filters["pct_change_today_min"])
+    if "pct_change_today_max" in filters:
+        parts.append("(snap.last_close - snap.last_open) / NULLIF(snap.last_open, 0) * 100 <= ?")
+        binds.append(filters["pct_change_today_max"])
+    if "pct_change_1w_min" in filters:
+        parts.append("ts.return_1w >= ?"); binds.append(filters["pct_change_1w_min"])
+    if "pct_change_1w_max" in filters:
+        parts.append("ts.return_1w <= ?"); binds.append(filters["pct_change_1w_max"])
+    if "pct_change_1m_min" in filters:
+        parts.append("ts.return_1m >= ?"); binds.append(filters["pct_change_1m_min"])
+    if "pct_change_1m_max" in filters:
+        parts.append("ts.return_1m <= ?"); binds.append(filters["pct_change_1m_max"])
+    if "pct_change_3m_min" in filters:
+        parts.append("ts.return_3m >= ?"); binds.append(filters["pct_change_3m_min"])
+    if "pct_change_3m_max" in filters:
+        parts.append("ts.return_3m <= ?"); binds.append(filters["pct_change_3m_max"])
+    if "pct_change_6m_min" in filters:
+        parts.append("ts.return_6m >= ?"); binds.append(filters["pct_change_6m_min"])
+    if "pct_change_6m_max" in filters:
+        parts.append("ts.return_6m <= ?"); binds.append(filters["pct_change_6m_max"])
+    if "pct_change_1y_min" in filters:
+        parts.append("ts.return_1y >= ?"); binds.append(filters["pct_change_1y_min"])
+    if "pct_change_1y_max" in filters:
+        parts.append("ts.return_1y <= ?"); binds.append(filters["pct_change_1y_max"])
+    if "volume_ratio_min" in filters:
+        parts.append("ts.volume_ratio_20d >= ?"); binds.append(filters["volume_ratio_min"])
+    if "volume_ratio_max" in filters:
+        parts.append("ts.volume_ratio_20d <= ?"); binds.append(filters["volume_ratio_max"])
+    if "pct_from_52w_high_max" in filters:
+        parts.append("snap.pct_from_52w_high <= ?")
+        binds.append(filters["pct_from_52w_high_max"])
+    if "pct_from_52w_high_min" in filters:
+        parts.append("snap.pct_from_52w_high >= ?")
+        binds.append(filters["pct_from_52w_high_min"])
+    if "pct_from_52w_low_min" in filters:
+        parts.append("snap.pct_from_52w_low >= ?")
+        binds.append(filters["pct_from_52w_low_min"])
+    if "pct_from_52w_low_max" in filters:
+        parts.append("snap.pct_from_52w_low <= ?")
+        binds.append(filters["pct_from_52w_low_max"])
+    if "is_52w_high" in filters:
+        v = filters["is_52w_high"]
+        if v:
+            parts.append("snap.high_52w IS NOT NULL AND snap.pct_from_52w_high >= -0.5")
+        else:
+            parts.append("snap.high_52w IS NULL OR snap.pct_from_52w_high < -0.5")
+    if "is_52w_low" in filters:
+        v = filters["is_52w_low"]
+        if v:
+            parts.append("snap.low_52w IS NOT NULL AND snap.pct_from_52w_low <= 0.5")
+        else:
+            parts.append("snap.low_52w IS NULL OR snap.pct_from_52w_low > 0.5")
+    if "atr_pct_max" in filters or "atr_pct_min" in filters:
+        if "atr_pct_max" in filters:
+            parts.append("snap.atr_percent_1d <= ?"); binds.append(filters["atr_pct_max"])
+        if "atr_pct_min" in filters:
+            parts.append("snap.atr_percent_1d >= ?"); binds.append(filters["atr_pct_min"])
+    if "rsi_min" in filters:
+        parts.append("snap.rsi_1d >= ?"); binds.append(filters["rsi_min"])
+    if "rsi_max" in filters:
+        parts.append("snap.rsi_1d <= ?"); binds.append(filters["rsi_max"])
+    if "bb_squeeze" in filters:
+        if filters["bb_squeeze"]:
+            parts.append("snap.bb_squeeze_1d = 'Y'")
+        else:
+            parts.append("(snap.bb_squeeze_1d IS NULL OR snap.bb_squeeze_1d != 'Y')")
+    if "pe_min" in filters:
+        parts.append("snap.pe >= ?"); binds.append(filters["pe_min"])
+    if "pe_max" in filters:
+        parts.append("snap.pe <= ?"); binds.append(filters["pe_max"])
+    if "sector" in filters:
+        parts.append("LOWER(snap.sector) = LOWER(?)"); binds.append(filters["sector"])
+    if "industry" in filters:
+        parts.append("LOWER(snap.industry) LIKE LOWER(?)"); binds.append(f"%{filters['industry']}%")
+    if "above_sma50" in filters:
+        v = filters["above_sma50"]
+        if v:
+            parts.append("snap.last_close > snap.bb_middle_1d")
+        else:
+            parts.append("snap.last_close <= snap.bb_middle_1d")
+    if "momentum_score_min" in filters:
+        parts.append("ts.momentum_score >= ?"); binds.append(filters["momentum_score_min"])
+
+    if not parts:
+        return "1=1", []
+    return " AND ".join(parts), binds
+
+
 # ─── Legacy filter transpiler ─────────────────────────────────────────────────
 
 # Map legacy filter key → (sql_expr, op, value) or special handlers.

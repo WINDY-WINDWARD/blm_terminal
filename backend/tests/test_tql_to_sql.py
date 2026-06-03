@@ -40,6 +40,8 @@ from app.services.tql_to_sql import (  # noqa: E402
     _sort_sql,
     _split_field,
     build_legacy_query,
+    build_snapshot_legacy_query,
+    build_snapshot_tql_query,
     build_tql_query,
 )
 
@@ -615,3 +617,185 @@ class TestSqliteIntegration:
         cur = in_memory_db.execute(sql, binds)
         rows = cur.fetchall()
         assert len(rows) == 0
+
+
+# ─── Phase B: snapshot-backed query tests ───────────────────────────────────
+
+_SNAPSHOT_SCHEMA = """
+    CREATE TABLE ticker_screener_snapshot (
+        symbol TEXT PRIMARY KEY,
+        last_date TEXT NOT NULL,
+        compute_date TEXT NOT NULL,
+        computed_at TEXT NOT NULL,
+        last_close REAL NOT NULL,
+        last_volume INTEGER NOT NULL,
+        last_open REAL NOT NULL,
+        last_high REAL NOT NULL,
+        last_low REAL NOT NULL,
+        rsi_1d REAL, macd_1d REAL, macd_signal_1d REAL, macd_histogram_1d REAL,
+        bb_middle_1d REAL, bb_upper_1d REAL, bb_lower_1d REAL, bb_width_1d REAL,
+        bb_squeeze_1d TEXT, atr_1d REAL, atr_percent_1d REAL, vwma_20_1d REAL,
+        hv_20 REAL, hv_60 REAL, sharpe_60 REAL, sharpe_126 REAL,
+        high_52w REAL, low_52w REAL,
+        pct_from_52w_high REAL, pct_from_52w_low REAL,
+        sector TEXT, industry TEXT, pe REAL, market_cap REAL, fair_value REAL,
+        intraday_close_1h REAL, rsi_1h REAL, macd_1h REAL, macd_signal_1h REAL,
+        macd_histogram_1h REAL, bb_middle_1h REAL, bb_upper_1h REAL, bb_lower_1h REAL,
+        bb_width_1h REAL, bb_squeeze_1h TEXT, atr_1h REAL, atr_percent_1h REAL,
+        vwma_20_1h REAL, hv_20_1h REAL, hv_60_1h REAL, sharpe_60_1h REAL, sharpe_126_1h REAL,
+        intraday_close_W REAL, rsi_W REAL, macd_W REAL, macd_signal_W REAL,
+        macd_histogram_W REAL, bb_middle_W REAL, bb_upper_W REAL, bb_lower_W REAL,
+        bb_width_W REAL, bb_squeeze_W TEXT, atr_W REAL, atr_percent_W REAL,
+        vwma_20_W REAL, hv_20_W REAL, hv_60_W REAL, sharpe_60_W REAL, sharpe_126_W REAL,
+        intraday_close_M REAL, rsi_M REAL, macd_M REAL, macd_signal_M REAL,
+        macd_histogram_M REAL, bb_middle_M REAL, bb_upper_M REAL, bb_lower_M REAL,
+        bb_width_M REAL, bb_squeeze_M TEXT, atr_M REAL, atr_percent_M REAL,
+        vwma_20_M REAL, hv_20_M REAL, hv_60_M REAL, sharpe_60_M REAL, sharpe_126_M REAL
+    );
+"""
+
+
+@pytest.fixture
+def snapshot_db():
+    """In-memory SQLite with ticker_screener_snapshot + ticker_scores seeded."""
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.executescript(_SNAPSHOT_SCHEMA + """
+        CREATE TABLE ticker_scores (
+            symbol TEXT PRIMARY KEY,
+            return_1w REAL, return_1m REAL, return_3m REAL,
+            return_6m REAL, return_1y REAL,
+            momentum_score REAL, momentum_rank INTEGER, volume_ratio_20d REAL
+        );
+    """)
+    # 3 symbols: HDFCBANK high RSI, INFY mid, TATAMOTORS low
+    snapshot_rows = [
+        # HDFCBANK: sector=Banks, pe=18, RSI=70, near 52w high
+        ("HDFCBANK", 105.0, 100.0, 110.0, 90.0, 70.0, "Banks", "Banking", 18.0,
+         1.05, 90.0, "Y", 80.0),
+        # INFY: sector=IT, pe=25, RSI=55
+        ("INFY", 105.0, 100.0, 110.0, 90.0, 55.0, "IT", "Software", 25.0,
+         1.0, 50.0, None, 60.0),
+        # TATAMOTORS: sector=Auto, pe=12, RSI=45, near 52w low
+        ("TATAMOTORS", 95.0, 100.0, 110.0, 90.0, 45.0, "Auto", "Auto", 12.0,
+         0.9, 0.0, "N", 30.0),
+    ]
+    for sym, last_close, last_open, high_52w, low_52w, rsi, sector, industry, pe, \
+        ratio, pct_hi, bb, mom in snapshot_rows:
+        last_date = "2025-06-04"
+        pct_lo = round(((last_close - low_52w) / low_52w) * 100, 2)
+        pct_hi_r = round(((last_close - high_52w) / high_52w) * 100, 2)
+        con.execute(
+            """
+            INSERT INTO ticker_screener_snapshot (
+                symbol, last_date, compute_date, computed_at,
+                last_close, last_volume, last_open, last_high, last_low,
+                rsi_1d, bb_squeeze_1d,
+                high_52w, low_52w, pct_from_52w_high, pct_from_52w_low,
+                sector, industry, pe
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (sym, last_date, last_date, "2025-06-04 10:00:00",
+             last_close, 1_000_000, last_open, last_close + 1, last_close - 1,
+             rsi, bb, high_52w, low_52w, pct_hi_r, pct_lo,
+             sector, industry, pe),
+        )
+        con.execute(
+            "INSERT INTO ticker_scores (symbol, return_1w, return_1m, momentum_score, volume_ratio_20d) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sym, 5.0, 10.0, mom, ratio),
+        )
+    con.commit()
+    return con
+
+
+class TestSnapshotQuery:
+    """Phase B: read directly from ticker_screener_snapshot."""
+
+    def test_snapshot_query_shape(self, snapshot_db):
+        sql, binds = build_snapshot_tql_query("RSI > 60", limit=10)
+        assert "ticker_screener_snapshot" in sql
+        assert "ticker_scores" in sql
+        assert "WITH td_latest" not in sql  # no CTE
+        assert "LEFT JOIN LATERAL" not in sql  # no lateral joins
+
+    def test_snapshot_RSI_filter(self, snapshot_db):
+        sql, binds = build_snapshot_tql_query("RSI > 60", limit=50)
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        symbols = {r["symbol"] for r in rows}
+        assert "HDFCBANK" in symbols
+        assert "INFY" not in symbols
+        assert "TATAMOTORS" not in symbols
+
+    def test_snapshot_sector_filter(self, snapshot_db):
+        sql, binds = build_snapshot_tql_query('Sector = "Banks"', limit=50)
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "HDFCBANK"
+
+    def test_snapshot_interval_1h_no_lateral(self, snapshot_db):
+        # Even with 1h:RSI, no lateral join needed (snapshot has it inline)
+        sql, binds = build_snapshot_tql_query("1h:RSI > 60", limit=50)
+        assert "LEFT JOIN LATERAL" not in sql
+        cur = snapshot_db.execute(sql, binds)
+        # rsi_1h not seeded in this fixture → no rows match
+        rows = cur.fetchall()
+        assert len(rows) == 0
+
+    def test_snapshot_pct_from_52w_low_filter(self, snapshot_db):
+        sql, binds = build_snapshot_tql_query("From52wLow > 10", limit=50)
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        # HDFCBANK pct_lo=16.67, INFY=16.67, TATAMOTORS=5.56 → 2 match
+        assert len(rows) == 2
+
+    def test_snapshot_legacy_pe_filter(self, snapshot_db):
+        sql, binds = build_snapshot_legacy_query({"pe_max": 20}, limit=50)
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        symbols = {r["symbol"] for r in rows}
+        assert "HDFCBANK" in symbols
+        assert "TATAMOTORS" in symbols
+        assert "INFY" not in symbols
+
+    def test_snapshot_legacy_bb_squeeze(self, snapshot_db):
+        # Only HDFCBANK has bb_squeeze_1d='Y'
+        sql, binds = build_snapshot_legacy_query({"bb_squeeze": True}, limit=50)
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "HDFCBANK"
+
+    def test_snapshot_legacy_above_sma50(self, snapshot_db):
+        # bb_middle_1d is NULL for all rows in this fixture
+        sql, binds = build_snapshot_legacy_query({"above_sma50": True}, limit=50)
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        assert len(rows) == 0
+
+    def test_snapshot_sort_desc(self, snapshot_db):
+        sql, binds = build_snapshot_tql_query(
+            "RSI > 0", sort_by="rsi", order="desc", limit=50
+        )
+        cur = snapshot_db.execute(sql, binds)
+        rows = cur.fetchall()
+        # Sorted by RSI desc: HDFCBANK(70) → INFY(55) → TATAMOTORS(45)
+        assert [r["symbol"] for r in rows] == ["HDFCBANK", "INFY", "TATAMOTORS"]
+
+    def test_snapshot_row_shape_matches_legacy(self, snapshot_db):
+        """_row_to_dict works on snapshot rows (no CTE-specific columns)."""
+        sql, binds = build_snapshot_tql_query("RSI > 60", limit=10)
+        cur = snapshot_db.execute(sql, binds)
+        row = dict(cur.fetchone())
+        result = _row_to_dict(row)
+        # Same shape as the CTE variant
+        for k in ("symbol", "close", "change_today", "returns", "pos_52w",
+                  "indicators", "indicators_by_interval", "sector", "industry",
+                  "pe", "momentum_score"):
+            assert k in result, f"missing {k}"
+        assert result["symbol"] == "HDFCBANK"
+        assert result["sector"] == "Banks"
+        assert result["pe"] == 18.0
+        assert result["indicators"]["rsi_14"] == 70.0

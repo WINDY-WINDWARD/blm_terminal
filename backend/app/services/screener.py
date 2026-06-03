@@ -15,6 +15,8 @@ from typing import Optional
 from app.services.tql_to_sql import (
     _row_to_dict,
     build_legacy_query,
+    build_snapshot_legacy_query,
+    build_snapshot_tql_query,
     build_tql_query,
 )
 from app.services.tql_parser import TQLSyntaxError
@@ -52,6 +54,43 @@ def _execute_tql_count(sql_no_limit: str, binds: list) -> int:
     return int(row[0])
 
 
+# ─── Phase B: snapshot availability cache ────────────────────────────────────
+# ticker_screener_snapshot is populated nightly by _ticker_scores_sync().
+# We auto-prefer the snapshot-backed query when it has rows; otherwise fall
+# back to the CTE-based query (which is also fast, just less optimized).
+import time as _time
+_snapshot_check_ttl_s = 30.0
+_snapshot_check_last_ts = 0.0
+_snapshot_check_last_val = False
+
+
+def _snapshot_has_rows() -> bool:
+    """Return True iff ticker_screener_snapshot has at least one row.
+
+    Cached for ``_snapshot_check_ttl_s`` seconds to avoid hammering the DB.
+    """
+    global _snapshot_check_last_ts, _snapshot_check_last_val
+    now = _time.time()
+    if now - _snapshot_check_last_ts < _snapshot_check_ttl_s:
+        return _snapshot_check_last_val
+    try:
+        with sqlite3.connect(settings.db_path, timeout=10) as con:
+            row = con.execute("SELECT COUNT(*) FROM ticker_screener_snapshot").fetchone()
+            has = int(row[0]) > 0
+    except Exception:
+        has = False
+    _snapshot_check_last_ts = now
+    _snapshot_check_last_val = has
+    return has
+
+
+def invalidate_snapshot_check_cache() -> None:
+    """Reset the snapshot-availability cache (e.g. after a fresh sync)."""
+    global _snapshot_check_last_ts, _snapshot_check_last_val
+    _snapshot_check_last_ts = 0.0
+    _snapshot_check_last_val = False
+
+
 # ─── Public entry points ─────────────────────────────────────────────────────
 
 def run_screener_tql(
@@ -78,7 +117,10 @@ def run_screener_tql(
         Dict with count, returned, filters_applied, results.
     """
     try:
-        sql, binds = build_tql_query(tql, default_interval, sort_by, order, limit)
+        if _snapshot_has_rows():
+            sql, binds = build_snapshot_tql_query(tql, default_interval, sort_by, order, limit)
+        else:
+            sql, binds = build_tql_query(tql, default_interval, sort_by, order, limit)
     except TQLSyntaxError as e:
         raise ValueError(f"TQL syntax error: {e}") from e
 
@@ -107,7 +149,10 @@ def run_screener(
     """
     if filters is None:
         filters = {}
-    sql, binds = build_legacy_query(filters, sort_by, order, limit)
+    if _snapshot_has_rows():
+        sql, binds = build_snapshot_legacy_query(filters, sort_by, order, limit)
+    else:
+        sql, binds = build_legacy_query(filters, sort_by, order, limit)
     count = _execute_tql_count(sql, binds)
     rows = _execute_sql(sql, binds)
     return {
@@ -119,10 +164,15 @@ def run_screener(
 
 
 def get_screener_sectors(use_cache: bool = True) -> list[str]:
-    """Return sorted list of distinct sector values from stock_universe."""
+    """Return sorted list of distinct sector values from the snapshot (or stock_universe).
+
+    Phase B: prefer ticker_screener_snapshot since it's pre-computed. Falls
+    back to stock_universe if the snapshot hasn't been built yet.
+    """
+    table = "ticker_screener_snapshot" if _snapshot_has_rows() else "stock_universe"
     with sqlite3.connect(settings.db_path, timeout=60) as con:
         rows = con.execute(
-            "SELECT DISTINCT sector FROM stock_universe "
+            f"SELECT DISTINCT sector FROM {table} "
             "WHERE sector IS NOT NULL AND sector != '' ORDER BY sector"
         ).fetchall()
     return [r[0] for r in rows]
