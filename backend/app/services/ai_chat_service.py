@@ -311,6 +311,84 @@ BLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "run_tql_screener",
+            "description": (
+                "Run a custom TQL (Ticker Query Language) screener query against all NSE stocks "
+                "and return matching symbols with their data. Use this to find stocks meeting "
+                "specific technical or fundamental criteria.\n\n"
+                "SUPPORTED FIELDS:\n"
+                "  Technical indicators (support interval prefix like '1h:RSI', 'W:ATR'):\n"
+                "    RSI            — Relative Strength Index (0–100)\n"
+                "    ATR            — Average True Range\n"
+                "    MACD           — MACD line value\n"
+                "    MACDSignal     — MACD signal line value\n"
+                "    MACDHist       — MACD histogram value\n"
+                "    BBWidth        — Bollinger Band width\n"
+                "    BBSqueeze      — Boolean: true when bands are squeezed\n"
+                "    HV20           — 20-day historical volatility\n"
+                "    HV60           — 60-day historical volatility\n"
+                "    Sharpe60       — 60-day Sharpe ratio\n"
+                "    Sharpe126      — 126-day Sharpe ratio\n"
+                "  Price & volume:\n"
+                "    Change         — Intraday % change\n"
+                "    Volume         — Today's trading volume\n"
+                "    Close          — Last close price\n"
+                "    DataPoints     — Number of data points available\n"
+                "  Fundamentals:\n"
+                "    PE             — Price-to-Earnings ratio\n"
+                "    MomentumScore  — Composite momentum score\n"
+                "  Returns (period-based):\n"
+                "    Return1w, Return1m, Return3m, Return6m, Return1y\n"
+                "  52-week position:\n"
+                "    From52wHigh    — % below 52-week high (negative = below)\n"
+                "    From52wLow     — % above 52-week low\n"
+                "  Classification:\n"
+                "    Sector         — e.g. 'Banks', 'IT', 'Pharma' (use = or IN)\n"
+                "    Industry       — e.g. 'Bank - Private', 'IT Services' (use = or IN)\n"
+                "    Symbol         — NSE symbol string\n\n"
+                "INTERVAL PREFIXES (for technical indicators only):\n"
+                "  No prefix → uses default_interval (default: 1d)\n"
+                "  1h:RSI, W:ATR, M:MACD, 1d:BBWidth\n"
+                "  Valid intervals: 1d, 1h, W, M\n\n"
+                "OPERATORS: >, <, >=, <=, =, !=, IN (...), AND, OR, NOT, ( )\n\n"
+                "EXAMPLES:\n"
+                '  RSI > 60 AND Sector = "Banks"\n'
+                '  PE < 20 AND Return1y > 20 AND MomentumScore > 50\n'
+                '  1h:RSI < 30 AND Volume > 500000\n'
+                '  From52wHigh > -10 AND MomentumScore > 70\n'
+                '  Sector IN ("Banks", "Finance") AND RSI > 50 AND PE < 25'
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tql": {
+                        "type": "string",
+                        "description": 'TQL query expression, e.g. RSI > 60 AND Sector = "Banks" AND PE < 20',
+                    },
+                    "default_interval": {
+                        "type": "string",
+                        "description": "Default interval for un-prefixed indicator fields: 1d (default), 1h, W, M",
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "Field name to sort results by (default: symbol)",
+                    },
+                    "order": {
+                        "type": "string",
+                        "description": "Sort direction: asc (default) or desc",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return, 1–200 (default: 50)",
+                    },
+                },
+                "required": ["tql"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_corporate_filings",
             "description": _desc("get_corporate_filings"),
             "parameters": {
@@ -675,6 +753,7 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         list_watchlists,
         optimize_portfolio,
         remove_watchlist_item,
+        run_tql_screener,
         screener_company,
         screener_search,
         screener_trades,
@@ -700,6 +779,7 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "screener_search": screener_search,
         "screener_company": screener_company,
         "screener_trades": screener_trades,
+        "run_tql_screener": run_tql_screener,
         "get_corporate_filings": get_corporate_filings,
         "list_stock_universe": list_stock_universe,
         "get_stock_universe": get_stock_universe,
@@ -763,6 +843,7 @@ You help traders and investors cut through large volumes of market data to ident
 - **Price & momentum**: LTP, 52-week range, multi-timeframe returns, volume surges, breakout signals
 - **Deal flow**: Today's bulk/block deals, historical insider trades, promoter activity patterns
 - **Market scanning**: Top gainers/losers, 52-week highs/lows, volume movers, RSI/MACD signals
+- **Custom screening**: Use `run_tql_screener` to find stocks by any combination of technical and fundamental criteria — e.g. `RSI > 60 AND Sector = "Banks" AND PE < 20`. Supports RSI, ATR, MACD, BBWidth, BBSqueeze, HV20, HV60, Close, Volume, Change, PE, MomentumScore, Return1w/1m/3m/6m/1y, From52wHigh, From52wLow, Sector, Industry. Prefix indicators with an interval for non-daily timeframes: `1h:RSI`, `W:ATR`, `M:MACD`.
 - **Sector rotation**: Industry and sector PE, advance/decline, sentiment, top stocks by market cap
 - **News & catalysts**: Company-specific news, earnings announcements, macro events affecting the market
 - **Watchlist analysis**: Review held positions, flag signals across watched stocks

@@ -64,6 +64,7 @@
     { "name": "screener_search",               "description": "Search screener.in for NSE companies by name or symbol fragment." },
     { "name": "screener_company",              "description": "Fetch fundamental ratios and quarterly results for an NSE company from screener.in." },
     { "name": "screener_trades",               "description": "Fetch insider trades, bulk deals, and block deals for an NSE company from screener.in." },
+    { "name": "run_tql_screener",              "description": "Run a custom TQL (Ticker Query Language) screener query against all NSE stocks. Supports RSI, ATR, MACD, BBWidth, BBSqueeze, PE, Volume, Close, Change, MomentumScore, Return1w/1m/3m/6m/1y, From52wHigh/Low, Sector, Industry with AND/OR/NOT logic. Interval prefixes supported: 1h:RSI, W:ATR, M:MACD." },
     { "name": "get_company_quarterly_results", "description": "Fetch all available quarterly financial results for an NSE company from screener.in." },
     { "name": "list_stock_universe",           "description": "List all tracked NSE stocks with symbol, company name, sector, industry, and PE data." },
     { "name": "get_stock_universe",            "description": "Look up NSE stock universe metadata by symbol — prefer screener_company for deeper research." },

@@ -47,6 +47,7 @@ from app.models.watchlist import Watchlist as WatchlistModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client
+from app.services import screener as screener_service
 from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
@@ -703,6 +704,67 @@ async def screener_trades(
         s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
         for s, r in zip(symbols, results)
     }
+
+
+@mcp.tool()
+async def run_tql_screener(
+    tql: str,
+    default_interval: str = "1d",
+    sort_by: str = "symbol",
+    order: str = "asc",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Run a custom TQL (Ticker Query Language) screener query against all NSE stocks.
+
+    Returns matching symbols with their technical and fundamental data.
+
+    Args:
+        tql: TQL query expression. Examples:
+            RSI > 60 AND Sector = "Banks"
+            PE < 20 AND Return1y > 20
+            1h:RSI < 30 AND Volume > 500000
+            From52wHigh > -10 AND MomentumScore > 70
+            Sector IN ("Banks", "Finance") AND RSI > 50 AND PE < 25
+        default_interval: Default interval for un-prefixed indicator fields.
+            One of: 1d (default), 1h, W, M.
+            Prefix individual fields to override: 1h:RSI, W:ATR, M:MACD.
+        sort_by: Field name to sort results by (default: symbol).
+        order: Sort direction — asc (default) or desc.
+        limit: Maximum number of results to return, 1–200 (default: 50).
+
+    Supported fields:
+        Technical (support interval prefix):
+            RSI, ATR, MACD, MACDSignal, MACDHist, BBWidth, BBSqueeze,
+            HV20, HV60, Sharpe60, Sharpe126
+        Price & volume:
+            Change, Volume, Close, DataPoints
+        Fundamentals:
+            PE, MomentumScore
+        Returns:
+            Return1w, Return1m, Return3m, Return6m, Return1y
+        52-week position:
+            From52wHigh, From52wLow
+        Classification (use = or IN):
+            Sector, Industry, Symbol
+
+    Returns dict with: count, returned, filters_applied, results (list of symbol dicts).
+    Raises ValueError on TQL syntax errors.
+    """
+    if not tql or not tql.strip():
+        raise ValueError("tql query expression is required")
+    if limit < 1 or limit > 200:
+        raise ValueError("limit must be between 1 and 200")
+    if order not in ("asc", "desc"):
+        raise ValueError("order must be 'asc' or 'desc'")
+
+    return await asyncio.to_thread(
+        screener_service.run_screener_tql,
+        tql.strip(),
+        default_interval,
+        sort_by,
+        order,
+        limit,
+    )
 
 
 # ---------------------------------------------------------------------------
