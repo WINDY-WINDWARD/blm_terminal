@@ -324,11 +324,14 @@ function TqlInput({ value, onChange, onSubmit, sectors, isLoading, error }: TqlI
           )}
         </div>
         <button
-          onClick={() => { if (!validationError) onSubmit(); }}
+          onClick={() => { if (!validationError && !isLoading) onSubmit(); }}
           disabled={isLoading || !!validationError}
-          className="text-[10px] px-2 py-1.5 rounded border border-white/15 hover:bg-white/5 transition-colors disabled:opacity-40 shrink-0"
+          className="text-[10px] px-2 py-1.5 rounded border border-white/15 hover:bg-white/5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed shrink-0 min-w-[64px] flex items-center justify-center gap-1.5"
         >
-          {isLoading ? '…' : 'Run'}
+          {isLoading && (
+            <span className="inline-block w-3 h-3 border-[1.5px] border-white/60 border-t-transparent rounded-full animate-spin" />
+          )}
+          <span>Run</span>
         </button>
       </div>
 
@@ -504,7 +507,6 @@ export function ScreenerWidget() {
             Screener
           </span>
           <span className="text-white/20 text-[9px]">TQL</span>
-          {isLoading && <span className="text-white/30 text-[10px] animate-pulse">loading…</span>}
         </div>
         <div className="flex items-center gap-1.5">
           {sortedResults.length > 0 && (
