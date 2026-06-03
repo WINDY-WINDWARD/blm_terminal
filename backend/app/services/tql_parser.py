@@ -94,14 +94,15 @@ _TOKEN_RE = re.compile(
     r"""
     \s*
     (?:
-        (>=|<=|!=|>|<|=)           # operators
-      | (\()                        # LPAREN
-      | (\))                        # RPAREN
-      | (,)                         # COMMA
-      | "([^"]*)"                   # double-quoted string
-      | '([^']*)'                   # single-quoted string
-      | (-?\d+(?:\.\d+)?)           # number
-      | ([A-Za-z_][A-Za-z0-9_:.]*)  # identifier / field
+        (>=|<=|!=|>|<|=)                        # operators
+      | (\()                                      # LPAREN
+      | (\))                                      # RPAREN
+      | (,)                                       # COMMA
+      | "([^"]*)"                                 # double-quoted string
+      | '([^']*)'                                 # single-quoted string
+      | (\d+[A-Za-z][A-Za-z0-9]*:[A-Za-z_][A-Za-z0-9_]*)  # interval-prefixed field e.g. 1h:RSI
+      | (-?\d+(?:\.\d+)?)                         # number
+      | ([A-Za-z_][A-Za-z0-9_:.]*)               # identifier / field
     )
     """,
     re.VERBOSE,
@@ -125,7 +126,7 @@ def tokenize(text: str) -> list[Token]:
         if not m:
             raise TQLSyntaxError(f"Unexpected character at position {pos}: {text[pos]!r}")
         pos = m.end()
-        op, lp, rp, comma, dqs, sqs, num, ident = m.groups()
+        op, lp, rp, comma, dqs, sqs, iv_field, num, ident = m.groups()
         if op:
             tokens.append(Token(TT.OP, op))
         elif lp:
@@ -138,6 +139,9 @@ def tokenize(text: str) -> list[Token]:
             tokens.append(Token(TT.STRING, dqs))
         elif sqs is not None:
             tokens.append(Token(TT.STRING, sqs))
+        elif iv_field is not None:
+            # Interval-prefixed field like "1h:RSI" or "1d:ATR" — always a FIELD token
+            tokens.append(Token(TT.FIELD, iv_field))
         elif num is not None:
             tokens.append(Token(TT.NUMBER, float(num) if "." in num else int(num)))
         elif ident:

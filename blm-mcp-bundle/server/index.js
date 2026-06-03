@@ -51,7 +51,7 @@ function remoteCall(method, params) {
         'Content-Length': Buffer.byteLength(body),
         'Host': 'localhost'
       },
-      timeout: 30000
+      timeout: 120000
     }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);

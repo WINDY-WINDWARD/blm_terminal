@@ -887,10 +887,10 @@ async def _run_tools_parallel(
             content_str = json.dumps({"error": "Duplicate call — data already retrieved. Use it directly."})
         else:
             try:
-                result = await asyncio.wait_for(_execute_tool(tool_name, args), timeout=30.0)
+                result = await asyncio.wait_for(_execute_tool(tool_name, args), timeout=120.0)
                 content_str = _truncate_tool_result(result)
             except asyncio.TimeoutError:
-                content_str = json.dumps({"error": f"{tool_name} timed out after 30s"})
+                content_str = json.dumps({"error": f"{tool_name} timed out after 120s"})
             except Exception as exc:
                 logger.warning("Tool %s failed: %s", tool_name, exc)
                 content_str = json.dumps({"error": str(exc)})
