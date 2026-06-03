@@ -72,6 +72,31 @@ _INDICATOR_COLUMNS = {
 }
 
 
+# Snapshot column bases: maps the ticker_daily/intraday column name to the
+# base name used in ticker_screener_snapshot. The snapshot has columns like
+# ``rsi_1d``, ``rsi_1h``, ``rsi_W``, ``rsi_M`` (no trailing ``_14``), so we
+# need an explicit table-driven mapping rather than a string-suffix strip.
+# Any indicator added to _INDICATOR_COLUMNS must also appear here.
+_SNAPSHOT_INDICATOR_BASES: dict[str, str] = {
+    "rsi_14":         "rsi",
+    "atr_percent":    "atr_percent",
+    "macd":           "macd",
+    "macd_signal":    "macd_signal",
+    "macd_histogram": "macd_histogram",
+    "bb_middle":      "bb_middle",
+    "bb_upper":       "bb_upper",
+    "bb_lower":       "bb_lower",
+    "bb_width":       "bb_width",
+    "bb_squeeze":     "bb_squeeze",
+    "atr_14":         "atr",
+    "vwma_20":        "vwma_20",
+    "hv_20":          "hv_20",
+    "hv_60":          "hv_60",
+    "sharpe_60":      "sharpe_60",
+    "sharpe_126":     "sharpe_126",
+}
+
+
 def _field_sql_name(field: str) -> str:
     """Return SQL column name for a TQL field (no interval prefix)."""
     f = field.lower()
@@ -188,10 +213,13 @@ def _node_to_where(node: Any, default_interval: str, intervals: set[str], binds:
         # Bare-boolean shorthand: BBSqueeze alone is treated as ``BBSqueeze = 1``.
         # We expand it to (bbsqueeze IS NOT NULL AND bbsqueeze = 'Y') so that
         # NOT BBSqueeze correctly matches both NULL and explicit 'N'.
-        if node.field.lower() == "bbsqueeze" and node.op == "=" and node.value is True:
+        if node.field.lower() == "bbsqueeze" and node.op == "=":
             sql, ints = _field_sql_expression(node.field, default_interval)
             intervals.update(ints)
-            return f"({sql} IS NOT NULL AND {sql} = 'Y')"
+            if node.value is True:
+                return f"({sql} IS NOT NULL AND {sql} = 'Y')"
+            if node.value is False:
+                return f"({sql} IS NULL OR {sql} != 'Y')"
         sql, ints = _field_sql_expression(node.field, default_interval)
         intervals.update(ints)
         lit, vals = _literal_sql(node.value)
@@ -418,12 +446,16 @@ def _snapshot_field_sql_expression(field: str, default_interval: str) -> tuple[s
         col = _INDICATOR_COLUMNS[name_lower]
         # snapshot column names are {rsi, atr, macd, ...}_{1d, 1h, W, M}.
         # _INDICATOR_COLUMNS maps TQL name → ticker_daily/intraday column name
-        # (e.g. "rsi" → "rsi_14").  Strip the trailing "_14" suffix so the
-        # lookup matches the snapshot column (e.g. "rsi_1d" not "rsi_14_1d").
-        if col.endswith("_14"):
-            short = col[:-3]
-        else:
-            short = col
+        # (e.g. "rsi" → "rsi_14").  Use the explicit _SNAPSHOT_INDICATOR_BASES
+        # map to find the snapshot base; assert it exists so a future indicator
+        # with an unfamiliar column name fails loud at parse time, not at SQL
+        # execution.
+        short = _SNAPSHOT_INDICATOR_BASES.get(col)
+        if short is None:
+            raise ValueError(
+                f"Snapshot base unknown for indicator column {col!r} "
+                f"(TQL field {field!r}). Add an entry to _SNAPSHOT_INDICATOR_BASES."
+            )
         if interval == "1d":
             return f"snap.{short}_1d", set()
         if interval == "1h":
@@ -474,10 +506,13 @@ def _snapshot_node_to_where(
         return f"(NOT {_snapshot_node_to_where(node.expr, default_interval, intervals, binds)})"
 
     if isinstance(node, CompareNode):
-        if node.field.lower() == "bbsqueeze" and node.op == "=" and node.value is True:
+        if node.field.lower() == "bbsqueeze" and node.op == "=":
             sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
             intervals.update(ints)
-            return f"({sql} IS NOT NULL AND {sql} = 'Y')"
+            if node.value is True:
+                return f"({sql} IS NOT NULL AND {sql} = 'Y')"
+            if node.value is False:
+                return f"({sql} IS NULL OR {sql} != 'Y')"
         sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
         intervals.update(ints)
         lit, vals = _literal_sql(node.value)

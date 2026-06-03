@@ -160,20 +160,6 @@ class TestNodeToWhere:
         assert "bb_squeeze" in frag
         assert "= 'Y'" in frag
         assert "IS NOT NULL" in frag
-        assert "IS NOT NULL" in frag
-
-    def test_parens(self):
-        frag, _, _ = _render("(RSI > 60 AND Volume > 2) OR PE < 20")
-        assert frag.count("(") >= 2
-        assert "OR" in frag
-        assert "AND" in frag
-
-    def test_bbsqueeze_bare(self):
-        # BBSqueeze alone is shorthand for BBSqueeze = 1 (i.e. squeeze active)
-        frag, _, _ = _render("BBSqueeze")
-        assert "bb_squeeze" in frag
-        assert "= 'Y'" in frag
-        assert "IS NOT NULL" in frag
 
     def test_unknown_field_raises(self):
         with pytest.raises(TQLSyntaxError):
@@ -182,6 +168,23 @@ class TestNodeToWhere:
     def test_unknown_interval_raises(self):
         with pytest.raises(TQLSyntaxError):
             parse_tql("5m:RSI > 60")
+
+    def test_bbsqueeze_explicit_true(self):
+        # BBSqueeze = true is equivalent to bare BBSqueeze
+        frag, _, _ = _render("BBSqueeze = true")
+        assert "bb_squeeze" in frag
+        assert "= 'Y'" in frag
+        assert "IS NOT NULL" in frag
+        assert "IS NULL" not in frag.replace("IS NOT NULL", "")
+
+    def test_bbsqueeze_explicit_false(self):
+        # BBSqueeze = false must match NULL OR != 'Y', not 0
+        frag, _, _ = _render("BBSqueeze = false")
+        assert "bb_squeeze" in frag
+        assert "IS NULL" in frag
+        assert "!= 'Y'" in frag
+        assert "= 0" not in frag
+        assert "= 'N'" not in frag
 
 
 # ─── Interval lateral join generation ───────────────────────────────────────
@@ -799,3 +802,12 @@ class TestSnapshotQuery:
         assert result["sector"] == "Banks"
         assert result["pe"] == 18.0
         assert result["indicators"]["rsi_14"] == 70.0
+
+    def test_snapshot_unknown_indicator_base_raises(self, monkeypatch):
+        """Missing _SNAPSHOT_INDICATOR_BASES entry fails loud at parse time."""
+        from app.services import tql_to_sql
+        monkeypatch.delitem(
+            tql_to_sql._SNAPSHOT_INDICATOR_BASES, "rsi_14", raising=False
+        )
+        with pytest.raises(ValueError, match="Snapshot base unknown"):
+            build_snapshot_tql_query("RSI > 60", limit=10)
