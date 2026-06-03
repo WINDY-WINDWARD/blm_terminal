@@ -301,7 +301,7 @@ class TestBuildTqlQuery:
         assert "WITH td_latest AS" in sql
         assert "ticker_scores" in sql
         assert "stock_universe" in sql
-        assert "td_latest.rn = 1" in sql
+        assert "td_latest WHERE rn = 1" in sql
         assert "ORDER BY" in sql
         assert "LIMIT ?" in sql
         assert binds[-1] == 10

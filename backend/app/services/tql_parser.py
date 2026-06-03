@@ -289,9 +289,49 @@ class Parser:
 
 
 def parse_tql(query: str) -> Any:
-    """Parse a TQL query string and return an AST root node."""
+    """Parse a TQL query string and return an AST root node.
+
+    Also validates that every field reference (including interval prefix) is
+    well-formed — raises TQLSyntaxError at parse time for unknown fields or
+    interval prefixes. This catches user errors before any DB work.
+    """
     tokens = tokenize(query.strip())
-    return Parser(tokens).parse()
+    ast = Parser(tokens).parse()
+    _validate_ast(ast)
+    return ast
+
+
+def _validate_field(field_name: str) -> None:
+    """Validate a field name (with optional interval prefix) against _FIELD_MAP.
+
+    Raises TQLSyntaxError for unknown fields or interval prefixes. Matching is
+    case-insensitive — "W:RSI" and "w:rsi" are equivalent.
+    """
+    lowered = field_name.lower()
+    if ":" in lowered:
+        iv_raw, _ = lowered.split(":", 1)
+        if iv_raw not in _VALID_INTERVALS:
+            raise TQLSyntaxError(f"Unknown interval prefix {iv_raw!r}")
+        # Strip the prefix and validate the bare name
+        lowered = lowered.split(":", 1)[1]
+    if lowered not in _FIELD_MAP:
+        raise TQLSyntaxError(f"Unknown field {field_name!r}")
+
+
+def _validate_ast(node: Any) -> None:
+    """Walk an AST and validate every field reference."""
+    if isinstance(node, CompareNode):
+        _validate_field(node.field)
+    elif isinstance(node, InNode):
+        _validate_field(node.field)
+    elif isinstance(node, AndNode):
+        _validate_ast(node.left)
+        _validate_ast(node.right)
+    elif isinstance(node, OrNode):
+        _validate_ast(node.left)
+        _validate_ast(node.right)
+    elif isinstance(node, NotNode):
+        _validate_ast(node.expr)
 
 
 # ─── Field resolver ───────────────────────────────────────────────────────────
