@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,7 +11,7 @@ from typing import Any, Optional
 
 import pandas as pd
 import pytz
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 
@@ -145,6 +146,15 @@ def register_all_jobs() -> None:
             category="data_warehouse",
             cron_expression=None,
             callable=_ticker_intraday_update_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.vacuum",
+            name="vacuum",
+            description="Weekly SQLite VACUUM to reclaim space from deleted rows (Sunday 04:00)",
+            category="data_warehouse",
+            cron_expression=VACUUM_CRON,
+            callable=_run_vacuum,
             is_async=False,
         ),
         JobDefinition(
@@ -2393,6 +2403,108 @@ def news_rss_worker() -> None:
     logger.info("news_rss_worker: stopped")
 
 
+# ---------------------------------------------------------------------------
+# Phase C: weekly SQLite VACUUM worker
+# ---------------------------------------------------------------------------
+# SQLite stores data in pages; DELETE leaves free pages in the file until
+# VACUUM rebuilds the file.  News/intraday retention deletes thousands of
+# rows each week; running VACUUM once a week (Sunday 04:00) reclaims space
+# without adding meaningful write overhead.  This is a single-threaded
+# rebuild — takes 5-15 min on a 1-2GB DB.
+
+VACUUM_CRON = "0 4 * * 0"   # Every Sunday 04:00 (low-traffic window)
+
+
+def _run_vacuum() -> None:
+    """Run VACUUM on the SQLite warehouse to reclaim space from deleted rows.
+
+    Uses a dedicated short-lived connection because VACUUM cannot run inside
+    an open transaction.  Disables WAL briefly to allow the rebuild.
+    """
+    db_path = settings.db_path
+    logger.info("vacuum: starting VACUUM on %s", db_path)
+    update_job_status_sync("job.vacuum", "running", progress=10, message="Starting VACUUM...")
+    t0 = time.time()
+    try:
+        # VACUUM cannot be executed inside a transaction.  Use a fresh
+        # connection with isolation_level=None (autocommit) so each
+        # statement is its own transaction.
+        with sqlite3.connect(db_path, timeout=600, isolation_level=None) as con:
+            # 1. checkpoint WAL to fold pending writes into the main DB
+            update_job_status_sync("job.vacuum", "running", progress=20,
+                                   message="Checkpointing WAL...")
+            try:
+                con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError as e:
+                logger.warning("vacuum: wal_checkpoint failed (continuing): %s", e)
+
+            # 2. rebuild the database file in place
+            update_job_status_sync("job.vacuum", "running", progress=50,
+                                   message="VACUUM in progress (may take 5-15 min)...")
+            con.execute("VACUUM")
+
+            # 3. update query planner stats
+            update_job_status_sync("job.vacuum", "running", progress=90,
+                                   message="Running ANALYZE...")
+            con.execute("ANALYZE")
+
+        elapsed = time.time() - t0
+        logger.info("vacuum: complete in %.1fs", elapsed)
+        update_job_status_sync("job.vacuum", "waiting", progress=100,
+                               message=f"Complete in {elapsed:.0f}s")
+    except Exception:
+        logger.exception("vacuum: failed")
+        update_job_status_sync("job.vacuum", "waiting", progress=0,
+                               message="Failed (will retry next week)")
+
+
+def vacuum_worker() -> None:
+    """Daemon thread: runs VACUUM weekly on Sunday 04:00.
+
+    Skips if disabled via system_config.  On first launch (first_run=True)
+    waits for ticker_scores to complete before triggering (we don't want to
+    race with the nightly pipeline).  Subsequent cycles use the cron schedule.
+    """
+    logger.info("vacuum_worker: started")
+
+    if not _is_job_enabled("job.vacuum"):
+        logger.info("vacuum_worker: disabled, waiting...")
+        update_job_status_sync("job.vacuum", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
+        logger.info("vacuum_worker: stopped")
+        return
+
+    # Wait for ticker_scores to finish its first run so we don't fight for the
+    # DB lock during startup.  This is a soft check — if the worker hasn't
+    # started, just proceed.
+    if _is_first_run("vacuum") and _wait_for_startup_event(
+        _startup_ticker_scores_done, "ticker_scores", "job.vacuum"
+    ):
+        update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
+        return
+    if _is_first_run("vacuum"):
+        _set_first_run_complete("vacuum")
+
+    while not _shutdown_event.is_set():
+        wait_secs = _report_job_waiting("job.vacuum", VACUUM_CRON,
+                                        message="Weekly maintenance")
+        logger.info("vacuum_worker: sleeping %.0fs until next cron (%s)",
+                    wait_secs, VACUUM_CRON)
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.vacuum"):
+                update_job_status_sync("job.vacuum", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            _run_vacuum()
+
+    update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
+    logger.info("vacuum_worker: stopped")
+
+
 WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
 
 
@@ -2855,6 +2967,7 @@ async def start_all_workers() -> list[threading.Thread]:
       10. watchlist_news_worker              — waits stock_universe_done; then runs independently
       11. market_data_worker                 — waits stock_universe_done; then runs independently
       12. results_calendar_worker            — waits stock_universe_done; then runs independently
+      13. vacuum_worker                      — waits ticker_scores_done; weekly Sunday 04:00 cron
 
     Cron-cycle ordering is enforced via _pipeline_lock + _pipeline_idle:
       ticker_daily_update / ticker_indicators / ticker_scores each acquire
@@ -2888,6 +3001,7 @@ async def start_all_workers() -> list[threading.Thread]:
         news_rss_worker,                             # 11 — RSS news aggregation
         watchlist_news_worker,                       # 12 — per-symbol news
         results_calendar_worker,                     # 13 — upcoming results alerts
+        vacuum_worker,                               # 14 — weekly VACUUM (Sunday 04:00)
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -3045,6 +3159,12 @@ DAILY_NOTIFICATION_WINDOW_DAYS = 7          # lookback for deals and insider tra
 CLEANUP_READ_AFTER_DAYS = 30              # hard-delete read notifications older than this
 CLEANUP_INTERVAL = 24 * 60 * 60            # run cleanup at most once per 24 hours
 
+# Phase C: data-retention policies for high-volume tables
+NEWS_RETENTION_DAYS = 30                   # hard-delete news_articles older than this
+INTRADAY_1H_RETENTION_DAYS = 30            # 1h candles older than this are pruned
+INTRADAY_W_RETENTION_YEARS = 2             # weekly candles older than this are pruned
+# Monthly (M) candles: kept forever (small footprint, useful for long-term charts)
+
 _cleanup_last_run: datetime | None = None
 
 
@@ -3095,30 +3215,118 @@ def _bulk_upsert_notifications(rows: list[dict]) -> None:
 
 
 def _run_cleanup_if_due() -> None:
-    """Hard-delete read notifications older than CLEANUP_READ_AFTER_DAYS.
+    """Run the daily cleanup suite.
+
+    - Hard-delete read notifications older than CLEANUP_READ_AFTER_DAYS
+    - Phase C: hard-delete news_articles older than NEWS_RETENTION_DAYS
+    - Phase C: prune ticker_intraday 1h bars older than INTRADAY_1H_RETENTION_DAYS
+    - Phase C: prune ticker_intraday W bars older than INTRADAY_W_RETENTION_YEARS
+    - Monthly bars are never pruned.
 
     Runs at most once per CLEANUP_INTERVAL to avoid unnecessary DB writes.
+    Errors in any single pruner are logged and do not prevent the others.
     """
     global _cleanup_last_run
     now = datetime.now()
     if _cleanup_last_run is not None and (now - _cleanup_last_run).total_seconds() < CLEANUP_INTERVAL:
         return
 
-    cutoff = datetime.combine(now.date() - timedelta(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
-    with _SyncSessionLocal() as session:
-        deleted = session.execute(
-            delete(Notification).where(
-                Notification.is_read == True,
-                Notification.triggered_at < cutoff,
+    # 1) notifications
+    try:
+        cutoff = datetime.combine(now.date() - timedelta(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
+        with _SyncSessionLocal() as session:
+            deleted = session.execute(
+                delete(Notification).where(
+                    Notification.is_read == True,
+                    Notification.triggered_at < cutoff,
+                )
             )
-        )
-        session.commit()
-        if deleted.rowcount > 0:
+            session.commit()
+            if deleted.rowcount > 0:
+                logger.info(
+                    "notification_cleanup: deleted %d read notifications older than %s",
+                    deleted.rowcount,
+                    cutoff.date(),
+                )
+    except Exception:
+        logger.exception("notification_cleanup: failed (non-fatal)")
+
+    # 2) news articles (full row hard-delete) — use raw SQL for speed
+    #    (SQLAlchemy ORM delete() does a SELECT-then-DELETE-per-row)
+    try:
+        news_cutoff = now - timedelta(days=NEWS_RETENTION_DAYS)
+        with _SyncSessionLocal() as session:
+            deleted = session.execute(
+                text("DELETE FROM news_articles WHERE publish_date < :cutoff"),
+                {"cutoff": news_cutoff},
+            )
+            session.commit()
+            if deleted.rowcount > 0:
+                logger.info(
+                    "news_cleanup: deleted %d articles older than %s",
+                    deleted.rowcount, news_cutoff.date(),
+                )
+    except Exception:
+        logger.exception("news_cleanup: failed (non-fatal)")
+
+    # 3) intraday 1h — chunked DELETE so the WAL lock is held briefly per batch
+    try:
+        cutoff_1h = now - timedelta(days=INTRADAY_1H_RETENTION_DAYS)
+        total_1h = 0
+        for _ in range(50):  # up to 50 batches per cleanup cycle
+            with _SyncSessionLocal() as session:
+                deleted = session.execute(
+                    text(
+                        "DELETE FROM ticker_intraday WHERE rowid IN ("
+                        "  SELECT rowid FROM ticker_intraday "
+                        "  WHERE interval = '1h' AND timestamp < :cutoff "
+                        "  LIMIT 50000"
+                        ")"
+                    ),
+                    {"cutoff": cutoff_1h},
+                )
+                session.commit()
+                count = deleted.rowcount
+            total_1h += count
+            if count < 50000:
+                break
+        if total_1h > 0:
             logger.info(
-                "notification_cleanup: deleted %d read notifications older than %s",
-                deleted.rowcount,
-                cutoff.date(),
+                "intraday_cleanup: deleted %d 1h candles older than %s",
+                total_1h, cutoff_1h,
             )
+    except Exception:
+        logger.exception("intraday_1h_cleanup: failed (non-fatal)")
+
+    # 4) intraday W
+    try:
+        cutoff_w = now - timedelta(days=365 * INTRADAY_W_RETENTION_YEARS)
+        total_W = 0
+        for _ in range(50):
+            with _SyncSessionLocal() as session:
+                deleted = session.execute(
+                    text(
+                        "DELETE FROM ticker_intraday WHERE rowid IN ("
+                        "  SELECT rowid FROM ticker_intraday "
+                        "  WHERE interval = 'W' AND timestamp < :cutoff "
+                        "  LIMIT 50000"
+                        ")"
+                    ),
+                    {"cutoff": cutoff_w},
+                )
+                session.commit()
+                count = deleted.rowcount
+            total_W += count
+            if count < 50000:
+                break
+        if total_W > 0:
+            logger.info(
+                "intraday_cleanup: deleted %d W candles older than %s",
+                total_W, cutoff_w.date(),
+            )
+    except Exception:
+        logger.exception("intraday_W_cleanup: failed (non-fatal)")
+
     _cleanup_last_run = now
 
 

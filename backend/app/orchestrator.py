@@ -13,9 +13,10 @@ order for startup and nightly sync runs:
   Stage 6  → global_scan + watchlist_notif  (concurrent, one immediate cycle)
 
 Independent workers (news, market data, results calendar, fair value,
-ticker_intraday_hourly_update, ticker_intraday_hourly_indicators) are
+ticker_intraday_hourly_update, ticker_intraday_hourly_indicators, vacuum) are
 started immediately and self-manage their own cron schedules — the orchestrator
-does not sequence them.
+does not sequence them.  vacuum_worker runs Sunday 04:00 to reclaim space from
+news/intraday retention deletes.
 
 The orchestrator also owns the nightly pipeline trigger (23:00 IST) and the
 Morningstar fair value schedulers, previously scattered across main.py and
