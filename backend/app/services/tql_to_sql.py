@@ -96,6 +96,14 @@ _SNAPSHOT_INDICATOR_BASES: dict[str, str] = {
     "sharpe_126":     "sharpe_126",
 }
 
+# These four indicators are stored WITHOUT a ``_1d`` suffix in the snapshot
+# (because they are only computed daily, not for 1h/W/M), but WITH the
+# ``_1h`` / ``_W`` / ``_M`` suffix for the other intervals. Asymmetric
+# schema — special-case the 1d lookup so we use the bare column name.
+_SNAPSHOT_BARE_FOR_1D: frozenset[str] = frozenset(
+    {"hv_20", "hv_60", "sharpe_60", "sharpe_126"}
+)
+
 
 def _field_sql_name(field: str) -> str:
     """Return SQL column name for a TQL field (no interval prefix)."""
@@ -457,6 +465,10 @@ def _snapshot_field_sql_expression(field: str, default_interval: str) -> tuple[s
                 f"(TQL field {field!r}). Add an entry to _SNAPSHOT_INDICATOR_BASES."
             )
         if interval == "1d":
+            # hv_20 / hv_60 / sharpe_60 / sharpe_126 live at the bare column
+            # in the snapshot (no _1d suffix). Everything else is _1d.
+            if col in _SNAPSHOT_BARE_FOR_1D:
+                return f"snap.{short}", set()
             return f"snap.{short}_1d", set()
         if interval == "1h":
             return f"snap.{short}_1h", set()

@@ -121,3 +121,41 @@ class TestCountBindBugRegression:
         result = run_screener_tql("RSI > 0", limit=1)
         assert result["count"] == 3
         assert result["returned"] == 1
+
+    def test_hv_filter_uses_bare_column(self, shared_db):
+        """Regression: HV20/HV60/Sharpe60/Sharpe126 are stored without _1d suffix."""
+        from app.services.screener import run_screener_tql
+        # All three have hv_20=NULL by default; set one to 0.5 so the
+        # filter has at least one match
+        import sqlite3 as _sq
+        con = _sq.connect(str(shared_db))
+        con.execute("UPDATE ticker_screener_snapshot SET hv_20 = 0.5 WHERE symbol = 'HDFCBANK'")
+        con.commit(); con.close()
+        result = run_screener_tql("HV20 > 0.3", limit=10)
+        assert result["count"] == 1
+        assert result["results"][0]["symbol"] == "HDFCBANK"
+
+    def test_sharpe_filter_uses_bare_column(self, shared_db):
+        from app.services.screener import run_screener_tql
+        import sqlite3 as _sq
+        con = _sq.connect(str(shared_db))
+        con.execute("UPDATE ticker_screener_snapshot SET sharpe_60 = 2.0 WHERE symbol = 'INFY'")
+        con.commit(); con.close()
+        result = run_screener_tql("Sharpe60 > 1.0", limit=10)
+        assert result["count"] == 1
+        assert result["results"][0]["symbol"] == "INFY"
+
+    def test_1h_hv_uses_suffixed_column(self, shared_db):
+        """1h:HV20 still works because the snapshot has hv_20_1h."""
+        from app.services.screener import run_screener_tql
+        import sqlite3 as _sq
+        con = _sq.connect(str(shared_db))
+        # The schema doesn't include hv_20_1h in our test fixture; we add it
+        # to confirm the transpiler emits snap.hv_20_1h (not snap.hv_20_1d).
+        con.execute("ALTER TABLE ticker_screener_snapshot ADD COLUMN hv_20_1h REAL")
+        con.execute("UPDATE ticker_screener_snapshot SET hv_20_1h = 0.4 WHERE symbol = 'TATAMOTORS'")
+        con.commit(); con.close()
+        # This should not raise OperationalError about a missing column.
+        result = run_screener_tql("1h:HV20 > 0.3", limit=10)
+        assert result["count"] == 1
+        assert result["results"][0]["symbol"] == "TATAMOTORS"
