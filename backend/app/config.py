@@ -32,5 +32,11 @@ class Settings(BaseSettings):
     market_end_hour: int = 15
     market_end_minute: int = 30
 
+    # Pipeline tuning
+    # Sleep between indicator-backfill batches (seconds). Default 0.0
+    # (the O(n) rewrite made the sleep pure overhead). Set >0 to throttle
+    # DB writes on a busy host.
+    indicator_inter_batch_sleep_s: float = 0.0
+
 
 settings = Settings()
