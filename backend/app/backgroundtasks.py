@@ -3575,11 +3575,15 @@ def _ticker_indicator_notification_cycle() -> None:
     Evaluates all 15 technical trigger types (RSI, MACD, Bollinger, ATR,
     volatility, momentum, returns, streaks, 52W proximity) against the latest
     stored ticker_daily indicator columns.
+
+    Momentum and 1W return alerts are read from the pre-computed `ticker_scores`
+    cache (populated by Stage 4 `_ticker_scores_sync`), NOT from
+    `get_momentum_score`/`get_returns`. Those services do O(universe_size) work
+    per call, which previously caused the per-symbol loop to hang for hours when
+    invoked across the 65-symbol watchlist.
     """
-    from app.models.ticker import TickerDaily
+    from app.models.ticker import TickerDaily, TickerScore
     from app.models.stockuniverse import StockUniverse
-    from app.services import returns as returns_service
-    from app.services import momentum as momentum_service
 
     try:
         logger.info("ticker_indicator_notification_cycle: starting")
@@ -3605,6 +3609,23 @@ def _ticker_indicator_notification_cycle() -> None:
         total_symbols = len(all_symbols)
         logger.info("ticker_indicator_notification_cycle: starting for %d symbols in %d watchlists",
                     total_symbols, len(symbols_by_watchlist))
+
+        # Load TickerScore cache once for the whole cycle. Stage 4
+        # `_ticker_scores_sync` pre-computes momentum_score and return_1w for
+        # every symbol; reading from this cache keeps the cycle O(watchlist)
+        # instead of O(watchlist × universe).
+        scores_cache: dict[str, TickerScore] = {}
+        try:
+            with _SyncSessionLocal() as db:
+                rows = db.execute(
+                    select(TickerScore).where(TickerScore.compute_date == today_date)
+                )
+                for row in rows.scalars():
+                    scores_cache[row.symbol] = row
+            logger.info("ticker_indicator_notification_cycle: loaded %d ticker_scores from cache",
+                        len(scores_cache))
+        except Exception as e:
+            logger.warning("ticker_indicator_notification_cycle: failed to load ticker_scores: %s", e)
 
         seen_today = _get_seen_today()
         pending: list[dict] = []
@@ -3670,12 +3691,12 @@ def _ticker_indicator_notification_cycle() -> None:
                     if su_row.low_52w > 0:
                         pct_from_52w_low  = (latest.close - su_row.low_52w) / su_row.low_52w  * 100
 
-                # --- returns and momentum (service calls) ---
-                returns = returns_service.get_returns(symbol)
-                return_1w = returns.get("1w") if returns else None
-
-                momentum_data  = momentum_service.get_momentum_score(symbol)
-                momentum_score = momentum_data.get("score") if momentum_data else None
+                # --- momentum and return_1w from pre-computed TickerScore cache ---
+                # Avoid get_momentum_score/get_returns: those are O(universe_size)
+                # per call and were the root cause of the Stage 3 hang.
+                ts = scores_cache.get(symbol)
+                momentum_score = ts.momentum_score if ts else None
+                return_1w      = ts.return_1w      if ts else None
 
                 # --- build alerts per watchlist that contains this symbol ---
                 for wl_id, wl_symbols in symbols_by_watchlist.items():
@@ -3725,7 +3746,7 @@ def _ticker_indicator_notification_cycle() -> None:
                         alerts.append(("atr_expansion",
                             f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
 
-                    # Momentum / returns
+                    # Momentum / returns (read from TickerScore cache)
                     if momentum_score is not None and momentum_score > momentum_thr:
                         alerts.append(("momentum_surge",
                             f"{symbol} momentum score {momentum_score:.1f} > {momentum_thr}"))
