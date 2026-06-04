@@ -236,7 +236,7 @@ def _backfill_symbol_charting(symbol: str, days: int) -> int:
             "close": close_val,
             "volume": volume_val,
             "value": value_val,
-            "source": "equity_history",
+            "source": "nse_charting",
             "created_at": datetime.now(),
         })
 
@@ -859,21 +859,32 @@ def get_symbols_needing_backfill() -> list[str]:
 
     A symbol needs backfill if:
       - It has fewer than MIN_EXPECTED_ROWS rows (historical data missing), OR
-      - Its most recent date is older than the last trading day (stale data).
+      - Its most recent date is older than the DB consensus date (stale data).
+
+    Consensus date = the most common max(date) across all stored symbols in the
+    universe. This avoids the pitfall of using `get_last_trading_day()` as a live
+    reference, which would mark *every* symbol as stale on a non-bhavcopy day
+    (e.g. market closed weekends/holidays) and trigger a full universe re-fetch.
+
+    Excludes symbols with `review_status` in ('removed', 'ticker_error').
 
     Watchlist symbols are returned first, then the rest of universe.
 
     Returns:
         List of symbols needing backfill.
     """
-    last_trading_day = get_last_trading_day()
+    from collections import Counter
 
     with _get_session() as db:
         watchlist_symbols = set(
             db.execute(select(func.distinct(WatchlistItem.symbol))).scalars().all()
         )
 
-        universe_symbols = db.execute(select(StockUniverse.symbol)).scalars().all()
+        universe_symbols = db.execute(
+            select(StockUniverse.symbol).where(
+                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+            )
+        ).scalars().all()
 
         if not universe_symbols:
             return []
@@ -893,6 +904,17 @@ def get_symbols_needing_backfill() -> list[str]:
 
     stats_by_symbol = {row[0]: (row[1], row[2]) for row in rows}
 
+    # Compute DB consensus: most common max_date across stored symbols
+    max_dates = [row[2] for row in rows if row[2] is not None]
+    consensus_date = Counter(max_dates).most_common(1)[0][0] if max_dates else None
+    if consensus_date is not None:
+        logger.info(
+            "[daily_stale] consensus max_date = %s (shared by %d/%d stored symbols)",
+            consensus_date,
+            sum(1 for d in max_dates if d == consensus_date),
+            len(max_dates),
+        )
+
     priority_symbols = []
     other_symbols = []
 
@@ -901,7 +923,7 @@ def get_symbols_needing_backfill() -> list[str]:
         needs_backfill = (
             row_count < MIN_EXPECTED_ROWS
             or max_date is None
-            or max_date < last_trading_day
+            or (consensus_date is not None and max_date < consensus_date)
         )
 
         if not needs_backfill:
@@ -911,6 +933,15 @@ def get_symbols_needing_backfill() -> list[str]:
             priority_symbols.append(sym)
         else:
             other_symbols.append(sym)
+
+    total = len(priority_symbols) + len(other_symbols)
+    if total == 0:
+        logger.info("[daily_stale] all symbols up to date (consensus=%s)", consensus_date)
+    else:
+        logger.info(
+            "[daily_stale] %d/%d universe symbols need backfill (consensus=%s)",
+            total, len(universe_symbols), consensus_date,
+        )
 
     return priority_symbols + other_symbols
 
