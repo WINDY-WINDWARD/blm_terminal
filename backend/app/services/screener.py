@@ -44,10 +44,14 @@ def _execute_tql_count(sql_no_limit: str, binds: list) -> int:
 
     Used to report ``count`` (total matching) separately from ``returned``
     (the page). The COUNT re-uses the same CTE + WHERE.
+
+    The ``binds`` list must NOT include the LIMIT value — callers should
+    pass ``binds[:-1]`` since the build_*_query helpers always append the
+    LIMIT value as the last bind. Passing it would cause "Incorrect number
+    of bindings supplied" because we strip the corresponding ``LIMIT ?``
+    from the SQL.
     """
-    # Strip the trailing "LIMIT ?" to get the full filtered set
     sql_count = sql_no_limit.rsplit("LIMIT", 1)[0]
-    # Add a derived wrapper to count rows
     sql_count = f"SELECT COUNT(*) AS n FROM ({sql_count})"
     with sqlite3.connect(settings.db_path, timeout=60) as con:
         row = con.execute(sql_count, binds).fetchone()
@@ -124,7 +128,7 @@ def run_screener_tql(
     except TQLSyntaxError as e:
         raise ValueError(f"TQL syntax error: {e}") from e
 
-    count = _execute_tql_count(sql, binds)
+    count = _execute_tql_count(sql, binds[:-1])
     rows = _execute_sql(sql, binds)
 
     return {
@@ -153,7 +157,7 @@ def run_screener(
         sql, binds = build_snapshot_legacy_query(filters, sort_by, order, limit)
     else:
         sql, binds = build_legacy_query(filters, sort_by, order, limit)
-    count = _execute_tql_count(sql, binds)
+    count = _execute_tql_count(sql, binds[:-1])
     rows = _execute_sql(sql, binds)
     return {
         "count": count,
