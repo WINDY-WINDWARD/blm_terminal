@@ -36,6 +36,9 @@ A single `Orchestrator` class lives in `app/orchestrator.py` and owns the entire
 - A new hourly startup gate (`_startup_ticker_hourly_done`) ensures `ticker_intraday_hourly_indicators_worker` waits for `ticker_intraday_hourly_update_worker` to finish its first candle backfill before computing 1h indicators.
 - **1h stale-check + backfill** is now part of both startup and nightly pipelines (Stage 2c), so watchlist hourly candles are reconciled before the daily indicators/scores stages run.
 - **Weekly/Monthly (W/M) candles + indicators** are now part of the nightly pipeline (Stage 5a/5b), not standalone workers. This guarantees fresh W/M data before the nightly scan runs.
+- **W/M indicators are also computed at startup (Stage 1c)** as of 2026-06-04. Previously W/M indicators were nightly-only, which meant a fresh deployment would show `null` / 0 of 2348 in the Jobs dashboard and AnalysisWidget for W/M columns until the next 23:00 IST nightly. Stage 1c runs once during startup after Stage 1b finishes backfilling the W/M candles, so the universe's W/M indicator columns are populated within ~1-2 minutes of server boot. Nightly Stage 5b still runs (it must — it recomputes on the freshly-refreshed W/M candles after market close). The cost is paid once per restart, not duplicated inside the nightly run.
+- **Per-pair W/M indicator observability** matches the daily indicator rewrite (entry log, per-10 progress, 10s heartbeat, per-symbol timing warning at >5s, configurable inter-batch sleep via `INDICATOR_INTER_BATCH_SLEEP_S`). The previous in-place `print()` that was invisible to log files has been removed.
+- **MTF alignment notifications fixed** — `_ticker_intraday_indicator_notification_cycle` was raising `NameError: TickerDaily` for every watchlist symbol because the model was not imported. MTF (Daily + Weekly + Monthly RSI all > 50 or all < 50) alerts were silently swallowed by the per-symbol `except Exception`.
 
 `main.py` is now ~20 lines of lifespan logic instead of ~45, with a single import.
 
@@ -79,6 +82,16 @@ Both pipelines follow the same seven-stage structure. The nightly pipeline addit
 Stage 1  ──►  stock_universe
               (fetch all NSE symbol metadata)
 
+Stage 1b ──►  ticker_weekly_monthly_update
+              (smart W/M candle backfill for stale universe symbols; smart=True skips
+               symbols whose DB consensus shows the existing candles are current)
+
+Stage 1c ──►  ticker_weekly_monthly_indicators
+              (compute RSI, MACD, BB, ATR, HV, etc. on W/M candles for the full
+               universe. With the O(n) indicator rewrite this takes ~1-2 min for
+               2348 symbols. Skipped if job.ticker_weekly_monthly_indicators is
+               disabled. Nightly Stage 5b still runs after market close.)
+
 Stage 2  ──►  ticker_backfill
               (one-year OHLCV history for every symbol)
 
@@ -91,13 +104,16 @@ Stage 3  ──►  ticker_indicators
 Stage 4  ──►  ticker_scores
               (multi-period returns, momentum percentiles, volume ratios)
 
-Stage 5  ──►  (skipped at startup — W/M is nightly-only)
+Stage 5  ──►  (nightly-only — W/M sync + indicators handled in Stage 5a/5b
+               at 23:00 IST after the daily bhavcopy lands)
 
 Stage 6  ──►  global_scan  +  watchlist_notif
                (concurrent immediate cycle)
 ```
 
 > **Note:** The hourly intraday workers (`ticker_intraday_hourly_update` → `ticker_intraday_hourly_indicators`) still run independently during market hours. In addition, the Orchestrator runs `ticker_intraday_hourly_stale_check` at startup and nightly so missing 1h candles are reconciled before daily indicator/score stages. The W/M startup stage uses DB consensus (not a live NSE reference symbol) to avoid false staleness when the live API returns the current incomplete period.
+>
+> **Startup also computes W/M indicators (Stage 1c).** Stage 1b backfills W/M candles for stale universe symbols; Stage 1c immediately follows and computes W/M indicators for all universe symbols so the Jobs dashboard and AnalysisWidget show populated W/M columns without waiting for the next 23:00 IST nightly. The nightly Stage 5b still runs — it operates on the freshly-refreshed W/M candles from Stage 5a. Total startup-time cost of Stage 1c is ~1-2 minutes for 2348 symbols with the O(n) indicator rewrite.
 
 #### NIGHTLY Pipeline (23:00 IST)
 
@@ -241,31 +257,31 @@ Because they are registered as `is_async=True` with the Orchestrator's `run_pipe
     Stage 1: stock_universe          Stage 1: stock_universe
                │                               │
                ▼                               ▼
-    Stage 2: ticker_backfill         Stage 2a: ticker_daily_update
-               │                               │
-               │                               ▼
-               │                      Stage 2b: ticker_backfill
+    Stage 1b: W/M candle backfill     Stage 2a: ticker_daily_update
                │                               │
                ▼                               ▼
-    Stage 2c: 1h stale-check         Stage 2c: 1h stale-check
+    Stage 1c: W/M indicator compute   Stage 2b: ticker_backfill
                │                               │
                ▼                               ▼
-    Stage 3: ticker_indicators       Stage 3: ticker_indicators
+    Stage 2: ticker_backfill         Stage 2c: 1h stale-check
                │                               │
                ▼                               ▼
-    Stage 4: ticker_scores           Stage 4: ticker_scores
+    Stage 2c: 1h stale-check         Stage 3: ticker_indicators
                │                               │
                ▼                               ▼
-    Stage 5: —                        Stage 5a: W/M candle sync
+    Stage 3: ticker_indicators       Stage 4: ticker_scores
+               │                               │
+               ▼                               ▼
+    Stage 4: ticker_scores           Stage 5a: W/M candle sync
                │                               │
                ▼                               ▼
     Stage 6: scan + notif             Stage 5b: W/M indicator sync
                │                               │
                ▼                               ▼
           gates opened                  Stage 6: scan + notif
-                                              │
-                                              ▼
-                                         gates opened
+                                               │
+                                               ▼
+                                          gates opened
 ```
 
 ---
@@ -298,13 +314,15 @@ No new endpoints were added. The existing `POST /api/jobs/{job_key}/trigger` end
 
 3. **Shutdown respects the pipeline.** If `_shutdown_event` is set mid-pipeline, each stage checks the event and returns early. The pipeline status is updated to `failed` so the UI reflects the abort.
 
-4. **Scan/notif are paused during mutation.** Stages 2a, 3, 4, 5a, and 5b acquire the existing pipeline lock, so `global_scan_worker` and `watchlist_notification_worker` block on `_wait_for_pipeline()`. Once stage 5b releases the lock, the Orchestrator explicitly triggers one immediate scan+notif cycle before those workers resume their own cron schedules.
+4. **Scan/notif are paused during mutation.** Stages 1c, 2a, 3, 4, 5a, and 5b acquire the existing pipeline lock, so `global_scan_worker` and `watchlist_notification_worker` block on `_wait_for_pipeline()`. Once stage 5b releases the lock, the Orchestrator explicitly triggers one immediate scan+notif cycle before those workers resume their own cron schedules.
 
 5. **Independent workers are unaffected.** News, market data, results calendar, fair-value, and **hourly intraday** workers run on their own threads and asyncio tasks. They do not participate in the daily pipeline and are never blocked by it. The hourly intraday workers do have their own internal ordering: `ticker_intraday_hourly_indicators_worker` waits on `_startup_ticker_hourly_done` set by `ticker_intraday_hourly_update_worker`.
 
 6. **1h gaps are reconciled before indicators.** Because Stage 2c runs at both startup and nightly, watchlist symbols with missing hourly candles are backfilled and their 1h indicators are recomputed before the broader daily indicator/score pipeline continues.
 
-7. **W/M are always fresh before scan.** Because W/M candle sync and indicator recompute are Stage 5a/5b of the nightly pipeline, the nightly scan (Stage 6) always sees the most recent weekly and monthly bars — even after holidays or long weekends.
+7. **W/M are always fresh before scan.** Because W/M candle sync and indicator recompute are Stage 5a/5b of the nightly pipeline, the nightly scan (Stage 6) always sees the most recent weekly and monthly bars — even after holidays or long weekends. At startup, W/M candles are backfilled (Stage 1b) and W/M indicators are computed (Stage 1c) so the Jobs dashboard, AnalysisWidget, and screener show populated W/M columns within minutes of server boot instead of waiting for the next 23:00 IST nightly.
+
+8. **W/M indicator observability is symmetric with the daily indicator rewrite.** `_ticker_intraday_indicators_sync` (called by Stages 1c, 5b, and the hourly indicator worker) emits an entry log on stale/null pair scan, logs progress every 10 pairs, emits a 10-second heartbeat to prevent log silence on slow pairs, warns per-pair when compute exceeds 5 s, and honors the configurable inter-batch sleep (`settings.indicator_inter_batch_sleep_s`, env `INDICATOR_INTER_BATCH_SLEEP_S`, default 0). The old in-place `print()` that was invisible to log files has been removed.
 
 ---
 
@@ -312,13 +330,13 @@ No new endpoints were added. The existing `POST /api/jobs/{job_key}/trigger` end
 
 | File | Action | Role |
 |------|--------|------|
-| `backend/app/orchestrator.py` | **Modified** | Added Stage 2c (1h stale-check) and Stage 5a/5b (W/M sync + indicators), updated docstring/imports/stage labels |
+| `backend/app/orchestrator.py` | **Modified** | Added Stage 1c (W/M indicator compute for startup), updated docstring/imports/stage labels; added Stages 2c and 5a/5b in the previous intraday-worker-refactor |
 | `backend/main.py` | **Unchanged** | Lifespan already calls `orchestrator.start()` / `orchestrator.stop()` |
-| `backend/app/backgroundtasks.py` | **Modified** | Refactored `_ticker_intraday_update_sync()` and `_ticker_intraday_indicators_sync()` to accept `intervals` param; replaced old intraday workers with `ticker_intraday_hourly_update_worker` and `ticker_intraday_hourly_indicators_worker`; renamed gate to `_startup_ticker_hourly_done`; updated `register_all_jobs()` and `start_all_workers()` |
+| `backend/app/backgroundtasks.py` | **Modified** | Added `TickerDaily` to the local import in `_ticker_intraday_indicator_notification_cycle` (fixes MTF alignment `NameError`); refactored `_ticker_intraday_indicators_sync` with full observability (entry log, per-10 progress, 10s heartbeat, per-pair timing warn at >5s, configurable inter-batch sleep from `settings.indicator_inter_batch_sleep_s`, summary log with total duration) — replaced the old in-place `print()` that was invisible to log files; previously: refactored `_ticker_intraday_update_sync()` and `_ticker_intraday_indicators_sync()` to accept `intervals` param; replaced old intraday workers with `ticker_intraday_hourly_update_worker` and `ticker_intraday_hourly_indicators_worker`; renamed gate to `_startup_ticker_hourly_done`; updated `register_all_jobs()` and `start_all_workers()` |
 | `backend/alembic/versions/d8e1ed7addfa_cleanup_old_intraday_jobs.py` | **Created** | Deletes orphaned `job.ticker_intraday_update` / `job.ticker_intraday_indicators` rows and their `first_run.*` SystemConfig flags |
 | `backend/app/jobs/registry.py` | **Unchanged** | Already supports arbitrary job registration; no modifications needed |
 | `backend/app/models/ticker.py` | **Unchanged** | `TickerIntraday` model unchanged — still stores 1h / W / M with 17 indicator columns |
-| `backend/app/services/indicators.py` | **Unchanged** | `compute_intraday_indicators_for_all_rows()` and `compute_intraday_indicators_for_latest_candle()` still handle all intervals |
+| `backend/app/services/indicators.py` | **Unchanged** | `compute_intraday_indicators_for_all_rows()` and `compute_intraday_indicators_for_latest_candle()` still handle all intervals; the O(n) indicator rewrite shipped previously is the reason Stage 1c completes in ~1-2 min for 2348 symbols |
 | `backend/app/services/screener.py` | **Unchanged** | Cross-timeframe indicator loading and interval-prefixed filter keys still work |
 | `backend/app/routers/ticker.py` | **Unchanged** | `GET /ticker/screener` still accepts `filters_json` for cross-timeframe filtering |
 | `src/components/widgets/ScreenerWidget.tsx` | **Unchanged** | Frontend widget with Daily / 1h / Weekly / Monthly tabs |
