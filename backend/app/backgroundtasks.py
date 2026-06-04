@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import queue
 import sqlite3
 import threading
 import time
@@ -1337,6 +1338,68 @@ def ticker_intraday_hourly_update_worker() -> None:
     logger.info("ticker_intraday_hourly_update_worker: stopped")
 
 
+def _parallel_indicator_sync(
+    items: list[tuple],
+    prepare_fn,
+    flush_fn,
+    *,
+    job_key: str,
+    pipeline_job_key: str | None = None,
+    pipeline_progress_start: int | None = None,
+    pipeline_progress_end: int | None = None,
+    num_compute_workers: int = 3,
+    queue_maxsize: int = 100,
+    writer_batch_size: int = 50,
+    heartbeat_every_s: float = 10.0,
+    progress_every: int = 10,
+    slow_threshold_s: float = 5.0,
+) -> dict:
+    """Thin wrapper around `app.services.parallel_sync.parallel_indicator_sync`
+    that wires in the orchestrator's `_shutdown_event`, `_ticker_*_status_sync`
+    callbacks, and default logging.
+
+    The full implementation lives in `app.services.parallel_sync` so it can
+    be unit-tested without importing the heavy transitive dependencies of
+    `app.backgroundtasks` (NSE client, news aggregator, etc.).
+    """
+    from app.services.parallel_sync import parallel_indicator_sync
+
+    def _on_progress(enqueued: int, total: int, elapsed_s: float, rate: float) -> None:
+        logger.info(
+            "indicator_sync: enqueued %d/%d (%.1fs, %.1f items/s)",
+            enqueued, total, elapsed_s, rate,
+        )
+
+    def _on_heartbeat(enqueued: int, total: int, elapsed_s: float) -> None:
+        logger.info(
+            "indicator_sync: heartbeat — %d/%d enqueued (%.1fs elapsed)",
+            enqueued, total, elapsed_s,
+        )
+
+    def _update_job(job_key_: str, status: str, progress: int, message: str) -> None:
+        update_job_status_sync(job_key_, status, progress=progress, message=message)
+
+    return parallel_indicator_sync(
+        items=items,
+        prepare_fn=prepare_fn,
+        flush_fn=flush_fn,
+        shutdown_event=_shutdown_event,
+        update_job_status_fn=_update_job,
+        job_key=job_key,
+        pipeline_job_key=pipeline_job_key,
+        pipeline_progress_start=pipeline_progress_start,
+        pipeline_progress_end=pipeline_progress_end,
+        num_compute_workers=num_compute_workers,
+        queue_maxsize=queue_maxsize,
+        writer_batch_size=writer_batch_size,
+        heartbeat_every_s=heartbeat_every_s,
+        progress_every=progress_every,
+        slow_threshold_s=slow_threshold_s,
+        heartbeat_fn=_on_heartbeat,
+        progress_fn=_on_progress,
+    )
+
+
 def _ticker_indicators_sync() -> None:
     """Startup backfill: compute and store per-candle indicators for symbols that
     have uncomputed or stale indicator data.
@@ -1401,74 +1464,24 @@ def _ticker_indicators_sync() -> None:
         _ticker_indicator_notification_cycle()
         return
 
-    logger.info("ticker_indicators_sync: backfilling indicators for %d symbols", total)
+    logger.info("ticker_indicators_sync: backfilling indicators for %d symbols (3 compute + 1 writer threads)", total)
 
-    BATCH_SIZE = 100
-    PROGRESS_EVERY = 10  # log per-symbol progress every N symbols
-    PIPELINE_UPDATE_EVERY = 25  # also nudge job.pipeline.startup bar
-    HEARTBEAT_EVERY_S = 10.0
-    last_log_idx = 0
-    last_heartbeat = time.monotonic()
-    pipeline_start_time = time.monotonic()
-
-    for i in range(0, total, BATCH_SIZE):
-        if _shutdown_event.is_set():
-            logger.info("ticker_indicators_sync: shutdown requested, aborting")
-            break
-
-        batch = symbols[i:i + BATCH_SIZE]
-        for j, symbol in enumerate(batch):
-            global_idx = i + j + 1
-            try:
-                indicators.compute_indicators_for_all_rows(symbol)
-            except Exception as e:
-                logger.warning("ticker_indicators_sync: failed for %s: %s", symbol, e)
-
-            # Per-symbol progress (every N) — replaces the old in-place
-            # print() that was invisible to log files.
-            if global_idx % PROGRESS_EVERY == 0 or global_idx == total:
-                batch_elapsed = time.monotonic() - pipeline_start_time
-                rate = global_idx / batch_elapsed if batch_elapsed > 0 else 0
-                logger.info(
-                    "ticker_indicators_sync: [%d/%d] %s (%.1fs elapsed, %.1f sym/s)",
-                    global_idx, total, symbol, batch_elapsed, rate,
-                )
-                last_log_idx = global_idx
-
-            # Pipeline-level progress (also nudge the user-visible bar)
-            if global_idx % PIPELINE_UPDATE_EVERY == 0 or global_idx == total:
-                pct = 50 + int((global_idx / total) * 12)  # 50% → 62% range
-                update_job_status_sync(
-                    "job.pipeline.startup", "running", progress=pct,
-                    message=f"Stage 3/7: Computing indicators... {global_idx}/{total}",
-                )
-
-            # 10s heartbeat: ensures we never go silent for too long even if
-            # a single batch of slow symbols dominates.
-            now = time.monotonic()
-            if now - last_heartbeat > HEARTBEAT_EVERY_S:
-                batch_elapsed = now - pipeline_start_time
-                logger.info(
-                    "ticker_indicators_sync: heartbeat — [%d/%d] in progress (%.1fs elapsed)",
-                    global_idx, total, batch_elapsed,
-                )
-                last_heartbeat = now
-
-        progress = int(((i + len(batch)) / total) * 100)
-        update_job_status_sync(
-            "job.ticker_indicators",
-            "running",
-            progress=progress,
-            message=f"Backfilled {i + len(batch)}/{total} symbols",
-        )
-
-        if i + BATCH_SIZE < total:
-            sleep_s = settings.indicator_inter_batch_sleep_s
-            if sleep_s > 0 and _sleep_interruptible(sleep_s):
-                break
+    items = [(s,) for s in symbols]
+    summary = _parallel_indicator_sync(
+        items,
+        indicators.prepare_daily_indicator_updates,
+        indicators.flush_daily_indicator_updates,
+        job_key="job.ticker_indicators",
+        pipeline_job_key="job.pipeline.startup",
+        pipeline_progress_start=50,
+        pipeline_progress_end=62,
+    )
 
     update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="Indicator backfill complete")
-    logger.info("ticker_indicators_sync: complete (%d symbols in %.1fs)", total, time.monotonic() - pipeline_start_time)
+    logger.info(
+        "ticker_indicators_sync: complete (%d/%d symbols in %.1fs, %d rows written)",
+        summary["success"], total, summary["elapsed_s"], summary["rows_written"],
+    )
 
     _ticker_indicator_notification_cycle()
 
@@ -1549,78 +1562,27 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
             _ticker_intraday_indicator_notification_cycle()
             return
 
-        logger.info("ticker_intraday_indicators_sync: backfilling for %d symbol+interval pairs, intervals=%s", total, intervals)
+        logger.info(
+            "ticker_intraday_indicators_sync: backfilling %d symbol+interval pairs "
+            "(3 compute + 1 writer threads, intervals=%s)",
+            total, intervals,
+        )
 
-        BATCH_SIZE = 50
-        PROGRESS_EVERY = 10       # log per-pair progress every N pairs
-        HEARTBEAT_EVERY_S = 10.0  # never go silent for too long
-        SLOW_SYMBOL_S = 5.0       # per-symbol timing threshold
-        pipeline_start_time = time.monotonic()
-        last_heartbeat = pipeline_start_time
-
-        for i in range(0, total, BATCH_SIZE):
-            if _shutdown_event.is_set():
-                logger.info("ticker_intraday_indicators_sync: shutdown requested, aborting")
-                break
-
-            batch = pairs[i:i + BATCH_SIZE]
-            for j, (symbol, interval) in enumerate(batch):
-                global_idx = i + j + 1
-                t0 = time.monotonic()
-                try:
-                    indicators.compute_intraday_indicators_for_all_rows(symbol, interval)
-                except Exception as e:
-                    logger.warning("ticker_intraday_indicators_sync: failed for %s/%s: %s", symbol, interval, e)
-                dt = time.monotonic() - t0
-                if dt > SLOW_SYMBOL_S:
-                    logger.warning(
-                        "ticker_intraday_indicators_sync: slow pair %s/%s took %.1fs",
-                        symbol, interval, dt,
-                    )
-                else:
-                    logger.debug(
-                        "ticker_intraday_indicators_sync: pair %s/%s took %.2fs",
-                        symbol, interval, dt,
-                    )
-
-                # Per-pair progress (every N) — replaces the old in-place
-                # print() that was invisible to log files.
-                if global_idx % PROGRESS_EVERY == 0 or global_idx == total:
-                    batch_elapsed = time.monotonic() - pipeline_start_time
-                    rate = global_idx / batch_elapsed if batch_elapsed > 0 else 0
-                    logger.info(
-                        "ticker_intraday_indicators_sync: [%d/%d] %s/%s (%.1fs elapsed, %.1f pair/s)",
-                        global_idx, total, symbol, interval, batch_elapsed, rate,
-                    )
-
-                # 10s heartbeat: ensures we never go silent for too long even
-                # if a single batch of slow pairs dominates.
-                now = time.monotonic()
-                if now - last_heartbeat > HEARTBEAT_EVERY_S:
-                    batch_elapsed = now - pipeline_start_time
-                    logger.info(
-                        "ticker_intraday_indicators_sync: heartbeat — [%d/%d] in progress (%.1fs elapsed)",
-                        global_idx, total, batch_elapsed,
-                    )
-                    last_heartbeat = now
-
-            progress = int(((i + len(batch)) / total) * 100)
-            update_job_status_sync(
-                job_key,
-                "running",
-                progress=progress,
-                message=f"Backfilled {i + len(batch)}/{total} pairs",
-            )
-
-            if i + BATCH_SIZE < total:
-                sleep_s = settings.indicator_inter_batch_sleep_s
-                if sleep_s > 0 and _sleep_interruptible(sleep_s):
-                    break
+        items = list(pairs)  # already a list of (symbol, interval) tuples
+        summary = _parallel_indicator_sync(
+            items,
+            indicators.prepare_intraday_indicator_updates,
+            indicators.flush_intraday_indicator_updates,
+            job_key=job_key,
+            heartbeat_every_s=10.0,
+            progress_every=10,
+            slow_threshold_s=5.0,
+        )
 
         update_job_status_sync(job_key, "idle", progress=100, message="Intraday indicator backfill complete")
         logger.info(
-            "ticker_intraday_indicators_sync: complete (%d pairs in %.1fs, intervals=%s)",
-            total, time.monotonic() - pipeline_start_time, intervals,
+            "ticker_intraday_indicators_sync: complete (%d/%d pairs in %.1fs, %d rows written, intervals=%s)",
+            summary["success"], total, summary["elapsed_s"], summary["rows_written"], intervals,
         )
 
         _ticker_intraday_indicator_notification_cycle()
