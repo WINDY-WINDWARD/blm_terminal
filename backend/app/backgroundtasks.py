@@ -1483,8 +1483,9 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
         intervals: List of intervals to process (e.g. ["1h"], ["W", "M"]).
             Defaults to ["1h", "W", "M"] for backward compatibility.
 
-    Processes in batches of 50 with a 1 s inter-batch delay.
-    Triggers _ticker_intraday_indicator_notification_cycle() after completing.
+    Processes in batches of 50 with a configurable inter-batch delay (env
+    `INDICATOR_INTER_BATCH_SLEEP_S`, default 0).  Triggers
+    _ticker_intraday_indicator_notification_cycle() after completing.
     """
     from app.models.ticker import TickerIntraday
     from app.services import indicators
@@ -1495,6 +1496,13 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
     )
 
     try:
+        logger.info(
+            "ticker_intraday_indicators_sync: scanning ticker_intraday for stale/null pairs "
+            "intervals=%s",
+            intervals,
+        )
+        scan_start = time.monotonic()
+
         with _SyncSessionLocal() as db:
             # Symbols with any row where indicators_updated_at IS NULL
             null_result = db.execute(
@@ -1527,7 +1535,14 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
             stale_pairs = {(row[0], row[1]) for row in stale_result.fetchall()}
 
         pairs = list(null_pairs | stale_pairs)
+        scan_elapsed = time.monotonic() - scan_start
+
         total = len(pairs)
+        logger.info(
+            "ticker_intraday_indicators_sync: scan complete in %.1fs — %d null, %d stale, %d to process (intervals=%s)",
+            scan_elapsed, len(null_pairs), len(stale_pairs), total, intervals,
+        )
+
         if total == 0:
             logger.info("ticker_intraday_indicators_sync: all pairs up to date for intervals=%s", intervals)
             update_job_status_sync(job_key, "idle", progress=100, message="All pairs up to date")
@@ -1537,6 +1552,12 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
         logger.info("ticker_intraday_indicators_sync: backfilling for %d symbol+interval pairs, intervals=%s", total, intervals)
 
         BATCH_SIZE = 50
+        PROGRESS_EVERY = 10       # log per-pair progress every N pairs
+        HEARTBEAT_EVERY_S = 10.0  # never go silent for too long
+        SLOW_SYMBOL_S = 5.0       # per-symbol timing threshold
+        pipeline_start_time = time.monotonic()
+        last_heartbeat = pipeline_start_time
+
         for i in range(0, total, BATCH_SIZE):
             if _shutdown_event.is_set():
                 logger.info("ticker_intraday_indicators_sync: shutdown requested, aborting")
@@ -1545,11 +1566,43 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
             batch = pairs[i:i + BATCH_SIZE]
             for j, (symbol, interval) in enumerate(batch):
                 global_idx = i + j + 1
-                print(f"\rticker_intraday_indicators_sync: [{global_idx}/{total}] {symbol}/{interval}   ", end="", flush=True)
+                t0 = time.monotonic()
                 try:
                     indicators.compute_intraday_indicators_for_all_rows(symbol, interval)
                 except Exception as e:
                     logger.warning("ticker_intraday_indicators_sync: failed for %s/%s: %s", symbol, interval, e)
+                dt = time.monotonic() - t0
+                if dt > SLOW_SYMBOL_S:
+                    logger.warning(
+                        "ticker_intraday_indicators_sync: slow pair %s/%s took %.1fs",
+                        symbol, interval, dt,
+                    )
+                else:
+                    logger.debug(
+                        "ticker_intraday_indicators_sync: pair %s/%s took %.2fs",
+                        symbol, interval, dt,
+                    )
+
+                # Per-pair progress (every N) — replaces the old in-place
+                # print() that was invisible to log files.
+                if global_idx % PROGRESS_EVERY == 0 or global_idx == total:
+                    batch_elapsed = time.monotonic() - pipeline_start_time
+                    rate = global_idx / batch_elapsed if batch_elapsed > 0 else 0
+                    logger.info(
+                        "ticker_intraday_indicators_sync: [%d/%d] %s/%s (%.1fs elapsed, %.1f pair/s)",
+                        global_idx, total, symbol, interval, batch_elapsed, rate,
+                    )
+
+                # 10s heartbeat: ensures we never go silent for too long even
+                # if a single batch of slow pairs dominates.
+                now = time.monotonic()
+                if now - last_heartbeat > HEARTBEAT_EVERY_S:
+                    batch_elapsed = now - pipeline_start_time
+                    logger.info(
+                        "ticker_intraday_indicators_sync: heartbeat — [%d/%d] in progress (%.1fs elapsed)",
+                        global_idx, total, batch_elapsed,
+                    )
+                    last_heartbeat = now
 
             progress = int(((i + len(batch)) / total) * 100)
             update_job_status_sync(
@@ -1560,12 +1613,15 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
             )
 
             if i + BATCH_SIZE < total:
-                if _sleep_interruptible(1.0):
+                sleep_s = settings.indicator_inter_batch_sleep_s
+                if sleep_s > 0 and _sleep_interruptible(sleep_s):
                     break
 
-        print()
         update_job_status_sync(job_key, "idle", progress=100, message="Intraday indicator backfill complete")
-        logger.info("ticker_intraday_indicators_sync: complete")
+        logger.info(
+            "ticker_intraday_indicators_sync: complete (%d pairs in %.1fs, intervals=%s)",
+            total, time.monotonic() - pipeline_start_time, intervals,
+        )
 
         _ticker_intraday_indicator_notification_cycle()
 
@@ -3732,7 +3788,7 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
     Evaluates RSI, MACD, Bollinger, ATR, and MTF alignment triggers against
     the latest stored ticker_intraday indicator columns for 1h, W, and M.
     """
-    from app.models.ticker import TickerIntraday
+    from app.models.ticker import TickerIntraday, TickerDaily
     from app.models.stockuniverse import StockUniverse
 
     try:

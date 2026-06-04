@@ -269,6 +269,28 @@ class Orchestrator:
                     logger.info("Orchestrator [%s] Stage 1b skipped: job.ticker_weekly_monthly_update disabled", mode.value)
                 logger.info("Orchestrator [%s] Stage 1b complete", mode.value)
 
+                # ── Stage 1c: W/M indicator compute for full universe (startup only) ──
+                # Nightly pipeline handles this in Stage 5b; running both would double
+                # the work on every nightly run. At startup, fresh W candles are already
+                # in place from Stage 1b, so we compute indicators once here to avoid
+                # waiting until 23:00 IST for first-time UI visibility.
+                if _shutdown_event.is_set():
+                    return
+                logger.info("Orchestrator [%s] Stage 1c: ticker_weekly_monthly_indicators (universe scope)", mode.value)
+                if _is_job_enabled("job.ticker_weekly_monthly_indicators"):
+                    await update_job_status(pipeline_job_key, "running", progress=17,
+                                            message="Stage 1c/7: Computing W/M indicators for universe symbols...")
+                    await loop.run_in_executor(None, _run_pipeline_stage,
+                                               lambda: _ticker_intraday_indicators_sync(["W", "M"]),
+                                               _pipeline_lock, _pipeline_idle)
+                    await update_job_status(pipeline_job_key, "running", progress=18,
+                                            message="Stage 1c/7 complete — universe W/M indicators computed")
+                else:
+                    await update_job_status(pipeline_job_key, "running", progress=18,
+                                            message="Stage 1c/7 skipped — job.ticker_weekly_monthly_indicators disabled")
+                    logger.info("Orchestrator [%s] Stage 1c skipped: job.ticker_weekly_monthly_indicators disabled", mode.value)
+                logger.info("Orchestrator [%s] Stage 1c complete", mode.value)
+
             # ── Stage 2 (nightly only): Daily update / bhavcopy ───────────
             if mode == PipelineMode.NIGHTLY:
                 if _shutdown_event.is_set():
