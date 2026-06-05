@@ -215,7 +215,8 @@ async def get_company_news(
         .select_from(NewsArticle)
         .where(and_(*conditions))
     )
-    if (await db.scalar(count_stmt) or 0) == 0:
+    precomputed_total = (await db.scalar(count_stmt) or 0)
+    if precomputed_total == 0:
         raise HTTPException(
             status_code=404,
             detail=f"No articles found for symbol '{symbol_upper}'. "
@@ -231,6 +232,7 @@ async def get_company_news(
     )
     total, articles, has_more = await paginate(
         db, count_stmt, stmt, offset=offset, limit=limit,
+        precomputed_total=precomputed_total,
     )
 
     logger.debug(

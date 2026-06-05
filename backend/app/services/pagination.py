@@ -26,22 +26,31 @@ async def paginate(
     page_stmt: Any,
     offset: int,
     limit: int,
+    *,
+    precomputed_total: int | None = None,
 ) -> tuple[int, list[Any], bool]:
     """Run a count + page query and return ``(total, items, has_more)``.
 
     Args:
         db: Async SQLAlchemy session.
         count_stmt: A ``select(func.count())`` (or equivalent) statement.
+            Ignored if ``precomputed_total`` is provided.
         page_stmt: A ``select(...)`` statement with ``.limit()`` and
             ``.offset()`` applied.
         offset: Pagination offset (echoed back for response building).
         limit: Pagination limit (echoed back for response building).
+        precomputed_total: If the caller already ran the count query
+            (e.g. for an early-exit 404 check), pass the result here to
+            avoid a duplicate round-trip.
 
     Returns:
         ``(total, items, has_more)`` where ``has_more`` is True iff
         ``offset + limit < total`` (i.e. another page is available).
     """
-    total = (await db.scalar(count_stmt)) or 0
+    if precomputed_total is not None:
+        total = precomputed_total
+    else:
+        total = (await db.scalar(count_stmt)) or 0
     result = await db.execute(page_stmt)
     items: list[Any] = list(result.scalars().all())
     has_more = (offset + limit) < total

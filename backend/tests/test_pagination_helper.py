@@ -290,3 +290,78 @@ class TestNewsRouterUsesPaginate:
             "routers/news.py still has inline 'has_more=(offset+limit)<total' — "
             "consolidate into paginate()"
         )
+
+
+class TestPaginatePrecomputedTotal:
+    """Regression test for the post-B.8 double-count bug.
+
+    ``get_company_news`` runs the count statement for its 404 check,
+    then ``paginate()`` ran the same count statement again.  The fix
+    is the ``precomputed_total`` kwarg on :func:`paginate`.
+    """
+
+    @pytest.mark.asyncio
+    async def test_skips_count_when_precomputed_total_given(self):
+        from app.services.pagination import paginate
+
+        count_stmt_calls: list = []
+        page_stmt_calls: list = []
+
+        class FakeScalars:
+            def all(inner_self):
+                return []
+
+        class FakeResult:
+            def scalars(inner_self):
+                return FakeScalars()
+
+        class FakeSession:
+            async def scalar(inner_self, stmt):
+                count_stmt_calls.append(stmt)
+                return 5
+
+            async def execute(inner_self, stmt):
+                page_stmt_calls.append(stmt)
+                return FakeResult()
+
+        db = FakeSession()
+        total, items, has_more = await paginate(
+            db, count_stmt="ignored", page_stmt="page",
+            offset=0, limit=10, precomputed_total=5,
+        )
+        assert total == 5
+        assert items == []
+        assert has_more is False
+        assert count_stmt_calls == [], (
+            "count query was run even though precomputed_total was given"
+        )
+        assert page_stmt_calls == ["page"]
+
+    @pytest.mark.asyncio
+    async def test_runs_count_when_no_precomputed_total(self):
+        from app.services.pagination import paginate
+
+        count_stmt_calls: list = []
+
+        class FakeSession:
+            async def scalar(inner_self, stmt):
+                count_stmt_calls.append(stmt)
+                return 3
+
+            async def execute(inner_self, stmt):
+                class R:
+                    def scalars(self_):
+                        class S:
+                            def all(inner):
+                                return []
+                        return S()
+                return R()
+
+        db = FakeSession()
+        await paginate(
+            db, count_stmt="count", page_stmt="page",
+            offset=0, limit=10,
+        )
+        assert count_stmt_calls == ["count"], (
+            "count query was NOT run when precomputed_total was None"
+        )

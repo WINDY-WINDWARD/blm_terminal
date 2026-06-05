@@ -201,6 +201,41 @@ class TestFetchUsesSharedClient:
         # The streaming response must wrap the XML body
         assert response.media_type == "application/rss+xml"
 
+    def test_get_announcements_sends_rss_headers(
+        self, reset_announcements_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test: pre-refactor, the RSS endpoint was fetched
+        with RSS-friendly headers (``Accept: application/rss+xml`` and
+        a corporate-filings ``Referer``).  The B.2+B.3 refactor lost
+        that — the endpoint was using the generic JSON ``Accept``
+        header.  This test pins the RSS headers on the request.
+        """
+        client = announcements._get_shared_client()
+        get_mock = AsyncMock(
+            return_value=_make_response(
+                "<rss><channel><title>test</title></channel></rss>",
+            )
+        )
+        monkeypatch.setattr(client, "get", get_mock)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(announcements.get_announcements())
+        finally:
+            loop.close()
+
+        assert get_mock.await_count == 1
+        _, kwargs = get_mock.call_args
+        headers = kwargs.get("headers") or {}
+        # RSS-friendly Accept header
+        assert "application/rss+xml" in headers.get("Accept", ""), (
+            f"expected RSS-friendly Accept header, got: {headers}"
+        )
+        # Corporate-filings Referer
+        assert "companies-listing" in headers.get("Referer", ""), (
+            f"expected corporate-filings Referer, got: {headers}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # B.3 — concurrent fetch via asyncio.gather
@@ -366,3 +401,35 @@ class TestBehaviorParity:
 
         items = asyncio.run(announcements._fetch_past_results_raw())
         assert [item.symbol for item in items] == ["HDFCBANK"]
+
+    def test_past_results_dedupes_duplicate_entries(
+        self, reset_announcements_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test: pre-refactor code deduped on
+        ``(symbol, date, purpose)`` because NSE sometimes returns the
+        same entry twice.  The B.2+B.3 refactor lost that dedup.
+        """
+        client = announcements._get_shared_client()
+        duplicate_entry = {
+            "symbol": "HDFCBANK",
+            "company": "HDFC Bank",
+            "purpose": "Financial Results",
+            "bm_desc": "Q4 results",
+            "date": "20-Apr-2026",
+        }
+        get_mock = AsyncMock(
+            return_value=_make_response(
+                [
+                    duplicate_entry,
+                    duplicate_entry,  # exact duplicate
+                    {**duplicate_entry, "bm_desc": "different desc"},  # also dedup (same key)
+                ]
+            )
+        )
+        monkeypatch.setattr(client, "get", get_mock)
+
+        items = asyncio.run(announcements._fetch_past_results_raw())
+        assert len(items) == 1, (
+            f"expected dedup to leave 1 item, got {len(items)}: {items}"
+        )
+        assert items[0].symbol == "HDFCBANK"

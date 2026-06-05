@@ -230,6 +230,7 @@ async def _fetch_past_results_raw() -> list[EventCalendarItem]:
     )
 
     items: list[EventCalendarItem] = []
+    seen: set[tuple[str, str, str]] = set()
     try:
         resp = await client.get(url, timeout=30.0)
         resp.raise_for_status()
@@ -237,6 +238,14 @@ async def _fetch_past_results_raw() -> list[EventCalendarItem]:
         for item in _normalize_main(raw):
             if "financial results" not in item.purpose.lower():
                 continue
+            # Dedup: NSE's past-results endpoint may return the same
+            # (symbol, date, purpose) entry more than once when the
+            # window straddles a corporate action.  The pre-refactor
+            # code had this dedup; restore it.
+            key = (item.symbol, item.date, item.purpose)
+            if key in seen:
+                continue
+            seen.add(key)
             items.append(item)
     except Exception:
         logger.exception("Failed to fetch past results from %s", url)
@@ -335,7 +344,7 @@ async def get_announcements() -> StreamingResponse:
     """Fetch and proxy the NSE announcements RSS feed via the shared client."""
     client = _get_shared_client()
     try:
-        resp = await client.get(RSS_URL, timeout=30.0)
+        resp = await client.get(RSS_URL, headers=_RSS_HEADERS, timeout=30.0)
         resp.raise_for_status()
 
         return StreamingResponse(
