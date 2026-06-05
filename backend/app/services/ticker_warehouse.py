@@ -881,7 +881,8 @@ def get_symbols_needing_backfill() -> list[str]:
 
         universe_symbols = db.execute(
             select(StockUniverse.symbol).where(
-                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+                StockUniverse.review_status.is_(None)
+                | StockUniverse.review_status.notin_(["removed", "ticker_error"])
             )
         ).scalars().all()
 
@@ -955,11 +956,16 @@ def get_watchlist_symbols() -> list[str]:
 
 
 def get_all_universe_symbols() -> list[str]:
-    """Get all symbols from stock_universe, excluding removed and ticker-disabled."""
+    """Get all symbols from stock_universe, excluding removed and ticker-disabled.
+
+    NULL review_status is treated as 'not yet reviewed' and is included.
+    SQL: WHERE review_status IS NULL OR review_status NOT IN ('removed', 'ticker_error')
+    """
     with _get_session() as db:
         symbols = db.execute(
             select(StockUniverse.symbol).where(
-                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+                StockUniverse.review_status.is_(None)
+                | StockUniverse.review_status.notin_(["removed", "ticker_error"])
             )
         ).scalars().all()
         return list(symbols)
