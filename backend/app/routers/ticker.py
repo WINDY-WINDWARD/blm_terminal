@@ -1,6 +1,8 @@
 """Router for ticker warehouse endpoints."""
 
-from datetime import date, datetime, timezone
+import json
+import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -20,6 +22,7 @@ from app.services import returns as returns_service
 from app.services import momentum as momentum_service
 from app.services import indicators as indicators_service
 from app.services import screener as screener_service
+from app.services.nse_charting_client import fetch_candles_async
 from app.jobs.runner import trigger_job
 
 router = APIRouter(prefix="/ticker", tags=["ticker"])
@@ -463,7 +466,6 @@ async def get_screener(
 
     filters = {}
     if filters_json:
-        import json
         try:
             extra = json.loads(filters_json)
             if isinstance(extra, dict):
@@ -601,11 +603,8 @@ async def get_intraday_ohlcv(
 
     # During market hours: fetch fresh data from NSE and upsert
     if _is_market_hours():
-        from app.services.nse_charting_client import fetch_candles_async
-
         now_ts = int(datetime.now(timezone.utc).timestamp())
         if interval == "1h":
-            from datetime import timedelta
             fetch_from = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
         else:
             fetch_from = 0  # all history
@@ -615,7 +614,6 @@ async def get_intraday_ohlcv(
             ticker_warehouse.upsert_intraday(symbol, interval, rows)
         except ValueError as exc:
             # Log but don't fail — fall through to cached data
-            import logging
             logging.getLogger(__name__).warning(
                 "[intraday] live fetch failed for %s/%s: %s — serving from cache", symbol, interval, exc
             )

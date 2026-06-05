@@ -9,7 +9,7 @@ import logging
 from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import nullslast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
@@ -145,7 +145,6 @@ async def _heartbeat(websocket: WebSocket) -> None:
 async def _get_recent_articles(limit: int = 20) -> list[dict]:
     """Fetch recent articles from database."""
     async with AsyncSessionLocal() as session:
-        from sqlalchemy import nullslast
         stmt = (
             select(NewsArticle)
             .order_by(nullslast(NewsArticle.publish_date.desc()))
