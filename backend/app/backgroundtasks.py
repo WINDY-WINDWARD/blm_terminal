@@ -9,9 +9,9 @@ from datetime import time as dt_time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pytz
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError as _SAOperationalError
@@ -842,7 +842,6 @@ def _ticker_daily_update_sync() -> None:
     and _ticker_scores_sync() so that indicator-based alerts are evaluated
     on the freshest data.
     """
-    import pytz
     from sqlalchemy import func
     from app.models.ticker import TickerDaily
     from app.models.watchlist import WatchlistItem
@@ -850,8 +849,8 @@ def _ticker_daily_update_sync() -> None:
     CATCH_UP_DAYS = 5  # look back at most this many weekdays
     BHAVCOPY_MIN_ROWS = 2000  # minimum rows expected from a valid bhavcopy
 
-    now_utc = datetime.now(pytz.utc)
-    now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
 
     if now_ist.weekday() >= 5:
         logger.info("ticker_daily_update_sync: weekend, skipping")
@@ -1161,7 +1160,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     from app.services.indicators import compute_intraday_indicators_for_all_rows
     from app.services.ticker_warehouse import backfill_intraday_symbol, get_last_trading_day, get_watchlist_symbols
 
-    ist = pytz.timezone("Asia/Kolkata")
+    ist = ZoneInfo("Asia/Kolkata")
     symbols = get_watchlist_symbols()
     if not symbols:
         logger.info("[hourly_stale_check] no watchlist symbols to inspect")
@@ -1190,7 +1189,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     # During the active session only expect candles up to the latest elapsed slot.
     # After market close, expect the full session through 15:15.
     if target_date == now_ist.date() and now_ist.weekday() < 5:
-        slots_elapsed = [slot for slot in session_slots if now_ist >= ist.localize(slot)]
+        slots_elapsed = [slot for slot in session_slots if now_ist >= slot.replace(tzinfo=ist)]
         expected_latest = slots_elapsed[-1] if slots_elapsed else None
     else:
         expected_latest = session_slots[-1]
@@ -2644,10 +2643,8 @@ def watchlist_news_worker() -> None:
 
 def _is_market_open() -> bool:
     """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST)."""
-    import pytz
-
-    now_utc = datetime.now(pytz.utc)
-    now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
 
     if now_ist.weekday() >= 5:
         return False
@@ -2670,10 +2667,8 @@ def _is_market_open() -> bool:
 
 def _seconds_until_market_open() -> float:
     """Calculate seconds until the next market open time (09:15 IST)."""
-    import pytz
-
-    now_utc = datetime.now(pytz.utc)
-    now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
 
     if now_ist.weekday() == 5:
         days_until_monday = 2

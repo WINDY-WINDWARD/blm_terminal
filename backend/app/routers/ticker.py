@@ -2,8 +2,8 @@
 
 from datetime import date, datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
-import pytz
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -548,7 +548,7 @@ async def get_screener(
 # Intraday / Weekly / Monthly OHLCV endpoint
 # ---------------------------------------------------------------------------
 
-_IST = pytz.timezone("Asia/Kolkata")
+_IST = ZoneInfo("Asia/Kolkata")
 _VALID_INTRADAY_INTERVALS = {"1h", "W", "M"}
 
 

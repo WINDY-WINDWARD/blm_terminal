@@ -13,8 +13,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Generator, Optional
-
-import pytz
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -40,7 +39,7 @@ DEFAULT_BACKFILL_DAYS = 365
 MIN_EXPECTED_ROWS = 200  # ~1 year of trading days
 REQUEST_DELAY_SECONDS = 3.0
 
-_IST = pytz.timezone("Asia/Kolkata")
+_IST = ZoneInfo("Asia/Kolkata")
 _MARKET_CLOSE_HOUR = 15
 _MARKET_CLOSE_MINUTE = 30
 
@@ -1093,7 +1092,7 @@ def upsert_intraday(
     def _do_upsert(session: Session) -> int:
         records = []
         for r in rows:
-            ts_utc = datetime.fromtimestamp(r["time_ms"] / 1000, tz=pytz.utc).replace(tzinfo=None)
+            ts_utc = datetime.fromtimestamp(r["time_ms"] / 1000, tz=timezone.utc).replace(tzinfo=None)
             records.append({
                 "symbol":    symbol,
                 "timestamp": ts_utc,
@@ -1161,16 +1160,16 @@ def get_intraday(
         )
 
         if from_ts is not None:
-            from_dt = datetime.fromtimestamp(from_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            from_dt = datetime.fromtimestamp(from_ts / 1000, tz=timezone.utc).replace(tzinfo=None)
             stmt = stmt.where(TickerIntraday.timestamp >= from_dt)
         if to_ts is not None:
-            to_dt = datetime.fromtimestamp(to_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            to_dt = datetime.fromtimestamp(to_ts / 1000, tz=timezone.utc).replace(tzinfo=None)
             stmt = stmt.where(TickerIntraday.timestamp <= to_dt)
 
         rows = session.execute(stmt).scalars().all()
         return [
             {
-                "timestamp": int(r.timestamp.replace(tzinfo=pytz.utc).timestamp() * 1000),
+                "timestamp": int(r.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000),
                 "open":   r.open,
                 "high":   r.high,
                 "low":    r.low,

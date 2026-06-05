@@ -30,13 +30,12 @@ import enum
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
-
-import pytz
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 # IST timezone constant
-_IST = pytz.timezone("Asia/Kolkata")
+_IST = ZoneInfo("Asia/Kolkata")
 
 # Nightly pipeline trigger time (IST)
 _NIGHTLY_HOUR_IST = 23
