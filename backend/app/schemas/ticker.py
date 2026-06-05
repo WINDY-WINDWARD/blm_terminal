@@ -91,3 +91,109 @@ class TriggerResponse(BaseModel):
     job_key: str
     status: str
     message: str
+
+
+# ---------------------------------------------------------------------------
+# Router-defined request/response models (moved from routers/ticker.py under
+# audit B.5; field shapes are preserved).
+# ---------------------------------------------------------------------------
+
+
+class ReturnsResponse(BaseModel):
+    """Multi-period returns response for a single symbol."""
+
+    symbol: str
+    d1: float | None
+    d1w: float | None
+    d1m: float | None
+    d3m: float | None
+    d6m: float | None
+    d1y: float | None
+    latest_date: date | None
+
+
+class UniverseReturnsResponse(BaseModel):
+    """Universe returns heatmap response."""
+
+    period: str
+    count: int
+    results: list[dict]
+
+
+class SectorReturnsResponse(BaseModel):
+    """Sector returns response."""
+
+    period: str
+    results: list[dict]
+
+
+class Position52wResponse(BaseModel):
+    """52-week position response for a single symbol."""
+
+    symbol: str
+    high_52w: float | None
+    low_52w: float | None
+    high_52w_date: date | None
+    low_52w_date: date | None
+    current_close: float | None
+    pct_from_52w_high: float | None
+    pct_from_52w_low: float | None
+    is_52w_high: bool
+    is_52w_low: bool
+
+
+class MomentumScoreResponse(BaseModel):
+    """Composite momentum score response for a single symbol."""
+
+    symbol: str
+    score: float | None
+    rank: int | None
+    universe_size: int
+    reason: str | None = None
+    components: dict | None = None
+
+
+class MomentumLeaderboardResponse(BaseModel):
+    """Momentum leaderboard response (top N symbols)."""
+
+    count: int
+    results: list[dict]
+
+
+class StreakResponse(BaseModel):
+    """Streak tracking response for a single symbol."""
+
+    symbol: str
+    consecutive_up_days: int
+    consecutive_down_days: int
+    consecutive_volume_up_days: int
+    days_since_52w_high: int | None
+
+
+class ScreenerResponse(BaseModel):
+    """Screener response."""
+
+    count: int
+    returned: int
+    filters_applied: list[str]
+    results: list[dict]
+
+
+class IntradayCandleRow(BaseModel):
+    """Single intraday OHLCV candle."""
+
+    timestamp: int   # Unix milliseconds
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class IntradayOHLCVResponse(BaseModel):
+    """Intraday OHLCV response (1h / W / M)."""
+
+    symbol: str
+    interval: str
+    candles: list[IntradayCandleRow]
+    count: int

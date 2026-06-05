@@ -122,3 +122,10 @@ class FetchAllOut(BaseModel):
     articles_fetched: int
     sources_updated: int
     errors: list[FetchResultOut]
+
+
+class CompanyNewsFetchRequest(BaseModel):
+    """Request body for POST /news/company."""
+
+    symbol: str
+    mc_url: str | None = None

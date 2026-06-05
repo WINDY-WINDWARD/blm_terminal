@@ -24,6 +24,7 @@ from app.models.news import NewsArticle
 from app.schemas.news import (
     AnalyzeTextOut,
     AnalyzeTextRequest,
+    CompanyNewsFetchRequest,
     FetchAllOut,
     FetchResultOut,
     NewsArticleOut,
@@ -124,12 +125,6 @@ async def get_global_news(
 # Company-specific news (MoneyControl - existing)
 # ---------------------------------------------------------------------------
 
-
-class CompanyNewsFetchRequest(BaseModel):
-    """Request body for POST /news/company."""
-
-    symbol: str
-    mc_url: str | None = None
 
 
 @router.post(

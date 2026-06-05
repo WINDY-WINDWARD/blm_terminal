@@ -10,7 +10,8 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+
+from app.schemas.announcements import EventCalendarItem
 
 logger = logging.getLogger(__name__)
 
@@ -108,18 +109,6 @@ def _close_shared_client() -> None:
             except Exception:
                 logger.debug("Failed to close shared httpx client cleanly")
         _shared_client = None
-
-
-class EventCalendarItem(BaseModel):
-    """Normalised event calendar entry from NSE (main board or SME)."""
-
-    symbol: str
-    company: str
-    purpose: str
-    description: str
-    date: str          # "20-Apr-2026"
-    source: str        # "main" | "sme"
-    attachment: str | None = None
 
 
 def _normalize_main(raw: list[dict]) -> list[EventCalendarItem]:

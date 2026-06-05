@@ -15,7 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.models.ticker import TickerDaily
-from app.schemas.stockuniverse import StockUniverse as StockUniverseSchema
+from app.schemas.stockuniverse import (
+    ChangeSymbolRequest,
+    ConfirmMatchRequest,
+    ErrorCategory,
+    MatchResultResponse,
+    StockUniverse as StockUniverseSchema,
+    StockUniverseErrorSymbol,
+    StockUniverseErrorsResponse,
+)
 from app.services.mc_stock_linker import MCStockLinker
 from app.services.nse_client import NSEClient
 
@@ -96,14 +104,6 @@ async def search_stock_universe(
     return [_orm_to_schema(r) for r in rows]
 
 
-class MatchResultResponse(BaseModel):
-    total_matched: int
-    exact_matches: int
-    url_extract_matches: int
-    fuzzy_matches: int
-    ambiguous_matches: int
-
-
 @router.post(
     "/stockuniverse/run-mc-linker",
     response_model=MatchResultResponse,
@@ -130,11 +130,6 @@ async def get_pending_review(
     return [_orm_to_schema(r) for r in records]
 
 
-class ConfirmMatchRequest(BaseModel):
-    confirmed: bool
-    mc_url: Optional[str] = None
-
-
 @router.put(
     "/stockuniverse/{symbol}/confirm-match",
     response_model=StockUniverseSchema,
@@ -158,32 +153,6 @@ async def confirm_match(
 
 ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
 REVIEW_STATUS_REMOVED = "removed"
-
-
-class StockUniverseErrorSymbol(BaseModel):
-    symbol: str
-    companyName: str | None
-    reviewStatus: str
-    series: str | None
-    lastUpdateTime: datetime | None
-
-
-class ErrorCategory(BaseModel):
-    count: int
-    symbols: list[StockUniverseErrorSymbol]
-
-
-class StockUniverseErrorsResponse(BaseModel):
-    delisted: ErrorCategory
-    illiquid: ErrorCategory
-    suspended: ErrorCategory
-    not_tradable: ErrorCategory
-    unknown: ErrorCategory
-    ticker_error: ErrorCategory
-
-
-class ChangeSymbolRequest(BaseModel):
-    newSymbol: str
 
 
 errors_router = APIRouter()
