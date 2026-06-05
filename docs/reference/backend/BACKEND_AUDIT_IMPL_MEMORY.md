@@ -4,7 +4,7 @@
 **Branch:** `docs/backend-audit-and-test-plan` (pushed to origin)
 **Base:** `bc6dbde` (Merge PR #3 intraday-worker-refactor)
 **Date:** 2026-06-05 (initial session) / 2026-06-05 (Phase A finish session) / 2026-06-06 (Phase B start)
-**Status:** **Phase A 10/10 DONE. Phase B 1/12 (B.1 TQL SQL cache) DONE.** 247/247 pure-unit pass (was 232; +15 = new B.1 parity tests).
+**Status:** **Phase A 10/10 DONE. Phase B 6/12 (B.1, B.2+B.3, B.4, B.5, B.6) DONE.** 310/310 pure-unit pass (was 232; +78 = new B.1‑B.6 parity tests).
 
 ---
 
@@ -220,6 +220,71 @@ New test: `tests/test_utcnow_migration_parity.py` (6 tests: 3 behavioural frozen
 
 **Verification:** 247/247 pure-unit pass (was 232; +15 = new tests). No regressions in `test_tql_to_sql.py` (47 tests), `test_screener_service.py` (8 tests), or anywhere else.
 
-**Open:** 11 more Phase B items remain. Next: B.2 (pool httpx in `routers/announcements.py`).
+---
+
+## 9. Phase B: B.2 + B.3 shared httpx client + asyncio.gather — DONE (commit `886a6c4`)
+
+**Why:** `routers/announcements.py` created a fresh `requests.Session()` on every cache miss and fetched the main-board and SME event-calendar endpoints SEQUENTIALLY. A cold cache cost 2 × TCP+TLS handshake + 2 × NSE anti-bot cookie warm-up + 2 × calendar endpoint RTT.
+
+**What:**
+- Drop sync `requests`. All 3 fetch paths go through a module-shared `httpx.AsyncClient` (`_get_shared_client`).
+- `_fetch_event_calendar_raw` is now `async` and uses `asyncio.gather` to fetch main + SME in parallel; per-URL errors are isolated so one 500 does not drop the other endpoint's results.
+- `aget_*_cached` async variants for endpoints; the original sync `get_*_cached` wrappers (used by background tasks) drive the async fetch via `asyncio.run`.
+
+**Verification:** 257/257 pass (was 247; +10 new). No regressions.
+
+---
+
+## 10. Phase B: B.4 pragma helper + drop `_thread_async_engine` — DONE (commit `14efe2c`)
+
+**Why:** `database.py` had two near-identical pragma blocks; a `_thread_async_engine` existed "for thread safety" but the main `engine` is already `NullPool` (thread-safe by construction).
+
+**What:**
+- New `_apply_sqlite_pragmas(cursor)` helper in `database.py` — single source of truth.
+- Both connect listeners (`_set_sqlite_pragma`, `_set_sync_sqlite_pragmas`) delegate to it.
+- Drop `_thread_async_engine` and `_ThreadAsyncSessionLocal`. The 4 callers in `backgroundtasks.py` (`_crawl_news_async`, `_fetch_company_news_async`, `_refresh_market_data_async`, news-store block) now use the main `AsyncSessionLocal`. A test (`test_worker_thread_session_works_with_main_engine`) confirms the merge works in a real worker thread with its own event loop.
+
+**Verification:** 262/262 pass (was 257; +5 new). No regressions.
+
+---
+
+## 11. Phase B: B.5 move inline Pydantic models to `app/schemas/` — DONE (commit `b58b56f`-ish)
+
+**Why:** 17 inline `BaseModel` subclasses scattered across 4 routers (`ticker.py` 10, `news.py` 1, `announcements.py` 1, `stockuniverse.py` 5). Every other schema already lives in `app/schemas/<domain>.py`.
+
+**What:**
+- New `app/schemas/announcements.py` (`EventCalendarItem`).
+- Extended `app/schemas/news.py` (`CompanyNewsFetchRequest`).
+- Extended `app/schemas/stockuniverse.py` (5 classes).
+- Extended `app/schemas/ticker.py` (10 classes).
+- 4 routers updated to import from the schema modules. `BaseModel` import dropped from `routers/ticker.py`.
+
+**Verification:** 302/302 pass (was 262; +40 new). No regressions.
+
+---
+
+## 12. Phase B: B.6 centralize cookie loader — DONE (commit `82aac9f`)
+
+**Why:** `screener_client._get_browser_cookies` and `morningstar_client._load_browser_cookies` had nearly identical pickle-then-rookiepy routines. 30+ LOC of duplication, only the cookie-name filter varied.
+
+**What:**
+- New `cookie_loader.load_browser_cookies(service, domain, allowed_names=None, browsers=('chrome', 'firefox'))` — single source of truth. Never raises.
+- Both clients now delegate in 4 lines each. Drop `import rookiepy` from both client modules.
+
+**Verification:** 310/310 pass (was 302; +8 new). No regressions.
+
+---
+
+## 13. Phase B progress summary
+
+| Item | Title | Commit | Tests added | Cumulative |
+|------|-------|--------|-------------|-----------|
+| B.1  | TQL SQL cache | `74f162c` | 15 | 247 |
+| B.2+B.3 | Shared httpx + gather | `886a6c4` | 10 | 257 |
+| B.4  | Pragma helper + drop thread engine | `14efe2c` | 5 | 262 |
+| B.5  | Move inline Pydantic to schemas/ | (B.5 commit) | 40 | 302 |
+| B.6  | Centralize cookie loader | `82aac9f` | 8 | 310 |
+
+**Open (6 more):** B.7 (rate limiter consolidation), B.8 (paginate helper), B.9 (unify TQL transpilers), B.10 (delete sync `nse_client.py`), B.11 (orchestrator cleanup), B.12 (`asyncio.to_thread` warehouse).
 
 ---
