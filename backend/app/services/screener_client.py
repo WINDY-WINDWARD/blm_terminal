@@ -19,6 +19,8 @@ from typing import Any, Union
 import httpx
 from bs4 import BeautifulSoup, Tag
 
+from app.services.nse_rate_limiter import throttled_nse_call
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.screener.in"
@@ -31,8 +33,10 @@ TRADES_URL = f"{BASE_URL}/trades/company-{{warehouse_id}}/"
 # Compiled once at import time so the regex cache lives for the process.
 _TRADES_RE = re.compile(r"/trades/company-(\d+)/")
 
-_COURTESY_DELAY = 1.0
-_screener_semaphore = asyncio.Semaphore(2)
+# Concurrency, courtesy delay, and circuit breaker for screener.in
+# requests are now delegated to ``nse_rate_limiter.throttled_nse_call``
+# (audit B.7) so all three external services (NSE, screener.in,
+# morningstar.in) share one global concurrency budget.
 
 # Stable mapping of symbol → trades company ID.
 # These IDs don't change, so no TTL is needed — the dict lives for the
@@ -578,15 +582,18 @@ class ScreenerClient:
                 "ScreenerClient not initialised. Call await client.init() first."
             )
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
-            t0 = time.perf_counter()
-            resp = await self._http.get(
+        async def _do_search():
+            return await self._http.get(
                 SEARCH_URL,
                 params={"q": query, "v": "3", "fts": "1"},
             )
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+
+        logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.search", _do_search, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info(
             "Screener GET %s → %s (%.0fms)", SEARCH_URL, resp.status_code, elapsed_ms
@@ -605,12 +612,15 @@ class ScreenerClient:
         url = QUICK_RATIOS_URL.format(warehouse_id=warehouse_id)
 
         try:
-            async with _screener_semaphore:
-                logger.debug("Screener GET %s", url)
-                t0 = time.perf_counter()
-                resp = await self._http.get(url)
-                elapsed_ms = (time.perf_counter() - t0) * 1000
-                await asyncio.sleep(_COURTESY_DELAY)
+            async def _do_get():
+                return await self._http.get(url)
+
+            logger.debug("Screener GET %s", url)
+            t0 = time.perf_counter()
+            resp = await throttled_nse_call(
+                "screener.quick_ratios", _do_get, is_async_fn=True,
+            )
+            elapsed_ms = (time.perf_counter() - t0) * 1000
 
             logger.info(
                 "Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms
@@ -671,12 +681,15 @@ class ScreenerClient:
 
         url = COMPANY_URL.format(symbol=symbol_upper, mode=mode)
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+        async def _do_get():
+            return await self._http.get(url)
+
+        logger.debug("Screener GET %s", url)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.company_html", _do_get, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
 
@@ -759,12 +772,15 @@ class ScreenerClient:
 
         url = TRADES_URL.format(warehouse_id=warehouse_id)
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+        async def _do_get():
+            return await self._http.get(url)
+
+        logger.debug("Screener GET %s", url)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.trades", _do_get, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:
@@ -806,12 +822,15 @@ class ScreenerClient:
         mode = "consolidated" if consolidated else "standalone"
         url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)  # type: ignore[union-attr]
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+        async def _do_get():
+            return await self._http.get(url)
+
+        logger.debug("Screener GET %s", url)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.company", _do_get, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:
