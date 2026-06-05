@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Union
 
@@ -24,6 +25,10 @@ SEARCH_URL = f"{BASE_URL}/api/company/search/"
 COMPANY_URL = f"{BASE_URL}/company/{{symbol}}/{{mode}}/"
 QUICK_RATIOS_URL = f"{BASE_URL}/api/company/{{warehouse_id}}/quick_ratios/"
 TRADES_URL = f"{BASE_URL}/trades/company-{{warehouse_id}}/"
+
+# Trades button URL pattern — see _parse_trades_company_id below.
+# Compiled once at import time so the regex cache lives for the process.
+_TRADES_RE = re.compile(r"/trades/company-(\d+)/")
 
 _COURTESY_DELAY = 1.0
 _screener_semaphore = asyncio.Semaphore(2)
@@ -156,10 +161,6 @@ def _parse_trades_company_id(soup: BeautifulSoup) -> str | None:
     Falls back to a regex search over the full page HTML if the button
     selector does not match (e.g. future markup changes).
     """
-    import re as _re
-
-    _TRADES_RE = _re.compile(r"/trades/company-(\d+)/")
-
     # Primary: look for the button with a matching data-url attribute
     tag = soup.find(attrs={"data-url": _TRADES_RE})
     if tag:
