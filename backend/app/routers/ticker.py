@@ -1,5 +1,6 @@
 """Router for ticker warehouse endpoints."""
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -81,7 +82,9 @@ async def get_ohlcv(
                 detail="Invalid to_date format. Use DD-MM-YYYY",
             )
 
-    candles = ticker_warehouse.get_ohlcv(symbol, from_date_obj, to_date_obj)
+    candles = await asyncio.to_thread(
+        ticker_warehouse.get_ohlcv, symbol, from_date_obj, to_date_obj
+    )
     candle_rows = [_row_to_schema(c) for c in candles]
 
     return TickerOHLCVResponse(
@@ -96,7 +99,7 @@ async def get_ohlcv(
 @router.get("/ohlcv/{symbol}/latest", response_model=TickerLatestResponse)
 async def get_latest(symbol: str) -> TickerLatestResponse:
     """Get the most recent OHLCV candle for a symbol."""
-    candle = ticker_warehouse.get_latest_candle(symbol)
+    candle = await asyncio.to_thread(ticker_warehouse.get_latest_candle, symbol)
 
     if not candle:
         return TickerLatestResponse(
@@ -125,7 +128,7 @@ async def get_latest(symbol: str) -> TickerLatestResponse:
 @router.get("/status", response_model=TickerStatusResponse)
 async def get_status() -> TickerStatusResponse:
     """Get warehouse status and statistics."""
-    status_data = ticker_warehouse.get_warehouse_status()
+    status_data = await asyncio.to_thread(ticker_warehouse.get_warehouse_status)
 
     return TickerStatusResponse(
         total_rows=status_data["total_rows"],
@@ -533,14 +536,16 @@ async def get_intraday_ohlcv(
 
         try:
             rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=now_ts)
-            ticker_warehouse.upsert_intraday(symbol, interval, rows)
+            await asyncio.to_thread(ticker_warehouse.upsert_intraday, symbol, interval, rows)
         except ValueError as exc:
             # Log but don't fail — fall through to cached data
             logging.getLogger(__name__).warning(
                 "[intraday] live fetch failed for %s/%s: %s — serving from cache", symbol, interval, exc
             )
 
-    candles = ticker_warehouse.get_intraday(symbol, interval, from_ts=from_ts, to_ts=to_ts)
+    candles = await asyncio.to_thread(
+        ticker_warehouse.get_intraday, symbol, interval, from_ts=from_ts, to_ts=to_ts
+    )
     candle_rows = [
         IntradayCandleRow(
             timestamp=c["timestamp"],
