@@ -361,16 +361,18 @@ Each file caps at ~500 LOC and has a single responsibility.
 
 ### Phase A — Quick Hygiene (1-2 days, low risk)
 
-1. Delete all dead code listed in §5.
-2. `pytz → zoneinfo` repo-wide.
-3. Lift function-level imports to module top.
-4. Compile all regexes at module level.
-5. Replace `datetime.utcnow()` with `datetime.now(timezone.utc)`.
-6. Add `@functools.lru_cache(maxsize=256)` to `tql_parser.parse_tql`.
-7. Module-level `httpx.AsyncClient` for `ai_chat_service`, `rss_parser`, `nse_charting_client`.
-8. Unify 3 router TTL caches → `cache.nse_cache`.
-9. Fix `news_fetcher.py:655` sleep-inside-semaphore bug.
-10. Fix `news_fetcher.py:246-285` shared-client header mutation.
+1. Delete all dead code listed in §5. **DONE** — commit `869ca70`
+2. `pytz → zoneinfo` repo-wide. **DONE** — commit `758daae`
+3. Lift function-level imports to module top. **DONE** — commit `a91b6dc` (5 sites: `ticker.py` × 4, `news_ws.py` × 1)
+4. Compile all regexes at module level. **DONE** — commit `0ec74ac` (1 site: `screener_client._TRADES_RE`)
+5. Replace `datetime.utcnow()` with `datetime.now(timezone.utc)`. **DONE** — commit `74f5c78` (2 sites: `backgroundtasks._should_trigger_full_sync`, `news_aggregator._parsed_article_to_db_dict`)
+6. Add `@functools.lru_cache(maxsize=256)` to `tql_parser.parse_tql`. **DONE** — commit `af8a2aa`
+7. Module-level `httpx.AsyncClient` for `ai_chat_service`, `rss_parser`, `nse_charting_client`. **DONE for 2 / N/A for 1** — commit `e04ae49` applied to `ai_chat_service` + `rss_parser`; `nse_charting_client` was a misread (it uses sync `requests`, not httpx — see §8 note)
+8. Unify 3 router TTL caches → `cache.nse_cache`. **DONE** — commit `7e1c71b` (`valuation`, `portfolio`, `screener`)
+9. Fix `news_fetcher.py:655` sleep-inside-semaphore bug. **DONE** — commit `818c8c8` (1 sleep site moved out of `async with`; the audit-cited "2 sites" was actually 1)
+10. Fix `news_fetcher.py:246-285` shared-client header mutation. **DONE** — commit `818c8c8` (the actual fix site is `news_fetcher.py:377` `client.headers.update(headers)` → per-request `headers=`)
+
+**Phase A summary: 10/10 done.** All mechanical hygiene items complete; Phase A closes with 9 commits on `docs/backend-audit-and-test-plan` (7 prior + 3 from this session − 1 already in §6.1 if you count the prior session's commits; see `BACKEND_AUDIT_IMPL_MEMORY.md` for the full SHA list). Test infrastructure (`tests/conftest.py`, `tests/golden/`, 5 parity test files = 80 tests) provides a baseline for Phase B/C refactors.
 
 **Tests:** existing `pytest` suite + spot-check market hours/timezone behavior.
 

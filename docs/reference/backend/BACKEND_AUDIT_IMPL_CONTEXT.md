@@ -257,6 +257,79 @@ Wrote 11 tests:
 
 **Convention established:** If a router needs a different TTL than `nse_cache`'s 600s, the right move is to add a new named cache to `app/services/cache.py` (e.g., `valuation_cache` with 1800s TTL), not to bypass the module with another ad-hoc dict. The audit's preferred destination is `nse_cache` for consistency, but the rule is "no per-router caches, only module-level named caches."
 
+### 3.7 Function-level import hoist (`a91b6dc`)
+
+**Why:** The audit (§5 L347) called out imports living inside function bodies. 5 sites across 2 router files: `ticker.py` (4) and `news_ws.py` (1). Function-level imports add per-call name resolution overhead, hide the module's true dependencies from a quick scan of the import block, and complicate test/monkeypatch surfaces (a function-level import can shadow a top-level attribute that a test would otherwise patch).
+
+**How:** Minimal mechanical hoist — no logic changes. For each site:
+- `import json` (ticker.py:466) → top of `import` block
+- `import logging` (ticker.py:618) → top of `import` block
+- `from datetime import timedelta` (ticker.py:608) → added to the existing `from datetime import date, datetime, timezone` line
+- `from app.services.nse_charting_client import fetch_candles_async` (ticker.py:604) → top of `app.services.*` block
+- `from sqlalchemy import nullslast` (news_ws.py:148) → added to the existing `from sqlalchemy import select` line
+
+Wrote 5 tests (in `test_function_level_imports_parity.py`):
+- 2 AST scan tests (one per router): no `ast.Import`/`ast.ImportFrom` inside any `ast.FunctionDef`/`ast.AsyncFunctionDef` body
+- 1 parametrized test (2 modules): each previously-inline-imported name is now bound at module top level
+- 1 style test: `timedelta` rides the existing datetime import rather than spawning a new line (codebase style)
+
+**Test pattern gotcha:** Python's AST has nested scopes (functions, lambdas, comprehension scopes). Walking the tree with `ast.walk` and checking parent map for `FunctionDef`/`AsyncFunctionDef` is the right approach. Lambdas cannot contain statements, so they're irrelevant. Class bodies are also non-`FunctionDef` (only methods inside them are), so a class-level helper like `_article_to_dict` (which uses no inline imports) doesn't false-positive the scan.
+
+**Audit accuracy note:** The audit cited `ticker.py:604,608,618-619,466-467` (4-5 sites) and `news_ws.py:148` (1 site). Verified 5 sites total (4 in ticker, 1 in news_ws) — matches. No surprises.
+
+**Convention established:** Imports belong at module top, organized in the existing 4-group import order (stdlib, third-party, first-party, relative). `import json` and `import logging` go in group 1; `from datetime import ...` additions stay in the existing line; `from app.services...` stays in group 3. This is the codebase's convention as established in `routers/news_ws.py:1-18` and `routers/ticker.py:1-24` (both already use this order).
+
+### 3.8 Module-level regex compile (`0ec74ac`)
+
+**Why:** The audit (§5 L348, §4.6 L271) called out regexes compiled inside function bodies. 1 site in `screener_client.py:159-170` — `_TRADES_RE` was compiled on every call to `_parse_trades_company_id`. The pattern is process-invariant (a fixed URL shape), so the compile was wasted CPU.
+
+**How:** Move `import re as _re` + `_TRADES_RE = _re.compile(r"/trades/company-(\d+)/")` from the function body to module top. Add a comment explaining the pattern's role. The function now references the module-level `_TRADES_RE` via standard module-globals lookup (no behavioral change).
+
+Wrote 7 tests (in `test_screener_regex_parity.py`):
+- 3 structural:
+  - `_TRADES_RE` is a `re.Pattern` bound at module top level
+  - No `re.compile()` or `import re` inside any function body (AST scan)
+  - `re` is imported at module top
+- 3 behavioral (using `BeautifulSoup` fixtures):
+  - Primary path: button with matching `data-url` → returns ID
+  - Fallback path: no button but raw HTML contains the pattern → returns ID
+  - No match → returns `None`
+- 1 pattern-identity test: the same `re.Pattern` object is reused across calls (locks the perf property — proves the hoist wasn't undone by a per-call recompile)
+
+**Convention established:** Compile regexes at module top level. Document the pattern's role with a one-line comment. For regexes that need a config flag (e.g., `re.IGNORECASE`), pass it to `re.compile()` at the module level.
+
+**Audit accuracy note:** The audit cited `screener_client.py:159-161` (3 lines) — verified, matches exactly.
+
+### 3.9 `datetime.utcnow()` sweep (`74f5c78`)
+
+**Why:** The audit (§5 L349) called out `datetime.utcnow()` as deprecated in Python 3.12. 2 sites remained: `backgroundtasks.py:4963` and `news_aggregator.py:62`. Both target naive-UTC DB columns (`DateTime(timezone=False)`), so the replacement is `datetime.now(timezone.utc).replace(tzinfo=None)` — preserves the naive-UTC write contract.
+
+**How:** One-line swap per site. Both modules already imported `timezone` (backgroundtasks.py:10, news_aggregator.py:10) — no new imports.
+
+Column type verification before the swap:
+- `StockUniverse.fair_value_updated_at` (`models/stockuniverse.py:39-41`): `DateTime(timezone=False)` — naive
+- `NewsArticle.fetched_at` (`models/news.py:35-38`): `DateTime(timezone=False)` — naive
+
+Wrote 6 tests (in `test_utcnow_migration_parity.py`):
+- 3 behavioral on `_should_trigger_full_sync` (frozen-datetime):
+  - No `last_update` row → returns `True` (always trigger)
+  - `last_update` 25h old → returns `True` (stale)
+  - `last_update` 23h old → returns `False` (recent, skip)
+- 1 behavioral on `_parsed_article_to_db_dict`:
+  - `result["fetched_at"]` equals the frozen naive UTC instant; `tzinfo` is `None`
+  - Used a 9-key fake NLP dict to stub `analyze_article_dict` (the real one would touch an NLP model)
+- 2 lock tests:
+  - `inspect.getsource(backgroundtasks)` does not contain `datetime.utcnow()`
+  - `inspect.getsource(news_aggregator)` does not contain `datetime.utcnow()`
+
+**Critical test-helper gotcha (worth its own convention):** The `_FrozenDateTime` subclass must override **both** `now()` and `utcnow()`. Python's classmethod dispatch on a subclass falls through to the parent's classmethod if not explicitly overridden — so `MyFrozenDatetime.utcnow()` would call the real `datetime.utcnow()` and return actual wall-clock time if the subclass only overrode `now()`. First version of the helper overrode only `now()` and the "recent" test failed with `assert True is False` because real wall-clock time leaked through `utcnow()`. The fix: add a 4-line `utcnow()` override to the helper class.
+
+This is a refinement of the §3.2 / §4.4 frozen-datetime pattern established in the prior session. That prior pattern only used `now()` because the timezone-migration tests happened to all call `datetime.now(tz=...)` (the audit-cited replacement of `pytz.utc` is `datetime.timezone.utc`, used as the `tz=` argument to `now()`). The `datetime.utcnow()` call site — which the audit's A.5 item specifically targets — needs the additional override.
+
+**Audit accuracy note:** The audit cited 2 sites in the Phase A.5 narrative; verified exactly 2 sites remain. The deprecation concern (§4.10 L310 in the original audit) also pointed at `news_aggregator.py:62` specifically — matches.
+
+**Convention established:** For naive-UTC contracts (DB columns, comparison with naive values), use `datetime.now(timezone.utc).replace(tzinfo=None)`. For aware-UTC contracts (timezone-aware DB columns, JSON serialization with `tz` info), use `datetime.now(timezone.utc)` directly. Column type determines which — always check the model first.
+
 ---
 
 ## 4. Cross-cutting conventions established
@@ -282,6 +355,7 @@ Every audit-related fix has 1 new test file in `backend/tests/` with the naming 
 ### 4.4 Datetime mocking
 - Subclass the real type (don't use `Mock`)
 - Override `now()` to return a frozen value
+- **Override `utcnow()` as well** if the code under test (or any code transitively called by the test) uses `datetime.utcnow()`. Python's classmethod dispatch on a subclass falls through to the parent's classmethod if not explicitly overridden — so `MyFrozenDatetime.utcnow()` would call the real `datetime.utcnow()` and return actual wall-clock time if the subclass only overrode `now()`. Discovered in §3.9 (this session).
 - Preserve the `tz` parameter
 
 ### 4.5 TDD commit message format
@@ -296,12 +370,15 @@ refactor(<scope>): <one-line summary>
 
 ---
 
-## 5. What's next (Phase A remaining + Phase B/C)
+## 5. What's next (Phase B/C — Phase A is closed)
 
-### 5.1 Phase A remaining (low risk, mechanical)
-- **A.3** Lift function-level imports to module top in `ticker.py:604,608,618-619,466-467` and `news_ws.py:148`. ~10 lines moved, 5-line parity test (assert no import statements inside function bodies).
-- **A.4** Compile regexes at module level in `screener_client.py:159-161`. Module-level `re.compile()` calls + delete in-function `re.compile()` calls. 3-line parity test (assert compiled regex behavior unchanged).
-- **A.5** Dedicated `datetime.utcnow()` sweep. Grep for `utcnow()` in `backend/app/`, replace each with `datetime.now(timezone.utc).replace(tzinfo=None)`. 1-line parity test per call site (frozen datetime).
+### 5.1 Phase A — CLOSED (10/10 done)
+All 10 Phase A items completed across 9 commits (7 from the initial session + 3 from this session: `a91b6dc`, `0ec74ac`, `74f5c78`).
+
+- ~~A.3 Lift function-level imports~~ — done in `a91b6dc` (this session, see §3.7)
+- ~~A.4 Compile regexes at module level~~ — done in `0ec74ac` (this session, see §3.8)
+- ~~A.5 Dedicated `datetime.utcnow()` sweep~~ — done in `74f5c78` (this session, see §3.9)
+- A.1, A.2, A.6-A.10 — done in the prior session (see `BACKEND_AUDIT_IMPL_MEMORY.md` §1 and §4)
 
 ### 5.2 Top 10 perf wins (Phase B/C, high risk)
 Ordered by impact / risk ratio:
@@ -316,8 +393,8 @@ Ordered by impact / risk ratio:
 9. **#7 `_run_async()`** — find all `asyncio.run()` calls inside async paths and replace with proper await. May not exist in the current code (audit citation may be stale).
 
 ### 5.3 Estimated effort
-- Phase A remaining: ~2 hours total
-- Top 10 #2 (delete sync NSE): ~1 hour (verification + deletion)
+- **Phase A: DONE** (this session closed it: ~1.5 hours actual, including 3 commits + 18 new tests)
+- Top 10 #2 (delete sync NSE): ~1 day (8 callers to migrate; pre-flight `grep` reveals: `mcp_server.py:48,94`, `main.py:45`, `orchestrator.py:138,155`, `backgroundtasks.py:19,544,589,3119,3127,3135,3143,3151,3159`, `routers/corporatefilings.py:19,36`, `routers/market_ws.py:41`, `routers/nonpersistence.py:41`, `routers/stockuniverse.py:20`)
 - Top 10 #6 (asyncio.gather announcements): ~30 minutes
 - Top 10 #9 (unify TQL transpilers): ~1 day (needs contract tests)
 - Top 10 #1 (N+1 fix): ~2 days
@@ -327,11 +404,16 @@ Ordered by impact / risk ratio:
 
 ## 6. Open questions for the user
 
-1. **TTL unification contract** — was the move to canonical 600s for all 3 routers intended? The audit says yes, but the screener.search TTL change (60s → 600s) is a 10× slowdown in cache freshness.
-2. **`nse_charting_client` sync `requests`** — should this be converted to `httpx.AsyncClient`? It's used by `charting_router` for live chart data. If yes, the same module-level pool pattern applies.
-3. **`_run_async()`** — does this function actually exist? The audit's citation is unclear. `grep -rn "def _run_async" backend/app/` should answer this.
-4. **Phase B/C sequencing** — should the next session tackle #2 (delete sync NSE) as a low-risk confidence-builder, or jump to #6 (asyncio.gather announcements) for a quicker win?
-5. **Push strategy** — push `docs/backend-audit-and-test-plan` as-is and start Phase B on a new branch, or keep accumulating commits on the audit branch for a single review?
+**Resolved this session:**
+- Q1 (TTL unification 600s): kept (prior session, `7e1c71b`); still in effect
+- Q2 (`nse_charting_client`): **NO** — leave as sync `requests` (user selection). The `requests.get` calls at `nse_charting_client.py:99,244` remain unchanged. If a future async wrap is desired, it can be a separate, focused refactor.
+- Q3 (`_run_async()` existence): **YES** — defined at `backgroundtasks.py:484`; called from 3 sites (`:2186, :2531, :2706`) per the `database.py:101,104` comment. This is the real Top 10 #7 perf target.
+- Q5 (push strategy): **push branch as-is** — user selected this option. Branch is now pushed to origin (after this session's 3 commits).
+- Q4 (sequencing): deferred to next session. Based on impact/risk, the suggested order remains: B.1 (TQL SQL cache, free) → B.2-3 (announcements httpx + gather) → B.4 (sqlite pragmas) → B.9 (TQL transpiler unify, needs contract tests) → B.10 (delete sync NSE, 8 callers) → B.11 (orchestrator cleanup) → B.12 (async-wrap warehouse) → into Phase C.
+
+**Still open:**
+- Q6 (new): **Phase A finish scope confirmation** — is the user satisfied with closing Phase A now and starting Phase B in a separate session? Or do you want one more Phase A pass for any items we may have missed?
+- Q7 (new): **`nse_client` deletion sequencing** — should the 8 caller migration happen all-in-one (with Tier 1 golden snapshots for current sync behavior captured first), or one caller at a time with intermediate commits?
 
 ---
 
