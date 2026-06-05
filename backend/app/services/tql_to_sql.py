@@ -27,6 +27,7 @@ inserts the right lateral join when an interval other than ``1d`` is needed.
 
 from __future__ import annotations
 
+import functools
 from typing import Any, Optional
 
 from app.services.tql_parser import (
@@ -329,6 +330,15 @@ LEFT JOIN LATERAL (
     return "\n".join(parts)
 
 
+def _hashable_filters(filters: dict) -> tuple[tuple[str, Any], ...]:
+    """Convert a legacy-filter dict to a hashable key for lru_cache.
+
+    Items are sorted by key so that ``{"a": 1, "b": 2}`` and
+    ``{"b": 2, "a": 1}`` produce the same cache key.
+    """
+    return tuple(sorted(filters.items()))
+
+
 def build_tql_query(
     tql: str,
     default_interval: str = "1d",
@@ -341,7 +351,23 @@ def build_tql_query(
     The SQL is a single CTE-based statement that runs in O(1) queries
     against ticker_daily, ticker_intraday (lateral), ticker_scores,
     stock_universe, and ticker_screener_snapshot (Phase B).
+
+    Cached via ``functools.lru_cache(maxsize=256)`` (on the private
+    ``_build_tql_query_cached`` helper) — the (sql, binds) tuple is a
+    deterministic function of these args, and the typical screener request
+    flow issues the same TQL with the same sort/limit repeatedly.
     """
+    return _build_tql_query_cached(tql, default_interval, sort_by, order, limit)
+
+
+@functools.lru_cache(maxsize=256)
+def _build_tql_query_cached(
+    tql: str,
+    default_interval: str,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
     ast = parse_tql(tql)
     intervals: set[str] = set()
     binds: list[Any] = []
@@ -576,6 +602,22 @@ def build_snapshot_tql_query(
 ) -> tuple[str, list[Any]]:
     """Phase B: read directly from ticker_screener_snapshot.
 
+    Cached via ``functools.lru_cache(maxsize=256)`` on
+    ``_build_snapshot_tql_query_cached``.
+    """
+    return _build_snapshot_tql_query_cached(tql, default_interval, sort_by, order, limit)
+
+
+@functools.lru_cache(maxsize=256)
+def _build_snapshot_tql_query_cached(
+    tql: str,
+    default_interval: str,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    """Phase B: read directly from ticker_screener_snapshot.
+
     Faster than ``build_tql_query`` (no window functions, no lateral joins,
     no stock_universe JOIN) when the snapshot is populated.  Returns the
     same row shape so callers can use it as a drop-in replacement.
@@ -605,7 +647,27 @@ def build_snapshot_legacy_query(
     order: str = "asc",
     limit: int = 50,
 ) -> tuple[str, list[Any]]:
-    """Phase B: legacy-filter variant of build_snapshot_tql_query."""
+    """Phase B: legacy-filter variant of build_snapshot_tql_query.
+
+    Cached via ``functools.lru_cache(maxsize=256)`` on
+    ``_build_snapshot_legacy_query_cached`` — the dict is hashed via
+    ``_hashable_filters`` so the same filter dict (regardless of insertion
+    order) produces the same cache key.
+    """
+    return _build_snapshot_legacy_query_cached(
+        _hashable_filters(filters), sort_by, order, limit
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _build_snapshot_legacy_query_cached(
+    filters_hashable: tuple,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    """Phase B: legacy-filter variant of build_snapshot_tql_query (cached)."""
+    filters = dict(filters_hashable)
     where, binds = _legacy_where_snapshot(filters)
     sort_expr = _snapshot_sort_sql(sort_by, order)
     select = _snapshot_select_clause()
@@ -826,7 +888,27 @@ def build_legacy_query(
     order: str = "asc",
     limit: int = 50,
 ) -> tuple[str, list[Any]]:
-    """Translate legacy filter dict to a parameterised SQL statement."""
+    """Translate legacy filter dict to a parameterised SQL statement.
+
+    Cached via ``functools.lru_cache(maxsize=256)`` on
+    ``_build_legacy_query_cached`` — the dict is hashed via
+    ``_hashable_filters`` so the same filter dict (regardless of insertion
+    order) produces the same cache key.
+    """
+    return _build_legacy_query_cached(
+        _hashable_filters(filters), sort_by, order, limit
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _build_legacy_query_cached(
+    filters_hashable: tuple,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    """Translate legacy filter dict to a parameterised SQL statement (cached)."""
+    filters = dict(filters_hashable)
     where, binds = _legacy_where(filters)
     sort_expr = _sort_sql(sort_by, order)
     sql = f"""

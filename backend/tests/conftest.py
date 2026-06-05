@@ -23,7 +23,7 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 import pytest
 
@@ -124,6 +124,36 @@ def in_memory_db() -> sqlite3.Connection:
     con.commit()
     yield con
     con.close()
+
+
+# LRU cache reset ───────────────────────────────────────────────────────────────
+#
+# ``tql_to_sql`` caches its SQL builders via ``functools.lru_cache`` (Phase B.1).
+# Tests that mutate module-level state (e.g. ``_SNAPSHOT_INDICATOR_BASES``)
+# or that rely on a fresh parse must start from a clean cache.  This autouse
+# fixture resets all builder caches both before and after every test so test
+# order cannot leak state.
+
+@pytest.fixture(autouse=True)
+def _reset_tql_sql_lru_caches() -> Generator[None, None, None]:
+    from app.services import tql_to_sql
+
+    cached = [
+        getattr(tql_to_sql, name, None)
+        for name in (
+            "_build_tql_query_cached",
+            "_build_snapshot_tql_query_cached",
+            "_build_legacy_query_cached",
+            "_build_snapshot_legacy_query_cached",
+        )
+    ]
+    for fn in cached:
+        if fn is not None and hasattr(fn, "cache_clear"):
+            fn.cache_clear()
+    yield
+    for fn in cached:
+        if fn is not None and hasattr(fn, "cache_clear"):
+            fn.cache_clear()
 
 
 # Golden helpers ────────────────────────────────────────────────────────────────
