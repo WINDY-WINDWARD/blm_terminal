@@ -27,7 +27,7 @@ from app.models.news import NewsArticle
 from app.models.notification import Notification, GlobalNotification
 from app.models.system_config import SystemConfig
 from app.models.job import Job
-from app.database import _SyncSessionLocal, AsyncSessionLocal, _ThreadAsyncSessionLocal
+from app.database import _SyncSessionLocal, AsyncSessionLocal
 from app.config import settings
 from app.services.news_fetcher import news_fetcher
 from app.services.news_aggregator import fetch_all_feeds, store_articles
@@ -2183,11 +2183,12 @@ NEWS_CRAWL_MAX_INTERVAL = 30 * 60
 async def _crawl_news_async(pages: int) -> int:
     """Async helper: crawl and store news using AsyncSession.
 
-    Uses _ThreadAsyncSessionLocal (NullPool) — called via _run_async() which
-    creates a new event loop per worker thread, so it must not share the main
-    StaticPool connection.
+    Uses AsyncSessionLocal (NullPool) — called via _run_async() which
+    creates a new event loop per worker thread. NullPool is already
+    thread-safe; each ``engine.connect()`` opens a fresh DBAPI connection
+    bound to the loop that opened it.
     """
-    async with _ThreadAsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:
         return await news_fetcher.crawl_and_store(pages=pages, db=session)
 
 
@@ -2366,7 +2367,7 @@ async def _news_rss_sync_async() -> None:
         )
 
         if processed:
-            async with _ThreadAsyncSessionLocal() as session:
+            async with AsyncSessionLocal() as session:
                 stored = await store_articles(session, processed)
                 logger.info("news_rss_sync_async: stored %d articles", stored)
 
@@ -2528,15 +2529,16 @@ WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
 async def _fetch_company_news_async(symbol: str) -> int:
     """Async helper: fetch company news using AsyncSession.
 
-    Uses _ThreadAsyncSessionLocal (NullPool) — called via _run_async() which
-    creates a new event loop per worker thread, so it must not share the main
-    StaticPool connection.
+    Uses AsyncSessionLocal (NullPool) — called via _run_async() which
+    creates a new event loop per worker thread. NullPool is already
+    thread-safe; each ``engine.connect()`` opens a fresh DBAPI connection
+    bound to the loop that opened it.
 
     Note: We can't easily cancel HTTP requests mid-flight, but we can at least
     check for shutdown between symbols in the caller.
     """
     try:
-        async with _ThreadAsyncSessionLocal() as session:
+        async with AsyncSessionLocal() as session:
             return await news_fetcher.fetch_company_news(symbol=symbol, db=session)
     finally:
         await news_fetcher.close()
@@ -2703,11 +2705,12 @@ def _seconds_until_market_open() -> float:
 async def _refresh_market_data_async() -> None:
     """Async helper: refresh all market data using AsyncSession.
 
-    Uses _ThreadAsyncSessionLocal (NullPool) — called via _run_async() which
-    creates a new event loop per worker thread, so it must not share the main
-    StaticPool connection.
+    Uses AsyncSessionLocal (NullPool) — called via _run_async() which
+    creates a new event loop per worker thread. NullPool is already
+    thread-safe; each ``engine.connect()`` opens a fresh DBAPI connection
+    bound to the loop that opened it.
     """
-    async with _ThreadAsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:
         await market_data_fetcher.refresh_all(session)
 
 
