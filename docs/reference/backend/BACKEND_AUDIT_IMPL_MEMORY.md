@@ -3,8 +3,8 @@
 **Companion to:** `BACKEND_AUDIT.md`, `REFACTOR_TEST_PLAN.md`
 **Branch:** `docs/backend-audit-and-test-plan` (pushed to origin)
 **Base:** `bc6dbde` (Merge PR #3 intraday-worker-refactor)
-**Date:** 2026-06-05 (initial session) / 2026-06-05 (Phase A finish session)
-**Status:** **9 implementation commits, 80 audit-related parity tests pass, Phase A 10/10 DONE.** Branch pushed. 232/232 pure-unit pass excluding pre-existing test_mcp_stdio.py failures (14 live-server tests, unchanged baseline).
+**Date:** 2026-06-05 (initial session) / 2026-06-05 (Phase A finish session) / 2026-06-06 (Phase B start)
+**Status:** **Phase A 10/10 DONE. Phase B 1/12 (B.1 TQL SQL cache) DONE.** 247/247 pure-unit pass (was 232; +15 = new B.1 parity tests).
 
 ---
 
@@ -205,3 +205,21 @@ New test: `tests/test_utcnow_migration_parity.py` (6 tests: 3 behavioural frozen
   - `nse_charting_client` was a misread in the audit (uses sync `requests`, not httpx)
   - `news_fetcher.py:655` audit citation was a second sleep site that didn't exist; only one site moved
   - `news_fetcher.py:246-285` audit citation was the 5-page state diagram; the actual fix site is `client.headers.update` at `:377`
+
+## 8. Phase B: B.1 TQL SQL cache — DONE (commit `74f162c`)
+
+**Why:** The 4 SQL builders in `tql_to_sql.py` are deterministic functions of their args and are called repeatedly by the screener flow with the same TQL string / filter dict. Re-parsing the AST, re-resolving interval fields, and re-rendering the CTE tree on every call is wasted CPU.
+
+**What:**
+- `app/services/tql_to_sql.py` — wrapped each builder with `functools.lru_cache(maxsize=256)` via private `_build_*_cached` helpers; public builders are thin dict-hashing wrappers that preserve the original `filters: dict` signature (no caller change required)
+- New helper `_hashable_filters(filters: dict) -> tuple[tuple[str, Any], ...]` — sorts dict items so insertion order doesn't affect the cache key
+- `tests/test_tql_sql_cache_parity.py` — 15 new tests (structural, hits/misses, dict-key normalisation, same-arg object identity, parity with uncached output)
+- `tests/conftest.py` — autouse fixture `_reset_tql_sql_lru_caches` clears all 4 caches before/after every test (so test order can't leak state and tests that mutate `_SNAPSHOT_INDICATOR_BASES` start clean)
+
+**Bug squashed mid-implementation:** First attempt put `@functools.lru_cache` on BOTH the public wrapper AND the private cached helper, giving nested caching and breaking `test_snapshot_unknown_indicator_base_raises` (the prior test's call populated the outer cache, so the monkeypatched error path never executed). Fix: keep the decorator ONLY on the private `_build_*_cached` helper; the public function is a plain def that calls through.
+
+**Verification:** 247/247 pure-unit pass (was 232; +15 = new tests). No regressions in `test_tql_to_sql.py` (47 tests), `test_screener_service.py` (8 tests), or anywhere else.
+
+**Open:** 11 more Phase B items remain. Next: B.2 (pool httpx in `routers/announcements.py`).
+
+---
