@@ -39,6 +39,7 @@ from app.services.news_aggregator import (
     fetch_source_by_id,
     get_stored_articles,
 )
+from app.services.pagination import paginate
 from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 from app.services.news_sources import (
     ALL_SOURCES,
@@ -98,8 +99,6 @@ async def get_global_news(
         .select_from(NewsArticle)
         .where(and_(*conditions))
     )
-    total = await db.scalar(count_stmt) or 0
-
     stmt = (
         select(NewsArticle)
         .where(and_(*conditions))
@@ -108,8 +107,9 @@ async def get_global_news(
         .offset(offset)
     )
 
-    result = await db.execute(stmt)
-    articles: list[NewsArticle] = list(result.scalars().all())
+    total, articles, has_more = await paginate(
+        db, count_stmt, stmt, offset=offset, limit=limit,
+    )
 
     logger.debug("Returning %d articles (offset %d, limit %d, total %d)", len(articles), offset, limit, total)
     return NewsPaginatedOut(
@@ -117,7 +117,7 @@ async def get_global_news(
         total=total,
         limit=limit,
         offset=offset,
-        has_more=(offset + limit) < total,
+        has_more=has_more,
     )
 
 
@@ -157,8 +157,6 @@ async def fetch_company_news(
         .select_from(NewsArticle)
         .where(NewsArticle.company_symbol == symbol_upper)
     )
-    total = await db.scalar(count_stmt) or 0
-
     stmt = (
         select(NewsArticle)
         .where(NewsArticle.company_symbol == symbol_upper)
@@ -166,15 +164,16 @@ async def fetch_company_news(
         .limit(limit)
         .offset(offset)
     )
-    result = await db.execute(stmt)
-    articles: list[NewsArticle] = list(result.scalars().all())
+    total, articles, has_more = await paginate(
+        db, count_stmt, stmt, offset=offset, limit=limit,
+    )
 
     return NewsPaginatedOut(
         articles=[NewsArticleOut.model_validate(a) for a in articles],
         total=total,
         limit=limit,
         offset=offset,
-        has_more=(offset + limit) < total,
+        has_more=has_more,
     )
 
 
@@ -216,9 +215,7 @@ async def get_company_news(
         .select_from(NewsArticle)
         .where(and_(*conditions))
     )
-    total = await db.scalar(count_stmt) or 0
-
-    if total == 0:
+    if (await db.scalar(count_stmt) or 0) == 0:
         raise HTTPException(
             status_code=404,
             detail=f"No articles found for symbol '{symbol_upper}'. "
@@ -232,8 +229,9 @@ async def get_company_news(
         .limit(limit)
         .offset(offset)
     )
-    result = await db.execute(stmt)
-    articles: list[NewsArticle] = list(result.scalars().all())
+    total, articles, has_more = await paginate(
+        db, count_stmt, stmt, offset=offset, limit=limit,
+    )
 
     logger.debug(
         "get_company_news: returning %d articles (offset %d, limit %d, total %d) for %s",
@@ -244,7 +242,7 @@ async def get_company_news(
         total=total,
         limit=limit,
         offset=offset,
-        has_more=(offset + limit) < total,
+        has_more=has_more,
     )
 
 
@@ -335,7 +333,6 @@ async def get_all_news(
     count_query = select(func.count()).select_from(NewsArticle)
     if conditions:
         count_query = count_query.where(and_(*conditions))
-    total = await db.scalar(count_query) or 0
 
     # Fetch paginated articles
     query = (
@@ -345,8 +342,9 @@ async def get_all_news(
         .limit(limit)
         .offset(offset)
     )
-    result = await db.execute(query)
-    articles: list[NewsArticle] = list(result.scalars().all())
+    total, articles, has_more = await paginate(
+        db, count_query, query, offset=offset, limit=limit,
+    )
 
     logger.debug(
         "get_all_news: returning %d articles (offset %d, limit %d, total %d)",
@@ -358,7 +356,7 @@ async def get_all_news(
         total=total,
         limit=limit,
         offset=offset,
-        has_more=(offset + limit) < total,
+        has_more=has_more,
     )
 
 
