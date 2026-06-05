@@ -4960,7 +4960,7 @@ async def _should_trigger_full_sync() -> bool:
         if last_update is None:
             return True
 
-        now_naive = datetime.utcnow()
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
         if now_naive - last_update > timedelta(hours=24):
             return True
 

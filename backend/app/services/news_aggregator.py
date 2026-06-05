@@ -59,7 +59,7 @@ def _parsed_article_to_db_dict(article: ParsedArticle) -> dict[str, Any]:
         "title": article.title,
         "text": article.summary,
         "publish_date": _naive_datetime(article.published),
-        "fetched_at": datetime.utcnow(),
+        "fetched_at": datetime.now(timezone.utc).replace(tzinfo=None),
         "sentiment": nlp["sentiment"],
         "sentiment_score": nlp["sentiment_score"],
         "confidence": nlp["confidence"],
