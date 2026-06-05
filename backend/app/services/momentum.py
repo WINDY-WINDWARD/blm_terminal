@@ -1,7 +1,6 @@
 """Momentum score calculation service."""
 
 from typing import Optional
-import pandas as pd
 from sqlalchemy import select, func
 
 from app.models.ticker import TickerDaily

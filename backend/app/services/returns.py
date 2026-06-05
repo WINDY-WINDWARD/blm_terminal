@@ -1,10 +1,10 @@
 """Multi-period returns calculations with date-based lookups."""
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 import pandas as pd
-from sqlalchemy import and_, select
+from sqlalchemy import select
 
 from app.models.ticker import TickerDaily
 from app.models.stockuniverse import StockUniverse
@@ -19,28 +19,6 @@ TRADING_DAYS = {
     "6m": 120,
     "1y": 252,
 }
-
-
-def _get_date_lookup(days_back: int, anchor_date: Optional[date] = None) -> date:
-    """Find the date N trading days back from anchor_date using actual date lookups."""
-    if anchor_date is None:
-        anchor_date = date.today()
-    
-    with _SyncSessionLocal() as db:
-        stmt = (
-            select(TickerDaily.date)
-            .where(TickerDaily.date <= anchor_date)
-            .order_by(TickerDaily.date.desc())
-            .offset(days_back - 1)
-            .limit(1)
-        )
-        result = db.execute(stmt).scalar_one_or_none()
-    
-    if result:
-        return result
-    
-    fallback = anchor_date - timedelta(days=days_back * 2)
-    return fallback
 
 
 def get_returns(symbol: str, target_date: Optional[date] = None) -> dict:
