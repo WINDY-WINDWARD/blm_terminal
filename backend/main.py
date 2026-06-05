@@ -35,6 +35,8 @@ from app.routers import (
     system_config_router,
     stockuniverse_router,
     stockuniverse_errors_router,
+    valuation_router,
+    portfolio_router,
     watchlist_router,
     jobs_router,
 )
@@ -143,7 +145,7 @@ def _run_migrations_sync() -> None:
                 )
                 raise
 
-        elif "overlap" in err:
+        elif "overlap" in err or "multiple head" in err:
             # Multiple Alembic branches with overlapping migrations.
             # Upgrade each head independently to avoid the merge conflict.
             logger.warning("migrations: overlapping branches — upgrading each head individually")
@@ -483,6 +485,8 @@ app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
+app.include_router(valuation_router, prefix="/api")
+app.include_router(portfolio_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 from app.routers.ticker import router as ticker_router

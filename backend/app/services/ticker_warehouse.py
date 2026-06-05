@@ -10,7 +10,7 @@ This module is used by background workers and the ticker router.
 
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Generator, Optional
 
@@ -23,13 +23,15 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.models.ticker import TickerDaily
+from app.models.ticker import TickerDaily, TickerIntraday
 from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
 from app.database import _SyncSessionLocal
 from app.services.indicators import compute_indicators_for_latest_candle
 
 logger = logging.getLogger(__name__)
+
+TICKER_FAILURE_THRESHOLD = 3
 
 NSE_HISTORICAL_URL = "https://www.nseindia.com/api/historicalOR/generateSecurityWiseHistoricalData"
 
@@ -168,28 +170,115 @@ def _nse_equity_history_sync(symbol: str, start_date: str, end_date: str, _attem
     return pd.DataFrame()
 
 
-def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
-    """
-    Backfill OHLCV data for a single symbol.
+def _backfill_symbol_charting(symbol: str, days: int) -> int:
+    """Backfill using NSE charting API (deep history in one request).
 
-    Fetches `days` trading days of history via equity_history() API.
-    The API has a ~11 month limit, so we split into 2 requests if needed.
+    Looks up the symbol's NSE series from stock_universe DB first so the
+    charting API uses the correct suffix (e.g. -BE instead of -EQ).
+    If the symbol is not in stock_universe, the charting client falls back
+    through its own series preference loop (EQ → BE → SM → ST).
+
+    Args:
+        symbol: NSE ticker.
+        days:  How many calendar days of history to request.
 
     Returns:
-        Number of rows inserted/updated.
+        Number of rows inserted/updated (0 on failure).
     """
+    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+
+    # Look up the correct series from stock_universe (e.g. 'BE' for BODALCHEM)
+    discovered_series: str | None = None
+    with _get_session() as db:
+        row = db.execute(
+            select(StockUniverse.series).where(StockUniverse.symbol == symbol)
+        ).scalar_one_or_none()
+        if row:
+            discovered_series = row
+
+    today = date.today()
+    start_dt = today - timedelta(days=days + 30)
+    from_ts = int(datetime.combine(start_dt, datetime.min.time(), tzinfo=timezone.utc).timestamp())
+    to_ts = int(datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc).timestamp())
+
+    logger.info(
+        f"backfill_symbol_charting: fetching {symbol} (series={discovered_series!r}) "
+        f"from {start_dt} to {today}"
+    )
+
+    try:
+        candles = fetch_candles(symbol, "D", from_ts=from_ts, to_ts=to_ts, series=discovered_series)
+    except Exception as exc:
+        logger.warning(f"backfill_symbol_charting: charting API failed for {symbol}: {exc}")
+        return 0
+
+    if not candles:
+        logger.warning(f"backfill_symbol_charting: no candles returned for {symbol}")
+        return 0
+
+    rows = []
+    for c in candles:
+        ts_ms = c.get("time_ms")
+        if not ts_ms:
+            continue
+        dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+        close_val = float(c.get("close", 0))
+        volume_val = int(c.get("volume", 0))
+        # Approximate traded value: close * volume
+        value_val = close_val * volume_val
+        rows.append({
+            "symbol": symbol,
+            "date": dt,
+            "series": TICKER_SERIES_FILTER,
+            "open": float(c.get("open", 0)),
+            "high": float(c.get("high", 0)),
+            "low": float(c.get("low", 0)),
+            "close": close_val,
+            "volume": volume_val,
+            "value": value_val,
+            "source": "nse_charting",
+            "created_at": datetime.now(),
+        })
+
+    if not rows:
+        return 0
+
+    with _get_session() as db:
+        stmt = sqlite_insert(TickerDaily).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol", "date", "series"],
+            set_={
+                "open": stmt.excluded.open,
+                "high": stmt.excluded.high,
+                "low": stmt.excluded.low,
+                "close": stmt.excluded.close,
+                "volume": stmt.excluded.volume,
+                "value": stmt.excluded.value,
+                "source": stmt.excluded.source,
+                "created_at": stmt.excluded.created_at,
+            },
+        )
+        db.execute(stmt)
+        db.commit()
+
+    logger.info(f"backfill_symbol_charting: upserted {len(rows)} rows for {symbol}")
+    return len(rows)
+
+
+def _backfill_symbol_equity_history(symbol: str, days: int) -> int:
+    """Legacy backfill using nsepython.equity_history (shallow history, chunked)."""
     today = date.today()
     start_dt = today - timedelta(days=days + 50)
     start_date = start_dt.strftime("%d-%m-%Y")
     end_date = today.strftime("%d-%m-%Y")
 
-    logger.info(f"backfill_symbol: fetching {symbol} from {start_date} to {end_date}")
+    logger.info(f"backfill_symbol_equity: fetching {symbol} from {start_date} to {end_date}")
 
     df = _nse_equity_history_sync(symbol, start_date, end_date)
 
     if df.empty:
         mid_date = (today - timedelta(days=180)).strftime("%d-%m-%Y")
-        logger.info(f"backfill_symbol: trying split at {mid_date}")
+        logger.info(f"backfill_symbol_equity: trying split at {mid_date}")
         df1 = _nse_equity_history_sync(symbol, start_date, mid_date)
         time.sleep(REQUEST_DELAY_SECONDS)
         df2 = _nse_equity_history_sync(symbol, mid_date, end_date)
@@ -201,11 +290,11 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
             df = df1
 
     if df.empty:
-        logger.warning(f"backfill_symbol: empty result for {symbol}")
+        logger.warning(f"backfill_symbol_equity: empty result for {symbol}")
         return 0
 
     if "CH_SERIES" not in df.columns:
-        logger.warning(f"backfill_symbol: invalid response for {symbol}")
+        logger.warning(f"backfill_symbol_equity: invalid response for {symbol}")
         return 0
 
     df = df.rename(
@@ -223,7 +312,7 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
     required_cols = ["date", "open", "high", "low", "close", "volume", "value"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
-        logger.warning(f"backfill_symbol: missing columns {missing} for {symbol}")
+        logger.warning(f"backfill_symbol_equity: missing columns {missing} for {symbol}")
         return 0
 
     df["symbol"] = symbol
@@ -267,16 +356,38 @@ def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
         db.execute(stmt)
         db.commit()
 
-    logger.info(f"backfill_symbol: upserted {len(rows)} rows for {symbol}")
-
-    # Compute indicators for the latest candle now that data is stored.
-    # Full per-candle backfill is handled separately by _ticker_indicators_sync.
-    try:
-        compute_indicators_for_latest_candle(symbol)
-    except Exception as e:
-        logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
-
+    logger.info(f"backfill_symbol_equity: upserted {len(rows)} rows for {symbol}")
     return len(rows)
+
+
+def backfill_symbol(symbol: str, days: int = DEFAULT_BACKFILL_DAYS) -> int:
+    """
+    Backfill OHLCV data for a single symbol.
+
+    Primary: NSE charting API (deep history, single request).
+    Fallback: nsepython.equity_history (legacy, chunked, ~11 month limit).
+
+    Returns:
+        Number of rows inserted/updated.
+    """
+    # Try charting API first — deep history in one shot
+    rows = _backfill_symbol_charting(symbol, days)
+    if rows > 0:
+        # Compute indicators for the latest candle
+        try:
+            compute_indicators_for_latest_candle(symbol)
+        except Exception as e:
+            logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
+        return rows
+
+    # Fallback to legacy equity_history
+    rows = _backfill_symbol_equity_history(symbol, days)
+    if rows > 0:
+        try:
+            compute_indicators_for_latest_candle(symbol)
+        except Exception as e:
+            logger.warning(f"backfill_symbol: indicator computation failed for {symbol}: {e}")
+    return rows
 
 
 def bulk_update_via_bhavcopy(date_str: str) -> int:
@@ -644,6 +755,85 @@ def get_warehouse_status() -> dict:
             else:
                 days_behind_breakdown["3+"] += 1
 
+        # --- Intraday stats (1h / W / M) ---
+        intraday_stats: dict[str, dict] = {}
+        today = datetime.now().date()
+        today_0915 = datetime.combine(today, datetime.min.time().replace(hour=9, minute=15))
+
+        for interval in ("1h", "W", "M"):
+            iv_total = db.execute(
+                select(func.count(TickerIntraday.id))
+                .where(TickerIntraday.interval == interval)
+            ).scalar() or 0
+
+            iv_latest_ts = db.execute(
+                select(func.max(TickerIntraday.timestamp))
+                .where(TickerIntraday.interval == interval)
+            ).scalar()
+
+            iv_watchlist_covered = 0
+            iv_watchlist_current = 0
+            iv_symbols_with_indicators = 0
+            if watchlist_symbols_list:
+                iv_watchlist_covered = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(watchlist_symbols_list),
+                    )
+                ).scalar() or 0
+
+                if interval == "1h":
+                    iv_watchlist_current = db.execute(
+                        select(func.count(func.distinct(TickerIntraday.symbol)))
+                        .where(
+                            TickerIntraday.interval == interval,
+                            TickerIntraday.symbol.in_(watchlist_symbols_list),
+                            TickerIntraday.timestamp >= today_0915,
+                        )
+                    ).scalar() or 0
+
+                iv_symbols_with_indicators = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(watchlist_symbols_list),
+                        TickerIntraday.indicators_updated_at.isnot(None),
+                    )
+                ).scalar() or 0
+
+            # Universe coverage — tracked for W and M (which are now universe-scoped)
+            iv_universe_covered = 0
+            iv_universe_symbols_with_indicators = 0
+            if interval in ("W", "M"):
+                universe_symbol_list = list(universe_symbols)
+                iv_universe_covered = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(universe_symbol_list),
+                    )
+                ).scalar() or 0
+
+                iv_universe_symbols_with_indicators = db.execute(
+                    select(func.count(func.distinct(TickerIntraday.symbol)))
+                    .where(
+                        TickerIntraday.interval == interval,
+                        TickerIntraday.symbol.in_(universe_symbol_list),
+                        TickerIntraday.indicators_updated_at.isnot(None),
+                    )
+                ).scalar() or 0
+
+            intraday_stats[interval] = {
+                "total_rows": iv_total,
+                "watchlist_covered": iv_watchlist_covered,
+                "watchlist_current": iv_watchlist_current,
+                "symbols_with_indicators": iv_symbols_with_indicators,
+                "latest_timestamp": iv_latest_ts,
+                "universe_covered": iv_universe_covered,
+                "universe_symbols_with_indicators": iv_universe_symbols_with_indicators,
+            }
+
         return {
             "total_rows": total_rows,
             "symbols_covered": symbols_covered,
@@ -659,6 +849,7 @@ def get_warehouse_status() -> dict:
             "watchlist_symbols_total": watchlist_total,
             "watchlist_symbols_current": watchlist_current,
             "days_behind_breakdown": days_behind_breakdown,
+            "intraday_stats": intraday_stats,
         }
 
 
@@ -668,21 +859,32 @@ def get_symbols_needing_backfill() -> list[str]:
 
     A symbol needs backfill if:
       - It has fewer than MIN_EXPECTED_ROWS rows (historical data missing), OR
-      - Its most recent date is older than the last trading day (stale data).
+      - Its most recent date is older than the DB consensus date (stale data).
+
+    Consensus date = the most common max(date) across all stored symbols in the
+    universe. This avoids the pitfall of using `get_last_trading_day()` as a live
+    reference, which would mark *every* symbol as stale on a non-bhavcopy day
+    (e.g. market closed weekends/holidays) and trigger a full universe re-fetch.
+
+    Excludes symbols with `review_status` in ('removed', 'ticker_error').
 
     Watchlist symbols are returned first, then the rest of universe.
 
     Returns:
         List of symbols needing backfill.
     """
-    last_trading_day = get_last_trading_day()
+    from collections import Counter
 
     with _get_session() as db:
         watchlist_symbols = set(
             db.execute(select(func.distinct(WatchlistItem.symbol))).scalars().all()
         )
 
-        universe_symbols = db.execute(select(StockUniverse.symbol)).scalars().all()
+        universe_symbols = db.execute(
+            select(StockUniverse.symbol).where(
+                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+            )
+        ).scalars().all()
 
         if not universe_symbols:
             return []
@@ -702,6 +904,17 @@ def get_symbols_needing_backfill() -> list[str]:
 
     stats_by_symbol = {row[0]: (row[1], row[2]) for row in rows}
 
+    # Compute DB consensus: most common max_date across stored symbols
+    max_dates = [row[2] for row in rows if row[2] is not None]
+    consensus_date = Counter(max_dates).most_common(1)[0][0] if max_dates else None
+    if consensus_date is not None:
+        logger.info(
+            "[daily_stale] consensus max_date = %s (shared by %d/%d stored symbols)",
+            consensus_date,
+            sum(1 for d in max_dates if d == consensus_date),
+            len(max_dates),
+        )
+
     priority_symbols = []
     other_symbols = []
 
@@ -710,7 +923,7 @@ def get_symbols_needing_backfill() -> list[str]:
         needs_backfill = (
             row_count < MIN_EXPECTED_ROWS
             or max_date is None
-            or max_date < last_trading_day
+            or (consensus_date is not None and max_date < consensus_date)
         )
 
         if not needs_backfill:
@@ -720,6 +933,15 @@ def get_symbols_needing_backfill() -> list[str]:
             priority_symbols.append(sym)
         else:
             other_symbols.append(sym)
+
+    total = len(priority_symbols) + len(other_symbols)
+    if total == 0:
+        logger.info("[daily_stale] all symbols up to date (consensus=%s)", consensus_date)
+    else:
+        logger.info(
+            "[daily_stale] %d/%d universe symbols need backfill (consensus=%s)",
+            total, len(universe_symbols), consensus_date,
+        )
 
     return priority_symbols + other_symbols
 
@@ -734,9 +956,349 @@ def get_watchlist_symbols() -> list[str]:
 
 
 def get_all_universe_symbols() -> list[str]:
-    """Get all symbols from stock_universe that are EQ series."""
+    """Get all symbols from stock_universe, excluding removed and ticker-disabled."""
     with _get_session() as db:
         symbols = db.execute(
-            select(StockUniverse.symbol)
+            select(StockUniverse.symbol).where(
+                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+            )
         ).scalars().all()
         return list(symbols)
+
+
+def get_symbols_needing_intraday_backfill(
+    intervals: list[str],
+    symbols: list[str],
+) -> Optional[dict[str, list[str]]]:
+    """Get symbols whose W/M candles are stale compared to DB consensus.
+
+    Computes the most common latest timestamp across all *stored* symbols per
+    interval (DB consensus). Symbols whose max timestamp is before that consensus
+    are considered stale. New symbols (no rows) are always stale.
+
+    This avoids the pitfall of using a live API reference, which can return an
+    *incomplete* current period (e.g. current week just started on Monday)
+    while the DB only contains *completed* periods (last week). That mismatch
+    caused every symbol to appear stale and triggered a full universe re-fetch.
+
+    Args:
+        intervals: List of intervals to check (e.g. ["W", "M"]).
+        symbols:   Candidate symbols to evaluate.
+
+    Returns:
+        None  → DB query failed.
+        {}    → all symbols are up to date.
+        {"W": [...], "M": [...]} → stale symbols per interval.
+    """
+    if not symbols:
+        return {}
+
+    symbol_set = set(symbols)
+
+    with _get_session() as db:
+        try:
+            rows = db.execute(
+                select(
+                    TickerIntraday.symbol,
+                    TickerIntraday.interval,
+                    func.max(TickerIntraday.timestamp).label("max_ts"),
+                )
+                .where(
+                    TickerIntraday.symbol.in_(symbol_set),
+                    TickerIntraday.interval.in_(intervals),
+                )
+                .group_by(TickerIntraday.symbol, TickerIntraday.interval)
+            ).fetchall()
+        except Exception as exc:
+            logger.warning("[wm_stale] DB query failed: %s", exc)
+            return None
+
+    max_ts_by_sym_iv: dict[tuple[str, str], datetime] = {
+        (row[0], row[1]): row[2] for row in rows
+    }
+
+    # Build consensus reference timestamp per interval: the most common max_ts
+    from collections import Counter
+
+    reference_ts: dict[str, datetime] = {}
+    for iv in intervals:
+        timestamps = [
+            max_ts_by_sym_iv[(sym, iv)]
+            for sym in symbols
+            if (sym, iv) in max_ts_by_sym_iv and max_ts_by_sym_iv[(sym, iv)] is not None
+        ]
+        if not timestamps:
+            # No symbol has data for this interval → all are stale
+            reference_ts[iv] = None
+            logger.info("[wm_stale] no stored data for interval %s", iv)
+            continue
+
+        most_common_ts, count = Counter(timestamps).most_common(1)[0]
+        reference_ts[iv] = most_common_ts
+        logger.info(
+            "[wm_stale] consensus ref %s = %s (shared by %d/%d symbols)",
+            iv, most_common_ts, count, len(timestamps),
+        )
+
+    stale_map: dict[str, list[str]] = {}
+    for iv in intervals:
+        ref_ts = reference_ts[iv]
+        stale_symbols: list[str] = []
+        for sym in symbols:
+            max_ts = max_ts_by_sym_iv.get((sym, iv))
+            if max_ts is None:
+                # No stored data → definitely needs backfill
+                stale_symbols.append(sym)
+            elif ref_ts is not None and max_ts < ref_ts:
+                # Older than consensus → stale
+                stale_symbols.append(sym)
+            # max_ts >= ref_ts  → up to date (including symbols ahead of consensus)
+        if stale_symbols:
+            stale_map[iv] = stale_symbols
+
+    total_stale = sum(len(s) for s in stale_map.values())
+    logger.info(
+        "[wm_stale] %d/%d symbols need backfill across intervals %s",
+        total_stale, len(symbols), intervals,
+    )
+
+    return stale_map
+
+
+# ---------------------------------------------------------------------------
+# Intraday / Weekly / Monthly OHLCV  (ticker_intraday table)
+# ---------------------------------------------------------------------------
+
+def upsert_intraday(
+    symbol: str,
+    interval: str,
+    rows: list[dict],
+    db: Optional[Session] = None,
+) -> int:
+    """Upsert intraday/weekly/monthly candle rows for *symbol* + *interval*.
+
+    Args:
+        symbol:   NSE ticker (e.g. "RELIANCE").
+        interval: "1h", "W", or "M".
+        rows:     List of dicts from nse_charting_client.fetch_candles():
+                  [{time_ms, open, high, low, close, volume}, ...]
+        db:       Optional existing sync Session; if None a new one is opened.
+
+    Returns:
+        Number of rows upserted.
+    """
+    if not rows:
+        return 0
+
+    def _do_upsert(session: Session) -> int:
+        records = []
+        for r in rows:
+            ts_utc = datetime.fromtimestamp(r["time_ms"] / 1000, tz=pytz.utc).replace(tzinfo=None)
+            records.append({
+                "symbol":    symbol,
+                "timestamp": ts_utc,
+                "interval":  interval,
+                "open":      r["open"],
+                "high":      r["high"],
+                "low":       r["low"],
+                "close":     r["close"],
+                "volume":    r["volume"],
+                "source":    "nse_charting",
+            })
+
+        stmt = sqlite_insert(TickerIntraday).values(records)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol", "timestamp", "interval"],
+            set_={
+                "open":   stmt.excluded.open,
+                "high":   stmt.excluded.high,
+                "low":    stmt.excluded.low,
+                "close":  stmt.excluded.close,
+                "volume": stmt.excluded.volume,
+                "source": stmt.excluded.source,
+            },
+        )
+        session.execute(stmt)
+        session.commit()
+        return len(records)
+
+    if db is not None:
+        return _do_upsert(db)
+    with _get_session() as session:
+        return _do_upsert(session)
+
+
+def get_intraday(
+    symbol: str,
+    interval: str,
+    from_ts: Optional[int] = None,
+    to_ts: Optional[int] = None,
+    db: Optional[Session] = None,
+) -> list[dict]:
+    """Retrieve stored intraday/weekly/monthly candles for *symbol* + *interval*.
+
+    Args:
+        symbol:   NSE ticker.
+        interval: "1h", "W", or "M".
+        from_ts:  Start filter as Unix *milliseconds* (inclusive). None = no filter.
+        to_ts:    End filter as Unix *milliseconds* (inclusive). None = no filter.
+        db:       Optional existing sync Session.
+
+    Returns:
+        List of dicts [{timestamp (unix ms), open, high, low, close, volume}]
+        ordered oldest → newest.
+    """
+    def _do_get(session: Session) -> list[dict]:
+        stmt = (
+            select(TickerIntraday)
+            .where(
+                and_(
+                    TickerIntraday.symbol == symbol,
+                    TickerIntraday.interval == interval,
+                )
+            )
+            .order_by(TickerIntraday.timestamp)
+        )
+
+        if from_ts is not None:
+            from_dt = datetime.fromtimestamp(from_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            stmt = stmt.where(TickerIntraday.timestamp >= from_dt)
+        if to_ts is not None:
+            to_dt = datetime.fromtimestamp(to_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            stmt = stmt.where(TickerIntraday.timestamp <= to_dt)
+
+        rows = session.execute(stmt).scalars().all()
+        return [
+            {
+                "timestamp": int(r.timestamp.replace(tzinfo=pytz.utc).timestamp() * 1000),
+                "open":   r.open,
+                "high":   r.high,
+                "low":    r.low,
+                "close":  r.close,
+                "volume": r.volume,
+            }
+            for r in rows
+        ]
+
+    if db is not None:
+        return _do_get(db)
+    with _get_session() as session:
+        return _do_get(session)
+
+
+def _increment_ticker_failure(symbol: str) -> None:
+    """Increment ticker failure count; disable symbol at threshold."""
+    with _get_session() as db:
+        row = db.get(StockUniverse, symbol)
+        if row is None:
+            return
+        row.ticker_failure_count = (row.ticker_failure_count or 0) + 1
+        count = row.ticker_failure_count
+        if count >= TICKER_FAILURE_THRESHOLD and row.review_status != "ticker_error":
+            row.review_status = "ticker_error"
+            logger.warning(
+                "[ticker_failure] %s disabled after %d failures (review_status=ticker_error)",
+                symbol, count,
+            )
+        db.commit()
+
+
+def _reset_ticker_failure(symbol: str) -> None:
+    """Reset ticker failure count and clear ticker_error status if set."""
+    with _get_session() as db:
+        row = db.get(StockUniverse, symbol)
+        if row is None:
+            return
+        if row.ticker_failure_count != 0 or row.review_status == "ticker_error":
+            row.ticker_failure_count = 0
+            if row.review_status == "ticker_error":
+                row.review_status = None
+            db.commit()
+
+
+def _symbol_has_intraday_data(
+    symbol: str,
+    interval: str,
+    db: Optional[Session] = None,
+) -> bool:
+    """Check if a symbol already has stored intraday rows for a given interval."""
+    def _check(session: Session) -> bool:
+        count = session.execute(
+            select(func.count(TickerIntraday.id))
+            .where(TickerIntraday.symbol == symbol, TickerIntraday.interval == interval)
+        ).scalar() or 0
+        return count > 0
+
+    if db is not None:
+        return _check(db)
+    with _get_session() as session:
+        return _check(session)
+
+
+def backfill_intraday_symbol(
+    symbol: str,
+    intervals: Optional[list[str]] = None,
+    db: Optional[Session] = None,
+    from_ts_overrides: Optional[dict[str, int]] = None,
+) -> dict[str, int]:
+    """Backfill intraday/weekly/monthly candles for a single symbol.
+
+    Calls the NSE charting API for each interval and upserts into ticker_intraday.
+
+    History depth:
+      - "1h": last 90 days
+      - "W", "M": all available history (fromDate=0)
+
+    Args:
+        symbol:    NSE ticker.
+        intervals: List of intervals to backfill. Defaults to ["1h", "W", "M"].
+        db:        Optional existing sync Session.
+        from_ts_overrides: Optional dict mapping interval → from_ts (Unix seconds).
+            When provided and the symbol already has data for that interval,
+            the override is used instead of the default. New symbols (no rows)
+            always get from_ts=0 to ensure full history.
+
+    Returns:
+        Dict mapping interval → number of rows upserted.
+    """
+    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+
+    if intervals is None:
+        intervals = ["1h", "W", "M"]
+
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    counts: dict[str, int] = {}
+
+    for iv in intervals:
+        if iv == "1h":
+            from_ts = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+        else:
+            from_ts = 0  # all history
+
+        # Apply override for W/M if symbol already has data
+        if from_ts_overrides and iv in from_ts_overrides:
+            has_data = _symbol_has_intraday_data(symbol, iv, db=db)
+            if has_data:
+                from_ts = from_ts_overrides[iv]
+            else:
+                from_ts = 0  # new symbol needs full history
+
+        try:
+            rows = fetch_candles(symbol, iv, from_ts=from_ts, to_ts=now_ts)
+            n = upsert_intraday(symbol, iv, rows, db=db)
+            counts[iv] = n
+            logger.info("[intraday] %s/%s → %d rows upserted", symbol, iv, n)
+        except Exception as exc:
+            logger.warning("[intraday] backfill failed %s/%s: %s", symbol, iv, exc)
+            counts[iv] = 0
+
+    # Track success/failure for the symbol
+    total_attempted = sum(counts.values())
+    if total_attempted == 0:
+        # All intervals failed — increment failure counter
+        _increment_ticker_failure(symbol)
+    else:
+        # At least one interval succeeded — reset failure counter
+        _reset_ticker_failure(symbol)
+
+    return counts

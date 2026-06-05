@@ -83,8 +83,30 @@ async function proxyRequest(
       })
     }
 
-    const data = await upstream.json()
-    return NextResponse.json(data, { status: upstream.status })
+    const rawBody = await upstream.text()
+
+    if (!upstream.ok) {
+      // Gracefully handle non-JSON error responses (e.g. HTML 500 pages)
+      try {
+        const data = JSON.parse(rawBody)
+        return NextResponse.json(data, { status: upstream.status })
+      } catch {
+        // Not valid JSON — wrap raw body in an error object so callers always
+        // receive a predictable shape { error: string }.
+        return NextResponse.json(
+          { error: rawBody.slice(0, 500) },
+          { status: upstream.status },
+        )
+      }
+    }
+
+    try {
+      const data = JSON.parse(rawBody)
+      return NextResponse.json(data, { status: upstream.status })
+    } catch {
+      // Fallback for 200 OK responses that are not JSON — forward as plain text
+      return new Response(rawBody, { status: upstream.status })
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
 

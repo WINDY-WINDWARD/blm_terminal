@@ -8,9 +8,23 @@ import {
   focusedPanelAtom,
   panelCountAtom,
   wsConnectedAtom,
+  selectedPanelsAtom,
+  mergedGroupsAtom,
+  getMergedGroupForPanel,
+  validateMergeSelection,
   cleanupOldLocalStorage,
 } from '@/store/terminalStore';
-import { wsService } from '@/lib/socket';
+import { marketWsService } from '@/lib/marketWs';
+
+function isTextInputFocused(): boolean {
+  const el = document.activeElement;
+  if (!el) return false;
+  return (
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    (el as HTMLElement).isContentEditable
+  );
+}
 
 const VALID_WIDGETS = [
   'TOP',
@@ -28,8 +42,10 @@ const VALID_WIDGETS = [
   'NOTIF',
   'ANNC',
   'SCAN',
+  'SCREENER',
   'DOCS',
   'AI',
+  'PORTFOLIO',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
@@ -38,19 +54,19 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
   const [panelCount] = useAtom(panelCountAtom);
   const setWsConnected = useSetAtom(wsConnectedAtom);
+  const [selectedPanels, setSelectedPanels] = useAtom(selectedPanelsAtom);
+  const [mergedGroups, setMergedGroups] = useAtom(mergedGroupsAtom);
 
   // Clean up legacy localStorage keys once on mount
   useEffect(() => {
     cleanupOldLocalStorage();
   }, []);
 
-  // Connect WebSocket on mount and track connection state
+  // Track market WebSocket connection state
   useEffect(() => {
-    wsService.connect();
-    const unsub = wsService.onConnectionChange((connected) => setWsConnected(connected));
+    const unsub = marketWsService.onConnectionChange((connected) => setWsConnected(connected));
     return () => {
       unsub();
-      wsService.disconnect();
     };
   }, [setWsConnected]);
 
@@ -86,11 +102,49 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
         }
         // If already focused, let the keystroke fall through normally so the
         // user can type '/' freely.
+      } else if (e.key === 'm' && !isTextInputFocused()) {
+        e.preventDefault();
+        if (selectedPanels.length < 2) {
+          console.error('Select at least 2 panels (Ctrl+Click) to merge');
+          return;
+        }
+        const validation = validateMergeSelection(
+          selectedPanels,
+          panelCount,
+          mergedGroups,
+        );
+        if (!validation.valid) {
+          console.error(validation.error);
+          return;
+        }
+        // Use the first selected panel as the primary panel
+        const sorted = [...selectedPanels].sort((a, b) => {
+          const na = parseInt(a.split('-')[1]);
+          const nb = parseInt(b.split('-')[1]);
+          return na - nb;
+        });
+        const primary = sorted[0];
+        setMergedGroups((prev) => ({
+          ...prev,
+          [primary]: { panels: sorted, primary },
+        }));
+        setSelectedPanels([]);
+        setFocusedPanel(primary);
+      } else if (e.key === 'u' && !isTextInputFocused()) {
+        e.preventDefault();
+        const group = getMergedGroupForPanel(focusedPanel, mergedGroups);
+        if (group) {
+          setMergedGroups((prev) => {
+            const next = { ...prev };
+            delete next[group.primary];
+            return next;
+          });
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [selectedPanels, panelCount, mergedGroups, focusedPanel, setFocusedPanel, setSelectedPanels, setMergedGroups]);
 
   useEffect(() => {
     const focusedPanelNumber = Number(focusedPanel.split('-')[1]);

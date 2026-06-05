@@ -18,6 +18,7 @@
 - [Configuration](#configuration)
 - [Development](#development)
 - [Project Structure](#project-structure)
+- [Documentation](#documentation)
 
 ---
 
@@ -41,7 +42,7 @@ BLM Terminal is a full-stack trading dashboard built for NSE India. The frontend
 | **Deals** | NSE bulk/block deals and insider trade history via screener.in |
 | **News** | MoneyControl company and global news, with AI-powered summaries |
 | **Morningstar** | Fair value estimates from Morningstar India, synced nightly |
-| **MCP server** | FastAPI backend also exposes all 29 tools as an MCP server (streamable HTTP at `/api/mcp`) for AI assistant integration |
+| **MCP server** | FastAPI backend also exposes all 37 tools as an MCP server (streamable HTTP at `/api/mcp`) for AI assistant integration |
 | **Security** | All broker credentials stay server-side; never exposed to the browser |
 
 ---
@@ -188,7 +189,9 @@ src/
 │   ├── widgets/              # ChartWidget, OrderWidget, PosWidget, WatchWidget, …
 │   └── …                     # CommandBar, GridSystem, LiveTicker, Panel, ErrorBoundary
 ├── lib/                      # Shared utilities and singletons
-│   ├── socket.ts             # Native WebSocket singleton (wsService)
+│   ├── socket.ts             # (not used — replaced by marketWs.ts and newsSocket.ts)
+│   ├── marketWs.ts           # Native WebSocket singleton for market ticks (wsService)
+│   ├── newsSocket.ts         # Native WebSocket singleton for live news feed
 │   ├── cache.ts              # In-memory TTL cache (Map-backed, fixed-window rate limiter)
 │   └── …                     # openalgo.ts, openalgo-server.ts, prisma.ts, logger.ts
 └── store/
@@ -210,7 +213,7 @@ prisma/
                               # (watchlist & notifications live in the Python backend DB)
 blm-mcp-bundle/              # Claude Desktop MCP plugin
 ├── server/index.js           # Node.js proxy (stdio → HTTP)
-├── manifest.json             # Plugin manifest with 29 tools
+├── manifest.json             # Plugin manifest with 37 tools
 ├── build.js                  # Cross-platform build script
 └── README.md                # Usage instructions
 ```
@@ -219,7 +222,7 @@ blm-mcp-bundle/              # Claude Desktop MCP plugin
 
 ## Claude Desktop Integration
 
-BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 29 backend tools directly to Claude. This allows Claude to query NSE market data, screener.in fundamentals, watchlists, news, and Morningstar fair values without needing the Next.js frontend.
+BLM Terminal includes a **Claude Desktop MCP plugin** that exposes all 37 backend tools directly to Claude. This allows Claude to query NSE market data, optimize portfolios, save watchlists, and access screener.in fundamentals, news, and Morningstar fair values without needing the Next.js frontend.
 
 ### Quick Start
 
@@ -238,3 +241,44 @@ PYTHON_BACKEND_URL=http://192.168.1.100:4455 node build.js
 This creates `blm-mcp-proxy.mcpb`. Install it in Claude Desktop via **Developer → Extensions → Install Extension**.
 
 See [`blm-mcp-bundle/README.md`](blm-mcp-bundle/README.md) for full documentation.
+
+---
+
+## Documentation
+
+```
+docs/
+├── reference/                    # Living architecture and API reference
+│   ├── BACKEND_PERFORMANCE_ANALYSIS.md   # Performance analysis and optimization notes
+│   ├── backend/
+│   │   ├── orchestrator.md               # Background task orchestrator architecture
+│   │   ├── coverage.md                   # MCP tool coverage and gaps
+│   │   ├── API_RESPONSES.md              # API response shape samples
+│   │   ├── MARKET_CATEGORIES_API.md      # Market categories endpoint reference
+│   │   ├── ticker_api_implementation_guide.md
+│   │   ├── ticker_insights_ideas.md      # Roadmap: ticker warehouse v2 ideas
+│   │   └── ai_summarizer_plan.md         # Local LLM summarizer (not yet implemented)
+│   └── widgets/
+│       ├── news.md                       # NewsWidget NLP enrichment and UI
+│       └── movers.md                     # MoversWidget data sources and behavior
+├── guides/
+│   └── screener-integration.md           # screener.in cookie auth setup
+├── archive/                      # Completed plans — historical reference only
+│   ├── BuildMemory.md
+│   ├── FeatureExpansionHandoff.md
+│   ├── FeatureExpansionPlan.md
+│   ├── notification-feature-plan.md
+│   ├── multi-source-news-{PLAN,MEMORY,CONTEXT,IMPLEMENTATION}.md
+│   ├── morningstar-fair-value-plan.md
+│   ├── jobs-table-plan.md
+│   ├── background-task-offload-plan.md
+│   └── live-charting-{PLAN,MEMORY,CONTEXT,PLAN_INTRADAY_INDICATORS}.md
+plans/                            # In-progress feature planning
+└── 2026-04-24-ui-test-harness-v1.md      # Phases 1–2 done; Phase 3+ pending
+```
+
+Other docs:
+- [`AGENTS.md`](AGENTS.md) — coding agent guidelines
+- [`backend/README.md`](backend/README.md) — Python backend setup
+- [`backend/MCP_INTEGRATION.md`](backend/MCP_INTEGRATION.md) — MCP server integration details
+- [`blm-mcp-bundle/README.md`](blm-mcp-bundle/README.md) — Claude Desktop MCP plugin

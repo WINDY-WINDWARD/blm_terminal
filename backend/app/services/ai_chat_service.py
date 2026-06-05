@@ -42,6 +42,84 @@ AVAILABLE_MODELS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Analyst persona system prompts
+# ---------------------------------------------------------------------------
+
+PERSONA_SYSTEM_PROMPTS: dict[str, str] = {
+    "value": """You are a disciplined value investor analyst in the tradition of Benjamin Graham and Warren Buffett, specialising in NSE-listed Indian equities.
+
+Your analysis framework:
+1. QUALITY CHECK: Assess ROCE (>15% is good), ROE (>15% is good), Debt-to-Equity (<1 is preferred), operating cash flow vs net profit consistency. Use screener_company and get_symbol_data tools.
+2. MOAT ASSESSMENT: Does the company have pricing power, switching costs, network effects, or cost advantages? Use sector/industry context from list_sectors and get_industry_stocks.
+3. INTRINSIC VALUE: Calculate Graham Number (√(22.5 × EPS × Book Value)). Compare to current price. Assess margin of safety.
+4. MANAGEMENT: Check promoter holding %, pledge %, insider transactions via screener_trades.
+5. GROWTH CONTEXT: 5-year revenue and profit CAGR, Piotroski F-Score.
+6. RED FLAGS: Declining ROCE, rising debt, promoter pledging >20%, frequent equity dilution, poor cash conversion.
+7. PORTFOLIO CONSTRUCTION: When asked to build a value portfolio, select 8–15 stocks with strong quality scores (ROCE >15%, ROE >15%, D/E <1), then use `optimize_portfolio(objective='max_sharpe')` to find the optimal weight distribution. Save the result with `create_watchlist` and `bulk_replace_watchlist`.
+
+Always cite the specific data you retrieved. State your conclusion: BUY / HOLD / AVOID with clear reasoning. Be intellectually honest — if data is insufficient, say so. Do not confuse activity with productivity.""",
+
+    "earnings": """You are a forensic earnings analyst specialising in NSE-listed Indian companies.
+
+Your analysis framework:
+1. HEADLINE NUMBERS: Revenue QoQ and YoY growth, Net Profit QoQ and YoY growth, EPS trend. Use screener_company for quarterly data and get_corporate_filings for detailed filings.
+2. QUALITY OF EARNINGS: Is profit growth driven by operating leverage or one-time items? Check other income vs operating profit ratio. Use get_company_news to check for exceptional items.
+3. MARGIN ANALYSIS: Gross margin, EBITDA margin, PAT margin trends — expanding or contracting?
+4. REVENUE SUSTAINABILITY: Is revenue growth organic or acquisition-driven? Segment-wise breakdown if available.
+5. WORKING CAPITAL: Debtor days, inventory days — are they rising (bad sign)?
+6. GUIDANCE / EXPECTATIONS: Any management guidance in recent news? Use get_company_news for analyst commentary.
+7. EARNINGS SURPRISE: Compare actual vs street estimates if available.
+
+Be specific about which quarters you are comparing. Flag any accounting concerns. State whether the earnings trend is IMPROVING / STABLE / DETERIORATING.""",
+
+    "fno": """You are an experienced F&O (Futures & Options) derivatives analyst for NSE Indian markets.
+
+Your analysis framework:
+1. TREND ASSESSMENT: Is the stock in an uptrend, downtrend, or range? Use get_change_ranges for 1W/1M/3M/6M/1Y returns and get_symbol_data for 52-week high/low context.
+2. VOLUME & MOMENTUM: Use get_volume_gainers and check if the stock shows unusual volume. Use get_top_gainers/get_top_losers for intraday momentum context.
+3. OPTIONS STRATEGY RECOMMENDATION based on your view:
+   - Bullish + low volatility expectation: Bull Call Spread or naked Call Buy
+   - Bearish + high volatility expectation: Bear Put Spread or Put Buy
+   - Neutral + range-bound: Short Strangle or Iron Condor
+   - Directional with hedge: Covered Call or Protective Put
+4. RISK MANAGEMENT: Always state maximum loss, maximum profit, breakeven points for the strategy.
+5. EXPIRY SELECTION: Weekly vs monthly expiry considerations based on time horizon.
+6. POSITION SIZING: Suggest allocation as % of capital, not absolute amounts.
+
+Note: You do not have live IV or options chain data. Base recommendations on price trend and momentum. Always remind the user to verify current option premiums before trading. F&O trading involves substantial risk of loss.""",
+
+    "macro": """You are a macro and sector rotation analyst focused on Indian equity markets.
+
+Your analysis framework:
+1. MARKET BREADTH: Use list_sectors to check advance/decline ratios, sentiment labels, and earnings YoY% across all sectors. Identify which sectors are leading vs lagging.
+2. SECTOR MOMENTUM: Use get_sector_stocks for the top 2-3 sectors showing bullish sentiment. Check price change and market cap trends.
+3. INDIA MACRO CONTEXT from get_global_news:
+   - RBI monetary policy stance (hawkish/dovish) and repo rate direction
+   - INR/USD movement and FII flow implications
+   - Crude oil prices (high crude = negative for India as a net importer)
+   - US Fed policy (affects FII flows into emerging markets)
+   - India GDP and IIP data
+4. SECTOR ROTATION THESIS: Which sectors benefit from the current macro environment?
+   - Rate cuts → Banking, Real Estate, Rate-sensitive sectors
+   - High crude → Oil & Gas producers gain, Aviation/Paint lose
+   - Weak INR → IT exporters gain, importers lose
+   - Strong capex cycle → Capital Goods, Infrastructure, Cement
+5. POSITIONING: State which 2-3 sectors to overweight and which to underweight with clear macro rationale.
+6. PORTFOLIO CONSTRUCTION: Translate sector rotation views into concrete portfolios. Use `list_sectors` and `get_sector_stocks` to identify top-ranked stocks per sector, then use `optimize_portfolio(objective='risk_parity')` for a balanced sector-rotated portfolio. Save with `create_watchlist` and `bulk_replace_watchlist`.
+
+Use get_global_news with threat_level filters to identify macro risks. Be explicit about the difference between short-term (1-3 months) and medium-term (6-12 months) views.""",
+}
+
+
+def _get_system_prompt(symbol: str, exchange: str, persona: str | None) -> str:
+    """Build the system prompt, optionally prepending a persona definition."""
+    if persona and persona in PERSONA_SYSTEM_PROMPTS:
+        return PERSONA_SYSTEM_PROMPTS[persona] + f"\n\nCurrent symbol context: {symbol} on {exchange}."
+    # No persona — fall back to the rich default system prompt
+    return _build_system_prompt(symbol, exchange)
+
+
+# ---------------------------------------------------------------------------
 # Tool description registry — sourced from mcp_server.py docstrings
 # ---------------------------------------------------------------------------
 # This ensures the AI agent's tool descriptions stay in sync with the MCP
@@ -233,6 +311,84 @@ BLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "run_tql_screener",
+            "description": (
+                "Run a custom TQL (Ticker Query Language) screener query against all NSE stocks "
+                "and return matching symbols with their data. Use this to find stocks meeting "
+                "specific technical or fundamental criteria.\n\n"
+                "SUPPORTED FIELDS:\n"
+                "  Technical indicators (support interval prefix like '1h:RSI', 'W:ATR'):\n"
+                "    RSI            — Relative Strength Index (0–100)\n"
+                "    ATR            — Average True Range\n"
+                "    MACD           — MACD line value\n"
+                "    MACDSignal     — MACD signal line value\n"
+                "    MACDHist       — MACD histogram value\n"
+                "    BBWidth        — Bollinger Band width\n"
+                "    BBSqueeze      — Boolean: true when bands are squeezed\n"
+                "    HV20           — 20-day historical volatility\n"
+                "    HV60           — 60-day historical volatility\n"
+                "    Sharpe60       — 60-day Sharpe ratio\n"
+                "    Sharpe126      — 126-day Sharpe ratio\n"
+                "  Price & volume:\n"
+                "    Change         — Intraday % change\n"
+                "    Volume         — Today's trading volume\n"
+                "    Close          — Last close price\n"
+                "    DataPoints     — Number of data points available\n"
+                "  Fundamentals:\n"
+                "    PE             — Price-to-Earnings ratio\n"
+                "    MomentumScore  — Composite momentum score\n"
+                "  Returns (period-based):\n"
+                "    Return1w, Return1m, Return3m, Return6m, Return1y\n"
+                "  52-week position:\n"
+                "    From52wHigh    — % below 52-week high (negative = below)\n"
+                "    From52wLow     — % above 52-week low\n"
+                "  Classification:\n"
+                "    Sector         — e.g. 'Banks', 'IT', 'Pharma' (use = or IN)\n"
+                "    Industry       — e.g. 'Bank - Private', 'IT Services' (use = or IN)\n"
+                "    Symbol         — NSE symbol string\n\n"
+                "INTERVAL PREFIXES (for technical indicators only):\n"
+                "  No prefix → uses default_interval (default: 1d)\n"
+                "  1h:RSI, W:ATR, M:MACD, 1d:BBWidth\n"
+                "  Valid intervals: 1d, 1h, W, M\n\n"
+                "OPERATORS: >, <, >=, <=, =, !=, IN (...), AND, OR, NOT, ( )\n\n"
+                "EXAMPLES:\n"
+                '  RSI > 60 AND Sector = "Banks"\n'
+                '  PE < 20 AND Return1y > 20 AND MomentumScore > 50\n'
+                '  1h:RSI < 30 AND Volume > 500000\n'
+                '  From52wHigh > -10 AND MomentumScore > 70\n'
+                '  Sector IN ("Banks", "Finance") AND RSI > 50 AND PE < 25'
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tql": {
+                        "type": "string",
+                        "description": 'TQL query expression, e.g. RSI > 60 AND Sector = "Banks" AND PE < 20',
+                    },
+                    "default_interval": {
+                        "type": "string",
+                        "description": "Default interval for un-prefixed indicator fields: 1d (default), 1h, W, M",
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "Field name to sort results by (default: symbol)",
+                    },
+                    "order": {
+                        "type": "string",
+                        "description": "Sort direction: asc (default) or desc",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return, 1–200 (default: 50)",
+                    },
+                },
+                "required": ["tql"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_corporate_filings",
             "description": _desc("get_corporate_filings"),
             "parameters": {
@@ -307,6 +463,106 @@ BLM_TOOLS: list[dict[str, Any]] = [
                     "watchlist_id": {"type": "integer", "description": "Numeric watchlist ID from list_watchlists()."},
                 },
                 "required": ["watchlist_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_watchlist_symbols",
+            "description": "Fetch distinct symbols from the default watchlist as a flat list.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_watchlist_item",
+            "description": "Delete a watchlist item from the default watchlist by its numeric ID. Returns {ok: true} on success.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer", "description": "Numeric ID of the watchlist item to remove."},
+                },
+                "required": ["item_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "optimize_portfolio",
+            "description": "Run portfolio optimization on a list of NSE symbols. Supports mean-variance (max_sharpe, min_volatility) and hierarchical risk parity (risk_parity). Returns weights, expected return/volatility/Sharpe, correlation matrix, and per-symbol stats.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of NSE ticker symbols (no .NS suffix). Requires 3–30 symbols.",
+                    },
+                    "period": {
+                        "type": "string",
+                        "enum": ["1y", "2y", "3y"],
+                        "description": "Lookback period: '1y', '2y' (default), or '3y'.",
+                    },
+                    "objective": {
+                        "type": "string",
+                        "enum": ["max_sharpe", "min_volatility", "risk_parity"],
+                        "description": "Optimization goal: 'max_sharpe' (default), 'min_volatility', or 'risk_parity'.",
+                    },
+                    "risk_free_rate": {
+                        "type": "number",
+                        "description": "Annual risk-free rate as decimal (default 0.065 ≈ RBI repo rate).",
+                    },
+                },
+                "required": ["symbols"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_watchlist",
+            "description": "Create a new named watchlist. Returns the created watchlist with its id and creation timestamp.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Watchlist name — alphanumeric and hyphens only (e.g. 'Tech-Buys', 'Portfolio-2024')."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_watchlist_item",
+            "description": "Add a single symbol/exchange pair to a named watchlist. Idempotent — returns the existing row if already present.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "watchlist_id": {"type": "integer", "description": "Numeric watchlist ID — use list_watchlists() to enumerate valid IDs."},
+                    "symbol": {"type": "string", "description": "NSE ticker symbol (e.g. 'RELIANCE', 'TCS')."},
+                    "exchange": {"type": "string", "description": "Exchange (default 'NSE')."},
+                },
+                "required": ["watchlist_id", "symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bulk_replace_watchlist",
+            "description": "Atomically replace all items in a watchlist with a new set of symbols. Use this to save an optimized portfolio — it deletes all existing items and inserts the new set in a single transaction.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "watchlist_id": {"type": "integer", "description": "Numeric watchlist ID to overwrite."},
+                    "symbols": {"type": "array", "items": {"type": "string"}, "description": "List of NSE ticker symbols to set as the new portfolio."},
+                    "exchange": {"type": "string", "description": "Exchange for all symbols (default 'NSE')."},
+                },
+                "required": ["watchlist_id", "symbols"],
             },
         },
     },
@@ -465,6 +721,9 @@ BLM_TOOLS_ANTHROPIC: list[dict[str, Any]] = [
 
 async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
     from app.mcp_server import (
+        add_watchlist_item,
+        bulk_replace_watchlist,
+        create_watchlist,
         get_52week_high_stocks,
         get_52week_low_stocks,
         get_block_deals,
@@ -485,12 +744,16 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         get_top_losers,
         get_volume_gainers,
         get_watchlist_items,
+        get_watchlist_symbols,
         health_check,
         list_industries,
         list_sectors,
         list_stock_universe,
         list_watchlist,
         list_watchlists,
+        optimize_portfolio,
+        remove_watchlist_item,
+        run_tql_screener,
         screener_company,
         screener_search,
         screener_trades,
@@ -498,6 +761,10 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
     )
 
     dispatch: dict[str, Any] = {
+        "add_watchlist_item": add_watchlist_item,
+        "bulk_replace_watchlist": bulk_replace_watchlist,
+        "create_watchlist": create_watchlist,
+        "get_watchlist_symbols": get_watchlist_symbols,
         "health_check": health_check,
         "get_top_gainers": get_top_gainers,
         "get_top_losers": get_top_losers,
@@ -512,6 +779,7 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "screener_search": screener_search,
         "screener_company": screener_company,
         "screener_trades": screener_trades,
+        "run_tql_screener": run_tql_screener,
         "get_corporate_filings": get_corporate_filings,
         "list_stock_universe": list_stock_universe,
         "get_stock_universe": get_stock_universe,
@@ -528,6 +796,8 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "list_sectors": list_sectors,
         "get_industry_stocks": get_industry_stocks,
         "get_sector_stocks": get_sector_stocks,
+        "optimize_portfolio": optimize_portfolio,
+        "remove_watchlist_item": remove_watchlist_item,
     }
 
     fn = dispatch.get(name)
@@ -573,9 +843,11 @@ You help traders and investors cut through large volumes of market data to ident
 - **Price & momentum**: LTP, 52-week range, multi-timeframe returns, volume surges, breakout signals
 - **Deal flow**: Today's bulk/block deals, historical insider trades, promoter activity patterns
 - **Market scanning**: Top gainers/losers, 52-week highs/lows, volume movers, RSI/MACD signals
+- **Custom screening**: Use `run_tql_screener` to find stocks by any combination of technical and fundamental criteria — e.g. `RSI > 60 AND Sector = "Banks" AND PE < 20`. Supports RSI, ATR, MACD, BBWidth, BBSqueeze, HV20, HV60, Close, Volume, Change, PE, MomentumScore, Return1w/1m/3m/6m/1y, From52wHigh, From52wLow, Sector, Industry. Prefix indicators with an interval for non-daily timeframes: `1h:RSI`, `W:ATR`, `M:MACD`.
 - **Sector rotation**: Industry and sector PE, advance/decline, sentiment, top stocks by market cap
 - **News & catalysts**: Company-specific news, earnings announcements, macro events affecting the market
 - **Watchlist analysis**: Review held positions, flag signals across watched stocks
+- **Portfolio optimization**: Build and optimize portfolios using mean-variance (max Sharpe, min volatility) or hierarchical risk parity. Fetch a watchlist's symbols, run `optimize_portfolio`, interpret the weights and risk metrics, and save the result as a new or existing watchlist using `create_watchlist` and `bulk_replace_watchlist`.
 
 ## Output Format
 - Lead with the key insight or number — not a preamble.
@@ -615,10 +887,10 @@ async def _run_tools_parallel(
             content_str = json.dumps({"error": "Duplicate call — data already retrieved. Use it directly."})
         else:
             try:
-                result = await asyncio.wait_for(_execute_tool(tool_name, args), timeout=30.0)
+                result = await asyncio.wait_for(_execute_tool(tool_name, args), timeout=120.0)
                 content_str = _truncate_tool_result(result)
             except asyncio.TimeoutError:
-                content_str = json.dumps({"error": f"{tool_name} timed out after 30s"})
+                content_str = json.dumps({"error": f"{tool_name} timed out after 120s"})
             except Exception as exc:
                 logger.warning("Tool %s failed: %s", tool_name, exc)
                 content_str = json.dumps({"error": str(exc)})
@@ -935,6 +1207,7 @@ async def run_chat_agent(
     symbol: str,
     exchange: str,
     model: str = "kimi-k2.5",
+    persona: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Run the agentic loop and yield SSE-formatted JSON strings.
 
@@ -951,7 +1224,7 @@ async def run_chat_agent(
         yield json.dumps({"type": "done"})
         return
 
-    system_prompt = _build_system_prompt(symbol, exchange)
+    system_prompt = _get_system_prompt(symbol, exchange, persona)
 
     if model in ANTHROPIC_MODELS:
         # Anthropic format: system prompt is a top-level field, not a message

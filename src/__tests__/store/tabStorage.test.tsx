@@ -50,7 +50,11 @@ describe('tab storage isolation', () => {
     const sessionAtoms = [
       { atom: activePanelsAtom, key: 'terminal.activePanels', value: { 'panel-1': 'CHART' } },
       { atom: panelCountAtom, key: 'terminal.panelCount', value: 6 },
-      { atom: panelSizesAtom, key: 'terminal.panelSizes', value: { rowSizes: [50, 50], colSizes: [[50, 50]] } },
+      {
+        atom: panelSizesAtom,
+        key: 'terminal.panelSizes',
+        value: { rowSizes: [50, 50], colSizes: [[50, 50]], mergedColSizes: [50, 50] },
+      },
       { atom: focusedPanelAtom, key: 'terminal.focusedPanel', value: 'panel-2' },
       { atom: activeSymbolAtom, key: 'terminal.activeSymbol', value: 'INFY' },
       { atom: activeExchangeAtom, key: 'terminal.activeExchange', value: 'BSE' },

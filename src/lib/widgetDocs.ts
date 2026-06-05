@@ -303,21 +303,27 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'Two lists side-by-side: top gainers (highest % up) and top losers (highest % down) for the current session. Refreshes every 30 seconds.',
+        body: 'Two lists: top gainers (highest % up) and top losers (highest % down) for the current session. Refreshes every 60 seconds. Filter by market category (NIFTY 50, Bank NIFTY, F&O, etc.).',
       },
       {
         heading: 'Columns',
         items: [
           { name: 'Symbol', desc: 'NSE ticker.' },
-          { name: 'LTP', desc: 'Last traded price.' },
+          { name: 'CLOSE', desc: 'Last traded price (LTP).' },
           { name: 'CHG%', desc: 'Intraday % change from previous close.' },
-          { name: '1W / 1M / 3M', desc: 'Multi-timeframe return context (configurable).' },
+          { name: 'OPEN / HIGH / LOW', desc: 'Session open, intraday high, and intraday low prices.' },
+          { name: 'VOL', desc: 'Total traded quantity for the session.' },
+          { name: 'TRNVR', desc: 'Total turnover in ₹ Crores.' },
+          { name: 'CA', desc: 'Corporate Action ex-date (dividend, bonus, split, etc.). Hover for the purpose.' },
+          { name: '1W% / 1M% / 3M% / 6M% / 1Y% / 2Y% / 3Y% / 5Y%', desc: 'Price return over the stated period (from market WebSocket / NSE data).' },
+          { name: '52W HIGH / 52W LOW', desc: '52-week high and low prices (fetched via market WebSocket).' },
         ] as DocField[],
       },
       {
         heading: 'How to use',
         items: [
           'Click any symbol to set it as the global active symbol.',
+          'Toggle columns in SETTINGS → Movers Columns.',
           'Strong movers early in the session often sustain momentum; late-session movers may reverse.',
           'Cross-reference with BREAKOUTS to see if movers are also hitting 52-week levels.',
         ],
@@ -387,11 +393,36 @@ const DOCS_MAP: WidgetDoc[] = [
         ] as DocField[],
       },
       {
+        heading: 'Calculated Ratios',
+        items: [
+          { name: 'Piotroski Score', desc: '9-point quality score. ≥7 = strong, 4–6 = average, <4 = weak.' },
+          { name: 'Peter Lynch FV', desc: 'Fair value from EPS growth × EPS. Compare to current price.' },
+          { name: 'Peter Lynch FV Ratio', desc: '(EPS Growth + Div Yield) / P/E. >1.0 suggests undervaluation.' },
+          { name: 'MS Fair Value', desc: 'Morningstar fair value estimate when available.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Valuation Tab',
+        items: [
+          { name: 'Graham Number', desc: '√(22.5 × EPS × Book Value). Conservative floor price from screener.in or computed.' },
+          { name: 'DCF (10Y)', desc: 'Discounted cash flow with 2-stage growth. Requires FCF; auto-growth from revenue/earnings growth.' },
+          { name: 'DDM', desc: 'Dividend Discount Model. Only shown when dividend > 0.' },
+          { name: 'EV/EBITDA', desc: 'Enterprise value at sector median multiple. Uses screener EBITDA when available.' },
+          { name: 'PEG Fair Value', desc: 'Forward EPS × earnings growth rate (Lynch rule).' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Valuation Controls',
+        body: 'Adjust WACC (10–15%) and terminal growth (3–7%) via dropdowns. Changing them triggers a re-fetch. Signal coloring: UNDERVALUED (>+15%) green, FAIR (±15%) yellow, OVERVALUED (<-15%) red.',
+      },
+      {
         heading: 'How to use',
         items: [
           'Compare P/E and ROCE against sector peers for context.',
           'Declining margins QoQ despite rising revenue can be an early warning.',
           'Screener.in data has a ~1-day lag; not suitable for intraday decisions.',
+          'Valuation models use screener.in data first; yfinance fills gaps for FCF, forward EPS, and shares outstanding.',
+          'Not all models compute for every stock — DDM requires dividends, DCF requires FCF.',
         ],
       },
     ],
@@ -739,6 +770,15 @@ const DOCS_MAP: WidgetDoc[] = [
         ] as DocField[],
       },
       {
+        heading: 'Research Agent Personas',
+        items: [
+          { name: 'Value Analyst', desc: 'Graham/Buffett framework — margin of safety, moat assessment, Graham Number, ROCE/ROE quality, red flags.' },
+          { name: 'Earnings Analyst', desc: 'QoQ/YoY earnings forensics — revenue/profit trends, EPS trajectory, margin analysis, earnings quality.' },
+          { name: 'F&O Analyst', desc: 'Options strategy & derivatives — trend assessment, IV context, CE/PE bias, hedging suggestions, risk management.' },
+          { name: 'Macro Analyst', desc: 'Sector rotation & India macro — market breadth, FII/DII flows, RBI policy, sector positioning, macro tailwinds/headwinds.' },
+        ] as DocField[],
+      },
+      {
         heading: 'Models',
         items: [
           { name: 'M2.5 Free', desc: 'Zero cost — for development and testing only. Do not use with sensitive data.' },
@@ -755,7 +795,226 @@ const DOCS_MAP: WidgetDoc[] = [
           'Click Stop to cancel a running response.',
           'Tool call badges appear while the AI is fetching data — green check when done.',
           'The AI follows an agentic loop: it can call multiple tools across turns to build a complete answer.',
+          'Select a persona before asking for focused, disciplined analysis on a specific framework.',
           'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
+        ],
+      },
+    ],
+  },
+  // ─── Portfolio Optimizer ───────────────────────────────────────────────────────
+  {
+    command: 'PORTFOLIO',
+    title: 'Portfolio Optimizer',
+    summary:
+      'Modern Portfolio Theory optimizer using PyPortfolioOpt. Select watchlist stocks, choose an objective, and receive optimal allocation weights.',
+    sections: [
+      {
+        heading: 'Overview',
+        body: 'Build a statistically optimal portfolio from your watchlist stocks. The optimizer uses mean-variance optimization (Markowitz) or hierarchical risk parity to find weights that maximise risk-adjusted return.',
+      },
+      {
+        heading: 'Data Source',
+        body: 'Historical prices come from the local ticker_daily warehouse (SQLite DB populated by nightly NSE backfill). If data is missing or insufficient, the optimizer automatically triggers an NSE backfill via nsepython before computing. No external Yahoo Finance calls are made.',
+      },
+      {
+        heading: 'Watchlist Selection',
+        body: 'Choose any watchlist from the dropdown at the top of the left panel. Symbols load dynamically when you switch watchlists. Only one watchlist can be active at a time.',
+      },
+      {
+        heading: 'Objectives',
+        items: [
+          { name: 'Max Sharpe', desc: 'Maximise the Sharpe ratio — best risk-adjusted return.' },
+          { name: 'Min Volatility', desc: 'Minimise portfolio volatility — most conservative allocation.' },
+          { name: 'Risk Parity', desc: 'Equal risk contribution from each asset — HRP algorithm.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Inputs',
+        items: [
+          { name: 'Stocks', desc: 'Select 3–30 symbols from the active watchlist.' },
+          { name: 'Period', desc: 'Historical lookback: 1Y, 2Y, or 3Y of daily prices from the DB.' },
+          { name: 'Risk-free rate', desc: 'Fixed at 6.5% (approx RBI repo rate).' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Outputs',
+        items: [
+          { name: 'Optimal weights', desc: 'Horizontal bar chart showing allocation % per symbol.' },
+          { name: 'Expected return', desc: 'Annualised return of the optimised portfolio.' },
+          { name: 'Expected volatility', desc: 'Annualised standard deviation.' },
+          { name: 'Sharpe ratio', desc: 'Risk-adjusted return metric.' },
+          { name: 'Correlation heatmap', desc: 'Visual grid showing pairwise correlations.' },
+          { name: 'Per-symbol stats', desc: 'Individual annual return, volatility, and Sharpe for each selected stock.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Tips',
+        items: [
+          'Select at least 3 stocks — the optimizer requires a minimum for meaningful diversification.',
+          'Highly correlated stocks (e.g. all PSU banks) may produce extreme weights — this is mathematically correct.',
+          'If max_sharpe fails (no asset exceeds risk-free rate), the optimizer falls back to equal weights.',
+          'Use Risk Parity when you want balanced risk contribution rather than pure return maximisation.',
+          'Results are cached for 15 minutes — click Optimize again to force a recompute.',
+          'Symbols with no price data after backfill appear in the "Failed" list and are excluded from optimization.',
+        ],
+      },
+    ],
+  },
+
+  // ─── SCREENER ────────────────────────────────────────────────────────────────
+  {
+    command: 'SCREENER',
+    title: 'Stock Screener (TQL)',
+    summary: 'Filter the entire NSE universe using Ticker Query Language (TQL). Type a query in the bar and press Enter or Run.',
+    sections: [
+      {
+        heading: 'Ticker Query Language (TQL)',
+        body: 'TQL is a plain-English filter expression. Combine conditions with AND, OR, NOT, and parentheses. Each condition is FIELD OPERATOR VALUE. Use Tab/↑↓ to navigate autocomplete suggestions.',
+      },
+      {
+        heading: 'Operators',
+        items: [
+          { name: '>  <  >=  <=', desc: 'Numeric comparisons. Example: RSI > 60' },
+          { name: '=  !=',        desc: 'Equality / inequality. Works for numbers and strings. Example: Sector = "Banks"' },
+          { name: 'IN (...)',     desc: 'Match any value in a list. Example: Sector IN ("Banks", "IT", "Pharma")' },
+          { name: 'AND',          desc: 'Both conditions must be true.' },
+          { name: 'OR',           desc: 'Either condition must be true.' },
+          { name: 'NOT',          desc: 'Negate a condition. Example: NOT BBSqueeze' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Interval Prefix',
+        body: 'By default, indicator fields use the active interval tab (Daily / 1h / Weekly / Monthly). Override per-field with a prefix: 1h:RSI, W:ATR, M:MACD.',
+        items: [
+          { name: '1d:RSI', desc: 'Daily RSI (same as RSI when Daily tab is active)' },
+          { name: '1h:RSI', desc: 'Hourly RSI' },
+          { name: 'W:ATR',  desc: 'Weekly ATR %' },
+          { name: 'M:MACD', desc: 'Monthly MACD' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Indicator Fields',
+        items: [
+          { name: 'RSI',          desc: 'RSI(14). Oversold < 30, overbought > 70.' },
+          { name: 'ATR',          desc: 'ATR as % of price. Low = compressed, high = volatile.' },
+          { name: 'MACD',         desc: 'MACD line value.' },
+          { name: 'MACDSignal',   desc: 'MACD signal line.' },
+          { name: 'MACDHist',     desc: 'MACD histogram (MACD − Signal).' },
+          { name: 'BBWidth',      desc: 'Bollinger Band width (% of middle band).' },
+          { name: 'BBSqueeze',    desc: 'Boolean — true when bands are in a squeeze.' },
+          { name: 'HV20',         desc: 'Historical volatility over 20 days.' },
+          { name: 'HV60',         desc: 'Historical volatility over 60 days.' },
+          { name: 'Sharpe60',     desc: 'Sharpe ratio over 60 trading days.' },
+          { name: 'Sharpe126',    desc: 'Sharpe ratio over 126 trading days.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Price & Return Fields',
+        items: [
+          { name: 'Change',        desc: 'Today\'s % price change (open → last).' },
+          { name: 'Close',         desc: 'Last traded price.' },
+          { name: 'Volume',        desc: 'Volume ratio: today\'s volume ÷ 20-day average.' },
+          { name: 'Return1w',      desc: '1-week return %.' },
+          { name: 'Return1m',      desc: '1-month return %.' },
+          { name: 'Return3m',      desc: '3-month return %.' },
+          { name: 'Return6m',      desc: '6-month return %.' },
+          { name: 'Return1y',      desc: '1-year return %.' },
+          { name: 'From52wHigh',   desc: '% below the 52-week high (usually negative). Example: From52wHigh > -5 means within 5% of 52w high.' },
+          { name: 'From52wLow',    desc: '% above the 52-week low.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Fundamental & Meta Fields',
+        items: [
+          { name: 'PE',            desc: 'Price-to-earnings ratio.' },
+          { name: 'MomentumScore', desc: 'Composite momentum score (0–100).' },
+          { name: 'Sector',        desc: 'NSE sector string. Use quotes: Sector = "Banks".' },
+          { name: 'Industry',      desc: 'Industry sub-category (partial match).' },
+          { name: 'Symbol',        desc: 'Ticker symbol. Example: Symbol = "RELIANCE".' },
+          { name: 'DataPoints',    desc: 'Number of daily candles available. Use DataPoints > 200 to filter out recently listed stocks.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Example Queries',
+        items: [
+          // Momentum / breakout
+          'RSI > 60 AND Change > 1',
+          'RSI > 60 AND Volume > 2 AND Return1w > 3',
+          'MomentumScore > 80 AND RSI > 55 AND RSI < 75',
+          'MomentumScore > 70 AND Return1m > 10 AND Return3m > 20',
+          'From52wHigh > -5 AND Volume > 2',
+          'From52wHigh > -3 AND MomentumScore > 65',
+          'Return1w > 5 AND Return1m > 10 AND Return3m > 20',
+          'Change > 3 AND Volume > 3',
+          'Change > 5 AND From52wHigh > -10',
+
+          // Oversold / reversal
+          'RSI < 35 AND Volume > 2',
+          'RSI < 30 AND From52wLow < 10',
+          'RSI < 40 AND MACDHist > 0',
+          'RSI < 45 AND MACD > MACDSignal',
+
+          // Sector filters
+          'Sector = "Banks" AND Return1m > 5',
+          'Sector = "Banks" AND RSI > 55 AND RSI < 70',
+          'Sector = "Pharma" AND MomentumScore > 60 AND PE < 30',
+          'Sector IN ("Banks", "IT") AND MomentumScore > 60',
+          'Sector IN ("FMCG", "Consumer Durables") AND Return3m > 15',
+          'Sector = "IT" AND From52wHigh > -10 AND Volume > 1.5',
+          'Sector = "Auto" AND RSI > 55 AND Return1m > 5',
+
+          // Volatility / squeeze setups
+          'BBSqueeze AND ATR < 2',
+          'BBSqueeze AND Volume > 1.5 AND MomentumScore > 50',
+          'NOT BBSqueeze AND BBWidth > 10 AND Volume > 2',
+          'HV20 < 20 AND MomentumScore > 60',
+          'HV20 < 25 AND Sharpe60 > 1',
+          'ATR < 2 AND RSI > 55 AND Volume > 1.5',
+
+          // Multi-timeframe
+          '1h:RSI > 65 AND W:RSI > 55',
+          '1h:RSI > 60 AND 1d:RSI > 55 AND W:RSI > 50',
+          'W:MACD > 0 AND 1d:RSI > 55',
+          'W:RSI > 60 AND M:RSI > 55 AND Return3m > 15',
+          '1h:BBSqueeze AND 1d:RSI > 50',
+
+          // Value / fundamentals
+          'PE < 15 AND Return1y > 20',
+          'PE < 20 AND MomentumScore > 60',
+          '(Return1m > 10 OR Return3m > 20) AND PE < 30',
+          'PE > 0 AND PE < 12 AND Sector = "Banks"',
+          'Sharpe126 > 1 AND PE < 25 AND Return1y > 15',
+
+          // Quality / risk-adjusted
+          'Sharpe60 > 1 AND HV20 < 25',
+          'Sharpe60 > 1.5 AND MomentumScore > 65',
+          'Sharpe126 > 1 AND Return1y > 20 AND PE < 30',
+          'HV60 < 20 AND Return1y > 15 AND DataPoints > 200',
+
+          // Universe hygiene
+          'DataPoints > 200 AND MomentumScore > 70',
+          'DataPoints > 240 AND RSI > 60 AND Volume > 1.5',
+
+          // Complex / combined
+          'RSI > 55 AND MACD > 0 AND Volume > 1.5 AND Return1m > 5',
+          '(Sector = "Banks" OR Sector = "IT") AND RSI > 60 AND Volume > 2',
+          'NOT BBSqueeze AND RSI > 55 AND Volume > 2 AND Return1m > 5',
+          'BBSqueeze AND HV20 < 20 AND MomentumScore > 55',
+          'From52wHigh > -5 AND Volume > 3 AND RSI > 50 AND RSI < 70',
+          'Change > 2 AND Volume > 2 AND MomentumScore > 65 AND DataPoints > 200',
+          '(Return1w > 3 AND Return1m > 8) AND RSI < 70 AND PE < 40',
+          'Sector = "Pharma" AND From52wHigh > -15 AND Volume > 1.5 AND RSI > 50',
+        ],
+      },
+      {
+        heading: 'Tips',
+        items: [
+          'Press Tab to accept the highlighted autocomplete suggestion.',
+          'Press Enter or click Run to execute the query.',
+          'The active interval tab sets the default for un-prefixed indicator fields — switch tabs to rerun on a different timeframe.',
+          'Results are sorted by clicking any column header. Sorting happens client-side on the returned page.',
+          'Click any row to set that symbol as the active chart symbol.',
+          'The screener cache refreshes every 5 minutes — click Refresh to force an update.',
         ],
       },
     ],

@@ -13,6 +13,8 @@ import {
   activeWatchlistIdAtom,
   panelCountAtom,
   panelSizesAtom,
+  selectedPanelsAtom,
+  mergedGroupsAtom,
   type Watchlist,
   type PanelCount,
 } from '@/store/terminalStore';
@@ -165,6 +167,8 @@ export function SettingsWidget() {
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
   const [, setPanelSizes] = useAtom(panelSizesAtom);
+  const [, setSelectedPanels] = useAtom(selectedPanelsAtom);
+  const [, setMergedGroups] = useAtom(mergedGroupsAtom);
   const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
   const [appVersion, setAppVersion] = useState<string>('');
 
@@ -241,6 +245,8 @@ export function SettingsWidget() {
   const handlePanelCountChange = (count: PanelCount) => {
     setPanelCount(count);
     setPanelSizes(null);
+    setSelectedPanels([]);
+    setMergedGroups({});
   };
 
   const handleNotifConfigChange = (key: NotifConfigKey, value: string) => {
@@ -303,7 +309,7 @@ export function SettingsWidget() {
           })}
         </div>
         <div className="text-white text-[10px]">
-          Layout changes reset panel sizes.
+          Layout changes reset panel sizes and merges.
         </div>
       </div>
 
@@ -319,14 +325,11 @@ export function SettingsWidget() {
             }`}
           />
           <span className={wsConnected ? 'text-terminal-green' : 'text-terminal-red'}>
-            WebSocket: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
+            Market WS: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
           </span>
         </div>
         <div className="text-white text-[10px]">
           OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
-        </div>
-        <div className="text-white text-[10px]">
-          WebSocket: {process.env.NEXT_PUBLIC_OPENALGO_WS_URL ?? 'ws://localhost:8765'}
         </div>
       </div>
 
@@ -440,7 +443,7 @@ export function SettingsWidget() {
       {/* Tips */}
       <div className="flex flex-col gap-0.5 mt-auto">
         <div className="text-white text-[10px] border-t border-terminal-gray pt-2">
-          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS
+          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS · PORTFOLIO
         </div>
         <div className="text-white text-[10px]">
           Press / or Escape to focus command bar

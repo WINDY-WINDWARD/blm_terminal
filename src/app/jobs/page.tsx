@@ -41,6 +41,16 @@ interface SymbolErrors {
   unknown: ErrorCategory;
 }
 
+interface IntradayIntervalStatus {
+  total_rows: number;
+  watchlist_covered: number;
+  watchlist_current: number;
+  symbols_with_indicators: number;
+  latest_timestamp: string | null;
+  universe_covered: number;
+  universe_symbols_with_indicators: number;
+}
+
 interface TickerStatus {
   total_rows: number;
   symbols_covered: number;
@@ -56,6 +66,7 @@ interface TickerStatus {
   watchlist_symbols_total: number;
   watchlist_symbols_current: number;
   days_behind_breakdown: Record<string, number>;
+  intraday_stats: Record<string, IntradayIntervalStatus>;
 }
 
 function formatDate(dateStr: string | null): string {
@@ -70,8 +81,14 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-function formatCron(expr: string | null | undefined): string {
-  if (!expr) return '—';
+const orchestratorScheduleLabels: Record<string, string> = {
+  'job.ticker_intraday_hourly_stale_check': 'Startup + nightly pipeline',
+  'job.ticker_weekly_monthly_update': 'Nightly pipeline (23:00 IST)',
+  'job.ticker_weekly_monthly_indicators': 'Nightly pipeline (23:00 IST)',
+};
+
+function formatCron(expr: string | null | undefined, jobKey: string): string {
+  if (!expr) return orchestratorScheduleLabels[jobKey] ?? '—';
   const map: Record<string, string> = {
     '@startup':          'Run once (startup)',
     '0 0 * * *':         'Daily midnight',
@@ -89,9 +106,17 @@ function formatCron(expr: string | null | undefined): string {
   return map[expr] ?? expr;
 }
 
-function formatNextTrigger(dateStr: string | null, isManualOnly: boolean): string {
+function formatNextTrigger(dateStr: string | null, isManualOnly: boolean, jobKey: string): string {
   if (isManualOnly) return 'Manual only';
-  if (!dateStr) return '—';
+  if (!dateStr) {
+    if (jobKey === 'job.ticker_intraday_hourly_stale_check') {
+      return 'At startup and 23:00 IST nightly';
+    }
+    if (jobKey === 'job.ticker_weekly_monthly_update' || jobKey === 'job.ticker_weekly_monthly_indicators') {
+      return 'Startup + nightly pipeline at 23:00 IST';
+    }
+    return '—';
+  }
   const date = new Date(dateStr);
   const now = Date.now();
   const diffMs = date.getTime() - now;
@@ -318,7 +343,7 @@ export default function JobsPage() {
 
   return (
     <div className="h-screen overflow-y-auto bg-terminal-bg text-white font-mono p-4">
-      <div className="max-w-6xl mx-auto">
+      <div className="w-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-4 border-b border-terminal-gray pb-2">
           <div>
@@ -405,7 +430,7 @@ export default function JobsPage() {
                       </td>
                       <td className="py-2 px-2 text-white/70">{job.category || '—'}</td>
                       <td className="py-2 px-2 text-white/60 text-[10px] whitespace-nowrap">
-                        {formatCron(job.cron_expression)}
+                        {formatCron(job.cron_expression, job.job_key)}
                       </td>
                       <td className="py-2 px-2">
                         <StatusBadge status={job.status} />
@@ -434,7 +459,7 @@ export default function JobsPage() {
                       </td>
                       <td className="py-2 px-2 text-white/70">{formatDate(job.last_triggered_at)}</td>
                       <td className="py-2 px-2 text-white/70">{formatDate(job.last_completed_at)}</td>
-                      <td className="py-2 px-2 text-white/70">{formatNextTrigger(job.next_trigger_at, job.cron_expression === '@startup')}</td>
+                      <td className="py-2 px-2 text-white/70">{formatNextTrigger(job.next_trigger_at, job.cron_expression === '@startup', job.job_key)}</td>
                       <td className="py-2 px-2 text-terminal-red text-[10px] max-w-[150px] truncate" title={job.last_error || ''}>
                         {job.last_error || '—'}
                       </td>
@@ -635,7 +660,143 @@ export default function JobsPage() {
                   </div>
                 </div>
 
-                {/* Row 4: Backfill progress */}
+                {/* Row 4: Intraday warehouse stats */}
+                {tickerStatus.intraday_stats && (
+                  <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
+                    <div className="text-[10px] text-white/60 uppercase tracking-wider mb-3">
+                      Intraday Data Warehouse
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      {([
+                        { key: '1h', label: '1H Candles' },
+                        { key: 'W', label: 'Weekly' },
+                        { key: 'M', label: 'Monthly' },
+                      ] as const).map(({ key, label }) => {
+                        const stat = tickerStatus.intraday_stats[key];
+                        if (!stat) return null;
+                        const watchlistTotal = tickerStatus.watchlist_symbols_total;
+                        const universeTotal = tickerStatus.universe_count;
+                        const is1h = key === '1h';
+                        const isUniverseInterval = key === 'W' || key === 'M';
+
+                        const coveredPct = watchlistTotal > 0
+                          ? (stat.watchlist_covered / watchlistTotal) * 100
+                          : 0;
+                        const indicatorsPct = stat.watchlist_covered > 0
+                          ? (stat.symbols_with_indicators / stat.watchlist_covered) * 100
+                          : 0;
+                        const universeCoveredPct = universeTotal > 0
+                          ? (stat.universe_covered / universeTotal) * 100
+                          : 0;
+                        const universeIndicatorsPct = stat.universe_covered > 0
+                          ? (stat.universe_symbols_with_indicators / stat.universe_covered) * 100
+                          : 0;
+                        const currentPct = is1h && watchlistTotal > 0
+                          ? (stat.watchlist_current / watchlistTotal) * 100
+                          : 0;
+                        const currentColor = is1h
+                          ? stat.watchlist_current === watchlistTotal
+                            ? 'text-terminal-green'
+                            : stat.watchlist_current > 0
+                            ? 'text-terminal-amber'
+                            : 'text-terminal-red'
+                          : '';
+                        return (
+                          <div key={key} className="bg-black/20 rounded p-3">
+                            <div className="text-[10px] text-white/40 uppercase tracking-wider mb-2">
+                              {label}
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-white/50">Rows</span>
+                                <span className="text-sm font-bold text-white">
+                                  {stat.total_rows.toLocaleString()}
+                                </span>
+                              </div>
+                              {isUniverseInterval && (
+                                <>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[10px] text-white/50">Universe</span>
+                                    <span className="text-xs font-bold text-terminal-green">
+                                      {stat.universe_covered.toLocaleString()}/{universeTotal.toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                    <div
+                                      className="h-full bg-terminal-green transition-all"
+                                      style={{ width: `${universeCoveredPct}%` }}
+                                    />
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[10px] text-white/50">Univ. Indicators</span>
+                                    <span className="text-xs font-bold text-terminal-green">
+                                      {stat.universe_symbols_with_indicators.toLocaleString()}/{stat.universe_covered.toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                    <div
+                                      className="h-full bg-terminal-green/60 transition-all"
+                                      style={{ width: `${universeIndicatorsPct}%` }}
+                                    />
+                                  </div>
+                                  <div className="border-t border-terminal-gray/20 pt-1" />
+                                </>
+                              )}
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-white/50">Watchlist</span>
+                                <span className="text-xs font-bold text-blue-400">
+                                  {stat.watchlist_covered}/{watchlistTotal}
+                                </span>
+                              </div>
+                              <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-400 transition-all"
+                                  style={{ width: `${coveredPct}%` }}
+                                />
+                              </div>
+                              {is1h && (
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] text-white/50">Current</span>
+                                  <span className={`text-xs font-bold ${currentColor}`}>
+                                    {stat.watchlist_current}/{watchlistTotal}
+                                  </span>
+                                </div>
+                              )}
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-white/50">WL Indicators</span>
+                                <span className="text-xs font-bold text-blue-400">
+                                  {stat.symbols_with_indicators}/{stat.watchlist_covered}
+                                </span>
+                              </div>
+                              <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-400/60 transition-all"
+                                  style={{ width: `${indicatorsPct}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between items-center pt-1">
+                                <span className="text-[10px] text-white/50">Latest</span>
+                                <span className="text-[10px] text-white/70">
+                                  {stat.latest_timestamp
+                                    ? new Date(stat.latest_timestamp).toLocaleString('en-IN', {
+                                        day: '2-digit',
+                                        month: 'short',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        hour12: false,
+                                      })
+                                    : '—'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Row 5: Backfill progress */}
                 <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-[10px] text-white/60 uppercase tracking-wider">

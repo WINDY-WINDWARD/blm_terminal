@@ -14,8 +14,6 @@ import {
   notifSymbolFilterAtom,
   type Watchlist
 } from '@/store/terminalStore';
-import { wsService } from '@/lib/socket';
-import type { TickData } from '@/lib/socket';
 import { marketWsService } from '@/lib/marketWs';
 import type { ChangeRanges, SymbolDataExtract } from '@/lib/marketWs';
 import type { EventCalendarItem } from '@/app/api/event-calendar/route';
@@ -436,9 +434,16 @@ export function WatchWidget() {
       });
     });
 
-    // Subscribe to symbol-data responses
+    // Subscribe to symbol-data responses — also populates global tickDataAtom
     const unsubSymbol = marketWsService.onSymbolData((symbol, data) => {
       if (data) {
+        // Feed global tick data atom for OrderWidget / PosWidget consumers
+        const exchange = watchlist.find((i) => i.symbol === symbol)?.exchange ?? 'NSE';
+        setTickData((prev) => ({
+          ...prev,
+          [`${symbol}.${exchange}`]: { symbol, exchange, ltp: data.ltp, pChange: data.pChange, yearHigh: data.yearHigh, yearLow: data.yearLow },
+        }));
+
         setSymbolDataMap((prev) => {
           const prevData = prev.get(symbol);
           const ltpChanged = prevData !== undefined && prevData.ltp !== data.ltp;
@@ -744,50 +749,6 @@ export function WatchWidget() {
       setShowDropdown(false);
     }
   };
-
-  // Keep WS subscriptions alive so ChartWidget and tickDataAtom stay populated
-  useEffect(() => {
-    if (!watchlist.length) return;
-    for (const item of watchlist) {
-      wsService.subscribe(item.symbol, item.exchange, 2);
-    }
-    return () => {
-      for (const item of watchlist) {
-        wsService.unsubscribe(item.symbol, item.exchange, 2);
-      }
-    };
-  }, [watchlist]);
-
-  // Forward WS ticks into the global tickDataAtom for ChartWidget
-  useEffect(() => {
-    const unsub = wsService.onTick((data: TickData) => {
-      const key = `${data.symbol}.${data.exchange}`;
-      setTickData((prev) => ({ ...prev, [key]: data }));
-
-      const prevPrice = prevPricesRef.current.get(key);
-      if (prevPrice !== undefined && data.ltp !== undefined && data.ltp !== prevPrice) {
-        const direction = data.ltp > prevPrice ? 'up' : 'down';
-        const key2 = `${data.symbol}`;
-        setFlashStates((prev) => {
-          const next = new Map(prev);
-          next.set(key2, direction);
-          return next;
-        });
-        prevPricesRef.current.set(key, data.ltp);
-        setTimeout(() => {
-          setFlashStates((prev) => {
-            const next = new Map(prev);
-            next.delete(key2);
-            return next;
-          });
-        }, 400);
-      }
-      if (data.ltp !== undefined) {
-        prevPricesRef.current.set(key, data.ltp);
-      }
-    });
-    return unsub;
-  }, [setTickData]);
 
   // Cleanup debounce timer on unmount
   useEffect(() => {

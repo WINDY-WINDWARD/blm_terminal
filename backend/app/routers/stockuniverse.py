@@ -156,7 +156,7 @@ async def confirm_match(
     return _orm_to_schema(rec)
 
 
-ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown"})
+ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
 REVIEW_STATUS_REMOVED = "removed"
 
 
@@ -179,6 +179,7 @@ class StockUniverseErrorsResponse(BaseModel):
     suspended: ErrorCategory
     not_tradable: ErrorCategory
     unknown: ErrorCategory
+    ticker_error: ErrorCategory
 
 
 class ChangeSymbolRequest(BaseModel):
@@ -204,7 +205,7 @@ async def list_stock_universe_errors(
     rows = res.scalars().all()
 
     categories: dict[str, list[StockUniverseErrorSymbol]] = {
-        "delisted": [], "illiquid": [], "suspended": [], "not_tradable": [], "unknown": []
+        "delisted": [], "illiquid": [], "suspended": [], "not_tradable": [], "unknown": [], "ticker_error": []
     }
     for row in rows:
         status_val = row.review_status
@@ -223,6 +224,7 @@ async def list_stock_universe_errors(
         suspended=ErrorCategory(count=len(categories["suspended"]), symbols=categories["suspended"]),
         not_tradable=ErrorCategory(count=len(categories["not_tradable"]), symbols=categories["not_tradable"]),
         unknown=ErrorCategory(count=len(categories["unknown"]), symbols=categories["unknown"]),
+        ticker_error=ErrorCategory(count=len(categories["ticker_error"]), symbols=categories["ticker_error"]),
     )
 
 
@@ -248,6 +250,32 @@ async def remove_stock_universe_symbol(
     )
 
     await db.commit()
+
+
+@errors_router.put(
+    "/{symbol}/reset-ticker",
+    status_code=status.HTTP_200_OK,
+    tags=["stockuniverse"],
+)
+async def reset_ticker_error(
+    symbol: str,
+    db: AsyncSession = Depends(get_db),
+) -> StockUniverseSchema:
+    """Reset ticker_failure_count to 0 and clear ticker_error review_status.
+
+    Use this to re-enable a symbol that was disabled after repeated backfill failures.
+    """
+    rec = await db.get(StockUniverseModel, symbol)
+    if rec is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found")
+
+    rec.ticker_failure_count = 0
+    if rec.review_status == "ticker_error":
+        rec.review_status = None
+    db.add(rec)
+    await db.commit()
+    await db.refresh(rec)
+    return _orm_to_schema(rec)
 
 
 @errors_router.put(

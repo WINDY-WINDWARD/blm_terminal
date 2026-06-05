@@ -3,7 +3,9 @@ import {
   createDefaultPanelSizes,
   PANEL_LAYOUTS,
   DEFAULT_ACTIVE_PANELS,
-  type PanelCount,
+  validateMergeSelection,
+  getMergedGroupForPanel,
+  type MergedGroup,
 } from '@/store/terminalStore';
 
 describe('terminalStore', () => {
@@ -76,6 +78,128 @@ describe('terminalStore', () => {
       expect(PANEL_LAYOUTS[4]).toEqual({ rows: 2, cols: 2 });
       expect(PANEL_LAYOUTS[6]).toEqual({ rows: 2, cols: 3 });
       expect(PANEL_LAYOUTS[8]).toEqual({ rows: 2, cols: 4 });
+    });
+  });
+
+  describe('validateMergeSelection', () => {
+    it('rejects fewer than 2 panels', () => {
+      const result = validateMergeSelection(['panel-1'], 4, {});
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('at least 2');
+    });
+
+    it('rejects odd number of panels', () => {
+      const result = validateMergeSelection(
+        ['panel-1', 'panel-2', 'panel-3'],
+        4,
+        {},
+      );
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('even');
+    });
+
+    it('rejects panels already in a merge group', () => {
+      const merged: Record<string, MergedGroup> = {
+        'panel-1': { panels: ['panel-1', 'panel-2'], primary: 'panel-1' },
+      };
+      const result = validateMergeSelection(['panel-1', 'panel-3'], 4, merged);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('already be merged');
+    });
+
+    it('rejects panels outside the current layout', () => {
+      const result = validateMergeSelection(['panel-1', 'panel-5'], 4, {});
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('current layout');
+    });
+
+    it('accepts a horizontal pair in 2x2 layout', () => {
+      const result = validateMergeSelection(['panel-1', 'panel-2'], 4, {});
+      expect(result.valid).toBe(true);
+    });
+
+    it('accepts a vertical pair in 2x2 layout', () => {
+      const result = validateMergeSelection(['panel-1', 'panel-3'], 4, {});
+      expect(result.valid).toBe(true);
+    });
+
+    it('accepts a full 2x2 grid merge', () => {
+      const result = validateMergeSelection(
+        ['panel-1', 'panel-2', 'panel-3', 'panel-4'],
+        4,
+        {},
+      );
+      expect(result.valid).toBe(true);
+    });
+
+    it('rejects an even-count non-rectangle selection', () => {
+      const result = validateMergeSelection(
+        ['panel-1', 'panel-2', 'panel-3', 'panel-5'],
+        6,
+        {},
+      );
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('rectangle');
+    });
+
+    it('rejects a diagonal pair (non-adjacent rectangle)', () => {
+      const result = validateMergeSelection(['panel-1', 'panel-4'], 4, {});
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('rectangle');
+    });
+
+    it('accepts a 2x3 full grid merge in 6-panel layout', () => {
+      const result = validateMergeSelection(
+        [
+          'panel-1',
+          'panel-2',
+          'panel-3',
+          'panel-4',
+          'panel-5',
+          'panel-6',
+        ],
+        6,
+        {},
+      );
+      expect(result.valid).toBe(true);
+    });
+
+    it('accepts a 2x2 block inside a 2x3 layout', () => {
+      const result = validateMergeSelection(
+        ['panel-1', 'panel-2', 'panel-4', 'panel-5'],
+        6,
+        {},
+      );
+      expect(result.valid).toBe(true);
+    });
+
+    it('accepts a horizontal triple in 2x4 layout', () => {
+      const result = validateMergeSelection(
+        ['panel-1', 'panel-2', 'panel-3'],
+        8,
+        {},
+      );
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('even');
+    });
+  });
+
+  describe('getMergedGroupForPanel', () => {
+    it('returns the group containing the panel', () => {
+      const groups: Record<string, MergedGroup> = {
+        'panel-1': { panels: ['panel-1', 'panel-2'], primary: 'panel-1' },
+      };
+      expect(getMergedGroupForPanel('panel-2', groups)).toEqual({
+        panels: ['panel-1', 'panel-2'],
+        primary: 'panel-1',
+      });
+    });
+
+    it('returns undefined for unmerged panel', () => {
+      const groups: Record<string, MergedGroup> = {
+        'panel-1': { panels: ['panel-1', 'panel-2'], primary: 'panel-1' },
+      };
+      expect(getMergedGroupForPanel('panel-3', groups)).toBeUndefined();
     });
   });
 });

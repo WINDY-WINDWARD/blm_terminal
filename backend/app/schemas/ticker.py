@@ -52,6 +52,19 @@ class TickerLatestResponse(BaseModel):
     value: float | None
 
 
+class IntradayIntervalStatus(BaseModel):
+    """Per-interval intraday warehouse status (1h / W / M)."""
+
+    total_rows: int
+    watchlist_covered: int
+    watchlist_current: int
+    symbols_with_indicators: int
+    latest_timestamp: datetime | None
+    # Universe-level coverage (populated for W and M only; 0 for 1h)
+    universe_covered: int = 0
+    universe_symbols_with_indicators: int = 0
+
+
 class TickerStatusResponse(BaseModel):
     """Warehouse status response."""
 
@@ -69,6 +82,7 @@ class TickerStatusResponse(BaseModel):
     watchlist_symbols_total: int
     watchlist_symbols_current: int
     days_behind_breakdown: dict[str, int]
+    intraday_stats: dict[str, IntradayIntervalStatus]
 
 
 class TriggerResponse(BaseModel):

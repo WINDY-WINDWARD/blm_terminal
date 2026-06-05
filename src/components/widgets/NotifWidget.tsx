@@ -55,6 +55,7 @@ const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   deals: ['bulk_deal', 'block_deal', 'short_deal'],
   insider: ['insider_buy', 'insider_sell'],
   technical: [
+    // daily
     'rsi_oversold',
     'rsi_overbought',
     'macd_bullish_cross',
@@ -62,6 +63,29 @@ const TAB_TRIGGERS: Record<NotifTab, string[]> = {
     'bb_squeeze_alert',
     'bb_upper_break',
     'bb_lower_break',
+    // 1h
+    'rsi_oversold_1h',
+    'rsi_overbought_1h',
+    'macd_bullish_cross_1h',
+    'macd_bearish_cross_1h',
+    'bb_squeeze_alert_1h',
+    'bb_upper_break_1h',
+    'bb_lower_break_1h',
+    'atr_expansion_1h',
+    // weekly
+    'rsi_oversold_W',
+    'rsi_overbought_W',
+    'macd_bullish_cross_W',
+    'macd_bearish_cross_W',
+    'bb_squeeze_alert_W',
+    // monthly
+    'rsi_oversold_M',
+    'rsi_overbought_M',
+    'macd_bullish_cross_M',
+    'macd_bearish_cross_M',
+    // multi-timeframe
+    'mtf_bullish_alignment',
+    'mtf_bearish_alignment',
   ],
   momentum: ['momentum_surge', 'return_1w_spike'],
   volatility: ['volatility_spike', 'atr_expansion'],
@@ -102,6 +126,29 @@ const TRIGGER_LABELS: Record<string, string> = {
   streak_up_5d: 'STREAK UP',
   streak_down_5d: 'STREAK DOWN',
   results_upcoming: 'RESULTS UPCOMING',
+  // 1h
+  rsi_oversold_1h: 'RSI OVERSOLD [1H]',
+  rsi_overbought_1h: 'RSI OVERBOUGHT [1H]',
+  macd_bullish_cross_1h: 'MACD BULLISH [1H]',
+  macd_bearish_cross_1h: 'MACD BEARISH [1H]',
+  bb_squeeze_alert_1h: 'BB SQUEEZE [1H]',
+  bb_upper_break_1h: 'BB UPPER BREAK [1H]',
+  bb_lower_break_1h: 'BB LOWER BREAK [1H]',
+  atr_expansion_1h: 'ATR EXPANSION [1H]',
+  // weekly
+  rsi_oversold_W: 'RSI OVERSOLD [W]',
+  rsi_overbought_W: 'RSI OVERBOUGHT [W]',
+  macd_bullish_cross_W: 'MACD BULLISH [W]',
+  macd_bearish_cross_W: 'MACD BEARISH [W]',
+  bb_squeeze_alert_W: 'BB SQUEEZE [W]',
+  // monthly
+  rsi_oversold_M: 'RSI OVERSOLD [M]',
+  rsi_overbought_M: 'RSI OVERBOUGHT [M]',
+  macd_bullish_cross_M: 'MACD BULLISH [M]',
+  macd_bearish_cross_M: 'MACD BEARISH [M]',
+  // multi-timeframe
+  mtf_bullish_alignment: 'MTF BULLISH ALIGNMENT',
+  mtf_bearish_alignment: 'MTF BEARISH ALIGNMENT',
 };
 
 const STREAK_TRIGGER_TYPES = new Set(['streak_up_5d', 'streak_down_5d']);
@@ -135,6 +182,11 @@ function getBadgeColor(triggerType: string): string {
   if (triggerType === 'near_52w_high') return 'bg-amber-500 text-black';
   if (triggerType === 'near_52w_low') return 'bg-amber-700 text-white';
   if (triggerType === 'results_upcoming') return 'bg-emerald-700 text-white';
+  // interval-suffixed technical triggers (slightly muted vs daily)
+  if (triggerType.endsWith('_1h')) return 'bg-indigo-500 text-white';
+  if (triggerType.endsWith('_W')) return 'bg-violet-600 text-white';
+  if (triggerType.endsWith('_M')) return 'bg-fuchsia-700 text-white';
+  if (triggerType.startsWith('mtf_')) return 'bg-cyan-600 text-white';
   return 'bg-terminal-gray text-white';
 }
 
@@ -165,6 +217,26 @@ function getBadgeLabel(triggerType: string): string {
   if (triggerType === 'near_52w_high') return '~52W HI';
   if (triggerType === 'near_52w_low') return '~52W LO';
   if (triggerType === 'results_upcoming') return 'RESULTS';
+  // interval-suffixed short labels
+  if (triggerType === 'rsi_oversold_1h') return 'RSI LO[1H]';
+  if (triggerType === 'rsi_overbought_1h') return 'RSI HI[1H]';
+  if (triggerType === 'macd_bullish_cross_1h') return 'MACD+[1H]';
+  if (triggerType === 'macd_bearish_cross_1h') return 'MACD-[1H]';
+  if (triggerType === 'bb_squeeze_alert_1h') return 'BB SQZ[1H]';
+  if (triggerType === 'bb_upper_break_1h') return 'BB UP[1H]';
+  if (triggerType === 'bb_lower_break_1h') return 'BB DN[1H]';
+  if (triggerType === 'atr_expansion_1h') return 'ATR EXP[1H]';
+  if (triggerType === 'rsi_oversold_W') return 'RSI LO[W]';
+  if (triggerType === 'rsi_overbought_W') return 'RSI HI[W]';
+  if (triggerType === 'macd_bullish_cross_W') return 'MACD+[W]';
+  if (triggerType === 'macd_bearish_cross_W') return 'MACD-[W]';
+  if (triggerType === 'bb_squeeze_alert_W') return 'BB SQZ[W]';
+  if (triggerType === 'rsi_oversold_M') return 'RSI LO[M]';
+  if (triggerType === 'rsi_overbought_M') return 'RSI HI[M]';
+  if (triggerType === 'macd_bullish_cross_M') return 'MACD+[M]';
+  if (triggerType === 'macd_bearish_cross_M') return 'MACD-[M]';
+  if (triggerType === 'mtf_bullish_alignment') return 'MTF BULL';
+  if (triggerType === 'mtf_bearish_alignment') return 'MTF BEAR';
   return triggerType.toUpperCase();
 }
 
@@ -222,6 +294,48 @@ function getTooltipDescription(triggerType: string): string {
       return 'Within 3% of 52-week low — approaching support';
     case 'results_upcoming':
       return 'Board meeting scheduled to announce financial results — check for earnings surprise';
+    // 1h
+    case 'rsi_oversold_1h':
+      return 'Hourly RSI(14) below 30 — short-term oversold bounce potential';
+    case 'rsi_overbought_1h':
+      return 'Hourly RSI(14) above 70 — short-term overbought pullback risk';
+    case 'macd_bullish_cross_1h':
+      return 'Hourly MACD crossed above signal — intraday bullish shift';
+    case 'macd_bearish_cross_1h':
+      return 'Hourly MACD crossed below signal — intraday bearish shift';
+    case 'bb_squeeze_alert_1h':
+      return 'Hourly Bollinger Bands squeezed — intraday breakout imminent';
+    case 'bb_upper_break_1h':
+      return 'Hourly price closed above upper BB — short-term overbought';
+    case 'bb_lower_break_1h':
+      return 'Hourly price closed below lower BB — short-term oversold';
+    case 'atr_expansion_1h':
+      return 'Hourly ATR% expanded — intraday volatility increasing';
+    // weekly
+    case 'rsi_oversold_W':
+      return 'Weekly RSI(14) below 30 — deeper oversold, stronger signal';
+    case 'rsi_overbought_W':
+      return 'Weekly RSI(14) above 70 — deeper overbought, stronger signal';
+    case 'macd_bullish_cross_W':
+      return 'Weekly MACD bullish crossover — medium-term momentum shift';
+    case 'macd_bearish_cross_W':
+      return 'Weekly MACD bearish crossover — medium-term momentum shift';
+    case 'bb_squeeze_alert_W':
+      return 'Weekly Bollinger squeeze — medium-term breakout setup';
+    // monthly
+    case 'rsi_oversold_M':
+      return 'Monthly RSI(14) below 30 — very long-term oversold';
+    case 'rsi_overbought_M':
+      return 'Monthly RSI(14) above 70 — very long-term overbought';
+    case 'macd_bullish_cross_M':
+      return 'Monthly MACD bullish crossover — long-term trend change';
+    case 'macd_bearish_cross_M':
+      return 'Monthly MACD bearish crossover — long-term trend change';
+    // MTF
+    case 'mtf_bullish_alignment':
+      return 'Daily + Weekly + Monthly RSI all above 50 — strong multi-timeframe bullish consensus';
+    case 'mtf_bearish_alignment':
+      return 'Daily + Weekly + Monthly RSI all below 50 — strong multi-timeframe bearish consensus';
     default:
       return triggerType;
   }

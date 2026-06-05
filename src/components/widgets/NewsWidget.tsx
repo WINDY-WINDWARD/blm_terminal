@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  activeExchangeAtom,
   activeSymbolAtom,
   newsWsConnectedAtom,
   liveNewsArticlesAtom,
@@ -22,6 +23,7 @@ interface NewsPaginatedResponse {
 
 type Tab = 'global' | 'company';
 const PAGE_LIMIT = 50;
+const ENTITY_CHIP_LIMIT = 3;
 
 const SOURCE_LABELS: Record<string, string> = {
   // Tier 1: Wire & Regulatory
@@ -148,25 +150,66 @@ function SourceBadge({ sourceId }: { sourceId: string | null }) {
   );
 }
 
-function SentimentDot({ sentiment, score }: { sentiment: string | null; score: number | null }) {
+function formatPercent(value: number | null): string | null {
+  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatThreatCategory(category: string | null): string | null {
+  if (!category) return null;
+  return category.replaceAll('_', ' ').toUpperCase();
+}
+
+function normalizeTicker(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function getEntityValues(article: NewsArticle, key: string): string[] {
+  if (!article.entities || typeof article.entities !== 'object') return [];
+  const raw = article.entities[key];
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+}
+
+function SentimentDot({
+  sentiment,
+  score,
+  confidence,
+}: {
+  sentiment: string | null;
+  score: number | null;
+  confidence: number | null;
+}) {
   const color = sentiment ? SENTIMENT_COLORS[sentiment] || 'bg-gray-500' : 'bg-gray-500';
   const opacity = score !== null && score !== undefined ? Math.max(0.3, Math.min(1, score)) : 0.5;
+  const confidenceLabel = formatPercent(confidence);
   return (
-    <span
-      className={`inline-block w-2 h-2 rounded-full ${color}`}
-      style={{ opacity }}
-      title={`${sentiment || 'unknown'} (${score?.toFixed(2) || '?'})`}
-    />
+    <span className="inline-flex items-center gap-1 shrink-0">
+      <span
+        className={`inline-block w-2 h-2 rounded-full ${color}`}
+        style={{ opacity }}
+        title={`${sentiment || 'unknown'} (${score?.toFixed(2) || '?'})${confidenceLabel ? ` • confidence ${confidenceLabel}` : ''}`}
+      />
+      {confidenceLabel && (
+        <span className="text-[9px] text-white/40 font-mono">{confidenceLabel}</span>
+      )}
+    </span>
   );
 }
 
-function ThreatBadge({ level }: { level: string | null }) {
+function ThreatBadge({ level, category }: { level: string | null; category: string | null }) {
   if (!level) return null;
   const badge = THREAT_BADGES[level.toLowerCase()];
   if (!badge) return null;
+  const categoryLabel = formatThreatCategory(category);
   return (
     <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${badge.className}`}>
       {badge.label}
+      {categoryLabel ? ` · ${categoryLabel}` : ''}
     </span>
   );
 }
@@ -180,24 +223,111 @@ function CredibilityWarning({ credibility }: { credibility: string | null }) {
   );
 }
 
+function MetaChip({
+  label,
+  className,
+  title,
+}: {
+  label: string;
+  className: string;
+  title?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono leading-none ${className}`}
+      title={title}
+    >
+      {label}
+    </span>
+  );
+}
+
+function EntityChips({
+  label,
+  values,
+  className,
+  onClick,
+}: {
+  label: string;
+  values: string[];
+  className: string;
+  onClick?: (value: string) => void;
+}) {
+  if (values.length === 0) return null;
+
+  const visible = values.slice(0, ENTITY_CHIP_LIMIT);
+  const overflow = values.length - visible.length;
+
+  return (
+    <>
+      {visible.map((value) => {
+        const chipLabel = `${label}:${value}`;
+
+        if (!onClick) {
+          return <MetaChip key={chipLabel} label={chipLabel} className={className} />;
+        }
+
+        return (
+          <button
+            key={chipLabel}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onClick(value);
+            }}
+            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono leading-none transition-colors hover:bg-terminal-amber hover:text-black ${className}`}
+            title={`Set active symbol to ${value}`}
+          >
+            {chipLabel}
+          </button>
+        );
+      })}
+      {overflow > 0 && (
+        <MetaChip
+          label={`+${overflow}`}
+          className="border-terminal-gray/50 text-white/40"
+          title={`${overflow} more ${label.toLowerCase()} entities`}
+        />
+      )}
+    </>
+  );
+}
+
 function ArticleRow({
   article,
   showSentiment = true,
+  onTickerClick,
 }: {
   article: NewsArticle;
   showSentiment?: boolean;
+  onTickerClick: (ticker: string) => void;
 }) {
   const title = article.title ?? 'Untitled';
   const date = formatDate(article.publish_date);
   const sourceId = article.source;
   const credibility = article.source_credibility;
+  const companySymbol = article.company_symbol ? normalizeTicker(article.company_symbol) : null;
+  const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
+  const organizations = getEntityValues(article, 'organizations');
+  const people = getEntityValues(article, 'people');
+  const countries = getEntityValues(article, 'countries');
+
+  const handleOpenArticle = () => {
+    window.open(article.url, '_blank', 'noopener,noreferrer');
+  };
 
   return (
-    <a
-      href={article.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block border-b border-terminal-gray/40 hover:bg-zinc-900 py-2 px-1 cursor-pointer"
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={handleOpenArticle}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          handleOpenArticle();
+        }
+      }}
+      className="block border-b border-terminal-gray/40 hover:bg-zinc-900 py-2 px-1 cursor-pointer focus:outline-none focus:bg-zinc-900"
     >
       <div className="flex items-start gap-2">
         <span className="text-[10px] text-white/50 shrink-0 font-mono w-20">
@@ -206,18 +336,54 @@ function ArticleRow({
         <div className="flex items-center gap-1 shrink-0">
           <SourceBadge sourceId={sourceId} />
           {showSentiment && (
-            <SentimentDot sentiment={article.sentiment} score={article.sentiment_score} />
+            <SentimentDot
+              sentiment={article.sentiment}
+              score={article.sentiment_score}
+              confidence={article.confidence}
+            />
           )}
         </div>
-        <div className="flex items-center gap-1 flex-1 min-w-0">
-          <span className="text-xs text-terminal-amber font-medium leading-tight truncate">
-            {title}
-          </span>
-          <ThreatBadge level={article.threat_level} />
-          <CredibilityWarning credibility={credibility} />
+        <div className="flex flex-col gap-1 flex-1 min-w-0">
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-xs text-terminal-amber font-medium leading-tight truncate">
+              {title}
+            </span>
+            {companySymbol && (
+              <MetaChip
+                label={companySymbol}
+                className="border-terminal-amber/50 text-terminal-amber"
+                title="Tagged company symbol"
+              />
+            )}
+            <ThreatBadge level={article.threat_level} category={article.threat_category} />
+            <CredibilityWarning credibility={credibility} />
+          </div>
+          <div className="flex flex-wrap items-center gap-1 min-w-0">
+            <EntityChips
+              label="T"
+              values={tickers}
+              className="border-terminal-amber/40 text-terminal-amber"
+              onClick={onTickerClick}
+            />
+            <EntityChips
+              label="O"
+              values={organizations}
+              className="border-cyan-500/40 text-cyan-300"
+            />
+            <EntityChips
+              label="P"
+              values={people}
+              className="border-violet-500/40 text-violet-300"
+            />
+            <EntityChips
+              label="C"
+              values={countries}
+              className="border-slate-500/40 text-slate-300"
+            />
+          </div>
         </div>
       </div>
-    </a>
+    </div>
   );
 }
 
@@ -305,7 +471,8 @@ function TabButton({
 }
 
 export function NewsWidget() {
-  const symbol = useAtomValue(activeSymbolAtom);
+  const [symbol, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const [wsConnected, setWsConnected] = useAtom(newsWsConnectedAtom);
   const [liveArticles, setLiveArticles] = useAtom(liveNewsArticlesAtom);
   const [filters, setFilters] = useAtom(newsFiltersAtom);
@@ -440,6 +607,25 @@ export function NewsWidget() {
     setGlobalOffset(0); // reset to page 1 whenever filters change
   };
 
+  const handleTickerClick = useCallback(async (ticker: string) => {
+    const normalizedTicker = normalizeTicker(ticker);
+    if (!normalizedTicker) return;
+
+    try {
+      const res = await fetch(`/api/py/stockuniverse/search/${encodeURIComponent(normalizedTicker)}`);
+      if (!res.ok) return;
+
+      const data = (await res.json()) as Array<{ symbol?: string; exchange?: string }>;
+      const match = data.find((item) => normalizeTicker(item.symbol || '') === normalizedTicker);
+      if (!match?.symbol) return;
+
+      setActiveSymbol(match.symbol);
+      setActiveExchange(match.exchange || 'NSE');
+    } catch {
+      // Ignore lookup failures so news browsing remains uninterrupted.
+    }
+  }, [setActiveExchange, setActiveSymbol]);
+
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden">
       <div className="flex border-b border-terminal-gray shrink-0">
@@ -521,7 +707,11 @@ export function NewsWidget() {
                   LIVE
                 </div>
                 {filteredLiveArticles.slice(0, 5).map((article) => (
-                  <ArticleRow key={article.url + '_live'} article={article} />
+                  <ArticleRow
+                    key={article.url + '_live'}
+                    article={article}
+                    onTickerClick={handleTickerClick}
+                  />
                 ))}
               </div>
             )}
@@ -530,12 +720,16 @@ export function NewsWidget() {
                 <div className="h-full w-full flex items-center justify-center">
                   <span className="text-white/40 text-[10px]">No articles found</span>
                 </div>
-              ) : (
-                dbArticles.map((article, idx) => (
-                  <ArticleRow key={article.url + idx} article={article} />
-                ))
-              )}
-            </div>
+                ) : (
+                  dbArticles.map((article, idx) => (
+                    <ArticleRow
+                      key={article.url + idx}
+                      article={article}
+                      onTickerClick={handleTickerClick}
+                    />
+                  ))
+                )}
+              </div>
             {dbArticles.length > 0 && (
               <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
                 <button

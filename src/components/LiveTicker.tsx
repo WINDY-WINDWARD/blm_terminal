@@ -1,11 +1,7 @@
 'use client';
 
-import React, { useEffect } from 'react';
-import { useAtom } from 'jotai';
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { tickDataAtom } from '@/store/terminalStore';
-import { wsService } from '@/lib/socket';
-import type { TickData } from '@/lib/socket';
 
 // Shape returned by /api/py/market/top-gainers and top-losers
 interface NseEquity {
@@ -50,8 +46,6 @@ async function fetchTopMovers(): Promise<{ gainers: NseEquity[]; losers: NseEqui
 }
 
 export function LiveTicker() {
-  const [tickData, setTickData] = useAtom(tickDataAtom);
-
   const { data: movers } = useQuery({
     queryKey: ['ticker-top-movers'],
     queryFn: fetchTopMovers,
@@ -59,52 +53,22 @@ export function LiveTicker() {
     staleTime: 30_000,
   });
 
-  // Subscribe to live WS ticks for all symbols shown in the ticker
-  useEffect(() => {
-    if (!movers) return;
-
-    const symbols = [
-      ...movers.gainers.map((s) => s.symbol),
-      ...movers.losers.map((s) => s.symbol),
-    ];
-
-    for (const sym of symbols) {
-      wsService.subscribe(sym, 'NSE', 1);
-    }
-
-    const unsub = wsService.onTick((data: TickData) => {
-      const key = `${data.symbol}.${data.exchange}`;
-      setTickData((prev) => ({ ...prev, [key]: data }));
-    });
-
-    return () => {
-      unsub();
-      for (const sym of symbols) {
-        wsService.unsubscribe(sym, 'NSE', 1);
-      }
-    };
-  }, [movers, setTickData]);
-
-  // Build display items — overlay live WS tick where available, else use backend snapshot
+  // Build display items from polling snapshot — 60 s refresh is sufficient for a scrolling ticker
   const items = React.useMemo(() => {
     if (!movers) return [];
 
-    const toItem = (equity: NseEquity, kind: 'gainer' | 'loser') => {
-      const key = `${equity.symbol}.NSE`;
-      const tick = tickData[key];
-      return {
-        label: `NSE:${equity.symbol}`,
-        ltp: tick?.ltp ?? equity.lastPrice,
-        chgPct: tick?.change_percent ?? equity.pChange,
-        kind,
-      };
-    };
+    const toItem = (equity: NseEquity, kind: 'gainer' | 'loser') => ({
+      label: `NSE:${equity.symbol}`,
+      ltp: equity.lastPrice,
+      chgPct: equity.pChange,
+      kind,
+    });
 
     return [
       ...movers.gainers.map((e) => toItem(e, 'gainer')),
       ...movers.losers.map((e) => toItem(e, 'loser')),
     ];
-  }, [movers, tickData]);
+  }, [movers]);
 
   if (items.length === 0) {
     return (

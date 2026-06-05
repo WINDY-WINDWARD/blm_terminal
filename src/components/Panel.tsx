@@ -2,7 +2,11 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAtom } from 'jotai';
-import { focusedPanelAtom, notifPanelHighlightAtom } from '@/store/terminalStore';
+import {
+  focusedPanelAtom,
+  notifPanelHighlightAtom,
+  selectedPanelsAtom,
+} from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
 import { OrderWidget } from './widgets/OrderWidget';
@@ -17,9 +21,11 @@ import { NewsWidget } from './widgets/NewsWidget';
 import { AnalysisWidget } from './widgets/AnalysisWidget';
 import { NotifWidget } from './widgets/NotifWidget';
 import { ScanWidget } from './widgets/ScanWidget';
+import { ScreenerWidget } from './widgets/ScreenerWidget';
 import { AnnouncementsWidget } from './widgets/AnnouncementsWidget';
 import { DocsWidget } from './widgets/DocsWidget';
 import { AiWidget } from './widgets/AiWidget';
+import { PortfolioWidget } from './widgets/PortfolioWidget';
 import { ErrorBoundary } from './ErrorBoundary';
 
 interface PanelProps {
@@ -29,19 +35,36 @@ interface PanelProps {
 
 export function Panel({ id, title }: PanelProps) {
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
+  const [selectedPanels, setSelectedPanels] = useAtom(selectedPanelsAtom);
   const [notifHighlight] = useAtom(notifPanelHighlightAtom);
   const isFocused = focusedPanel === id;
+  const isSelected = selectedPanels.includes(id);
   const [isFlashing, setIsFlashing] = useState(false);
 
   useEffect(() => {
     if (title !== 'NOTIF' || notifHighlight === 0) return;
-    setIsFlashing(true);
-    const timer = setTimeout(() => setIsFlashing(false), 2000);
+    const flashTimer = setTimeout(() => setIsFlashing(true), 0);
+    const clearTimer = setTimeout(() => setIsFlashing(false), 2000);
     return () => {
-      clearTimeout(timer);
+      clearTimeout(flashTimer);
+      clearTimeout(clearTimer);
       setIsFlashing(false);
     };
   }, [notifHighlight, title]);
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      setSelectedPanels((prev) =>
+        prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
+      );
+      // Keep the focused panel unchanged when Ctrl+clicking
+      return;
+    }
+    // Normal click: clear selection and focus this panel
+    setSelectedPanels([]);
+    setFocusedPanel(id);
+  };
 
   const renderWidget = () => {
     switch (title) {
@@ -60,8 +83,10 @@ export function Panel({ id, title }: PanelProps) {
       case 'NOTIF':   return <NotifWidget />;
       case 'ANNC':    return <AnnouncementsWidget />;
       case 'SCAN':    return <ScanWidget />;
+      case 'SCREENER': return <ScreenerWidget />;
       case 'DOCS':    return <DocsWidget />;
       case 'AI':      return <AiWidget />;
+      case 'PORTFOLIO': return <PortfolioWidget />;
       default:
         return (
           <div className="text-terminal-amber/50 text-xs font-mono h-full w-full flex items-center justify-center">
@@ -73,10 +98,14 @@ export function Panel({ id, title }: PanelProps) {
 
   return (
     <div
-      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-200 ${
-        isFocused ? 'border-blue-500' : 'border-transparent'
+      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-200 h-full w-full ${
+        isSelected
+          ? 'border-yellow-500'
+          : isFocused
+            ? 'border-blue-500'
+            : 'border-transparent'
       }`}
-      onClick={() => setFocusedPanel(id)}
+      onClick={handleClick}
     >
       <div
         className={`h-6 px-2 flex items-center font-bold text-xs uppercase transition-colors duration-200 ${
@@ -91,7 +120,9 @@ export function Panel({ id, title }: PanelProps) {
       </div>
       <div className="flex-1 relative overflow-hidden">
         <ErrorBoundary>
-          {renderWidget()}
+          <div className="h-full w-full flex flex-col overflow-hidden">
+            {renderWidget()}
+          </div>
         </ErrorBoundary>
       </div>
     </div>

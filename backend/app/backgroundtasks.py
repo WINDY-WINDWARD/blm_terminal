@@ -1,14 +1,18 @@
 import asyncio
 import logging
+import queue
+import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import time as dt_time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, timezone
 from typing import Any, Optional
 
 import pandas as pd
 import pytz
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import OperationalError as _SAOperationalError
 
@@ -16,7 +20,8 @@ from app.services.nse_client import NSEClient, SymbolNotFoundError
 from app.services import ticker_warehouse
 from app.services import indicators
 from app.models import stockuniverse
-from app.models.ticker import TickerScore
+from app.models.ticker import TickerScore, TickerScreenerSnapshot, TickerIntraday
+from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
 from app.models.news import NewsArticle
 from app.models.notification import Notification, GlobalNotification
@@ -106,6 +111,60 @@ def register_all_jobs() -> None:
             category="data_warehouse",
             cron_expression="*/30 15,16,17,18,19,20 * * 1-5",
             callable=_ticker_daily_update_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_intraday_hourly_update",
+            name="ticker_intraday_hourly_update",
+            description="Backfill 1h candles from NSE charting API for all watchlist symbols during market hours",
+            category="data_warehouse",
+            cron_expression="15 9,10,11,12,13,14,15 * * 1-5",
+            callable=_ticker_intraday_update_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_intraday_hourly_indicators",
+            name="ticker_intraday_hourly_indicators",
+            description="Compute and store technical indicators for 1h intraday candles during market hours",
+            category="data_warehouse",
+            cron_expression="30 9,10,11,12,13,14,15 * * 1-5",
+            callable=_ticker_intraday_indicators_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_intraday_hourly_stale_check",
+            name="ticker_intraday_hourly_stale_check",
+            description="Check watchlist 1h candles for gaps and backfill stale symbols (startup/nightly orchestrator stage)",
+            category="data_warehouse",
+            cron_expression=None,
+            callable=_ticker_intraday_hourly_stale_check_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_weekly_monthly_update",
+            name="ticker_weekly_monthly_update",
+            description="Backfill W/M candles from NSE charting API for all universe symbols (startup + nightly orchestrator stage)",
+            category="data_warehouse",
+            cron_expression=None,
+            callable=_ticker_intraday_update_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.vacuum",
+            name="vacuum",
+            description="Weekly SQLite VACUUM to reclaim space from deleted rows (Sunday 04:00)",
+            category="data_warehouse",
+            cron_expression=VACUUM_CRON,
+            callable=_run_vacuum,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ticker_weekly_monthly_indicators",
+            name="ticker_weekly_monthly_indicators",
+            description="Compute and store technical indicators for W/M intraday candles (nightly orchestrator stage)",
+            category="data_warehouse",
+            cron_expression=None,
+            callable=_ticker_intraday_indicators_sync,
             is_async=False,
         ),
         # --- Live market data ---
@@ -264,9 +323,10 @@ _worker_threads: list[threading.Thread] = []
 # Downstream workers poll these before starting their own first-run work.
 # ---------------------------------------------------------------------------
 _startup_stock_universe_done   = threading.Event()
-_startup_ticker_backfill_done  = threading.Event()
-_startup_ticker_indicators_done = threading.Event()
-_startup_ticker_scores_done    = threading.Event()
+_startup_ticker_backfill_done    = threading.Event()
+_startup_ticker_indicators_done   = threading.Event()
+_startup_ticker_scores_done       = threading.Event()
+_startup_ticker_hourly_done       = threading.Event()
 
 
 # ---------------------------------------------------------------------------
@@ -559,6 +619,12 @@ def _stock_universe_sync() -> None:
                 _bulk_insert_stock_universe(session, batch)
                 session.commit()
 
+        update_job_status_sync(
+            "job.stock_universe",
+            "idle",
+            progress=100,
+            message="Stock universe sync complete",
+        )
         logger.info("stock_universe_sync: complete")
     except Exception:
         logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
@@ -636,18 +702,14 @@ def stock_universe_worker() -> None:
         logger.info("stock_universe_worker: stopped")
         return
 
-    # Check first_run for startup execution
+    # Startup sequencing is owned by the orchestrator pipeline. The worker only
+    # handles scheduled cron refreshes after startup completes.
     if _is_first_run("stock_universe"):
-        update_job_status_sync("job.stock_universe", "running", progress=0, message="Starting initial sync...")
-        _stock_universe_sync()
+        logger.info("stock_universe_worker: orchestrator owns startup sync, skipping worker first-run execution")
         _set_first_run_complete("stock_universe")
     else:
         logger.info("stock_universe_worker: first_run=False, skipping startup execution")
-        update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for cron schedule")
-
-    # Unblock all workers that depend on stock universe data
-    _startup_stock_universe_done.set()
-    logger.info("stock_universe_worker: startup gate released (_startup_stock_universe_done)")
+    update_job_status_sync("job.stock_universe", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.stock_universe", "0 0 * * *")
@@ -667,7 +729,15 @@ def stock_universe_worker() -> None:
 
 
 def _ticker_backfill_sync() -> None:
-    """Perform the ticker backfill synchronization."""
+    """Perform the ticker backfill synchronization.
+
+    Processes up to 10 symbols concurrently using a thread pool. Each batch
+    of 10 is submitted together; results are collected before moving to the
+    next batch. One REQUEST_DELAY_SECONDS sleep is applied per batch (not per
+    symbol) to stay within NSE rate limits while improving throughput ~10x.
+    """
+    _BATCH_SIZE = 10
+
     symbols = ticker_warehouse.get_symbols_needing_backfill()
     total = len(symbols)
     if total == 0:
@@ -675,30 +745,41 @@ def _ticker_backfill_sync() -> None:
         update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="All symbols up to date")
         return
 
-    logger.info(f"ticker_backfill_sync: {total} symbols need backfill")
+    logger.info(f"ticker_backfill_sync: {total} symbols need backfill (batch_size={_BATCH_SIZE})")
 
-    for i, symbol in enumerate(symbols):
+    processed = 0
+    for batch_start in range(0, total, _BATCH_SIZE):
         if _shutdown_event.is_set():
             break
 
-        if i % 10 == 0:
-            progress = int((i / total) * 100)
-            update_job_status_sync(
-                "job.ticker_backfill",
-                "running",
-                progress=progress,
-                message=f"Backfilling {symbol} ({i+1}/{total})",
-            )
+        batch = symbols[batch_start : batch_start + _BATCH_SIZE]
 
-        if i > 0 and i % 50 == 0:
-            logger.info(f"ticker_backfill_sync: refreshing session after {i} symbols")
+        # Refresh NSE session every 50 cumulative symbols
+        if processed > 0 and (processed // 50) != ((processed - len(batch)) // 50):
+            logger.info(f"ticker_backfill_sync: refreshing session after {processed} symbols")
             ticker_warehouse._refresh_nse_session()
 
-        try:
-            ticker_warehouse.backfill_symbol(symbol, days=365)
-        except Exception as e:
-            logger.warning(f"ticker_backfill_sync: failed for {symbol}: {e}")
+        progress = int((batch_start / total) * 100)
+        update_job_status_sync(
+            "job.ticker_backfill",
+            "running",
+            progress=progress,
+            message=f"Backfilling {batch[0]}..{batch[-1]} ({batch_start + 1}-{min(batch_start + _BATCH_SIZE, total)}/{total})",
+        )
 
+        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
+            future_to_symbol = {
+                pool.submit(ticker_warehouse.backfill_symbol, sym, 365): sym
+                for sym in batch
+            }
+            for future in as_completed(future_to_symbol):
+                sym = future_to_symbol[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.warning(f"ticker_backfill_sync: failed for {sym}: {e}")
+
+        processed += len(batch)
         time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
 
     update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
@@ -729,14 +810,14 @@ def ticker_backfill_worker() -> None:
         logger.info("ticker_backfill_worker: stopped")
         return
 
-    _ticker_backfill_sync()
+    if _is_first_run("ticker_backfill"):
+        logger.info("ticker_backfill_worker: orchestrator owns startup backfill, skipping worker first-run execution")
+        _set_first_run_complete("ticker_backfill")
+    else:
+        logger.info("ticker_backfill_worker: first_run=False, startup already delegated to orchestrator")
 
-    # Unblock workers that depend on candle history
-    _startup_ticker_backfill_done.set()
-    logger.info("ticker_backfill_worker: startup gate released (_startup_ticker_backfill_done)")
-
-    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
-    logger.info("ticker_backfill_worker: backfill complete, idling until shutdown")
+    update_job_status_sync("job.ticker_backfill", "waiting", progress=0, message="Waiting for orchestrator startup / idle")
+    logger.info("ticker_backfill_worker: startup work delegated to orchestrator, idling until shutdown")
 
     while not _shutdown_event.is_set():
         _sleep_interruptible(3600)
@@ -918,31 +999,14 @@ def ticker_daily_update_worker() -> None:
         logger.info("ticker_daily_update_worker: stopped")
         return
 
-    # Check first_run for startup execution (will also check market hours inside sync)
+    # Startup sequencing is owned by the orchestrator. Daily update is a nightly
+    # stage there, so the worker should only handle its recurring cron schedule.
     if _is_first_run("ticker_daily_update"):
-        # Wait for candle backfill before attempting daily update
-        if _wait_for_startup_event(_startup_ticker_backfill_done, "ticker_backfill", "job.ticker_daily_update"):
-            update_job_status_sync("job.ticker_daily_update", "idle", progress=0, message="Stopped")
-            logger.info("ticker_daily_update_worker: stopped")
-            return
-        # Acquire pipeline lock for startup first-run: daily_update runs the
-        # full inline pipeline (candles → indicators → scores), so scan/notif
-        # workers that became unblocked by _startup_ticker_scores_done must
-        # still wait if the startup daily update fires concurrently.
-        # NOTE: No _startup_ticker_daily_update_done event is published here
-        # because no worker depends on it — the downstream gate is
-        # _startup_ticker_scores_done, set by ticker_scores_worker.
-        with _pipeline_lock:
-            _pipeline_idle.clear()
-            try:
-                update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Starting daily update...")
-                _ticker_daily_update_sync()
-            finally:
-                _pipeline_idle.set()
+        logger.info("ticker_daily_update_worker: orchestrator owns startup/nightly sequencing, skipping worker first-run execution")
         _set_first_run_complete("ticker_daily_update")
     else:
         logger.info("ticker_daily_update_worker: first_run=False, skipping startup execution")
-        update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
+    update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_daily_update", "*/30 15,16,17,18,19,20 * * 1-5")
@@ -968,6 +1032,374 @@ def ticker_daily_update_worker() -> None:
     logger.info("ticker_daily_update_worker: stopped")
 
 
+# ---------------------------------------------------------------------------
+# Intraday / Weekly / Monthly candle worker
+# ---------------------------------------------------------------------------
+
+def _ticker_intraday_update_sync(
+    intervals: list[str] = None,
+    scope: str = "watchlist",
+    smart: bool = False,
+    from_ts_overrides: Optional[dict[str, int]] = None,
+) -> None:
+    """Synchronous core: backfill intraday candles for watchlist or all universe symbols.
+
+    Args:
+        intervals: List of intervals to backfill (e.g. ["1h"], ["W", "M"]).
+            Defaults to ["1h", "W", "M"] for backward compatibility.
+        scope: "watchlist" (default) — only symbols in any watchlist.
+               "universe" — all symbols in stock_universe (for W/M nightly/startup runs).
+        smart: If True, only backfill symbols whose latest stored candle is older
+            than the DB consensus (most common latest timestamp). Skips up-to-date
+            symbols. Uses DB consensus to avoid false positives from live API
+            returning incomplete current periods.
+        from_ts_overrides: Optional dict mapping interval → from_ts (Unix seconds).
+            When provided, existing symbols get the override window; new symbols
+            always fetch full history (from_ts=0).
+
+    Called from workers/orchestrator. Loops symbols, calls backfill_intraday_symbol()
+    for each, logs counts. 1 s delay between symbols to avoid NSE charting API rate limits.
+    """
+    from app.services.ticker_warehouse import (
+        backfill_intraday_symbol,
+        get_all_universe_symbols,
+        get_symbols_needing_intraday_backfill,
+        get_watchlist_symbols,
+    )
+
+    intervals = intervals or ["1h", "W", "M"]
+    if scope == "universe":
+        symbols = get_all_universe_symbols()
+        scope_label = "universe"
+    else:
+        symbols = get_watchlist_symbols()
+        scope_label = "watchlist"
+    if not symbols:
+        logger.info("[intraday_worker] no %s symbols to backfill", scope_label)
+        return
+
+    # Smart mode: filter to only stale symbols
+    symbol_intervals: dict[str, list[str]]
+    if smart:
+        stale_map = get_symbols_needing_intraday_backfill(intervals, symbols)
+        if stale_map is None:
+            logger.warning(
+                "[intraday_worker] smart mode: consensus check failed, falling back to full %s scope",
+                scope_label,
+            )
+            symbol_intervals = {sym: intervals for sym in symbols}
+        elif not stale_map:
+            logger.info(
+                "[intraday_worker] smart mode: all %d %s symbols up to date for intervals %s",
+                len(symbols), scope_label, intervals,
+            )
+            return
+        else:
+            symbol_intervals = {}
+            for iv, syms in stale_map.items():
+                for sym in syms:
+                    symbol_intervals.setdefault(sym, []).append(iv)
+            logger.info(
+                "[intraday_worker] smart mode: %d/%d %s symbols need backfill for intervals %s",
+                len(symbol_intervals), len(symbols), scope_label, intervals,
+            )
+    else:
+        symbol_intervals = {sym: intervals for sym in symbols}
+
+    symbols_to_process = list(symbol_intervals.keys())
+    total: dict[str, int] = {iv: 0 for iv in intervals}
+    errors = 0
+    _BATCH_SIZE = 10
+
+    for batch_start in range(0, len(symbols_to_process), _BATCH_SIZE):
+        if _shutdown_event.is_set():
+            break
+
+        batch = symbols_to_process[batch_start : batch_start + _BATCH_SIZE]
+
+        def _run_intraday(sym: str) -> dict:
+            needed = symbol_intervals.get(sym, intervals)
+            if not needed:
+                return {}
+            return backfill_intraday_symbol(sym, needed, from_ts_overrides=from_ts_overrides)
+
+        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
+            future_to_sym = {pool.submit(_run_intraday, sym): sym for sym in batch}
+            for future in as_completed(future_to_sym):
+                sym = future_to_sym[future]
+                try:
+                    counts = future.result()
+                    for iv, n in counts.items():
+                        if iv in total:
+                            total[iv] = total.get(iv, 0) + n
+                    logger.debug("[intraday_worker] %s → %s", sym, counts)
+                except Exception as exc:
+                    logger.warning("[intraday_worker] %s failed: %s", sym, exc)
+                    errors += 1
+
+        time.sleep(1.0)
+
+    logger.info(
+        "[intraday_worker] done — %s, %d errors",
+        ", ".join(f"{iv}:{n}" for iv, n in total.items()),
+        errors,
+    )
+
+
+def _ticker_intraday_hourly_stale_check_sync() -> None:
+    """Backfill stale 1h candles for watchlist symbols and recompute indicators.
+
+    This stage is orchestrator-managed and runs at startup + nightly. A symbol
+    is considered stale when its latest 1h candle for the last trading session
+    is older than the latest expected hourly slot for that session.
+
+    Expected slots are 09:15, 10:15, 11:15, 12:15, 13:15, 14:15, 15:15 IST.
+    After backfilling a stale symbol, recompute its 1h indicators immediately so
+    downstream pipeline stages see fresh data.
+    """
+    from app.models.ticker import TickerIntraday
+    from app.services.indicators import compute_intraday_indicators_for_all_rows
+    from app.services.ticker_warehouse import backfill_intraday_symbol, get_last_trading_day, get_watchlist_symbols
+
+    ist = pytz.timezone("Asia/Kolkata")
+    symbols = get_watchlist_symbols()
+    if not symbols:
+        logger.info("[hourly_stale_check] no watchlist symbols to inspect")
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "idle",
+            progress=100,
+            message="No watchlist symbols to inspect",
+        )
+        return
+
+    last_trading_day = get_last_trading_day()
+    now_ist = datetime.now(ist)
+    target_date = last_trading_day
+
+    session_slots = [
+        datetime.combine(target_date, dt_time(9, 15)),
+        datetime.combine(target_date, dt_time(10, 15)),
+        datetime.combine(target_date, dt_time(11, 15)),
+        datetime.combine(target_date, dt_time(12, 15)),
+        datetime.combine(target_date, dt_time(13, 15)),
+        datetime.combine(target_date, dt_time(14, 15)),
+        datetime.combine(target_date, dt_time(15, 15)),
+    ]
+
+    # During the active session only expect candles up to the latest elapsed slot.
+    # After market close, expect the full session through 15:15.
+    if target_date == now_ist.date() and now_ist.weekday() < 5:
+        slots_elapsed = [slot for slot in session_slots if now_ist >= ist.localize(slot)]
+        expected_latest = slots_elapsed[-1] if slots_elapsed else None
+    else:
+        expected_latest = session_slots[-1]
+
+    if expected_latest is None:
+        logger.info("[hourly_stale_check] before first hourly slot; nothing to do")
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "idle",
+            progress=100,
+            message="Before first hourly slot",
+        )
+        return
+
+    stale_symbols: list[str] = []
+    with _SyncSessionLocal() as db:
+        for symbol in symbols:
+            latest_ts = db.execute(
+                select(func.max(TickerIntraday.timestamp))
+                .where(
+                    TickerIntraday.symbol == symbol,
+                    TickerIntraday.interval == "1h",
+                    func.date(TickerIntraday.timestamp) == target_date.isoformat(),
+                )
+            ).scalar()
+            if latest_ts is None or latest_ts < expected_latest:
+                stale_symbols.append(symbol)
+
+    total = len(stale_symbols)
+    if total == 0:
+        logger.info(
+            "[hourly_stale_check] all %d watchlist symbols current through %s",
+            len(symbols),
+            expected_latest.strftime("%Y-%m-%d %H:%M"),
+        )
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "idle",
+            progress=100,
+            message="All watchlist symbols current",
+        )
+        return
+
+    logger.info(
+        "[hourly_stale_check] backfilling %d/%d stale symbols through %s",
+        total,
+        len(symbols),
+        expected_latest.strftime("%Y-%m-%d %H:%M"),
+    )
+
+    total_rows = 0
+    indicator_updates = 0
+    errors = 0
+
+    for idx, symbol in enumerate(stale_symbols, start=1):
+        if _shutdown_event.is_set():
+            logger.info("[hourly_stale_check] shutdown requested, aborting")
+            break
+
+        update_job_status_sync(
+            "job.ticker_intraday_hourly_stale_check",
+            "running",
+            progress=int((idx - 1) / total * 100),
+            message=f"Backfilling {symbol} ({idx}/{total})",
+        )
+        try:
+            counts = backfill_intraday_symbol(symbol, ["1h"])
+            total_rows += counts.get("1h", 0)
+            indicator_updates += compute_intraday_indicators_for_all_rows(symbol, "1h")
+            logger.debug("[hourly_stale_check] %s → %s", symbol, counts)
+        except Exception as exc:
+            logger.warning("[hourly_stale_check] %s failed: %s", symbol, exc)
+            errors += 1
+        time.sleep(1.0)
+
+    update_job_status_sync(
+        "job.ticker_intraday_hourly_stale_check",
+        "idle",
+        progress=100,
+        message=(
+            f"Checked {total} stale symbols — rows:{total_rows}, "
+            f"indicator updates:{indicator_updates}, errors:{errors}"
+        ),
+    )
+    logger.info(
+        "[hourly_stale_check] complete — stale:%d rows:%d indicator_updates:%d errors:%d",
+        total,
+        total_rows,
+        indicator_updates,
+        errors,
+    )
+
+
+def ticker_intraday_hourly_update_worker() -> None:
+    """Daemon thread target for hourly (1h) intraday candle updates.
+
+    Cron: at :15 past each trading hour 09:15–15:15 IST on weekdays.
+    Also executes once at startup (first_run pattern).
+    """
+    logger.info("ticker_intraday_hourly_update_worker: started")
+
+    if not _is_job_enabled("job.ticker_intraday_hourly_update"):
+        logger.info("ticker_intraday_hourly_update_worker: disabled, waiting...")
+        update_job_status_sync("job.ticker_intraday_hourly_update", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.ticker_intraday_hourly_update", "idle", progress=0, message="Stopped")
+        logger.info("ticker_intraday_hourly_update_worker: stopped")
+        return
+
+    if _is_first_run("ticker_intraday_hourly_update"):
+        update_job_status_sync("job.ticker_intraday_hourly_update", "running", progress=0, message="Starting hourly backfill...")
+        try:
+            _ticker_intraday_update_sync(["1h"])
+        except Exception as exc:
+            logger.error("[hourly_worker] startup run failed: %s", exc)
+        _set_first_run_complete("ticker_intraday_hourly_update")
+        _startup_ticker_hourly_done.set()
+        logger.info("ticker_intraday_hourly_update_worker: startup gate released (_startup_ticker_hourly_done)")
+        update_job_status_sync("job.ticker_intraday_hourly_update", "waiting", progress=0, message="Waiting for cron schedule")
+    else:
+        logger.info("ticker_intraday_hourly_update_worker: first_run=False, skipping startup execution")
+        _startup_ticker_hourly_done.set()
+        logger.info("ticker_intraday_hourly_update_worker: startup gate released (first_run=False)")
+        update_job_status_sync("job.ticker_intraday_hourly_update", "waiting", progress=0, message="Waiting for cron schedule")
+
+    while not _shutdown_event.is_set():
+        wait_secs = _report_job_waiting("job.ticker_intraday_hourly_update", "15 9,10,11,12,13,14,15 * * 1-5")
+        logger.info("ticker_intraday_hourly_update_worker: sleeping %.0fs until next cron (15 9,10,11,12,13,14,15 * * 1-5)", wait_secs)
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.ticker_intraday_hourly_update"):
+                update_job_status_sync("job.ticker_intraday_hourly_update", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.ticker_intraday_hourly_update", "running", progress=0, message="Running hourly update...")
+            try:
+                _ticker_intraday_update_sync(["1h"])
+            except Exception as exc:
+                logger.error("[hourly_worker] cron run failed: %s", exc)
+            update_job_status_sync("job.ticker_intraday_hourly_update", "waiting", progress=0, message="Waiting for cron schedule")
+
+    update_job_status_sync("job.ticker_intraday_hourly_update", "idle", progress=0, message="Stopped")
+    logger.info("ticker_intraday_hourly_update_worker: stopped")
+
+
+def _parallel_indicator_sync(
+    items: list[tuple],
+    prepare_fn,
+    flush_fn,
+    *,
+    job_key: str,
+    pipeline_job_key: str | None = None,
+    pipeline_progress_start: int | None = None,
+    pipeline_progress_end: int | None = None,
+    num_compute_workers: int = 3,
+    queue_maxsize: int = 100,
+    writer_batch_size: int = 50,
+    heartbeat_every_s: float = 10.0,
+    progress_every: int = 10,
+    slow_threshold_s: float = 5.0,
+) -> dict:
+    """Thin wrapper around `app.services.parallel_sync.parallel_indicator_sync`
+    that wires in the orchestrator's `_shutdown_event`, `_ticker_*_status_sync`
+    callbacks, and default logging.
+
+    The full implementation lives in `app.services.parallel_sync` so it can
+    be unit-tested without importing the heavy transitive dependencies of
+    `app.backgroundtasks` (NSE client, news aggregator, etc.).
+    """
+    from app.services.parallel_sync import parallel_indicator_sync
+
+    def _on_progress(enqueued: int, total: int, elapsed_s: float, rate: float) -> None:
+        logger.info(
+            "indicator_sync: enqueued %d/%d (%.1fs, %.1f items/s)",
+            enqueued, total, elapsed_s, rate,
+        )
+
+    def _on_heartbeat(enqueued: int, total: int, elapsed_s: float) -> None:
+        logger.info(
+            "indicator_sync: heartbeat — %d/%d enqueued (%.1fs elapsed)",
+            enqueued, total, elapsed_s,
+        )
+
+    def _update_job(job_key_: str, status: str, progress: int, message: str) -> None:
+        update_job_status_sync(job_key_, status, progress=progress, message=message)
+
+    return parallel_indicator_sync(
+        items=items,
+        prepare_fn=prepare_fn,
+        flush_fn=flush_fn,
+        shutdown_event=_shutdown_event,
+        update_job_status_fn=_update_job,
+        job_key=job_key,
+        pipeline_job_key=pipeline_job_key,
+        pipeline_progress_start=pipeline_progress_start,
+        pipeline_progress_end=pipeline_progress_end,
+        num_compute_workers=num_compute_workers,
+        queue_maxsize=queue_maxsize,
+        writer_batch_size=writer_batch_size,
+        heartbeat_every_s=heartbeat_every_s,
+        progress_every=progress_every,
+        slow_threshold_s=slow_threshold_s,
+        heartbeat_fn=_on_heartbeat,
+        progress_fn=_on_progress,
+    )
+
+
 def _ticker_indicators_sync() -> None:
     """Startup backfill: compute and store per-candle indicators for symbols that
     have uncomputed or stale indicator data.
@@ -976,11 +1408,18 @@ def _ticker_indicators_sync() -> None:
     strictly newer than its indicators_updated_at timestamp (i.e. a new candle
     arrived but indicators haven't been recomputed for the full history yet).
 
-    Processes in batches of 100 with a 1 s inter-batch delay and prints
-    progress to stdout.  Triggers _ticker_indicator_notification_cycle() after
-    completing.
+    Processes in batches of 100 with a configurable inter-batch delay (env
+    `INDICATOR_INTER_BATCH_SLEEP_S`, default 0).  Triggers
+    _ticker_indicator_notification_cycle() after completing.
     """
+    from app.config import settings
     from app.models.ticker import TickerDaily
+
+    logger.info(
+        "ticker_indicators_sync: scanning ticker_daily for stale/null symbols "
+        "(this can take ~1-2 min on a large universe)…"
+    )
+    scan_start = time.monotonic()
 
     with _SyncSessionLocal() as db:
         # Symbols with any row where indicators_updated_at IS NULL (never backfilled)
@@ -1011,48 +1450,145 @@ def _ticker_indicators_sync() -> None:
         stale_symbols = {row[0] for row in stale_result.fetchall()}
 
     symbols = list(null_symbols | stale_symbols)
+    scan_elapsed = time.monotonic() - scan_start
 
     total = len(symbols)
+    logger.info(
+        "ticker_indicators_sync: scan complete in %.1fs — %d null, %d stale, %d to process",
+        scan_elapsed, len(null_symbols), len(stale_symbols), total,
+    )
+
     if total == 0:
         logger.info("ticker_indicators_sync: all symbols already have per-candle indicators")
         update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="All symbols up to date")
         _ticker_indicator_notification_cycle()
         return
 
-    logger.info(f"ticker_indicators_sync: backfilling indicators for {total} symbols")
+    logger.info("ticker_indicators_sync: backfilling indicators for %d symbols (3 compute + 1 writer threads)", total)
 
-    BATCH_SIZE = 100
-    for i in range(0, total, BATCH_SIZE):
-        if _shutdown_event.is_set():
-            logger.info("ticker_indicators_sync: shutdown requested, aborting")
-            break
+    items = [(s,) for s in symbols]
+    summary = _parallel_indicator_sync(
+        items,
+        indicators.prepare_daily_indicator_updates,
+        indicators.flush_daily_indicator_updates,
+        job_key="job.ticker_indicators",
+        pipeline_job_key="job.pipeline.startup",
+        pipeline_progress_start=50,
+        pipeline_progress_end=62,
+    )
 
-        batch = symbols[i:i + BATCH_SIZE]
-        for j, symbol in enumerate(batch):
-            global_idx = i + j + 1
-            print(f"\rticker_indicators_sync: [{global_idx}/{total}] {symbol}   ", end="", flush=True)
-            try:
-                indicators.compute_indicators_for_all_rows(symbol)
-            except Exception as e:
-                logger.warning(f"ticker_indicators_sync: failed for {symbol}: {e}")
-
-        progress = int(((i + len(batch)) / total) * 100)
-        update_job_status_sync(
-            "job.ticker_indicators",
-            "running",
-            progress=progress,
-            message=f"Backfilled {i + len(batch)}/{total} symbols",
-        )
-
-        if i + BATCH_SIZE < total:
-            if _sleep_interruptible(1.0):
-                break
-
-    print()  # newline after in-place progress output
     update_job_status_sync("job.ticker_indicators", "idle", progress=100, message="Indicator backfill complete")
-    logger.info("ticker_indicators_sync: complete")
+    logger.info(
+        "ticker_indicators_sync: complete (%d/%d symbols in %.1fs, %d rows written)",
+        summary["success"], total, summary["elapsed_s"], summary["rows_written"],
+    )
 
     _ticker_indicator_notification_cycle()
+
+
+def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
+    """Startup backfill: compute and store per-candle indicators for intraday symbols.
+
+    A symbol+interval pair is considered stale when its latest ticker_intraday
+    row has a timestamp strictly newer than its indicators_updated_at.
+
+    Args:
+        intervals: List of intervals to process (e.g. ["1h"], ["W", "M"]).
+            Defaults to ["1h", "W", "M"] for backward compatibility.
+
+    Processes in batches of 50 with a configurable inter-batch delay (env
+    `INDICATOR_INTER_BATCH_SLEEP_S`, default 0).  Triggers
+    _ticker_intraday_indicator_notification_cycle() after completing.
+    """
+    from app.models.ticker import TickerIntraday
+    from app.services import indicators
+
+    intervals = intervals or ["1h", "W", "M"]
+    job_key = "job.ticker_intraday_indicators" if set(intervals) == {"1h", "W", "M"} else (
+        "job.ticker_intraday_hourly_indicators" if intervals == ["1h"] else "job.ticker_weekly_monthly_indicators"
+    )
+
+    try:
+        logger.info(
+            "ticker_intraday_indicators_sync: scanning ticker_intraday for stale/null pairs "
+            "intervals=%s",
+            intervals,
+        )
+        scan_start = time.monotonic()
+
+        with _SyncSessionLocal() as db:
+            # Symbols with any row where indicators_updated_at IS NULL
+            null_result = db.execute(
+                select(TickerIntraday.symbol, TickerIntraday.interval)
+                .where(TickerIntraday.indicators_updated_at.is_(None),
+                       TickerIntraday.interval.in_(intervals))
+                .distinct()
+            )
+            null_pairs = {(row[0], row[1]) for row in null_result.fetchall()}
+
+            # Symbols where latest candle timestamp > indicators_updated_at (stale)
+            latest_subq = (
+                select(
+                    TickerIntraday.symbol,
+                    TickerIntraday.interval,
+                    func.max(TickerIntraday.timestamp).label("max_ts"),
+                    func.max(TickerIntraday.indicators_updated_at).label("max_ind_at"),
+                )
+                .where(TickerIntraday.interval.in_(intervals))
+                .group_by(TickerIntraday.symbol, TickerIntraday.interval)
+                .subquery()
+            )
+            stale_result = db.execute(
+                select(latest_subq.c.symbol, latest_subq.c.interval)
+                .where(
+                    latest_subq.c.max_ind_at.isnot(None),
+                    func.date(latest_subq.c.max_ts) > func.date(latest_subq.c.max_ind_at),
+                )
+            )
+            stale_pairs = {(row[0], row[1]) for row in stale_result.fetchall()}
+
+        pairs = list(null_pairs | stale_pairs)
+        scan_elapsed = time.monotonic() - scan_start
+
+        total = len(pairs)
+        logger.info(
+            "ticker_intraday_indicators_sync: scan complete in %.1fs — %d null, %d stale, %d to process (intervals=%s)",
+            scan_elapsed, len(null_pairs), len(stale_pairs), total, intervals,
+        )
+
+        if total == 0:
+            logger.info("ticker_intraday_indicators_sync: all pairs up to date for intervals=%s", intervals)
+            update_job_status_sync(job_key, "idle", progress=100, message="All pairs up to date")
+            _ticker_intraday_indicator_notification_cycle()
+            return
+
+        logger.info(
+            "ticker_intraday_indicators_sync: backfilling %d symbol+interval pairs "
+            "(3 compute + 1 writer threads, intervals=%s)",
+            total, intervals,
+        )
+
+        items = list(pairs)  # already a list of (symbol, interval) tuples
+        summary = _parallel_indicator_sync(
+            items,
+            indicators.prepare_intraday_indicator_updates,
+            indicators.flush_intraday_indicator_updates,
+            job_key=job_key,
+            heartbeat_every_s=10.0,
+            progress_every=10,
+            slow_threshold_s=5.0,
+        )
+
+        update_job_status_sync(job_key, "idle", progress=100, message="Intraday indicator backfill complete")
+        logger.info(
+            "ticker_intraday_indicators_sync: complete (%d/%d pairs in %.1fs, %d rows written, intervals=%s)",
+            summary["success"], total, summary["elapsed_s"], summary["rows_written"], intervals,
+        )
+
+        _ticker_intraday_indicator_notification_cycle()
+
+    except Exception:
+        logger.exception("ticker_intraday_indicators_sync: unhandled exception")
 
 
 def _ticker_scores_sync() -> None:
@@ -1102,8 +1638,27 @@ def _ticker_scores_sync() -> None:
             {
                 "symbol": r.symbol,
                 "date": r.date,
+                "open": r.open,
+                "high": r.high,
+                "low": r.low,
                 "close": r.close,
                 "volume": r.volume,
+                "rsi_14": r.rsi_14,
+                "macd": r.macd,
+                "macd_signal": r.macd_signal,
+                "macd_histogram": r.macd_histogram,
+                "bb_middle": r.bb_middle,
+                "bb_upper": r.bb_upper,
+                "bb_lower": r.bb_lower,
+                "bb_width": r.bb_width,
+                "bb_squeeze": r.bb_squeeze,
+                "atr_14": r.atr_14,
+                "atr_percent": r.atr_percent,
+                "vwma_20": r.vwma_20,
+                "hv_20": r.hv_20,
+                "hv_60": r.hv_60,
+                "sharpe_60": r.sharpe_60,
+                "sharpe_126": r.sharpe_126,
             }
             for r in all_rows
         ])
@@ -1232,11 +1787,243 @@ def _ticker_scores_sync() -> None:
             db.execute(insert_stmt)
             db.commit()
 
+        # Phase B: also write pre-computed screener snapshot so TQL→SQL
+        # queries are O(1) reads against a small denormalized table instead
+        # of window-function scans over ticker_daily/ticker_intraday.
+        try:
+            _screener_snapshot_sync(df, today_date, now)
+        except Exception:
+            logger.exception("ticker_scores_sync: screener snapshot failed (non-fatal)")
+
         logger.info("ticker_scores_sync: complete, cached %d symbols", len(results))
         update_job_status_sync("job.ticker_scores", "waiting", progress=100, message=f"Cached {len(results)} symbols")
 
     except Exception:
         logger.exception("ticker_scores_sync: unhandled exception")
+
+
+# Phase B: fields to copy from latest 1h/W/M ticker_intraday row into snapshot.
+# Each value is (snapshot_column_name, intraday_column_name).
+_INTRADAY_COLS: list[tuple[str, str]] = [
+    ("intraday_close", "close"),
+    ("rsi", "rsi_14"),
+    ("macd", "macd"),
+    ("macd_signal", "macd_signal"),
+    ("macd_histogram", "macd_histogram"),
+    ("bb_middle", "bb_middle"),
+    ("bb_upper", "bb_upper"),
+    ("bb_lower", "bb_lower"),
+    ("bb_width", "bb_width"),
+    ("bb_squeeze", "bb_squeeze"),
+    ("atr", "atr_14"),
+    ("atr_percent", "atr_percent"),
+    ("vwma_20", "vwma_20"),
+    ("hv_20", "hv_20"),
+    ("hv_60", "hv_60"),
+    ("sharpe_60", "sharpe_60"),
+    ("sharpe_126", "sharpe_126"),
+]
+
+
+def _screener_snapshot_sync(
+    daily_df: pd.DataFrame,
+    today_date: date,
+    now: datetime,
+) -> None:
+    """Build/refresh ticker_screener_snapshot from in-memory 252d daily data
+    plus 2 supplementary queries (latest 1h/W/M intraday + stock_universe).
+
+    Called from _ticker_scores_sync() right after the ticker_scores upsert.
+    Snapshot is one row per symbol with all screener fields denormalized.
+    TQL→SQL queries read this table via INNER JOIN with ticker_scores.
+    """
+    update_job_status_sync(
+        "job.ticker_scores", "running", progress=95,
+        message="Building screener snapshot...",
+    )
+
+    # 1. Reduce 252d window to the latest row per symbol
+    daily_df_sorted = daily_df.sort_values(["symbol", "date"], ascending=[True, False])
+    latest_per_sym = daily_df_sorted.groupby("symbol", as_index=False).first()
+
+    # 2. Compute 52w high/low from the same 252d window (per symbol)
+    def _agg_52w(g: pd.DataFrame) -> pd.Series:
+        return pd.Series({
+            "high_52w": g["high"].max(),
+            "low_52w": g["low"].min(),
+        })
+
+    # SQLite + SQLAlchemy return date columns as ISO strings via raw execute();
+    # convert to Python date objects so the snapshot upsert doesn't fail with
+    # "SQLite Date type only accepts Python date objects as input".
+    if len(latest_per_sym) > 0 and not isinstance(latest_per_sym["date"].iloc[0], date):
+        latest_per_sym["date"] = pd.to_datetime(latest_per_sym["date"]).dt.date
+    w52 = (
+        daily_df_sorted.groupby("symbol", as_index=False)
+        .apply(_agg_52w, include_groups=False)
+        .reset_index(drop=True)
+    )
+    latest_per_sym = latest_per_sym.merge(w52, on="symbol", how="left")
+    last_close = latest_per_sym["close"].astype(float)
+    latest_per_sym["pct_from_52w_high"] = (
+        (last_close - latest_per_sym["high_52w"]) / latest_per_sym["high_52w"] * 100
+    )
+    latest_per_sym["pct_from_52w_low"] = (
+        (last_close - latest_per_sym["low_52w"]) / latest_per_sym["low_52w"] * 100
+    )
+    latest_per_sym["pct_from_52w_high"] = latest_per_sym["pct_from_52w_high"].round(2)
+    latest_per_sym["pct_from_52w_low"] = latest_per_sym["pct_from_52w_low"].round(2)
+
+    # 3. Latest 1h/W/M from ticker_intraday — one query per interval
+    symbols = latest_per_sym["symbol"].tolist()
+    intraday_latest: dict[tuple[str, str], dict] = {}
+    # Map source column name → ORM attribute for SELECT
+    intraday_attr_map = {
+        "close": TickerIntraday.close,
+        "rsi_14": TickerIntraday.rsi_14,
+        "macd": TickerIntraday.macd,
+        "macd_signal": TickerIntraday.macd_signal,
+        "macd_histogram": TickerIntraday.macd_histogram,
+        "bb_middle": TickerIntraday.bb_middle,
+        "bb_upper": TickerIntraday.bb_upper,
+        "bb_lower": TickerIntraday.bb_lower,
+        "bb_width": TickerIntraday.bb_width,
+        "bb_squeeze": TickerIntraday.bb_squeeze,
+        "atr_14": TickerIntraday.atr_14,
+        "atr_percent": TickerIntraday.atr_percent,
+        "vwma_20": TickerIntraday.vwma_20,
+        "hv_20": TickerIntraday.hv_20,
+        "hv_60": TickerIntraday.hv_60,
+        "sharpe_60": TickerIntraday.sharpe_60,
+        "sharpe_126": TickerIntraday.sharpe_126,
+    }
+    intraday_value_cols = [c[1] for c in _INTRADAY_COLS]
+    with _SyncSessionLocal() as db:
+        for iv in ("1h", "W", "M"):
+            stmt = (
+                select(TickerIntraday.symbol, *[intraday_attr_map[c] for c in intraday_value_cols])
+                .where(TickerIntraday.symbol.in_(symbols))
+                .where(TickerIntraday.interval == iv)
+                .order_by(TickerIntraday.symbol, TickerIntraday.timestamp.desc())
+            )
+            # Reduce to latest per symbol (rows already sorted desc)
+            seen: set[str] = set()
+            for row in db.execute(stmt).all():
+                sym = row[0]
+                if sym in seen:
+                    continue
+                seen.add(sym)
+                rec = dict(zip(intraday_value_cols, row[1:]))
+                intraday_latest[(sym, iv)] = rec
+
+    # 4. Sector/industry/PE/market_cap/fair_value from stock_universe
+    universe_meta: dict[str, dict] = {}
+    with _SyncSessionLocal() as db:
+        stmt = select(
+            StockUniverse.symbol,
+            StockUniverse.symbol_pe,
+            StockUniverse.industry,
+            StockUniverse.fair_value,
+            StockUniverse.high_52w,
+            StockUniverse.low_52w,
+        ).where(StockUniverse.symbol.in_(symbols))
+        for sym, pe, industry, fv, h52, l52 in db.execute(stmt).all():
+            # industry field stores the description (e.g. "Banks", "IT - Software");
+            # treat it as the sector for TQL Sector filtering (legacy behavior).
+            universe_meta[sym] = {
+                "pe": pe,
+                "sector": industry,  # TQL "Sector" maps to industry description
+                "industry": industry,
+                "fair_value": fv,
+            }
+
+    # 5. Assemble snapshot rows
+    snapshot_rows: list[dict] = []
+    for _, r in latest_per_sym.iterrows():
+        sym = r["symbol"]
+        meta = universe_meta.get(sym, {})
+
+        row: dict = {
+            "symbol": sym,
+            "last_date": r["date"],
+            "compute_date": today_date,
+            "computed_at": now,
+            "last_close": float(r["close"]),
+            "last_volume": int(r["volume"]),
+            "last_open": float(r["open"]),
+            "last_high": float(r["high"]),
+            "last_low": float(r["low"]),
+            # 1d indicators (sourced from TickerDaily)
+            "rsi_1d": r["rsi_14"],
+            "macd_1d": r["macd"],
+            "macd_signal_1d": r["macd_signal"],
+            "macd_histogram_1d": r["macd_histogram"],
+            "bb_middle_1d": r["bb_middle"],
+            "bb_upper_1d": r["bb_upper"],
+            "bb_lower_1d": r["bb_lower"],
+            "bb_width_1d": r["bb_width"],
+            "bb_squeeze_1d": r["bb_squeeze"],
+            "atr_1d": r["atr_14"],
+            "atr_percent_1d": r["atr_percent"],
+            "vwma_20_1d": r["vwma_20"],
+            "hv_20": r["hv_20"],
+            "hv_60": r["hv_60"],
+            "sharpe_60": r["sharpe_60"],
+            "sharpe_126": r["sharpe_126"],
+            "high_52w": r["high_52w"],
+            "low_52w": r["low_52w"],
+            "pct_from_52w_high": r["pct_from_52w_high"],
+            "pct_from_52w_low": r["pct_from_52w_low"],
+            "sector": meta.get("sector"),
+            "industry": meta.get("industry"),
+            "pe": meta.get("pe"),
+            "market_cap": None,  # Not in stock_universe; reserved for future
+            "fair_value": meta.get("fair_value"),
+        }
+
+        # Add 1h/W/M intraday columns
+        for iv in ("1h", "W", "M"):
+            iv_row = intraday_latest.get((sym, iv), {})
+            for snap_col, src_col in _INTRADAY_COLS:
+                row[f"{snap_col}_{iv}"] = iv_row.get(src_col)
+
+        snapshot_rows.append(row)
+
+    # 6. Bulk upsert (ON CONFLICT(symbol) DO UPDATE)
+    set_dict = {col: sqlite_insert(TickerScreenerSnapshot).excluded[col] for col in [
+        "last_date", "compute_date", "computed_at",
+        "last_close", "last_volume", "last_open", "last_high", "last_low",
+        "rsi_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
+        "bb_middle_1d", "bb_upper_1d", "bb_lower_1d", "bb_width_1d",
+        "bb_squeeze_1d", "atr_1d", "atr_percent_1d", "vwma_20_1d",
+        "hv_20", "hv_60", "sharpe_60", "sharpe_126",
+        "high_52w", "low_52w", "pct_from_52w_high", "pct_from_52w_low",
+        "sector", "industry", "pe", "market_cap", "fair_value",
+        "intraday_close_1h", "rsi_1h", "macd_1h", "macd_signal_1h",
+        "macd_histogram_1h", "bb_middle_1h", "bb_upper_1h", "bb_lower_1h",
+        "bb_width_1h", "bb_squeeze_1h", "atr_1h", "atr_percent_1h",
+        "vwma_20_1h", "hv_20_1h", "hv_60_1h", "sharpe_60_1h", "sharpe_126_1h",
+        "intraday_close_W", "rsi_W", "macd_W", "macd_signal_W",
+        "macd_histogram_W", "bb_middle_W", "bb_upper_W", "bb_lower_W",
+        "bb_width_W", "bb_squeeze_W", "atr_W", "atr_percent_W",
+        "vwma_20_W", "hv_20_W", "hv_60_W", "sharpe_60_W", "sharpe_126_W",
+        "intraday_close_M", "rsi_M", "macd_M", "macd_signal_M",
+        "macd_histogram_M", "bb_middle_M", "bb_upper_M", "bb_lower_M",
+        "bb_width_M", "bb_squeeze_M", "atr_M", "atr_percent_M",
+        "vwma_20_M", "hv_20_M", "hv_60_M", "sharpe_60_M", "sharpe_126_M",
+    ]}
+    with _SyncSessionLocal() as db:
+        ins = sqlite_insert(TickerScreenerSnapshot).values(snapshot_rows)
+        ins = ins.on_conflict_do_update(
+            index_elements=["symbol"],
+            set_=set_dict,
+        )
+        db.execute(ins)
+        db.commit()
+    logger.info(
+        "screener_snapshot_sync: wrote %d rows to ticker_screener_snapshot",
+        len(snapshot_rows),
+    )
 
 
 def ticker_scores_worker() -> None:
@@ -1255,23 +2042,20 @@ def ticker_scores_worker() -> None:
         logger.info("ticker_scores_worker: stopped")
         return
 
-    # Check first_run for startup execution
+    # Startup sequencing is owned by the orchestrator pipeline. The worker waits
+    # for the upstream stage gate, then yields to the orchestrator instead of
+    # running its own first-run computation.
     if _is_first_run("ticker_scores"):
         # Wait for indicators to be computed before scoring
         if _wait_for_startup_event(_startup_ticker_indicators_done, "ticker_indicators", "job.ticker_scores"):
             update_job_status_sync("job.ticker_scores", "idle", progress=0, message="Stopped")
             logger.info("ticker_scores_worker: stopped")
             return
-        update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
-        _ticker_scores_sync()
+        logger.info("ticker_scores_worker: orchestrator owns startup score computation, skipping worker first-run execution")
         _set_first_run_complete("ticker_scores")
     else:
         logger.info("ticker_scores_worker: first_run=False, skipping startup computation")
-        update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for cron schedule")
-
-    # Unblock scan/notification workers that depend on scores
-    _startup_ticker_scores_done.set()
-    logger.info("ticker_scores_worker: startup gate released (_startup_ticker_scores_done)")
+    update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_scores", "0 0 * * *")
@@ -1308,23 +2092,20 @@ def ticker_indicators_worker() -> None:
         logger.info("ticker_indicators_worker: stopped")
         return
 
-    # Check first_run for startup execution
+    # Startup sequencing is owned by the orchestrator pipeline. The worker waits
+    # for the upstream stage gate, then yields to the orchestrator instead of
+    # running its own first-run computation.
     if _is_first_run("ticker_indicators"):
         # Wait for candle backfill to complete before computing indicators
         if _wait_for_startup_event(_startup_ticker_backfill_done, "ticker_backfill", "job.ticker_indicators"):
             update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
             logger.info("ticker_indicators_worker: stopped")
             return
-        update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Starting initial computation...")
-        _ticker_indicators_sync()
+        logger.info("ticker_indicators_worker: orchestrator owns startup indicator computation, skipping worker first-run execution")
         _set_first_run_complete("ticker_indicators")
     else:
         logger.info("ticker_indicators_worker: first_run=False, skipping startup computation")
-        update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for cron schedule")
-
-    # Unblock workers that depend on indicators
-    _startup_ticker_indicators_done.set()
-    logger.info("ticker_indicators_worker: startup gate released (_startup_ticker_indicators_done)")
+    update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_indicators", "0 11 * * 1-5")
@@ -1347,6 +2128,53 @@ def ticker_indicators_worker() -> None:
 
     update_job_status_sync("job.ticker_indicators", "idle", progress=0, message="Stopped")
     logger.info("ticker_indicators_worker: stopped")
+
+
+def ticker_intraday_hourly_indicators_worker() -> None:
+    """Daemon thread target for computing hourly (1h) intraday technical indicators.
+
+    Cron: at :30 past each trading hour 09:30–15:30 IST on weekdays.
+    """
+    logger.info("ticker_intraday_hourly_indicators_worker: started")
+
+    if not _is_job_enabled("job.ticker_intraday_hourly_indicators"):
+        logger.info("ticker_intraday_hourly_indicators_worker: disabled, waiting...")
+        update_job_status_sync("job.ticker_intraday_hourly_indicators", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.ticker_intraday_hourly_indicators", "idle", progress=0, message="Stopped")
+        logger.info("ticker_intraday_hourly_indicators_worker: stopped")
+        return
+
+    # Check first_run for startup execution
+    if _is_first_run("ticker_intraday_hourly_indicators"):
+        # Wait for hourly backfill to complete before computing indicators
+        if _wait_for_startup_event(_startup_ticker_hourly_done, "ticker_intraday_hourly_update", "job.ticker_intraday_hourly_indicators"):
+            update_job_status_sync("job.ticker_intraday_hourly_indicators", "idle", progress=0, message="Stopped")
+            logger.info("ticker_intraday_hourly_indicators_worker: stopped")
+            return
+        update_job_status_sync("job.ticker_intraday_hourly_indicators", "running", progress=0, message="Starting initial computation...")
+        _ticker_intraday_indicators_sync(["1h"])
+        _set_first_run_complete("ticker_intraday_hourly_indicators")
+    else:
+        logger.info("ticker_intraday_hourly_indicators_worker: first_run=False, skipping startup computation")
+        update_job_status_sync("job.ticker_intraday_hourly_indicators", "waiting", progress=0, message="Waiting for cron schedule")
+
+    while not _shutdown_event.is_set():
+        wait_secs = _report_job_waiting("job.ticker_intraday_hourly_indicators", "30 9,10,11,12,13,14,15 * * 1-5")
+        logger.info("ticker_intraday_hourly_indicators_worker: sleeping %.0fs until next cron (30 9,10,11,12,13,14,15 * * 1-5)", wait_secs)
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.ticker_intraday_hourly_indicators"):
+                update_job_status_sync("job.ticker_intraday_hourly_indicators", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            update_job_status_sync("job.ticker_intraday_hourly_indicators", "running", progress=0, message="Computing hourly indicators...")
+            _ticker_intraday_indicators_sync(["1h"])
+
+    update_job_status_sync("job.ticker_intraday_hourly_indicators", "idle", progress=0, message="Stopped")
+    logger.info("ticker_intraday_hourly_indicators_worker: stopped")
 
 
 NEWS_CRON = "*/5 * * * *"
@@ -1591,6 +2419,108 @@ def news_rss_worker() -> None:
 
     update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
     logger.info("news_rss_worker: stopped")
+
+
+# ---------------------------------------------------------------------------
+# Phase C: weekly SQLite VACUUM worker
+# ---------------------------------------------------------------------------
+# SQLite stores data in pages; DELETE leaves free pages in the file until
+# VACUUM rebuilds the file.  News/intraday retention deletes thousands of
+# rows each week; running VACUUM once a week (Sunday 04:00) reclaims space
+# without adding meaningful write overhead.  This is a single-threaded
+# rebuild — takes 5-15 min on a 1-2GB DB.
+
+VACUUM_CRON = "0 4 * * 0"   # Every Sunday 04:00 (low-traffic window)
+
+
+def _run_vacuum() -> None:
+    """Run VACUUM on the SQLite warehouse to reclaim space from deleted rows.
+
+    Uses a dedicated short-lived connection because VACUUM cannot run inside
+    an open transaction.  Disables WAL briefly to allow the rebuild.
+    """
+    db_path = settings.db_path
+    logger.info("vacuum: starting VACUUM on %s", db_path)
+    update_job_status_sync("job.vacuum", "running", progress=10, message="Starting VACUUM...")
+    t0 = time.time()
+    try:
+        # VACUUM cannot be executed inside a transaction.  Use a fresh
+        # connection with isolation_level=None (autocommit) so each
+        # statement is its own transaction.
+        with sqlite3.connect(db_path, timeout=600, isolation_level=None) as con:
+            # 1. checkpoint WAL to fold pending writes into the main DB
+            update_job_status_sync("job.vacuum", "running", progress=20,
+                                   message="Checkpointing WAL...")
+            try:
+                con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError as e:
+                logger.warning("vacuum: wal_checkpoint failed (continuing): %s", e)
+
+            # 2. rebuild the database file in place
+            update_job_status_sync("job.vacuum", "running", progress=50,
+                                   message="VACUUM in progress (may take 5-15 min)...")
+            con.execute("VACUUM")
+
+            # 3. update query planner stats
+            update_job_status_sync("job.vacuum", "running", progress=90,
+                                   message="Running ANALYZE...")
+            con.execute("ANALYZE")
+
+        elapsed = time.time() - t0
+        logger.info("vacuum: complete in %.1fs", elapsed)
+        update_job_status_sync("job.vacuum", "waiting", progress=100,
+                               message=f"Complete in {elapsed:.0f}s")
+    except Exception:
+        logger.exception("vacuum: failed")
+        update_job_status_sync("job.vacuum", "waiting", progress=0,
+                               message="Failed (will retry next week)")
+
+
+def vacuum_worker() -> None:
+    """Daemon thread: runs VACUUM weekly on Sunday 04:00.
+
+    Skips if disabled via system_config.  On first launch (first_run=True)
+    waits for ticker_scores to complete before triggering (we don't want to
+    race with the nightly pipeline).  Subsequent cycles use the cron schedule.
+    """
+    logger.info("vacuum_worker: started")
+
+    if not _is_job_enabled("job.vacuum"):
+        logger.info("vacuum_worker: disabled, waiting...")
+        update_job_status_sync("job.vacuum", "waiting", progress=0, message="Disabled")
+        while not _shutdown_event.is_set():
+            _sleep_interruptible(60)
+        update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
+        logger.info("vacuum_worker: stopped")
+        return
+
+    # Wait for ticker_scores to finish its first run so we don't fight for the
+    # DB lock during startup.  This is a soft check — if the worker hasn't
+    # started, just proceed.
+    if _is_first_run("vacuum") and _wait_for_startup_event(
+        _startup_ticker_scores_done, "ticker_scores", "job.vacuum"
+    ):
+        update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
+        return
+    if _is_first_run("vacuum"):
+        _set_first_run_complete("vacuum")
+
+    while not _shutdown_event.is_set():
+        wait_secs = _report_job_waiting("job.vacuum", VACUUM_CRON,
+                                        message="Weekly maintenance")
+        logger.info("vacuum_worker: sleeping %.0fs until next cron (%s)",
+                    wait_secs, VACUUM_CRON)
+        if _sleep_interruptible(wait_secs):
+            break
+        if not _shutdown_event.is_set():
+            if not _is_job_enabled("job.vacuum"):
+                update_job_status_sync("job.vacuum", "waiting", progress=0, message="Disabled")
+                _sleep_interruptible(60)
+                continue
+            _run_vacuum()
+
+    update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
+    logger.info("vacuum_worker: stopped")
 
 
 WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
@@ -2041,18 +2971,21 @@ async def start_all_workers() -> list[threading.Thread]:
 
     Startup ordering is strictly enforced via threading.Event gates:
 
-      1. stock_universe_worker      — runs first; sets _startup_stock_universe_done
-                                      All other workers wait on this before their first-run.
-      2. ticker_backfill_worker     — waits stock_universe_done; sets _startup_ticker_backfill_done
-      3. ticker_indicators_worker   — waits ticker_backfill_done; sets _startup_ticker_indicators_done
-      4. ticker_scores_worker       — waits ticker_indicators_done; sets _startup_ticker_scores_done
-      5. ticker_daily_update_worker — waits ticker_backfill_done (runs its own inline pipeline)
-      6. global_scan_worker         — waits ticker_scores_done; polls _pipeline_idle on every cycle
-      7. watchlist_notification_worker — waits ticker_scores_done; polls _pipeline_idle on every cycle
-      8. news_worker                — waits stock_universe_done; then runs independently
-      9. watchlist_news_worker      — waits stock_universe_done; then runs independently
-      10. market_data_worker        — waits stock_universe_done; then runs independently
-      11. results_calendar_worker   — waits stock_universe_done; then runs independently
+      1. stock_universe_worker               — runs first; sets _startup_stock_universe_done
+                                                 All other workers wait on this before their first-run.
+      2. ticker_backfill_worker              — waits stock_universe_done; sets _startup_ticker_backfill_done
+      3. ticker_indicators_worker            — waits ticker_backfill_done; sets _startup_ticker_indicators_done
+      4. ticker_scores_worker                — waits ticker_indicators_done; sets _startup_ticker_scores_done
+      5. ticker_daily_update_worker          — waits ticker_backfill_done (runs its own inline pipeline)
+      6. ticker_intraday_hourly_update_worker    — runs independently; sets _startup_ticker_hourly_done
+      6b. ticker_intraday_hourly_indicators_worker — waits _startup_ticker_hourly_done
+      7. global_scan_worker                  — waits ticker_scores_done; polls _pipeline_idle on every cycle
+      8. watchlist_notification_worker       — waits ticker_scores_done; polls _pipeline_idle on every cycle
+      9. news_worker                         — waits stock_universe_done; then runs independently
+      10. watchlist_news_worker              — waits stock_universe_done; then runs independently
+      11. market_data_worker                 — waits stock_universe_done; then runs independently
+      12. results_calendar_worker            — waits stock_universe_done; then runs independently
+      13. vacuum_worker                      — waits ticker_scores_done; weekly Sunday 04:00 cron
 
     Cron-cycle ordering is enforced via _pipeline_lock + _pipeline_idle:
       ticker_daily_update / ticker_indicators / ticker_scores each acquire
@@ -2062,24 +2995,31 @@ async def start_all_workers() -> list[threading.Thread]:
       progress. Note: there is an inherent narrow race where a consumer passes
       the idle check and a producer then starts — this is accepted because scan
       workers are DB-read-only and the window is sub-millisecond.
+
+    Weekly/Monthly (W/M) candle sync + indicators are NOT run by standalone
+    workers — they are Stage 5 of the nightly orchestrator pipeline (see
+    orchestrator.py) so that W/M data is fresh before the nightly scan.
     """
     reset_async_shutdown_event()
     register_all_jobs()
     await sync_all_jobs_to_db()
 
     targets = [
-        ticker_backfill_worker,        # 1 — candle history first
-        stock_universe_worker,         # 2 — symbol metadata
-        ticker_indicators_worker,      # 3 — indicator backfill
-        ticker_scores_worker,          # 4 — momentum scores
-        ticker_daily_update_worker,    # 5 — daily bhavcopy + refresh
-        market_data_worker,            # 6 — live market data
-        global_scan_worker,           # 7 — full-universe scan
-        watchlist_notification_worker,  # 8 — watchlist alerts
-        news_worker,                   # 9 — global news (MoneyControl)
-        news_rss_worker,              # 10 — RSS news aggregation
-        watchlist_news_worker,        # 11 — per-symbol news
-        results_calendar_worker,       # 12 — upcoming results alerts
+        ticker_backfill_worker,                      # 1 — candle history first
+        stock_universe_worker,                       # 2 — symbol metadata
+        ticker_indicators_worker,                    # 3 — indicator backfill
+        ticker_scores_worker,                          # 4 — momentum scores
+        ticker_daily_update_worker,                  # 5 — daily bhavcopy + refresh
+        ticker_intraday_hourly_update_worker,       # 6 — 1h candles during market hours
+        ticker_intraday_hourly_indicators_worker,   # 6b — 1h indicators during market hours
+        market_data_worker,                          # 7 — live market data
+        global_scan_worker,                          # 8 — full-universe scan
+        watchlist_notification_worker,               # 9 — watchlist alerts
+        news_worker,                                 # 10 — global news (MoneyControl)
+        news_rss_worker,                             # 11 — RSS news aggregation
+        watchlist_news_worker,                       # 12 — per-symbol news
+        results_calendar_worker,                     # 13 — upcoming results alerts
+        vacuum_worker,                               # 14 — weekly VACUUM (Sunday 04:00)
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)
@@ -2237,6 +3177,12 @@ DAILY_NOTIFICATION_WINDOW_DAYS = 7          # lookback for deals and insider tra
 CLEANUP_READ_AFTER_DAYS = 30              # hard-delete read notifications older than this
 CLEANUP_INTERVAL = 24 * 60 * 60            # run cleanup at most once per 24 hours
 
+# Phase C: data-retention policies for high-volume tables
+NEWS_RETENTION_DAYS = 30                   # hard-delete news_articles older than this
+INTRADAY_1H_RETENTION_DAYS = 30            # 1h candles older than this are pruned
+INTRADAY_W_RETENTION_YEARS = 2             # weekly candles older than this are pruned
+# Monthly (M) candles: kept forever (small footprint, useful for long-term charts)
+
 _cleanup_last_run: datetime | None = None
 
 
@@ -2287,30 +3233,118 @@ def _bulk_upsert_notifications(rows: list[dict]) -> None:
 
 
 def _run_cleanup_if_due() -> None:
-    """Hard-delete read notifications older than CLEANUP_READ_AFTER_DAYS.
+    """Run the daily cleanup suite.
+
+    - Hard-delete read notifications older than CLEANUP_READ_AFTER_DAYS
+    - Phase C: hard-delete news_articles older than NEWS_RETENTION_DAYS
+    - Phase C: prune ticker_intraday 1h bars older than INTRADAY_1H_RETENTION_DAYS
+    - Phase C: prune ticker_intraday W bars older than INTRADAY_W_RETENTION_YEARS
+    - Monthly bars are never pruned.
 
     Runs at most once per CLEANUP_INTERVAL to avoid unnecessary DB writes.
+    Errors in any single pruner are logged and do not prevent the others.
     """
     global _cleanup_last_run
     now = datetime.now()
     if _cleanup_last_run is not None and (now - _cleanup_last_run).total_seconds() < CLEANUP_INTERVAL:
         return
 
-    cutoff = datetime.combine(now.date() - timedelta(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
-    with _SyncSessionLocal() as session:
-        deleted = session.execute(
-            delete(Notification).where(
-                Notification.is_read == True,
-                Notification.triggered_at < cutoff,
+    # 1) notifications
+    try:
+        cutoff = datetime.combine(now.date() - timedelta(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
+        with _SyncSessionLocal() as session:
+            deleted = session.execute(
+                delete(Notification).where(
+                    Notification.is_read == True,
+                    Notification.triggered_at < cutoff,
+                )
             )
-        )
-        session.commit()
-        if deleted.rowcount > 0:
+            session.commit()
+            if deleted.rowcount > 0:
+                logger.info(
+                    "notification_cleanup: deleted %d read notifications older than %s",
+                    deleted.rowcount,
+                    cutoff.date(),
+                )
+    except Exception:
+        logger.exception("notification_cleanup: failed (non-fatal)")
+
+    # 2) news articles (full row hard-delete) — use raw SQL for speed
+    #    (SQLAlchemy ORM delete() does a SELECT-then-DELETE-per-row)
+    try:
+        news_cutoff = now - timedelta(days=NEWS_RETENTION_DAYS)
+        with _SyncSessionLocal() as session:
+            deleted = session.execute(
+                text("DELETE FROM news_articles WHERE publish_date < :cutoff"),
+                {"cutoff": news_cutoff},
+            )
+            session.commit()
+            if deleted.rowcount > 0:
+                logger.info(
+                    "news_cleanup: deleted %d articles older than %s",
+                    deleted.rowcount, news_cutoff.date(),
+                )
+    except Exception:
+        logger.exception("news_cleanup: failed (non-fatal)")
+
+    # 3) intraday 1h — chunked DELETE so the WAL lock is held briefly per batch
+    try:
+        cutoff_1h = now - timedelta(days=INTRADAY_1H_RETENTION_DAYS)
+        total_1h = 0
+        for _ in range(50):  # up to 50 batches per cleanup cycle
+            with _SyncSessionLocal() as session:
+                deleted = session.execute(
+                    text(
+                        "DELETE FROM ticker_intraday WHERE rowid IN ("
+                        "  SELECT rowid FROM ticker_intraday "
+                        "  WHERE interval = '1h' AND timestamp < :cutoff "
+                        "  LIMIT 50000"
+                        ")"
+                    ),
+                    {"cutoff": cutoff_1h},
+                )
+                session.commit()
+                count = deleted.rowcount
+            total_1h += count
+            if count < 50000:
+                break
+        if total_1h > 0:
             logger.info(
-                "notification_cleanup: deleted %d read notifications older than %s",
-                deleted.rowcount,
-                cutoff.date(),
+                "intraday_cleanup: deleted %d 1h candles older than %s",
+                total_1h, cutoff_1h,
             )
+    except Exception:
+        logger.exception("intraday_1h_cleanup: failed (non-fatal)")
+
+    # 4) intraday W
+    try:
+        cutoff_w = now - timedelta(days=365 * INTRADAY_W_RETENTION_YEARS)
+        total_W = 0
+        for _ in range(50):
+            with _SyncSessionLocal() as session:
+                deleted = session.execute(
+                    text(
+                        "DELETE FROM ticker_intraday WHERE rowid IN ("
+                        "  SELECT rowid FROM ticker_intraday "
+                        "  WHERE interval = 'W' AND timestamp < :cutoff "
+                        "  LIMIT 50000"
+                        ")"
+                    ),
+                    {"cutoff": cutoff_w},
+                )
+                session.commit()
+                count = deleted.rowcount
+            total_W += count
+            if count < 50000:
+                break
+        if total_W > 0:
+            logger.info(
+                "intraday_cleanup: deleted %d W candles older than %s",
+                total_W, cutoff_w.date(),
+            )
+    except Exception:
+        logger.exception("intraday_W_cleanup: failed (non-fatal)")
+
     _cleanup_last_run = now
 
 
@@ -2503,11 +3537,15 @@ def _ticker_indicator_notification_cycle() -> None:
     Evaluates all 15 technical trigger types (RSI, MACD, Bollinger, ATR,
     volatility, momentum, returns, streaks, 52W proximity) against the latest
     stored ticker_daily indicator columns.
+
+    Momentum and 1W return alerts are read from the pre-computed `ticker_scores`
+    cache (populated by Stage 4 `_ticker_scores_sync`), NOT from
+    `get_momentum_score`/`get_returns`. Those services do O(universe_size) work
+    per call, which previously caused the per-symbol loop to hang for hours when
+    invoked across the 65-symbol watchlist.
     """
-    from app.models.ticker import TickerDaily
+    from app.models.ticker import TickerDaily, TickerScore
     from app.models.stockuniverse import StockUniverse
-    from app.services import returns as returns_service
-    from app.services import momentum as momentum_service
 
     try:
         logger.info("ticker_indicator_notification_cycle: starting")
@@ -2533,6 +3571,23 @@ def _ticker_indicator_notification_cycle() -> None:
         total_symbols = len(all_symbols)
         logger.info("ticker_indicator_notification_cycle: starting for %d symbols in %d watchlists",
                     total_symbols, len(symbols_by_watchlist))
+
+        # Load TickerScore cache once for the whole cycle. Stage 4
+        # `_ticker_scores_sync` pre-computes momentum_score and return_1w for
+        # every symbol; reading from this cache keeps the cycle O(watchlist)
+        # instead of O(watchlist × universe).
+        scores_cache: dict[str, TickerScore] = {}
+        try:
+            with _SyncSessionLocal() as db:
+                rows = db.execute(
+                    select(TickerScore).where(TickerScore.compute_date == today_date)
+                )
+                for row in rows.scalars():
+                    scores_cache[row.symbol] = row
+            logger.info("ticker_indicator_notification_cycle: loaded %d ticker_scores from cache",
+                        len(scores_cache))
+        except Exception as e:
+            logger.warning("ticker_indicator_notification_cycle: failed to load ticker_scores: %s", e)
 
         seen_today = _get_seen_today()
         pending: list[dict] = []
@@ -2598,12 +3653,12 @@ def _ticker_indicator_notification_cycle() -> None:
                     if su_row.low_52w > 0:
                         pct_from_52w_low  = (latest.close - su_row.low_52w) / su_row.low_52w  * 100
 
-                # --- returns and momentum (service calls) ---
-                returns = returns_service.get_returns(symbol)
-                return_1w = returns.get("1w") if returns else None
-
-                momentum_data  = momentum_service.get_momentum_score(symbol)
-                momentum_score = momentum_data.get("score") if momentum_data else None
+                # --- momentum and return_1w from pre-computed TickerScore cache ---
+                # Avoid get_momentum_score/get_returns: those are O(universe_size)
+                # per call and were the root cause of the Stage 3 hang.
+                ts = scores_cache.get(symbol)
+                momentum_score = ts.momentum_score if ts else None
+                return_1w      = ts.return_1w      if ts else None
 
                 # --- build alerts per watchlist that contains this symbol ---
                 for wl_id, wl_symbols in symbols_by_watchlist.items():
@@ -2653,7 +3708,7 @@ def _ticker_indicator_notification_cycle() -> None:
                         alerts.append(("atr_expansion",
                             f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
 
-                    # Momentum / returns
+                    # Momentum / returns (read from TickerScore cache)
                     if momentum_score is not None and momentum_score > momentum_thr:
                         alerts.append(("momentum_surge",
                             f"{symbol} momentum score {momentum_score:.1f} > {momentum_thr}"))
@@ -2708,6 +3763,178 @@ def _ticker_indicator_notification_cycle() -> None:
 
     except Exception:
         logger.exception("ticker_indicator_notification_cycle: unhandled exception")
+
+
+def _ticker_intraday_indicator_notification_cycle() -> None:
+    """Generate indicator-based notifications for watchlist symbols using intraday data.
+
+    Evaluates RSI, MACD, Bollinger, ATR, and MTF alignment triggers against
+    the latest stored ticker_intraday indicator columns for 1h, W, and M.
+    """
+    from app.models.ticker import TickerIntraday, TickerDaily
+    from app.models.stockuniverse import StockUniverse
+
+    try:
+        logger.info("ticker_intraday_indicator_notification_cycle: starting")
+        now = datetime.now()
+        today_date = now.date()
+
+        cfg = get_notif_config()
+        rsi_oversold_thr   = float(cfg.get("notif.rsi_oversold_threshold", "30.0"))
+        rsi_overbought_thr = float(cfg.get("notif.rsi_overbought_threshold", "70.0"))
+        atr_exp_thr        = float(cfg.get("notif.atr_expansion_threshold", "4.0"))
+
+        symbols_by_watchlist = _get_watchlist_symbols()
+        if not symbols_by_watchlist:
+            logger.debug("ticker_intraday_indicator_notification_cycle: watchlist empty, skipping")
+            return
+
+        all_symbols = list({s for wl_symbols in symbols_by_watchlist.values() for s in wl_symbols})
+        total_symbols = len(all_symbols)
+
+        seen_today = _get_seen_today()
+        pending: list[dict] = []
+        processed = 0
+        alerts_generated = 0
+
+        for symbol in all_symbols:
+            if _shutdown_event.is_set():
+                return
+
+            processed += 1
+            if processed % 20 == 0 or processed == 1:
+                logger.info("ticker_intraday_indicator_notification_cycle: progress %d/%d", processed, total_symbols)
+
+            try:
+                # Load latest 2 rows per interval for crossover detection
+                intraday_rows: dict[str, list] = {}
+                with _SyncSessionLocal() as db:
+                    for interval in ("1h", "W", "M"):
+                        rows = list(
+                            db.execute(
+                                select(TickerIntraday)
+                                .where(TickerIntraday.symbol == symbol)
+                                .where(TickerIntraday.interval == interval)
+                                .order_by(TickerIntraday.timestamp.desc())
+                                .limit(2)
+                            ).scalars()
+                        )
+                        if rows:
+                            intraday_rows[interval] = list(reversed(rows))  # oldest → newest
+
+                    su_row = db.execute(
+                        select(StockUniverse).where(StockUniverse.symbol == symbol)
+                    ).scalar_one_or_none()
+
+                if not intraday_rows:
+                    continue
+
+                # Build per-watchlist alerts
+                for wl_id, wl_symbols in symbols_by_watchlist.items():
+                    if symbol not in wl_symbols:
+                        continue
+
+                    alerts: list[tuple[str, str]] = []
+
+                    for interval, rows in intraday_rows.items():
+                        if len(rows) < 1:
+                            continue
+                        latest = rows[-1]
+                        prev = rows[-2] if len(rows) >= 2 else None
+                        sfx = f"_{interval}"
+
+                        # RSI
+                        if latest.rsi_14 is not None:
+                            if latest.rsi_14 < rsi_oversold_thr:
+                                alerts.append((f"rsi_oversold{sfx}",
+                                    f"{symbol} [{interval}] RSI oversold: {latest.rsi_14:.1f} < {rsi_oversold_thr}"))
+                            elif latest.rsi_14 > rsi_overbought_thr:
+                                alerts.append((f"rsi_overbought{sfx}",
+                                    f"{symbol} [{interval}] RSI overbought: {latest.rsi_14:.1f} > {rsi_overbought_thr}"))
+
+                        # MACD crossover
+                        if prev and latest.macd_histogram is not None and prev.macd_histogram is not None:
+                            if prev.macd_histogram < 0 and latest.macd_histogram >= 0:
+                                alerts.append((f"macd_bullish_cross{sfx}",
+                                    f"{symbol} [{interval}] MACD bullish crossover"))
+                            elif prev.macd_histogram > 0 and latest.macd_histogram <= 0:
+                                alerts.append((f"macd_bearish_cross{sfx}",
+                                    f"{symbol} [{interval}] MACD bearish crossover"))
+
+                        # Bollinger Bands
+                        if latest.bb_squeeze == "Y":
+                            alerts.append((f"bb_squeeze_alert{sfx}",
+                                f"{symbol} [{interval}] BB squeeze (width={latest.bb_width})"))
+                        if latest.close is not None and latest.bb_upper is not None and latest.close > latest.bb_upper:
+                            alerts.append((f"bb_upper_break{sfx}",
+                                f"{symbol} [{interval}] close > BB upper"))
+                        if latest.close is not None and latest.bb_lower is not None and latest.close < latest.bb_lower:
+                            alerts.append((f"bb_lower_break{sfx}",
+                                f"{symbol} [{interval}] close < BB lower"))
+
+                        # ATR expansion (1h only — meaningful for intraday)
+                        if interval == "1h" and latest.atr_percent is not None and latest.atr_percent > atr_exp_thr:
+                            alerts.append((f"atr_expansion{sfx}",
+                                f"{symbol} [1h] ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
+
+                    # MTF alignment (daily + weekly + monthly RSI all same direction)
+                    daily_rsi = None
+                    weekly_rsi = None
+                    monthly_rsi = None
+                    if "1h" in intraday_rows:
+                        # 1h is not used for MTF; use daily from ticker_daily if available
+                        with _SyncSessionLocal() as db:
+                            daily_row = db.execute(
+                                select(TickerDaily.rsi_14)
+                                .where(TickerDaily.symbol == symbol)
+                                .order_by(TickerDaily.date.desc())
+                                .limit(1)
+                            ).scalar_one_or_none()
+                            daily_rsi = daily_row
+                    if "W" in intraday_rows:
+                        weekly_rsi = intraday_rows["W"][-1].rsi_14
+                    if "M" in intraday_rows:
+                        monthly_rsi = intraday_rows["M"][-1].rsi_14
+
+                    if daily_rsi is not None and weekly_rsi is not None and monthly_rsi is not None:
+                        if daily_rsi > 50 and weekly_rsi > 50 and monthly_rsi > 50:
+                            alerts.append(("mtf_bullish_alignment",
+                                f"{symbol} MTF bullish: D={daily_rsi:.1f} W={weekly_rsi:.1f} M={monthly_rsi:.1f} all > 50"))
+                        elif daily_rsi < 50 and weekly_rsi < 50 and monthly_rsi < 50:
+                            alerts.append(("mtf_bearish_alignment",
+                                f"{symbol} MTF bearish: D={daily_rsi:.1f} W={weekly_rsi:.1f} M={monthly_rsi:.1f} all < 50"))
+
+                    for trigger_type, message in alerts:
+                        key = (wl_id, symbol, trigger_type)
+                        if key in seen_today:
+                            continue
+                        seen_today.add(key)
+                        pending.append({
+                            "watchlist_id":   wl_id,
+                            "symbol":         symbol,
+                            "exchange":       "NSE",
+                            "trigger_type":   trigger_type,
+                            "message":        message,
+                            "triggered_at":   now,
+                            "triggered_date": today_date,
+                            "is_read":        False,
+                        })
+                        alerts_generated += 1
+
+            except Exception:
+                logger.exception("ticker_intraday_indicator_notification_cycle: failed for %s", symbol)
+
+        if pending:
+            _bulk_upsert_notifications(pending)
+            logger.info(
+                "ticker_intraday_indicator_notification_cycle: processed %d symbols, generated %d notifications, upserted %d",
+                processed, alerts_generated, len(pending)
+            )
+        else:
+            logger.info("ticker_intraday_indicator_notification_cycle: processed %d symbols, no new notifications", processed)
+
+    except Exception:
+        logger.exception("ticker_intraday_indicator_notification_cycle: unhandled exception")
 
 
 def _build_alerts(
@@ -3244,6 +4471,64 @@ def _global_scan_cycle() -> None:
                     if pct_from_52w_low is not None and 0 <= pct_from_52w_low <= near52w_thr:
                         alerts.append(("near_52w_low",
                             f"{symbol} within {near52w_thr}% of 52W low"))
+
+                    # --- Intraday / Weekly / Monthly indicator triggers ---
+                    try:
+                        from app.models.ticker import TickerIntraday
+                        intraday_rows: dict[str, list] = {}
+                        with _SyncSessionLocal() as db:
+                            for interval in ("1h", "W", "M"):
+                                iv_rows = list(
+                                    db.execute(
+                                        select(TickerIntraday)
+                                        .where(TickerIntraday.symbol == symbol)
+                                        .where(TickerIntraday.interval == interval)
+                                        .where(TickerIntraday.indicators_updated_at.isnot(None))
+                                        .order_by(TickerIntraday.timestamp.desc())
+                                        .limit(2)
+                                    ).scalars()
+                                )
+                                if iv_rows:
+                                    intraday_rows[interval] = list(reversed(iv_rows))
+
+                        for interval, iv_rows in intraday_rows.items():
+                            if len(iv_rows) < 1:
+                                continue
+                            latest_iv = iv_rows[-1]
+                            prev_iv = iv_rows[-2] if len(iv_rows) >= 2 else None
+                            sfx = f"_{interval}"
+
+                            if latest_iv.rsi_14 is not None:
+                                if latest_iv.rsi_14 < rsi_oversold_thr:
+                                    alerts.append((f"rsi_oversold{sfx}",
+                                        f"{symbol} [{interval}] RSI oversold: {latest_iv.rsi_14:.1f}"))
+                                elif latest_iv.rsi_14 > rsi_overbought_thr:
+                                    alerts.append((f"rsi_overbought{sfx}",
+                                        f"{symbol} [{interval}] RSI overbought: {latest_iv.rsi_14:.1f}"))
+
+                            if prev_iv and latest_iv.macd_histogram is not None and prev_iv.macd_histogram is not None:
+                                if prev_iv.macd_histogram < 0 and latest_iv.macd_histogram >= 0:
+                                    alerts.append((f"macd_bullish_cross{sfx}",
+                                        f"{symbol} [{interval}] MACD bullish crossover"))
+                                elif prev_iv.macd_histogram > 0 and latest_iv.macd_histogram <= 0:
+                                    alerts.append((f"macd_bearish_cross{sfx}",
+                                        f"{symbol} [{interval}] MACD bearish crossover"))
+
+                            if latest_iv.bb_squeeze == "Y":
+                                alerts.append((f"bb_squeeze_alert{sfx}",
+                                    f"{symbol} [{interval}] BB squeeze"))
+                            if latest_iv.close is not None and latest_iv.bb_upper is not None and latest_iv.close > latest_iv.bb_upper:
+                                alerts.append((f"bb_upper_break{sfx}",
+                                    f"{symbol} [{interval}] close > BB upper"))
+                            if latest_iv.close is not None and latest_iv.bb_lower is not None and latest_iv.close < latest_iv.bb_lower:
+                                alerts.append((f"bb_lower_break{sfx}",
+                                    f"{symbol} [{interval}] close < BB lower"))
+
+                            if interval == "1h" and latest_iv.atr_percent is not None and latest_iv.atr_percent > atr_exp_thr:
+                                alerts.append((f"atr_expansion{sfx}",
+                                    f"{symbol} [1h] ATR% {latest_iv.atr_percent:.1f}% > {atr_exp_thr}%"))
+                    except Exception:
+                        logger.debug("global_scan_cycle: intraday eval failed for %s", symbol, exc_info=True)
 
                     ts = scores_cache.get(symbol)
                     if ts:

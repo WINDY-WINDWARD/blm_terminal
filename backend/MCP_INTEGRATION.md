@@ -40,7 +40,9 @@ This creates `blm-mcp-proxy.mcpb` in the `blm-mcp-bundle/` directory.
 - Zero configuration
 - Works cross-platform (Windows, macOS)
 - Auto-updates when reinstalled
-- 28 tools available immediately
+- 37 tools available immediately
+
+The bundle and direct MCP server both expose portfolio optimization plus watchlist mutation tools, so Claude can create a new portfolio, optimize it, and save the resulting symbols into a new or existing watchlist.
 
 See [`blm-mcp-bundle/README.md`](../blm-mcp-bundle/README.md) for full documentation.
 
@@ -234,5 +236,5 @@ Replace `/path/to/blm_terminal` with the absolute path to your cloned repository
 ## 5. Troubleshooting
 
 - **Server Disconnected / Tool Execution Failed**: This usually means the Python executable path is incorrect or the virtual environment is missing dependencies. Verify the absolute paths in your `command` and `args`.
-- **Database Locked / Access Errors**: Because the `stdio` process runs independently of the FastAPI process, it connects to the same SQLite database. SQLite allows concurrent reads, but if you do heavy concurrent writes, you might see locking. (The current MCP tools are primarily read-only, with slight caching/upserting for filings and screener sessions).
+- **Database Locked / Access Errors**: Because the `stdio` process runs independently of the FastAPI process, it connects to the same SQLite database. SQLite allows concurrent reads, but if you do heavy concurrent writes, you might see locking. Some MCP tools now write portfolio/watchlist data, so save operations are expected here.
 - **Logs**: To debug the `stdio` server, you can manually run the command in your terminal. It communicates over stdout, so any Python tracebacks will be printed directly to the console if it crashes on startup.

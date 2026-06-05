@@ -4,8 +4,7 @@ from collections.abc import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import event
-from sqlalchemy.pool import StaticPool
-
+from sqlalchemy.pool import NullPool as _AsyncNullPool
 from app.config import settings
 
 DATABASE_URL = f"sqlite+aiosqlite:///{settings.db_path}"
@@ -41,7 +40,7 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
+    poolclass=_AsyncNullPool,
 )
 event.listen(engine.sync_engine, "connect", _set_sqlite_pragma)
 
@@ -101,16 +100,10 @@ _SyncSessionLocal = _sync_sessionmaker(
 # ---------------------------------------------------------------------------
 # Thread-safe async engine — used by _run_async() callsites in worker threads.
 #
-# The main `engine` above uses StaticPool (one shared connection), which is
-# correct for uvicorn's single event loop where coroutines are cooperative.
-# However, _run_async() creates a *new* event loop per worker thread — if
-# those loops also used StaticPool they would share the same raw sqlite3
-# connection object across OS threads, which is not thread-safe.
-#
-# This engine uses NullPool: each async session opens a fresh connection and
-# closes it on exit, making it safe to call from any worker thread.
+# The main `engine` above uses NullPool so each request gets its own connection.
+# _run_async() creates a *new* event loop per worker thread — this engine also
+# uses NullPool so it is safe to call from any worker thread.
 # ---------------------------------------------------------------------------
-from sqlalchemy.pool import NullPool as _AsyncNullPool
 
 _thread_async_engine = create_async_engine(
     DATABASE_URL,
