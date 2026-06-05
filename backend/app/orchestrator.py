@@ -194,26 +194,126 @@ class Orchestrator:
     # Internal: pipeline execution
     # ------------------------------------------------------------------
 
-    async def _execute_pipeline(self, mode: PipelineMode) -> None:
+    async def _run_stage(
+        self,
+        mode: PipelineMode,
+        stage_name: str,
+        sub_jobs: list,
+        *,
+        progress_start: int,
+        progress_end: int,
+        stage_label: str,
+        requires_mode=None,
+        on_complete=None,
+    ) -> bool:
+        """Run one pipeline stage (audit B.11).
+
+        Encapsulates the pattern shared by every stage of
+        ``_execute_pipeline``:
+
+        1. Bail if ``_shutdown_event`` is set.
+        2. Skip if ``requires_mode`` is set and ``mode`` is not in it.
+        3. For each ``(job_key, sync_fn, requires_lock)`` in ``sub_jobs``:
+           - if ``_is_job_enabled(job_key)``: write 'running' status,
+             run ``sync_fn`` in an executor (acquiring the pipeline
+             lock when ``requires_lock``), then write 'idle' status.
+           - else: write 'skipped' status, log a skip.
+        4. Call ``on_complete`` (used to set the startup gate events).
+        5. Log 'complete'.
+        6. Update the pipeline job status to ``progress_end``.
+
+        Returns ``True`` if the stage ran (or was mode-skipped), ``False``
+        if shutdown was requested during this stage (caller should bail
+        out of the rest of the pipeline).
+        """
         from app.backgroundtasks import (
             _is_job_enabled,
-            _stock_universe_sync,
-            _ticker_backfill_sync,
-            _ticker_daily_update_sync,
-            _ticker_intraday_hourly_stale_check_sync,
-            _ticker_indicators_sync,
-            _ticker_scores_sync,
-            _ticker_intraday_update_sync,
-            _ticker_intraday_indicators_sync,
+            _pipeline_idle,
+            _pipeline_lock,
+            _shutdown_event,
+        )
+        from app.jobs.runner import update_job_status
+
+        if requires_mode is not None and mode not in requires_mode:
+            return True
+
+        if _shutdown_event.is_set():
+            return False
+
+        pipeline_job_key = (
+            "job.pipeline.startup" if mode == PipelineMode.STARTUP else "job.pipeline.nightly"
+        )
+
+        logger.info("Orchestrator [%s] Stage %s: %s", mode.value, stage_label, stage_name)
+
+        any_enabled = False
+        for job_key, sync_fn, requires_lock in sub_jobs:
+            if _is_job_enabled(job_key):
+                any_enabled = True
+                await update_job_status(pipeline_job_key, "running", progress=progress_start,
+                                        message=f"Stage {stage_label}: {stage_name}...")
+                await update_job_status(job_key, "running", progress=0,
+                                        message=f"{stage_name} (orchestrator)...")
+                loop = asyncio.get_running_loop()
+                if requires_lock:
+                    await loop.run_in_executor(
+                        None, _run_pipeline_stage, sync_fn, _pipeline_lock, _pipeline_idle,
+                    )
+                else:
+                    await loop.run_in_executor(None, sync_fn)
+                await update_job_status(job_key, "idle", progress=100,
+                                        message=f"{stage_name} complete")
+            else:
+                await update_job_status(job_key, "idle", progress=100,
+                                        message=f"Disabled — skipped by orchestrator")
+                logger.info(
+                    "Orchestrator [%s] Stage %s skipped: %s disabled",
+                    mode.value, stage_label, job_key,
+                )
+
+        # If the stage ran (or was enabled for at least one sub-job),
+        # write the per-stage "starting" message; if it was entirely
+        # disabled, write the "skipped" message.  This mirrors the
+        # original inline behaviour.
+        if any_enabled:
+            await update_job_status(pipeline_job_key, "running", progress=progress_end,
+                                    message=f"Stage {stage_label} complete — {stage_name} done")
+        else:
+            await update_job_status(pipeline_job_key, "running", progress=progress_end,
+                                    message=f"Stage {stage_label} skipped — {stage_name} disabled")
+
+        if on_complete is not None:
+            on_complete()
+
+        logger.info("Orchestrator [%s] Stage %s complete", mode.value, stage_label)
+        return True
+
+    async def _execute_pipeline(self, mode: PipelineMode) -> None:
+        """Execute the full ordered pipeline (audit B.11: uses ``_run_stage``).
+
+        The body is a linear list of ``_run_stage`` calls.  Each stage
+        configures (mode, jobs, lock, gate) and the helper handles the
+        shutdown check, executor dispatch, status updates, and skip
+        logging.  This is the result of consolidating 9 near-identical
+        stage blocks (~270 LOC) into 1 helper + ~120 LOC of stage
+        configuration.
+        """
+        from app.backgroundtasks import (
             _global_scan_cycle,
             _notification_cycle_full,
+            _shutdown_event,
             _startup_stock_universe_done,
             _startup_ticker_backfill_done,
             _startup_ticker_indicators_done,
             _startup_ticker_scores_done,
-            _pipeline_lock,
-            _pipeline_idle,
-            _shutdown_event,
+            _stock_universe_sync,
+            _ticker_backfill_sync,
+            _ticker_daily_update_sync,
+            _ticker_indicators_sync,
+            _ticker_intraday_hourly_stale_check_sync,
+            _ticker_intraday_indicators_sync,
+            _ticker_intraday_update_sync,
+            _ticker_scores_sync,
         )
         from app.jobs.runner import update_job_status
 
@@ -225,275 +325,151 @@ class Orchestrator:
         await update_job_status(pipeline_job_key, "running", progress=0,
                                 message=f"Starting {mode.value} pipeline...")
 
-        loop = asyncio.get_running_loop()
+        async def _run_or_bail(stage_kwargs):
+            """Call ``_run_stage`` and bail out of the pipeline if it
+            returns ``False`` (i.e. shutdown was requested)."""
+            ok = await self._run_stage(mode, **stage_kwargs)
+            if not ok:
+                return False
+            return True
 
         try:
-            # ── Stage 1: Stock Universe ────────────────────────────────────
-            if _shutdown_event.is_set():
+            # ── Stage 1: stock universe (always) ──────────────────────────
+            if not await _run_or_bail(dict(
+                stage_name="stock_universe",
+                sub_jobs=[("job.stock_universe", _stock_universe_sync, False)],
+                progress_start=5, progress_end=15, stage_label="1/7",
+                on_complete=_startup_stock_universe_done.set,
+            )):
                 return
-            logger.info("Orchestrator [%s] Stage 1: stock_universe", mode.value)
-            if _is_job_enabled("job.stock_universe"):
-                await update_job_status(pipeline_job_key, "running", progress=5,
-                                        message="Stage 1/7: Syncing stock universe...")
-                await loop.run_in_executor(None, _stock_universe_sync)
-            else:
-                await update_job_status(pipeline_job_key, "running", progress=15,
-                                        message="Stage 1/7 skipped — job.stock_universe disabled")
-                logger.info("Orchestrator [%s] Stage 1 skipped: job.stock_universe disabled", mode.value)
-            # Set gate so worker cron loops can proceed even when skipped
-            _startup_stock_universe_done.set()
-            logger.info("Orchestrator [%s] Stage 1 complete", mode.value)
-            if _is_job_enabled("job.stock_universe"):
-                await update_job_status(pipeline_job_key, "running", progress=15,
-                                        message="Stage 1/7 complete — stock universe synced")
 
-            # ── Stage 1b: W/M candle backfill for full universe (startup only) ──
-            # Nightly pipeline handles this in Stage 5a; running both would double
-            # the work (~2000 symbols × 1 s delay) on every nightly run.
-            if mode == PipelineMode.STARTUP:
-                if _shutdown_event.is_set():
-                    return
-                logger.info("Orchestrator [%s] Stage 1b: ticker_weekly_monthly_update (universe scope)", mode.value)
-                if _is_job_enabled("job.ticker_weekly_monthly_update"):
-                    await update_job_status(pipeline_job_key, "running", progress=16,
-                                            message="Stage 1b/7: Backfilling W/M candles for stale universe symbols...")
-                    await update_job_status("job.ticker_weekly_monthly_update", "running", progress=0,
-                                            message="Backfilling W/M candles for stale universe symbols...")
-                    await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe", smart=True),
-                                               _pipeline_lock, _pipeline_idle)
-                    await update_job_status("job.ticker_weekly_monthly_update", "idle", progress=100,
-                                            message="Universe W/M candles synced")
-                    await update_job_status(pipeline_job_key, "running", progress=17,
-                                            message="Stage 1b/7 complete — universe W/M candles synced")
-                else:
-                    await update_job_status(pipeline_job_key, "running", progress=17,
-                                            message="Stage 1b/7 skipped — job.ticker_weekly_monthly_update disabled")
-                    await update_job_status("job.ticker_weekly_monthly_update", "idle", progress=100,
-                                            message="Disabled — skipped by orchestrator")
-                    logger.info("Orchestrator [%s] Stage 1b skipped: job.ticker_weekly_monthly_update disabled", mode.value)
-                logger.info("Orchestrator [%s] Stage 1b complete", mode.value)
+            # ── Stage 1b: W/M candle backfill (startup only) ──────────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_weekly_monthly_update (universe scope)",
+                sub_jobs=[(
+                    "job.ticker_weekly_monthly_update",
+                    lambda: _ticker_intraday_update_sync(
+                        ["W", "M"], scope="universe", smart=True
+                    ),
+                    True,
+                )],
+                progress_start=16, progress_end=17, stage_label="1b/7",
+                requires_mode={PipelineMode.STARTUP},
+            )):
+                return
 
-                # ── Stage 1c: W/M indicator compute for full universe (startup only) ──
-                # Nightly pipeline handles this in Stage 5b; running both would double
-                # the work on every nightly run. At startup, fresh W candles are already
-                # in place from Stage 1b, so we compute indicators once here to avoid
-                # waiting until 23:00 IST for first-time UI visibility.
-                if _shutdown_event.is_set():
-                    return
-                logger.info("Orchestrator [%s] Stage 1c: ticker_weekly_monthly_indicators (universe scope)", mode.value)
-                if _is_job_enabled("job.ticker_weekly_monthly_indicators"):
-                    await update_job_status(pipeline_job_key, "running", progress=17,
-                                            message="Stage 1c/7: Computing W/M indicators for universe symbols...")
-                    await update_job_status("job.ticker_weekly_monthly_indicators", "running", progress=0,
-                                            message="Computing W/M indicators for universe symbols...")
-                    await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_indicators_sync(["W", "M"]),
-                                               _pipeline_lock, _pipeline_idle)
-                    await update_job_status("job.ticker_weekly_monthly_indicators", "idle", progress=100,
-                                            message="Universe W/M indicators computed")
-                    await update_job_status(pipeline_job_key, "running", progress=18,
-                                            message="Stage 1c/7 complete — universe W/M indicators computed")
-                else:
-                    await update_job_status(pipeline_job_key, "running", progress=18,
-                                            message="Stage 1c/7 skipped — job.ticker_weekly_monthly_indicators disabled")
-                    await update_job_status("job.ticker_weekly_monthly_indicators", "idle", progress=100,
-                                            message="Disabled — skipped by orchestrator")
-                    logger.info("Orchestrator [%s] Stage 1c skipped: job.ticker_weekly_monthly_indicators disabled", mode.value)
-                logger.info("Orchestrator [%s] Stage 1c complete", mode.value)
+            # ── Stage 1c: W/M indicator compute (startup only) ────────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_weekly_monthly_indicators (universe scope)",
+                sub_jobs=[(
+                    "job.ticker_weekly_monthly_indicators",
+                    lambda: _ticker_intraday_indicators_sync(["W", "M"]),
+                    True,
+                )],
+                progress_start=17, progress_end=18, stage_label="1c/7",
+                requires_mode={PipelineMode.STARTUP},
+            )):
+                return
 
-            # ── Stage 2 (nightly only): Daily update / bhavcopy ───────────
+            # ── Stage 2a: daily update / bhavcopy (nightly only) ──────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_daily_update",
+                sub_jobs=[("job.ticker_daily_update", _ticker_daily_update_sync, True)],
+                progress_start=18, progress_end=28, stage_label="2a/7",
+                requires_mode={PipelineMode.NIGHTLY},
+            )):
+                return
+
+            # ── Stage 2b: backfill (always) ───────────────────────────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_backfill",
+                sub_jobs=[("job.ticker_backfill", _ticker_backfill_sync, False)],
+                progress_start=30, progress_end=40, stage_label="2b/7",
+                on_complete=_startup_ticker_backfill_done.set,
+            )):
+                return
+
+            # ── Stage 2c: hourly 1h stale-check (always) ──────────────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_intraday_hourly_stale_check",
+                sub_jobs=[(
+                    "job.ticker_intraday_hourly_stale_check",
+                    _ticker_intraday_hourly_stale_check_sync,
+                    True,
+                )],
+                progress_start=42, progress_end=48, stage_label="2c/7",
+            )):
+                return
+
+            # ── Stage 3: indicators (always) ──────────────────────────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_indicators",
+                sub_jobs=[("job.ticker_indicators", _ticker_indicators_sync, True)],
+                progress_start=50, progress_end=62, stage_label="3/7",
+                on_complete=_startup_ticker_indicators_done.set,
+            )):
+                return
+
+            # ── Stage 4: scores (always) ──────────────────────────────────
+            if not await _run_or_bail(dict(
+                stage_name="ticker_scores",
+                sub_jobs=[("job.ticker_scores", _ticker_scores_sync, True)],
+                progress_start=64, progress_end=74, stage_label="4/7",
+                on_complete=_startup_ticker_scores_done.set,
+            )):
+                return
+
+            # ── Stage 5a: W/M candle refresh (nightly only) ───────────────
             if mode == PipelineMode.NIGHTLY:
-                if _shutdown_event.is_set():
+                now_utc = datetime.now(timezone.utc)
+                wm_from_ts_overrides = {
+                    "W": int((now_utc - timedelta(days=30)).timestamp()),
+                    "M": int((now_utc - timedelta(days=90)).timestamp()),
+                }
+                if not await _run_or_bail(dict(
+                    stage_name="ticker_weekly_monthly_update (all universe)",
+                    sub_jobs=[(
+                        "job.ticker_weekly_monthly_update",
+                        lambda: _ticker_intraday_update_sync(
+                            ["W", "M"], scope="universe",
+                            from_ts_overrides=wm_from_ts_overrides,
+                        ),
+                        True,
+                    )],
+                    progress_start=76, progress_end=82, stage_label="5a/7",
+                    requires_mode={PipelineMode.NIGHTLY},
+                )):
                     return
-                logger.info("Orchestrator [%s] Stage 2a: ticker_daily_update", mode.value)
-                if _is_job_enabled("job.ticker_daily_update"):
-                    await update_job_status(pipeline_job_key, "running", progress=18,
-                                            message="Stage 2a/7: Downloading bhavcopy...")
-                    await update_job_status("job.ticker_daily_update", "running", progress=0,
-                                            message="Downloading bhavcopy (orchestrator nightly)...")
-                    # Acquire pipeline lock so scan/notif workers pause
-                    await loop.run_in_executor(None, _run_pipeline_stage,
-                                               _ticker_daily_update_sync, _pipeline_lock, _pipeline_idle)
-                    await update_job_status("job.ticker_daily_update", "idle", progress=100,
-                                            message="Bhavcopy downloaded")
-                else:
-                    await update_job_status(pipeline_job_key, "running", progress=28,
-                                            message="Stage 2a/7 skipped — job.ticker_daily_update disabled")
-                    logger.info("Orchestrator [%s] Stage 2a skipped: job.ticker_daily_update disabled", mode.value)
-                logger.info("Orchestrator [%s] Stage 2a complete", mode.value)
-                if _is_job_enabled("job.ticker_daily_update"):
-                    await update_job_status(pipeline_job_key, "running", progress=28,
-                                            message="Stage 2a/7 complete — bhavcopy downloaded")
 
-            # ── Stage 2b: Backfill ─────────────────────────────────────────
-            if _shutdown_event.is_set():
-                return
-            logger.info("Orchestrator [%s] Stage 2b: ticker_backfill", mode.value)
-            if _is_job_enabled("job.ticker_backfill"):
-                await update_job_status(pipeline_job_key, "running", progress=30,
-                                        message="Stage 2b/7: Backfilling OHLCV history...")
-                await update_job_status("job.ticker_backfill", "running", progress=0,
-                                        message="Backfilling OHLCV history (orchestrator)...")
-                await loop.run_in_executor(None, _ticker_backfill_sync)
-                await update_job_status("job.ticker_backfill", "idle", progress=100,
-                                        message="Backfill complete")
-            else:
-                await update_job_status(pipeline_job_key, "running", progress=40,
-                                        message="Stage 2b/7 skipped — job.ticker_backfill disabled")
-                logger.info("Orchestrator [%s] Stage 2b skipped: job.ticker_backfill disabled", mode.value)
-            _startup_ticker_backfill_done.set()
-            logger.info("Orchestrator [%s] Stage 2b complete", mode.value)
-            if _is_job_enabled("job.ticker_backfill"):
-                await update_job_status(pipeline_job_key, "running", progress=40,
-                                        message="Stage 2b/7 complete — backfill done")
-
-            # ── Stage 2c: Hourly 1h stale-check ────────────────────────────
-            if _shutdown_event.is_set():
-                return
-            logger.info("Orchestrator [%s] Stage 2c: ticker_intraday_hourly_stale_check", mode.value)
-            if _is_job_enabled("job.ticker_intraday_hourly_stale_check"):
-                await update_job_status(pipeline_job_key, "running", progress=42,
-                                        message="Stage 2c/7: Checking 1h intraday gaps...")
-                await update_job_status("job.ticker_intraday_hourly_stale_check", "running", progress=0,
-                                        message="Checking 1h intraday gaps (orchestrator)...")
-                await loop.run_in_executor(None, _run_pipeline_stage,
-                                           _ticker_intraday_hourly_stale_check_sync, _pipeline_lock, _pipeline_idle)
-                await update_job_status("job.ticker_intraday_hourly_stale_check", "idle", progress=100,
-                                        message="1h candles reconciled")
-            else:
-                await update_job_status(pipeline_job_key, "running", progress=48,
-                                        message="Stage 2c/7 skipped — job.ticker_intraday_hourly_stale_check disabled")
-                logger.info("Orchestrator [%s] Stage 2c skipped: job.ticker_intraday_hourly_stale_check disabled", mode.value)
-            logger.info("Orchestrator [%s] Stage 2c complete", mode.value)
-            if _is_job_enabled("job.ticker_intraday_hourly_stale_check"):
-                await update_job_status(pipeline_job_key, "running", progress=48,
-                                        message="Stage 2c/7 complete — 1h candles reconciled")
-
-            # ── Stage 3: Indicators ────────────────────────────────────────
-            if _shutdown_event.is_set():
-                return
-            logger.info("Orchestrator [%s] Stage 3: ticker_indicators", mode.value)
-            if _is_job_enabled("job.ticker_indicators"):
-                await update_job_status(pipeline_job_key, "running", progress=50,
-                                        message="Stage 3/7: Computing indicators...")
-                await update_job_status("job.ticker_indicators", "running", progress=0,
-                                        message="Computing daily indicators (orchestrator)...")
-                # Acquire pipeline lock — indicators modify data read by scan/notif
-                await loop.run_in_executor(None, _run_pipeline_stage,
-                                           _ticker_indicators_sync, _pipeline_lock, _pipeline_idle)
-                await update_job_status("job.ticker_indicators", "idle", progress=100,
-                                        message="Indicators computed")
-            else:
-                await update_job_status(pipeline_job_key, "running", progress=62,
-                                        message="Stage 3/7 skipped — job.ticker_indicators disabled")
-                logger.info("Orchestrator [%s] Stage 3 skipped: job.ticker_indicators disabled", mode.value)
-            _startup_ticker_indicators_done.set()
-            logger.info("Orchestrator [%s] Stage 3 complete", mode.value)
-            if _is_job_enabled("job.ticker_indicators"):
-                await update_job_status(pipeline_job_key, "running", progress=62,
-                                        message="Stage 3/7 complete — indicators computed")
-
-            # ── Stage 4: Scores ────────────────────────────────────────────
-            if _shutdown_event.is_set():
-                return
-            logger.info("Orchestrator [%s] Stage 4: ticker_scores", mode.value)
-            if _is_job_enabled("job.ticker_scores"):
-                await update_job_status(pipeline_job_key, "running", progress=64,
-                                        message="Stage 4/7: Computing momentum scores...")
-                await update_job_status("job.ticker_scores", "running", progress=0,
-                                        message="Computing momentum scores (orchestrator)...")
-                # Acquire pipeline lock — scores modify data read by scan/notif
-                await loop.run_in_executor(None, _run_pipeline_stage,
-                                           _ticker_scores_sync, _pipeline_lock, _pipeline_idle)
-                await update_job_status("job.ticker_scores", "idle", progress=100,
-                                        message="Scores computed")
-            else:
-                await update_job_status(pipeline_job_key, "running", progress=74,
-                                        message="Stage 4/7 skipped — job.ticker_scores disabled")
-                logger.info("Orchestrator [%s] Stage 4 skipped: job.ticker_scores disabled", mode.value)
-            _startup_ticker_scores_done.set()
-            logger.info("Orchestrator [%s] Stage 4 complete", mode.value)
-            if _is_job_enabled("job.ticker_scores"):
-                await update_job_status(pipeline_job_key, "running", progress=74,
-                                        message="Stage 4/7 complete — scores computed")
-
-            # ── Stage 5 (nightly only): Weekly + Monthly candles ─────────────
-            if mode == PipelineMode.NIGHTLY:
-                if _shutdown_event.is_set():
+                # ── Stage 5b: W/M indicators (nightly only) ─────────────
+                if not await _run_or_bail(dict(
+                    stage_name="ticker_weekly_monthly_indicators",
+                    sub_jobs=[(
+                        "job.ticker_weekly_monthly_indicators",
+                        lambda: _ticker_intraday_indicators_sync(["W", "M"]),
+                        True,
+                    )],
+                    progress_start=84, progress_end=88, stage_label="5b/7",
+                    requires_mode={PipelineMode.NIGHTLY},
+                )):
                     return
-                logger.info("Orchestrator [%s] Stage 5a: ticker_weekly_monthly_update", mode.value)
-                if _is_job_enabled("job.ticker_weekly_monthly_update"):
-                    await update_job_status(pipeline_job_key, "running", progress=76,
-                                            message="Stage 5a/7: Refreshing W/M candles for all universe symbols...")
-                    await update_job_status("job.ticker_weekly_monthly_update", "running", progress=0,
-                                            message="Refreshing W/M candles for all universe symbols (orchestrator nightly)...")
-                    now_utc = datetime.now(timezone.utc)
-                    wm_from_ts_overrides = {
-                        "W": int((now_utc - timedelta(days=30)).timestamp()),
-                        "M": int((now_utc - timedelta(days=90)).timestamp()),
-                    }
-                    await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_update_sync(
-                                                   ["W", "M"], scope="universe",
-                                                   from_ts_overrides=wm_from_ts_overrides,
-                                               ),
-                                               _pipeline_lock, _pipeline_idle)
-                    await update_job_status("job.ticker_weekly_monthly_update", "idle", progress=100,
-                                            message="Universe W/M candles refreshed")
-                else:
-                    await update_job_status(pipeline_job_key, "running", progress=82,
-                                            message="Stage 5a/7 skipped — job.ticker_weekly_monthly_update disabled")
-                    logger.info("Orchestrator [%s] Stage 5a skipped: job.ticker_weekly_monthly_update disabled", mode.value)
-                logger.info("Orchestrator [%s] Stage 5a complete", mode.value)
-                if _is_job_enabled("job.ticker_weekly_monthly_update"):
-                    await update_job_status(pipeline_job_key, "running", progress=82,
-                                            message="Stage 5a/7 complete — W/M candles synced")
 
-                if _shutdown_event.is_set():
-                    return
-                logger.info("Orchestrator [%s] Stage 5b: ticker_weekly_monthly_indicators", mode.value)
-                if _is_job_enabled("job.ticker_weekly_monthly_indicators"):
-                    await update_job_status(pipeline_job_key, "running", progress=84,
-                                            message="Stage 5b/7: Computing W/M indicators...")
-                    await update_job_status("job.ticker_weekly_monthly_indicators", "running", progress=0,
-                                            message="Computing W/M indicators (orchestrator nightly)...")
-                    await loop.run_in_executor(None, _run_pipeline_stage,
-                                               lambda: _ticker_intraday_indicators_sync(["W", "M"]),
-                                               _pipeline_lock, _pipeline_idle)
-                    await update_job_status("job.ticker_weekly_monthly_indicators", "idle", progress=100,
-                                            message="W/M indicators computed")
-                else:
-                    await update_job_status(pipeline_job_key, "running", progress=88,
-                                            message="Stage 5b/7 skipped — job.ticker_weekly_monthly_indicators disabled")
-                    logger.info("Orchestrator [%s] Stage 5b skipped: job.ticker_weekly_monthly_indicators disabled", mode.value)
-                logger.info("Orchestrator [%s] Stage 5b complete", mode.value)
-                if _is_job_enabled("job.ticker_weekly_monthly_indicators"):
-                    await update_job_status(pipeline_job_key, "running", progress=88,
-                                            message="Stage 5b/7 complete — W/M indicators computed")
-
-            # ── Stage 6: Scan + Notif (immediate cycle) ────────────────────
-            # Pipeline is now idle (_pipeline_idle already set by the lock helper).
-            # Trigger one immediate cycle of both scan and notif concurrently.
+            # ── Stage 6: scan + notif (always) — concurrent via gather ────
             if _shutdown_event.is_set():
                 return
             logger.info("Orchestrator [%s] Stage 6: scan + notif", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=90,
                                     message="Stage 6/7: Running scan and notifications...")
+            from app.backgroundtasks import _is_job_enabled
             stage6_tasks = []
             if _is_job_enabled("job.global_scan"):
+                loop = asyncio.get_running_loop()
                 stage6_tasks.append(loop.run_in_executor(None, _global_scan_cycle))
-            else:
-                logger.info("Orchestrator [%s] Stage 6 scan skipped: job.global_scan disabled", mode.value)
             if _is_job_enabled("job.notifications"):
+                loop = asyncio.get_running_loop()
                 stage6_tasks.append(loop.run_in_executor(None, _notification_cycle_full))
-            else:
-                logger.info("Orchestrator [%s] Stage 6 notifications skipped: job.notifications disabled", mode.value)
             if stage6_tasks:
                 await asyncio.gather(*stage6_tasks)
-            else:
-                await update_job_status(pipeline_job_key, "running", progress=95,
-                                        message="Stage 6/7 skipped — scan and notifications disabled")
             logger.info("Orchestrator [%s] Stage 6 complete", mode.value)
 
             now = datetime.now(timezone.utc)
@@ -562,121 +538,44 @@ class Orchestrator:
 
     async def _run_nightly_pipeline_scheduler(self) -> None:
         """Asyncio loop: sleep until 23:00 IST each day then run the nightly pipeline."""
-        from app.backgroundtasks import get_async_shutdown_event
-
-        shutdown_event = get_async_shutdown_event()
         nightly_cron = f"{_NIGHTLY_MINUTE_IST} {_NIGHTLY_HOUR_IST} * * *"
-
-        while not shutdown_event.is_set():
-            wait_secs = _seconds_until_next_cron_ist(nightly_cron)
-            next_trigger = datetime.now(timezone.utc) + timedelta(seconds=wait_secs)
-            logger.info(
-                "Orchestrator: nightly pipeline scheduled in %.0f s (%s IST)",
-                wait_secs,
-                _next_fire_time_ist(nightly_cron),
-            )
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                _update_fv_job_waiting,
-                "job.pipeline.nightly",
-                next_trigger,
-                wait_secs,
-            )
-            try:
-                await asyncio.wait_for(
-                    _wait_for_shutdown(shutdown_event),
-                    timeout=wait_secs,
-                )
-                break
-            except asyncio.TimeoutError:
-                pass
-
-            if shutdown_event.is_set():
-                break
-
-            logger.info("Orchestrator: nightly pipeline triggered (23:00 IST)")
-            await self.run_pipeline(PipelineMode.NIGHTLY)
-
-        logger.info("Orchestrator: nightly pipeline scheduler stopped")
+        await _cron_loop(
+            cron_expr=nightly_cron,
+            job_key="job.pipeline.nightly",
+            target_fn=lambda: self.run_pipeline(PipelineMode.NIGHTLY),
+            compute_wait_secs=_seconds_until_next_cron_ist,
+            next_fire_label_fn=_next_fire_time_ist,
+            schedule_label="nightly pipeline",
+        )
 
     async def _run_watchlist_fair_value_scheduler(self) -> None:
         """Asyncio loop: run watchlist fair value sync every 3 hours."""
         from app.backgroundtasks import (
-            get_async_shutdown_event,
             _seconds_until_next_cron,
             sync_watchlist_fair_values,
         )
 
-        shutdown_event = get_async_shutdown_event()
-        wfv_cron = "0 */3 * * *"
-
-        while not shutdown_event.is_set():
-            wait_secs = _seconds_until_next_cron(wfv_cron)
-            next_trigger = datetime.now(timezone.utc) + timedelta(seconds=wait_secs)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                _update_fv_job_waiting,
-                "job.watchlist_fair_value",
-                next_trigger,
-                wait_secs,
-            )
-
-            try:
-                await asyncio.wait_for(
-                    _wait_for_shutdown(shutdown_event),
-                    timeout=wait_secs,
-                )
-                break
-            except asyncio.TimeoutError:
-                pass
-
-            if shutdown_event.is_set():
-                break
-            await sync_watchlist_fair_values()
-
-        logger.info("Orchestrator: watchlist fair value scheduler stopped")
+        await _cron_loop(
+            cron_expr="0 */3 * * *",
+            job_key="job.watchlist_fair_value",
+            target_fn=sync_watchlist_fair_values,
+            compute_wait_secs=_seconds_until_next_cron,
+            next_fire_label_fn=None,
+            schedule_label="watchlist fair value",
+        )
 
     async def _run_full_fair_value_scheduler(self) -> None:
         """Asyncio loop: run full universe fair value sync daily at 23:30 IST."""
-        from app.backgroundtasks import get_async_shutdown_event, sync_all_fair_values
-        from app.jobs.runner import update_job_status_sync
+        from app.backgroundtasks import sync_all_fair_values
 
-        shutdown_event = get_async_shutdown_event()
-        fv_cron = "30 23 * * *"  # 23:30 IST
-
-        while not shutdown_event.is_set():
-            wait_secs = _seconds_until_next_cron_ist(fv_cron)
-            next_trigger = datetime.now(timezone.utc) + timedelta(seconds=wait_secs)
-            logger.info(
-                "Orchestrator: full fair value sync scheduled in %.0f s (%s IST)",
-                wait_secs, _next_fire_time_ist(fv_cron),
-            )
-
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                _update_fv_job_waiting,
-                "job.full_fair_value",
-                next_trigger,
-                wait_secs,
-            )
-
-            try:
-                await asyncio.wait_for(
-                    _wait_for_shutdown(shutdown_event),
-                    timeout=wait_secs,
-                )
-                break
-            except asyncio.TimeoutError:
-                pass
-
-            if shutdown_event.is_set():
-                break
-            await sync_all_fair_values()
-
-        logger.info("Orchestrator: full fair value scheduler stopped")
+        await _cron_loop(
+            cron_expr="30 23 * * *",  # 23:30 IST
+            job_key="job.full_fair_value",
+            target_fn=sync_all_fair_values,
+            compute_wait_secs=_seconds_until_next_cron_ist,
+            next_fire_label_fn=_next_fire_time_ist,
+            schedule_label="full fair value sync",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -709,9 +608,75 @@ def _run_pipeline_stage(
 
 
 async def _wait_for_shutdown(shutdown_event: asyncio.Event) -> None:
-    """Coroutine that completes only when the shutdown event is set."""
+    """Coroutine that completes only when the shutdown event is set.
+
+    Audit B.11: replaced the ``asyncio.sleep(1)`` poll loop with a
+    direct ``await shutdown_event.wait()`` — fires immediately on
+    ``.set()`` and uses zero CPU while waiting.  Behaviour is
+    equivalent for the callers (they wrap this in ``asyncio.wait`` /
+    ``asyncio.gather`` to race it against a job execution).
+    """
+    await shutdown_event.wait()
+
+
+async def _cron_loop(
+    cron_expr: str,
+    job_key: str,
+    target_fn,
+    *,
+    compute_wait_secs,
+    next_fire_label_fn=None,
+    schedule_label: str,
+) -> None:
+    """Generic cron-driven job loop (audit B.11).
+
+    Replaces three near-identical schedulers
+    (``_run_nightly_pipeline_scheduler``,
+    ``_run_watchlist_fair_value_scheduler``,
+    ``_run_full_fair_value_scheduler``) with a single body.  Each
+    scheduler is now a 7-line configuration of this helper.
+
+    Behaviour:
+        loop forever (until ``shutdown_event`` is set):
+            1. ``wait_secs = compute_wait_secs(cron_expr)``
+            2. write a 'waiting' status to the jobs table
+            3. ``asyncio.wait_for(_wait_for_shutdown, wait_secs)``
+               — returns early on shutdown, raises TimeoutError on
+               next fire
+            4. on TimeoutError: run ``await target_fn()`` and repeat
+            5. on early return: exit
+
+    ``target_fn`` is awaited; pass ``lambda: sync_blocking_fn()`` if
+    the underlying work is synchronous.  Exceptions in ``target_fn``
+    are NOT caught here — the caller's task will fail and the
+    orchestrator's broader error handler will log it.
+    """
+    from app.backgroundtasks import get_async_shutdown_event
+
+    shutdown_event = get_async_shutdown_event()
     while not shutdown_event.is_set():
-        await asyncio.sleep(1)
+        wait_secs = compute_wait_secs(cron_expr)
+        next_trigger = datetime.now(timezone.utc) + timedelta(seconds=wait_secs)
+        if next_fire_label_fn is not None:
+            logger.info(
+                "Orchestrator: %s scheduled in %.0f s (%s)",
+                schedule_label, wait_secs, next_fire_label_fn(cron_expr),
+            )
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, _update_fv_job_waiting, job_key, next_trigger, wait_secs,
+        )
+        try:
+            await asyncio.wait_for(
+                _wait_for_shutdown(shutdown_event), timeout=wait_secs,
+            )
+            break
+        except asyncio.TimeoutError:
+            pass
+        if shutdown_event.is_set():
+            break
+        await target_fn()
+    logger.info("Orchestrator: %s scheduler stopped", schedule_label)
 
 
 def _seconds_until_next_cron_ist(cron_expr: str) -> float:
