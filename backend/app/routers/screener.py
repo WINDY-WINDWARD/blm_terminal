@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from typing import Any
 
 import httpx
@@ -18,28 +17,13 @@ from bs4 import BeautifulSoup
 
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
+from app.services.cache import nse_cache
 from app.services.screener_client import _parse_all_quarters, screener_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["screener"])
 
-_CACHE: dict[str, tuple[float, object]] = {}
-SEARCH_TTL = 60
-COMPANY_TTL = 15 * 60
-TRADES_TTL = 15 * 60
-
 _SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{1,30}$")
-
-
-def _cache_get(key: str) -> object | None:
-    entry = _CACHE.get(key)
-    if entry and time.monotonic() < entry[0]:
-        return entry[1]
-    return None
-
-
-def _cache_set(key: str, value: object, ttl: float) -> None:
-    _CACHE[key] = (time.monotonic() + ttl, value)
 
 
 @router.get("/screener/search")
@@ -53,7 +37,7 @@ async def screener_search(
     Public endpoint — no login required.
     """
     cache_key = f"screener:search:{q.lower()}"
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -66,7 +50,7 @@ async def screener_search(
         logger.error("screener.in search error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
-    _cache_set(cache_key, results, SEARCH_TTL)
+    nse_cache[cache_key] = results
     return results
 
 
@@ -95,7 +79,7 @@ async def screener_company(
         )
 
     cache_key = f"screener:company:{symbol}:{'c' if consolidated else 's'}"
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -112,7 +96,7 @@ async def screener_company(
         logger.error("screener.in company error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
-    _cache_set(cache_key, data, COMPANY_TTL)
+    nse_cache[cache_key] = data
     return data
 
 
@@ -154,7 +138,7 @@ async def screener_trades(
         )
 
     cache_key = f"screener:trades:{symbol}:{'c' if consolidated else 's'}"
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached is not None:
         return cached  # type: ignore[return-value]
 
@@ -192,11 +176,8 @@ async def screener_trades(
         logger.error("screener.in trades error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
-    _cache_set(cache_key, data, TRADES_TTL)
+    nse_cache[cache_key] = data
     return data  # type: ignore[return-value]
-
-
-QUARTERLY_TTL = 15 * 60
 
 
 @router.get("/screener/quarterly/{symbol}")
@@ -224,9 +205,10 @@ async def screener_quarterly(
     Other Income, Interest, Depreciation, Profit before tax, Tax %, Net Profit,
     EPS in Rs, etc.) and all available periods — not just the last 4.
 
-    Results are served from the shared raw-HTML cache (15-minute TTL).  If the
-    company page was already fetched for the ``/screener/company/{symbol}``
-    endpoint within the TTL window, no new network request is made.
+    Results are served from the shared ``nse_cache`` (TTL configured on
+    ``app.services.cache`` — 600s).  If a cached entry exists for the same
+    ``(symbol, consolidated)`` key, no parsing is performed and the cached
+    structured payload is returned.
 
     Requires a valid screener.in Chrome session (same as /api/screener/company).
     """
@@ -245,7 +227,7 @@ async def screener_quarterly(
         )
 
     cache_key = f"screener:quarterly:{symbol}:{'c' if consolidated else 's'}"
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached is not None:
         return cached  # type: ignore[return-value]
 
@@ -268,5 +250,5 @@ async def screener_quarterly(
         "quarterly_results": quarterly_results,
     }
 
-    _cache_set(cache_key, result, QUARTERLY_TTL)
+    nse_cache[cache_key] = result
     return result
