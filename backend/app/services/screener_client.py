@@ -1,8 +1,10 @@
 """
 ScreenerClient — authenticated HTTP client for screener.in.
 
-Uses rookiepy to extract the sessionid cookie from the local browser profile.
-Tries Chrome first, then Firefox as fallback.
+Cookies (sessionid, csrftoken) are loaded via
+:func:`app.services.cookie_loader.load_browser_cookies` which tries a
+pre-extracted pickle file first and falls back to reading Chrome /
+Firefox's encrypted cookie DB via rookiepy.
 All requests are made with httpx, sharing a single async client.
 """
 
@@ -15,7 +17,6 @@ import time
 from typing import Any, Union
 
 import httpx
-import rookiepy
 from bs4 import BeautifulSoup, Tag
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,11 @@ def _html_cache_set(key: str, html: str) -> None:
 
 
 def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
-    """Extract sessionid and csrftoken from rookiepy cookie list."""
+    """Extract sessionid and csrftoken from rookiepy cookie list.
+
+    Retained for any external callers; new code should use
+    ``cookie_loader.load_browser_cookies(..., allowed_names=[...])``.
+    """
     result: dict[str, str] = {}
     for cookie in cookies:
         name = cookie.get("name", "")
@@ -69,50 +74,21 @@ def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _get_browser_cookies() -> dict[str, str]:
+    """Try to extract sessionid and csrftoken for screener.in.
+
+    Delegates to :func:`app.services.cookie_loader.load_browser_cookies`
+    which implements the pickle-first / rookiepy-fallback strategy.
     """
-    Try to extract sessionid and csrftoken for screener.in from browser profiles.
-    First tries pickle files (pre-extracted on Windows), then falls back to
-    reading directly from the browser via rookiepy.
-    Attempts Chrome first, then Firefox as fallback.
-    Returns empty dict if no cookies found.
-    """
-    from app.services.cookie_loader import load_cookies_from_pickle
+    from app.services.cookie_loader import load_browser_cookies
 
-    # Try pickle first
-    pickle_cookies = load_cookies_from_pickle("screener")
-    if pickle_cookies:
-        extracted = _extract_cookies(pickle_cookies)
-        if extracted.get("sessionid"):
-            logger.info("Using screener.in cookies from pickle file")
-            return extracted
-        logger.debug("Pickle has no sessionid, trying browsers")
-
-    # Fall back to browser extraction
-    browsers = ["chrome", "firefox"]
-
-    for browser_name in browsers:
-        try:
-            func = getattr(rookiepy, browser_name, None)
-            if func is None:
-                continue
-            raw: list[dict[str, Any]] = func(["screener.in"])
-            if raw:
-                cookies = _extract_cookies(raw)
-                if cookies.get("sessionid"):
-                    logger.info("Found screener.in cookies in %s", browser_name)
-                    return cookies
-                logger.debug(
-                    "No sessionid in %s cookies, trying next browser", browser_name
-                )
-        except Exception as exc:
-            logger.debug("Failed to read cookies from %s: %s", browser_name, exc)
-            continue
-
-    logger.warning(
-        "No screener.in session found in Chrome or Firefox. "
-        "Company fundamentals endpoints will return 503 until you log in."
+    cookies = load_browser_cookies(
+        service="screener",
+        domain="screener.in",
+        allowed_names=["sessionid", "csrftoken"],
     )
-    return {}
+    if not cookies.get("sessionid"):
+        logger.warning("No screener.in session found in any source")
+    return cookies
 
 
 def _clean_value(value: str | None) -> str | None:

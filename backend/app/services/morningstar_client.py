@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-import rookiepy
 from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -200,42 +199,20 @@ class MorningstarClient:
         return tokens
 
     async def _load_browser_cookies(self) -> dict[str, str]:
-        """Use pickle files (pre-extracted on Windows) or fallback to rookiepy."""
-        from app.services.cookie_loader import load_cookies_from_pickle
+        """Use pickle files (pre-extracted on Windows) or fallback to rookiepy.
 
-        pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "morningstar")
-        if pickle_cookies:
-            cookies = {}
-            for c in pickle_cookies:
-                name = c.get("name")
-                if name:
-                    cookies[name] = c.get("value", "")
-            if cookies:
-                logger.info("Using morningstar.in cookies from pickle file")
-                return cookies
+        Delegates to :func:`app.services.cookie_loader.load_browser_cookies`.
+        The CPU/IO work happens in a thread (rookiepy reads from a
+        browser DB which can block) so the event loop is not stalled.
+        """
+        from app.services.cookie_loader import load_browser_cookies
 
-        # Fall back to browser extraction
-        browsers = ["chrome", "firefox"]
-        for browser_name in browsers:
-            try:
-                func = getattr(rookiepy, browser_name, None)
-                if func is None:
-                    continue
-                raw = await asyncio.to_thread(func, ["morningstar.in"])
-                if raw:
-                    cookies = {}
-                    for c in raw:
-                        name = c.get("name")
-                        if name:
-                            cookies[name] = c.get("value", "")
-                    logger.info("Found morningstar.in cookies in %s", browser_name)
-                    return cookies
-            except Exception as exc:
-                logger.debug("Failed to read cookies from %s: %s", browser_name, exc)
-                continue
-
-        logger.warning("No morningstar.in session found in Chrome or Firefox")
-        return {}
+        return await asyncio.to_thread(
+            load_browser_cookies,
+            "morningstar",
+            "morningstar.in",
+            None,  # allowed_names: morningstar wants every cookie
+        )
 
     async def resolve_symbol_to_id(
         self, symbol: str, db: AsyncSession | None = None
