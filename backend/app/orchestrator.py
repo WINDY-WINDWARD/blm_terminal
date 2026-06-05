@@ -257,14 +257,20 @@ class Orchestrator:
                 if _is_job_enabled("job.ticker_weekly_monthly_update"):
                     await update_job_status(pipeline_job_key, "running", progress=16,
                                             message="Stage 1b/7: Backfilling W/M candles for stale universe symbols...")
+                    await update_job_status("job.ticker_weekly_monthly_update", "running", progress=0,
+                                            message="Backfilling W/M candles for stale universe symbols...")
                     await loop.run_in_executor(None, _run_pipeline_stage,
                                                lambda: _ticker_intraday_update_sync(["W", "M"], scope="universe", smart=True),
                                                _pipeline_lock, _pipeline_idle)
+                    await update_job_status("job.ticker_weekly_monthly_update", "idle", progress=100,
+                                            message="Universe W/M candles synced")
                     await update_job_status(pipeline_job_key, "running", progress=17,
                                             message="Stage 1b/7 complete — universe W/M candles synced")
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=17,
                                             message="Stage 1b/7 skipped — job.ticker_weekly_monthly_update disabled")
+                    await update_job_status("job.ticker_weekly_monthly_update", "idle", progress=100,
+                                            message="Disabled — skipped by orchestrator")
                     logger.info("Orchestrator [%s] Stage 1b skipped: job.ticker_weekly_monthly_update disabled", mode.value)
                 logger.info("Orchestrator [%s] Stage 1b complete", mode.value)
 
@@ -279,14 +285,20 @@ class Orchestrator:
                 if _is_job_enabled("job.ticker_weekly_monthly_indicators"):
                     await update_job_status(pipeline_job_key, "running", progress=17,
                                             message="Stage 1c/7: Computing W/M indicators for universe symbols...")
+                    await update_job_status("job.ticker_weekly_monthly_indicators", "running", progress=0,
+                                            message="Computing W/M indicators for universe symbols...")
                     await loop.run_in_executor(None, _run_pipeline_stage,
                                                lambda: _ticker_intraday_indicators_sync(["W", "M"]),
                                                _pipeline_lock, _pipeline_idle)
+                    await update_job_status("job.ticker_weekly_monthly_indicators", "idle", progress=100,
+                                            message="Universe W/M indicators computed")
                     await update_job_status(pipeline_job_key, "running", progress=18,
                                             message="Stage 1c/7 complete — universe W/M indicators computed")
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=18,
                                             message="Stage 1c/7 skipped — job.ticker_weekly_monthly_indicators disabled")
+                    await update_job_status("job.ticker_weekly_monthly_indicators", "idle", progress=100,
+                                            message="Disabled — skipped by orchestrator")
                     logger.info("Orchestrator [%s] Stage 1c skipped: job.ticker_weekly_monthly_indicators disabled", mode.value)
                 logger.info("Orchestrator [%s] Stage 1c complete", mode.value)
 
@@ -298,9 +310,13 @@ class Orchestrator:
                 if _is_job_enabled("job.ticker_daily_update"):
                     await update_job_status(pipeline_job_key, "running", progress=18,
                                             message="Stage 2a/7: Downloading bhavcopy...")
+                    await update_job_status("job.ticker_daily_update", "running", progress=0,
+                                            message="Downloading bhavcopy (orchestrator nightly)...")
                     # Acquire pipeline lock so scan/notif workers pause
                     await loop.run_in_executor(None, _run_pipeline_stage,
                                                _ticker_daily_update_sync, _pipeline_lock, _pipeline_idle)
+                    await update_job_status("job.ticker_daily_update", "idle", progress=100,
+                                            message="Bhavcopy downloaded")
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=28,
                                             message="Stage 2a/7 skipped — job.ticker_daily_update disabled")
@@ -317,7 +333,11 @@ class Orchestrator:
             if _is_job_enabled("job.ticker_backfill"):
                 await update_job_status(pipeline_job_key, "running", progress=30,
                                         message="Stage 2b/7: Backfilling OHLCV history...")
+                await update_job_status("job.ticker_backfill", "running", progress=0,
+                                        message="Backfilling OHLCV history (orchestrator)...")
                 await loop.run_in_executor(None, _ticker_backfill_sync)
+                await update_job_status("job.ticker_backfill", "idle", progress=100,
+                                        message="Backfill complete")
             else:
                 await update_job_status(pipeline_job_key, "running", progress=40,
                                         message="Stage 2b/7 skipped — job.ticker_backfill disabled")
@@ -335,8 +355,12 @@ class Orchestrator:
             if _is_job_enabled("job.ticker_intraday_hourly_stale_check"):
                 await update_job_status(pipeline_job_key, "running", progress=42,
                                         message="Stage 2c/7: Checking 1h intraday gaps...")
+                await update_job_status("job.ticker_intraday_hourly_stale_check", "running", progress=0,
+                                        message="Checking 1h intraday gaps (orchestrator)...")
                 await loop.run_in_executor(None, _run_pipeline_stage,
                                            _ticker_intraday_hourly_stale_check_sync, _pipeline_lock, _pipeline_idle)
+                await update_job_status("job.ticker_intraday_hourly_stale_check", "idle", progress=100,
+                                        message="1h candles reconciled")
             else:
                 await update_job_status(pipeline_job_key, "running", progress=48,
                                         message="Stage 2c/7 skipped — job.ticker_intraday_hourly_stale_check disabled")
@@ -353,9 +377,13 @@ class Orchestrator:
             if _is_job_enabled("job.ticker_indicators"):
                 await update_job_status(pipeline_job_key, "running", progress=50,
                                         message="Stage 3/7: Computing indicators...")
+                await update_job_status("job.ticker_indicators", "running", progress=0,
+                                        message="Computing daily indicators (orchestrator)...")
                 # Acquire pipeline lock — indicators modify data read by scan/notif
                 await loop.run_in_executor(None, _run_pipeline_stage,
                                            _ticker_indicators_sync, _pipeline_lock, _pipeline_idle)
+                await update_job_status("job.ticker_indicators", "idle", progress=100,
+                                        message="Indicators computed")
             else:
                 await update_job_status(pipeline_job_key, "running", progress=62,
                                         message="Stage 3/7 skipped — job.ticker_indicators disabled")
@@ -373,9 +401,13 @@ class Orchestrator:
             if _is_job_enabled("job.ticker_scores"):
                 await update_job_status(pipeline_job_key, "running", progress=64,
                                         message="Stage 4/7: Computing momentum scores...")
+                await update_job_status("job.ticker_scores", "running", progress=0,
+                                        message="Computing momentum scores (orchestrator)...")
                 # Acquire pipeline lock — scores modify data read by scan/notif
                 await loop.run_in_executor(None, _run_pipeline_stage,
                                            _ticker_scores_sync, _pipeline_lock, _pipeline_idle)
+                await update_job_status("job.ticker_scores", "idle", progress=100,
+                                        message="Scores computed")
             else:
                 await update_job_status(pipeline_job_key, "running", progress=74,
                                         message="Stage 4/7 skipped — job.ticker_scores disabled")
@@ -394,6 +426,8 @@ class Orchestrator:
                 if _is_job_enabled("job.ticker_weekly_monthly_update"):
                     await update_job_status(pipeline_job_key, "running", progress=76,
                                             message="Stage 5a/7: Refreshing W/M candles for all universe symbols...")
+                    await update_job_status("job.ticker_weekly_monthly_update", "running", progress=0,
+                                            message="Refreshing W/M candles for all universe symbols (orchestrator nightly)...")
                     now_utc = datetime.now(timezone.utc)
                     wm_from_ts_overrides = {
                         "W": int((now_utc - timedelta(days=30)).timestamp()),
@@ -405,6 +439,8 @@ class Orchestrator:
                                                    from_ts_overrides=wm_from_ts_overrides,
                                                ),
                                                _pipeline_lock, _pipeline_idle)
+                    await update_job_status("job.ticker_weekly_monthly_update", "idle", progress=100,
+                                            message="Universe W/M candles refreshed")
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=82,
                                             message="Stage 5a/7 skipped — job.ticker_weekly_monthly_update disabled")
@@ -420,9 +456,13 @@ class Orchestrator:
                 if _is_job_enabled("job.ticker_weekly_monthly_indicators"):
                     await update_job_status(pipeline_job_key, "running", progress=84,
                                             message="Stage 5b/7: Computing W/M indicators...")
+                    await update_job_status("job.ticker_weekly_monthly_indicators", "running", progress=0,
+                                            message="Computing W/M indicators (orchestrator nightly)...")
                     await loop.run_in_executor(None, _run_pipeline_stage,
                                                lambda: _ticker_intraday_indicators_sync(["W", "M"]),
                                                _pipeline_lock, _pipeline_idle)
+                    await update_job_status("job.ticker_weekly_monthly_indicators", "idle", progress=100,
+                                            message="W/M indicators computed")
                 else:
                     await update_job_status(pipeline_job_key, "running", progress=88,
                                             message="Stage 5b/7 skipped — job.ticker_weekly_monthly_indicators disabled")
