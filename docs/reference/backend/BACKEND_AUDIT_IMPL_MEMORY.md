@@ -320,7 +320,57 @@ The audit also called out `_legacy_where` vs `_legacy_where_snapshot` (~200 LOC)
 
 ---
 
-## 16. Phase B progress summary
+## 16. Phase B: B.10 delete sync `nse_client.py` — DONE (commit `a611369`)
+
+**Why:** The legacy 545-LOC sync `NSEClient` class in `nse_client.py` duplicated the HTTP / parsing logic in `nse_client_async.py`.  Drift had already happened: `get_top_gainers` sync copied `perChange` into `pChange`; the async path filters to `EQ` series and falls back to `nsepython` on JSON parse failure.  `get_stock_list` worked in sync, raised `NotImplementedError` in async.  Future fixes had to be made in two places with no test catching the divergence.
+
+**What:**
+- `app/services/nse_client_async.py`: added `NSEClient` sync-facade class + `nse_client` singleton.  Each method delegates to the async client via `asyncio.run()` (creates a fresh event loop per call; overhead ~1-10ms vs 100ms-2s NSE HTTP latency).  Sync-only methods (`get_stock_list` with nsepython fallback, `get_corporate_filing_comparison`) skip the `asyncio.run` wrap.
+- `app/services/nse_client.py`: 545 LOC of duplicate class body replaced with a 56-line re-export module.  The 8 call sites (`routers/corporatefilings`, `routers/market_ws`, `routers/nonpersistence`, `routers/stockuniverse`, `backgroundtasks`, `orchestrator`, `mcp_server`, `main.py`) keep working without import changes.
+
+**Behavioural notes:**
+- The facade ALWAYS uses the async implementation.  A few methods had divergent behaviour between old sync and async (EQ-series filter, perChange/pChange copy, nsepython fallback, get_stock_list working vs raising).  Callers will see the more-correct async behaviour from now on.
+- `get_stock_list` historically called `nsepython.nse_eq_symbols()` directly; the facade preserves that via a try/except fallback.
+- `SymbolNotFoundError` re-exported so existing `except` blocks keep working.
+
+**Verification:** 397/397 pass (was 385; +12 new). No regressions.  Lines: nse_client.py 545 → 56 (‑489), nse_client_async.py 385 → 470 (+85). Net ‑404 LOC deleted.
+
+---
+
+## 17. Phase B: B.11 orchestrator cleanup — DONE (commit `ea871ad`)
+
+**Why:** `orchestrator.py` had three forms of boilerplate: a polling `_wait_for_shutdown`, three near-identical cron schedulers, and nine near-identical pipeline-stage blocks.
+
+**What:**
+- `_wait_for_shutdown` is now `await shutdown_event.wait()` (zero CPU, fires immediately on `.set()`).
+- New `_cron_loop(cron_expr, job_key, target_fn, *, compute_wait_secs, next_fire_label_fn=None, schedule_label)` consolidates the three schedulers.  Each is now a 7-line configuration.
+- New `_run_stage(mode, stage_name, sub_jobs, *, progress_start, progress_end, stage_label, requires_mode=None, on_complete=None)` consolidates the 9 stage blocks.  Each stage in `_execute_pipeline` is now 5-7 lines of helper configuration.  `_execute_pipeline` shrank from ~317 → ~200 LOC.
+
+**Test design notes:**
+- `_run_stage` returns a 3-state value: `True` (stage ran / was mode-skipped — caller continues), `False` (shutdown requested — caller should bail).  Tests pin this contract.
+- The shutdown check happens at the start of each stage; the helper returns `False` and the caller bails.  Original code did `if _shutdown_event.is_set(): return` between every stage.
+
+**Verification:** 412/412 pass (was 397; +15 new). No regressions.  Lines: orchestrator.py 732 → 708 (‑24).  Function-level: `_execute_pipeline` 280 → 200 LOC (‑80), three schedulers 117 → 23 LOC (‑94).
+
+---
+
+## 18. Phase B: B.12 wrap sync warehouse calls in `asyncio.to_thread` — DONE (commit `486b883`)
+
+**Why:** `app/services/ticker_warehouse.py` is fully synchronous (SQLAlchemy `Session` under the hood).  The 5 ticker router handlers (`get_ohlcv`, `get_latest`, `get_status`, `get_intraday_ohlcv`) were calling the warehouse directly from `async def` handlers, blocking the event loop for the duration of every DB round-trip.
+
+**What:**
+- 5 sync warehouse calls in `routers/ticker.py` wrapped in `asyncio.to_thread(...)` so the SQLAlchemy work runs in a thread-pool worker.
+- Wraps use the bound method (`asyncio.to_thread(ticker_warehouse.get_ohlcv, ...)`) rather than a lambda, preserving `__name__` / `__doc__` for debugging.
+
+**Other call sites left untouched (intentional):**
+- `routers/portfolio.py`: `_run_optimization_sync` and `_fetch` helper are already wrapped in `asyncio.to_thread`.  No change.
+- `backgroundtasks.py`: the 5 warehouse calls in `_ticker_backfill_sync` run inside a worker thread (the function is sync and called via `loop.run_in_executor` from `orchestrator._run_pipeline_stage`).  Wrapping these in `asyncio.to_thread` would be redundant.  Tests pin this invariant.
+
+**Verification:** 419/419 pass (was 412; +7 new). No regressions.  Performance: ticker router endpoints no longer block the event loop on the sync SQLAlchemy round-trip.
+
+---
+
+## 19. Phase B progress summary (COMPLETE)
 
 | Item | Title | Commit | Tests added | Cumulative |
 |------|-------|--------|-------------|-----------|
@@ -332,9 +382,26 @@ The audit also called out `_legacy_where` vs `_legacy_where_snapshot` (~200 LOC)
 | B.7  | Consolidate 3 semaphores | `26bcecc` | 9 | 319 |
 | B.8  | `paginate()` helper | `91c30c7` | 6 | 325 |
 | B.9 (partial) | Unify TQL AST + sort | `25f2c2f` | 60 | 385 |
+| B.10 | Delete sync `nse_client.py` (facade) | `a611369` | 12 | 397 |
+| B.11 | Orchestrator cleanup | `ea871ad` | 15 | 412 |
+| B.12 | `asyncio.to_thread` warehouse | `486b883` | 7 | 419 |
 
-**Open (3 more + 1 follow-up):** B.9b (unify legacy filter transpilers via column_map), B.10 (delete sync `nse_client.py`), B.11 (orchestrator cleanup), B.12 (`asyncio.to_thread` warehouse).
+**Final tally: 232 → 419 pure‑unit tests (+187 across 11 audit items, +1 follow-up deferred).**
 
-**Deferred rationale:** `_legacy_where` and `_legacy_where_snapshot` differ in SQL math (precomputed percentage columns vs `CASE WHEN` runtime computation). A `column_map` parameterisation is feasible but would need Tier 3 integration tests against both schemas to verify behavioural equivalence. Tracked as B.9b.
+**Deferred:** B.9b — unify `_legacy_where` and `_legacy_where_snapshot` via a `column_map` parameter.  Deferred because the SQL fragments are not equivalent (precomputed `pct_*` columns vs `CASE WHEN` runtime computation); would need Tier 3 integration tests against both schemas.  Tracked for a future session.
+
+**Branch:** `docs/backend-audit-and-test-plan` (16 commits ahead of `main`).
+
+**Files touched in Phase B:**
+- `app/services/tql_to_sql.py` (B.1, B.9)
+- `app/routers/announcements.py` (B.2, B.3)
+- `app/database.py`, `app/backgroundtasks.py` (B.4)
+- `app/schemas/{announcements,news,stockuniverse,ticker}.py` (B.5)
+- `app/services/cookie_loader.py`, `app/services/{screener_client,morningstar_client}.py` (B.6)
+- `app/services/{nse_rate_limiter,screener_client,morningstar_client}.py` (B.7)
+- `app/services/pagination.py`, `app/routers/news.py` (B.8)
+- `app/services/{nse_client,nse_client_async}.py` (B.10)
+- `app/orchestrator.py` (B.11)
+- `app/routers/ticker.py` (B.12)
 
 ---
