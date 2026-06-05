@@ -275,7 +275,52 @@ New test: `tests/test_utcnow_migration_parity.py` (6 tests: 3 behavioural frozen
 
 ---
 
-## 13. Phase B progress summary
+## 13. Phase B: B.7 consolidate 3 semaphores behind `throttled_nse_call` — DONE (commit `26bcecc`)
+
+**Why:** Three independent rate-limit implementations were drifting apart: a global `nse_rate_limiter` (request-level), a per-client `asyncio.Semaphore` for the screener (`_screener_semaphore`), and a per-client `MAX_CONCURRENT_REQUESTS = 2` cap for the morningstar client. A future "bump the rate limit" change had to be made in three places.
+
+**What:**
+- Drop `_screener_semaphore` from `screener_client.py` and the `MAX_CONCURRENT_REQUESTS = 2` cap from `morningstar_client.py`. Both clients route every NSE call through the existing `throttled_nse_call(endpoint_name, fn, *args, is_async_fn=...)` helper.
+- 5 call sites refactored in `screener_client.py` (search, quick_ratios, company, company_html, trades).
+- 1 call site refactored in `morningstar_client.py` (`get_fair_value` body factored into `_get_fair_value_impl` so the wrapper is a one-liner that delegates).
+
+**Verification:** 319/319 pass (was 310; +9 new). No regressions.
+
+---
+
+## 14. Phase B: B.8 extract `paginate()` helper for news endpoints — DONE (commit `91c30c7`)
+
+**Why:** `routers/news.py` had 4 near-identical pagination blocks: each duplicated the count statement, the page statement, the `await db.execute(stmt) / .scalars().all()` dance, and the `has_more=(offset + limit) < total` boundary check.
+
+**What:**
+- New `app/services/pagination.py` with `async paginate(db, count_stmt, page_stmt, offset, limit) -> (total, items, has_more)`. Single source of truth for the count-then-page pattern and the `has_more` boundary (strict less-than so an exact-boundary page reports `has_more=False`).
+- 4 call sites in `routers/news.py` refactored to use `paginate()`. The `(offset + limit) < total` substring no longer appears in the router.
+
+**Verification:** 325/325 pass (was 319; +6 new). No regressions.
+
+---
+
+## 15. Phase B: B.9 unify TQL transpilers (partial) — DONE (commit `25f2c2f`)
+
+**Why:** `tql_to_sql.py` had two near-identical recursive AST renderers (`_node_to_where` and `_snapshot_node_to_where`) and two near-identical sort helpers (`_sort_sql` and `_snapshot_sort_sql`). The only difference was the field resolver / sort map injected. The two paths could drift apart in silence — a future fix to one would not be reflected in the other.
+
+The audit also called out `_legacy_where` vs `_legacy_where_snapshot` (~200 LOC), but those functions query different tables with different math (the snapshot precomputes 52w percentages; the legacy computes them on the fly via `CASE WHEN`). Simple parameterisation would change behaviour. **Deferred to a follow-up audit item (B.9b).**
+
+**What:**
+- New `_render_node_to_where(node, default_interval, intervals, binds, field_resolver)` — the unified body. `_node_to_where` and `_snapshot_node_to_where` are now thin wrappers that pass the legacy / snapshot field resolver respectively.
+- New `_render_sort_sql(sort_by, order, sort_map, default_col, tiebreaker_col)` — the unified body. `_sort_sql` and `_snapshot_sort_sql` are now thin wrappers. Snapshot sort map hoisted to module-level `_SNAPSHOT_SORT_FIELD_SQL` for parity with the existing `_SORT_FIELD_SQL`.
+
+**Test design notes:**
+- The interval-set test had to be split: for `1h:` / `W:` / `M:` prefixes, the legacy path needs a lateral join and the snapshot path resolves the indicator inline (the snapshot table stores `rsi_1h`, `rsi_W`, `rsi_M` columns). This is a structural asymmetry in the data model, not a bug — the tests now document it explicitly.
+- `_strip_column_refs` helper normalises `td.rsi_14` / `snap.last_close` / `ts.return_1w` to `<COL>` so we can compare structural shape (operators, parens, bind count) without being sensitive to which table the column comes from.
+
+**Verification:** 385/385 pass (was 325; +60 new). No regressions.
+
+**Follow-up:** B.9b — unify the legacy filter transpilers using a `column_map` parameter (≈200 LOC). Tracked separately because the math is non-equivalent and the change needs a Tier 3 integration test against both schemas.
+
+---
+
+## 16. Phase B progress summary
 
 | Item | Title | Commit | Tests added | Cumulative |
 |------|-------|--------|-------------|-----------|
@@ -284,7 +329,12 @@ New test: `tests/test_utcnow_migration_parity.py` (6 tests: 3 behavioural frozen
 | B.4  | Pragma helper + drop thread engine | `14efe2c` | 5 | 262 |
 | B.5  | Move inline Pydantic to schemas/ | (B.5 commit) | 40 | 302 |
 | B.6  | Centralize cookie loader | `82aac9f` | 8 | 310 |
+| B.7  | Consolidate 3 semaphores | `26bcecc` | 9 | 319 |
+| B.8  | `paginate()` helper | `91c30c7` | 6 | 325 |
+| B.9 (partial) | Unify TQL AST + sort | `25f2c2f` | 60 | 385 |
 
-**Open (6 more):** B.7 (rate limiter consolidation), B.8 (paginate helper), B.9 (unify TQL transpilers), B.10 (delete sync `nse_client.py`), B.11 (orchestrator cleanup), B.12 (`asyncio.to_thread` warehouse).
+**Open (3 more + 1 follow-up):** B.9b (unify legacy filter transpilers via column_map), B.10 (delete sync `nse_client.py`), B.11 (orchestrator cleanup), B.12 (`asyncio.to_thread` warehouse).
+
+**Deferred rationale:** `_legacy_where` and `_legacy_where_snapshot` differ in SQL math (precomputed percentage columns vs `CASE WHEN` runtime computation). A `column_map` parameterisation is feasible but would need Tier 3 integration tests against both schemas to verify behavioural equivalence. Tracked as B.9b.
 
 ---
