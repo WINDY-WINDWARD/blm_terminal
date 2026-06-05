@@ -18,6 +18,39 @@ from app.services.news_sources import NewsSource
 
 logger = logging.getLogger(__name__)
 
+# Module-level shared httpx client (audit win #10: pool HTTP connections).
+# Recreated per event loop so tests / server reloads don't reuse a closed client.
+_SHARED_CLIENT_TIMEOUT = 15.0
+_shared_client: httpx.AsyncClient | None = None
+_shared_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    """Return the module-level shared httpx.AsyncClient for the current event loop.
+
+    Lazy-initialized on first call; rebuilt when the running event loop changes
+    (e.g. FastAPI reload, pytest-asyncio new loop per test). Safe to call from
+    sync code — returns the cached client when no loop is running.
+    """
+    global _shared_client, _shared_client_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        if _shared_client is None:
+            _shared_client = httpx.AsyncClient(
+                timeout=_SHARED_CLIENT_TIMEOUT,
+                follow_redirects=True,
+            )
+        return _shared_client
+    if _shared_client is None or _shared_client_loop is not current_loop:
+        _shared_client = httpx.AsyncClient(
+            timeout=_SHARED_CLIENT_TIMEOUT,
+            follow_redirects=True,
+        )
+        _shared_client_loop = current_loop
+    return _shared_client
+
+
 # Browser user agents for RSS fetching (RSS is less restrictive but we use realistic headers)
 BROWSER_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -158,31 +191,31 @@ async def fetch_feed(source: NewsSource, timeout: float = 15.0) -> FetchResult:
     articles: list[ParsedArticle] = []
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            response = await client.get(source.url, headers=_get_random_headers())
-            response.raise_for_status()
+        client = _get_shared_client()
+        response = await client.get(source.url, headers=_get_random_headers(), timeout=timeout)
+        response.raise_for_status()
 
-            # Parse the feed
-            feed = feedparser.parse(response.text)
+        # Parse the feed
+        feed = feedparser.parse(response.text)
 
-            if feed.bozo:
-                # Check if it's a serious error vs just a warning
-                if isinstance(feed.bozo_exception, feedparser.exceptions.CharacterEncodingOverride):
-                    # Try to recover from encoding issues
-                    pass
-                elif isinstance(feed.bozo_exception, feedparser.exceptions.FeedparserError):
-                    # Try with alternative encoding
-                    feed = feedparser.parse(response.text, encoding='utf-8')
-                    if feed.bozo and isinstance(feed.bozo_exception, feedparser.exceptions.FeedparserError):
-                        logger.warning(f"Feed parse error for {source.id}: {feed.bozo_exception}")
-                        return FetchResult(source=source, articles=[], error=str(feed.bozo_exception))
+        if feed.bozo:
+            # Check if it's a serious error vs just a warning
+            if isinstance(feed.bozo_exception, feedparser.exceptions.CharacterEncodingOverride):
+                # Try to recover from encoding issues
+                pass
+            elif isinstance(feed.bozo_exception, feedparser.exceptions.FeedparserError):
+                # Try with alternative encoding
+                feed = feedparser.parse(response.text, encoding='utf-8')
+                if feed.bozo and isinstance(feed.bozo_exception, feedparser.exceptions.FeedparserError):
+                    logger.warning(f"Feed parse error for {source.id}: {feed.bozo_exception}")
+                    return FetchResult(source=source, articles=[], error=str(feed.bozo_exception))
 
-            for entry in feed.entries:
-                article = _parse_rss_entry(entry, source)
-                if article:
-                    articles.append(article)
+        for entry in feed.entries:
+            article = _parse_rss_entry(entry, source)
+            if article:
+                articles.append(article)
 
-            logger.debug(f"Fetched {len(articles)} articles from {source.id}")
+        logger.debug(f"Fetched {len(articles)} articles from {source.id}")
 
     except httpx.TimeoutException:
         logger.warning(f"Timeout fetching {source.id}")
