@@ -449,11 +449,22 @@ def _normalize(obj: Any) -> Any:
     return obj
 
 
+def _sort_pending(pending: list[dict]) -> list[dict]:
+    """Sort notification-dict lists by ``(symbol, trigger_type)`` so the
+    golden file is byte-stable across runs (the source code uses
+    ``set`` iteration which is hash-order and non-deterministic
+    between Python sessions).
+
+    Each item must have ``symbol`` and ``trigger_type`` keys.
+    """
+    return sorted(pending, key=lambda d: (d.get("symbol", ""), d.get("trigger_type", "")))
+
+
 def capture_global_scan(captured) -> int:
     from app.backgroundtasks import _global_scan_cycle
     _global_scan_cycle()
     rows = captured["global_scan_pending"]
-    out = _normalize(rows)
+    out = _normalize(_sort_pending(rows))
     return len(rows), out
 
 
@@ -461,14 +472,14 @@ def capture_ticker_indicator(captured) -> int:
     from app.backgroundtasks import _ticker_indicator_notification_cycle
     _ticker_indicator_notification_cycle()
     rows = captured["ticker_indicator_pending"]
-    return len(rows), _normalize(rows)
+    return len(rows), _normalize(_sort_pending(rows))
 
 
 def capture_intraday_indicator(captured) -> int:
     from app.backgroundtasks import _ticker_intraday_indicator_notification_cycle
     _ticker_intraday_indicator_notification_cycle()
     rows = captured["intraday_indicator_pending"]
-    return len(rows), _normalize(rows)
+    return len(rows), _normalize(_sort_pending(rows))
 
 
 def capture_intraday_stale(SessionLocal) -> list[str]:

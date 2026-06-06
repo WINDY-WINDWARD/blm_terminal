@@ -537,157 +537,6 @@ def _report_job_waiting(job_key: str, cron_expr: str | None, message: str | None
     return wait_secs
 
 
-def _stock_universe_sync() -> None:
-    """Populate or refresh the stock universe table. Runs synchronously in a worker thread."""
-    try:
-        logger.info("stock_universe_sync: starting")
-        stock_list: list[str] = _nse_client.get_stock_list()
-        total = len(stock_list)
-        logger.info("stock_universe_sync: %d symbols to process", total)
-
-        stale_delta = timedelta(hours=12)
-        batch_size = 50
-
-        with _SyncSessionLocal() as session:
-            batch: list = []
-            for i, symbol in enumerate(stock_list, 1):
-                if _shutdown_event.is_set():
-                    logger.info("stock_universe_sync: shutdown requested mid-run, aborting")
-                    return
-
-                if i % 100 == 0:
-                    progress = int((i / total) * 100)
-                    update_job_status_sync(
-                        "job.stock_universe", "running", progress=progress,
-                        message=f"Processing {i}/{total} symbols",
-                    )
-
-                existing = session.get(stockuniverse.StockUniverse, symbol)
-                last_time = None
-                if existing is not None:
-                    last_time = getattr(existing, "last_update_time", None) or getattr(
-                        existing, "last_fetched_at", None
-                    )
-                if last_time is not None:
-                    try:
-                        now = datetime.now()
-                        if (now - last_time) < stale_delta:
-                            logger.debug(
-                                "Skipping %s — last update was %s (within %.0f hours)",
-                                symbol,
-                                last_time,
-                                stale_delta.total_seconds() / 3600,
-                            )
-                            continue
-                    except Exception:
-                        logger.debug(
-                            "Unable to compare last update time for %s; refreshing",
-                            symbol,
-                        )
-
-                try:
-                    metadata = _nse_client.get_stock_metadata(symbol)
-                    batch.append(metadata)
-                    if len(batch) >= batch_size:
-                        _bulk_insert_stock_universe(session, batch)
-                        session.commit()
-                        batch.clear()
-                        if _sleep_interruptible(0.5):
-                            return
-                except SymbolNotFoundError:
-                    _update_symbol_error_status(session, symbol, "unknown")
-                    session.commit()
-                    logger.warning("Symbol %s: no tradeable series found, marked as unknown", symbol)
-                    if _sleep_interruptible(0.5):
-                        return
-                    continue
-                except _SAOperationalError as e:
-                    logger.warning(
-                        "DB write failed for %s (will retry next cycle): %s", symbol, e
-                    )
-                    session.rollback()
-                    if _sleep_interruptible(1.0):
-                        return
-                    continue
-                except Exception:
-                    logger.warning("Failed to fetch NSE metadata for %s, skipping", symbol)
-                    if _sleep_interruptible(1.0):
-                        return
-                    continue
-
-            if batch:
-                _bulk_insert_stock_universe(session, batch)
-                session.commit()
-
-        update_job_status_sync(
-            "job.stock_universe",
-            "idle",
-            progress=100,
-            message="Stock universe sync complete",
-        )
-        logger.info("stock_universe_sync: complete")
-    except Exception:
-        logger.exception("stock_universe_sync: unhandled exception; will retry next cycle")
-
-
-def _update_symbol_error_status(session, symbol: str, reason: str, series: str | None = None) -> None:
-    """Set review_status (and optionally series) on an existing stock_universe row."""
-    values: dict[str, object] = {"review_status": reason}
-    if series is not None:
-        values["series"] = series
-    session.execute(
-        update(stockuniverse.StockUniverse)
-        .where(stockuniverse.StockUniverse.symbol == symbol)
-        .values(**values)
-    )
-
-
-def _bulk_insert_stock_universe(session, batch: list) -> None:
-    """Bulk insert or update a batch of stock universe records."""
-    if not batch:
-        return
-    for metadata in batch:
-        stmt = (
-            sqlite_insert(stockuniverse.StockUniverse)
-.values(
-                symbol=metadata.symbol,
-                company_name=metadata.companyName,
-                segment=metadata.segment,
-                industry=metadata.industry,
-                sector_pe=metadata.sectorPE,
-                symbol_pe=metadata.symbolPE,
-                industry_info=metadata.industryInfo,
-                last_update_time=metadata.lastUpdateTime,
-                high_52w=metadata.high_52w,
-                low_52w=metadata.low_52w,
-                high_52w_date=metadata.high_52w_date,
-                low_52w_date=metadata.low_52w_date,
-                series=metadata.series if hasattr(metadata, "series") else None,
-                review_status=None,
-            )
-            .on_conflict_do_update(
-                index_elements=["symbol"],
-                set_={
-                    "company_name": metadata.companyName,
-                    "segment": metadata.segment,
-                    "industry": metadata.industry,
-                    "sector_pe": metadata.sectorPE,
-                    "symbol_pe": metadata.symbolPE,
-                    "industry_info": metadata.industryInfo,
-                    "last_update_time": metadata.lastUpdateTime,
-                    "high_52w": metadata.high_52w,
-                    "low_52w": metadata.low_52w,
-                    "high_52w_date": metadata.high_52w_date,
-                    "low_52w_date": metadata.low_52w_date,
-                    "series": metadata.series if hasattr(metadata, "series") else None,
-                    "review_status": None,  # clear error status on re-fetch
-                    "high_52w_updated_at": func.now(),
-                    "updated_at": func.now(),
-                },
-            )
-        )
-        session.execute(stmt)
-
 
 def stock_universe_worker() -> None:
     """Daemon thread target for stock universe refresh."""
@@ -4990,3 +4839,17 @@ async def _run_nightly_scheduler():
             break
         await sync_all_fair_values()
     logger.info("nightly_scheduler: stopped")
+
+
+# ─── Re-exports from split submodules (audit C.1) ────────────────────────
+#
+# Each of these was moved out of this file to a dedicated submodule
+# (e.g. ``app/services/data_sync/universe.py``).  The re-exports here
+# keep the package-level import path working and preserve
+# ``is``-identity for tests that pin the move.  See
+# ``tests/test_data_sync_universe.py`` etc. for the contract.
+from app.services.data_sync.universe import (  # noqa: E402,F401
+    _stock_universe_sync,
+    _update_symbol_error_status,
+    _bulk_insert_stock_universe,
+)

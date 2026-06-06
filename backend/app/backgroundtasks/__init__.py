@@ -50,7 +50,7 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _pipeline_idle,
     # First-run + job registry
     register_all_jobs,
-    # Universe sync
+    # Universe sync (moved to app.services.data_sync.universe in A.3)
     _stock_universe_sync,
     _update_symbol_error_status,
     _bulk_insert_stock_universe,
