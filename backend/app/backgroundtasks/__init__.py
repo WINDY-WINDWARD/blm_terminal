@@ -71,22 +71,9 @@ from app.backgroundtasks._impl import (  # noqa: F401
     # Indicator sync (moved to app.services.data_sync.indicators in A.8)
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
-    # News sync (news_worker + news_rss_worker + watchlist_news_worker
-    # moved to app.workers.news in A.9 step 4 — see TestMovedWorkers)
-    _crawl_news_async,
-    _news_sync,
-    _news_periodic_sync,
-    _news_rss_sync,
-    _news_rss_sync_async,
-    _watchlist_news_sync,
-    _fetch_company_news_async,
-    _is_market_open,
-    _seconds_until_market_open,
-    _refresh_market_data_async,
-    _market_data_sync,
-    # Results calendar (results_calendar_worker + market_data_worker
-    # moved to app.workers.market_calendar in A.9 step 4)
-    _results_calendar_sync,
+    # NOTE: news + market + calendar sync cores moved to
+    # app.services.data_sync.{news,market,calendar} in A.11 part 2 —
+    # see MOVED_SYMBOLS / TestMovedWorkers
     # Maintenance
     # NOTE: ``vacuum_worker`` is imported separately below from its
     # final home (``app.workers.maintenance``) to avoid a circular
@@ -194,4 +181,28 @@ from app.services.data_sync.parallel import (  # noqa: E402,F401
 )
 from app.services.data_sync.snapshot import (  # noqa: E402,F401
     _screener_snapshot_sync,
+)
+# A.11 part 2 — news + market + calendar sync cores moved out of
+# _impl.py into app.services.data_sync.{news,market,calendar}.
+from app.services.data_sync.news import (  # noqa: E402,F401
+    _crawl_news_async,
+    _news_sync,
+    _news_periodic_sync,
+    _news_rss_sync,
+    _news_rss_sync_async,
+    _watchlist_news_sync,
+    _fetch_company_news_async,
+    NEWS_CRON,
+    NEWS_CRAWL_MAX_INTERVAL,
+    WATCHLIST_NEWS_STALE_SECONDS,
+)
+from app.services.data_sync.market import (  # noqa: E402,F401
+    _is_market_open,
+    _seconds_until_market_open,
+    _refresh_market_data_async,
+    _market_data_sync,
+)
+from app.services.data_sync.calendar import (  # noqa: E402,F401
+    _results_calendar_sync,
+    _RESULTS_CALENDAR_CRON,
 )

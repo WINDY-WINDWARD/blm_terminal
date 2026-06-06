@@ -113,22 +113,9 @@ EXPECTED_PUBLIC_SYMBOLS = [
     # NOTE: the 7 ticker-data worker daemons moved to
     # app.workers.{universe,data,ticker_compute} in audit C.1
     # A.9 step 2 — see TestMovedWorkers / MOVED_SYMBOLS
-    # News sync functions (5 worker daemons moved to app.workers.{news,
-    # market_calendar} in A.9 step 4 — see TestMovedWorkers)
-    "_crawl_news_async",
-    "_news_sync",
-    "_news_periodic_sync",
-    "_news_rss_sync",
-    "_news_rss_sync_async",
-    "_watchlist_news_sync",
-    "_fetch_company_news_async",
-    "_is_market_open",
-    "_seconds_until_market_open",
-    "_refresh_market_data_async",
-    "_market_data_sync",
-    # Results calendar sync (results_calendar_worker moved to
-    # app.workers.market_calendar in A.9 step 4)
-    "_results_calendar_sync",
+    # NOTE: news + market + calendar sync cores moved to
+    # app.services.data_sync.{news,market,calendar} in A.11 part 2 —
+    # see MOVED_SYMBOLS / TestMovedWorkers
     # Maintenance (vacuum_worker moved to app.workers.maintenance — see TestMovedWorkers)
     "_run_cleanup_if_due",
     # Notification workers (watchlist_notification_worker + global_scan_worker
@@ -247,6 +234,19 @@ MOVED_SYMBOLS = [
     # A.11 part 1 — split remaining sync cores (parallel + snapshot)
     ("_parallel_indicator_sync", "app.services.data_sync.parallel"),
     ("_screener_snapshot_sync", "app.services.data_sync.snapshot"),
+    # A.11 part 2 — news + market + calendar sync cores
+    ("_crawl_news_async", "app.services.data_sync.news"),
+    ("_news_sync", "app.services.data_sync.news"),
+    ("_news_periodic_sync", "app.services.data_sync.news"),
+    ("_news_rss_sync", "app.services.data_sync.news"),
+    ("_news_rss_sync_async", "app.services.data_sync.news"),
+    ("_watchlist_news_sync", "app.services.data_sync.news"),
+    ("_fetch_company_news_async", "app.services.data_sync.news"),
+    ("_is_market_open", "app.services.data_sync.market"),
+    ("_seconds_until_market_open", "app.services.data_sync.market"),
+    ("_refresh_market_data_async", "app.services.data_sync.market"),
+    ("_market_data_sync", "app.services.data_sync.market"),
+    ("_results_calendar_sync", "app.services.data_sync.calendar"),
 ]
 
 

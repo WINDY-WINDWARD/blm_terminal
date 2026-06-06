@@ -16,6 +16,12 @@ business logic that runs in a worker thread) extracted from
 - ``market.py``      — market data + is_market_open helpers (A.11 part 2)
 - ``calendar.py``    — ``_results_calendar_sync`` (NSE event calendar, A.11 part 2)
 
+Every module except ``parallel.py`` uses the lazy-import pattern
+(``from app.backgroundtasks import _impl as _bg_impl; _bg_impl.<name>``)
+inside the function body to avoid a circular import through
+``_impl``'s re-export shim.  See ``tests/test_data_sync_<module>.py``
+for the per-module contract.
+
 Until the migration completes, the package is a no-op re-export
 shim that defers to ``app.backgroundtasks`` so callers continue
 to work unchanged.  See ``tests/test_data_sync_skeleton.py`` for
