@@ -89,10 +89,13 @@ async def test_should_trigger_full_sync_returns_true_when_no_last_update(monkeyp
         async def commit(self):
             pass
 
-    monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", lambda: _StubSession())
+    # After Phase C.1 A.1 split, the implementation lives in
+    # ``_impl`` — patch there because functions defined in ``_impl``
+    # look up their own module globals, not the package's.
+    monkeypatch.setattr(backgroundtasks._impl, "AsyncSessionLocal", lambda: _StubSession())
 
     frozen = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(backgroundtasks, "datetime", _make_frozen_datetime_class(frozen))
+    monkeypatch.setattr(backgroundtasks._impl, "datetime", _make_frozen_datetime_class(frozen))
 
     assert await backgroundtasks._should_trigger_full_sync() is True
 
@@ -126,8 +129,8 @@ async def test_should_trigger_full_sync_returns_true_when_stale(monkeypatch):
         async def commit(self):
             pass
 
-    monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", lambda: _StubSession())
-    monkeypatch.setattr(backgroundtasks, "datetime", _make_frozen_datetime_class(frozen))
+    monkeypatch.setattr(backgroundtasks._impl, "AsyncSessionLocal", lambda: _StubSession())
+    monkeypatch.setattr(backgroundtasks._impl, "datetime", _make_frozen_datetime_class(frozen))
 
     assert await backgroundtasks._should_trigger_full_sync() is True
 
@@ -161,8 +164,11 @@ async def test_should_trigger_full_sync_returns_false_when_recent(monkeypatch):
         async def commit(self):
             pass
 
-    monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", lambda: _StubSession())
-    monkeypatch.setattr(backgroundtasks, "datetime", _make_frozen_datetime_class(frozen))
+    # After Phase C.1 A.1 split, the implementation lives in
+    # ``_impl`` — patch there because functions defined in ``_impl``
+    # look up their own module globals, not the package's.
+    monkeypatch.setattr(backgroundtasks._impl, "AsyncSessionLocal", lambda: _StubSession())
+    monkeypatch.setattr(backgroundtasks._impl, "datetime", _make_frozen_datetime_class(frozen))
 
     assert await backgroundtasks._should_trigger_full_sync() is False
 

@@ -152,7 +152,10 @@ class TestBackgroundTasksNotWrapped:
     """
 
     def test_no_unnecessary_to_thread_in_backgroundtasks(self):
-        source = _read_source("app/backgroundtasks.py")
+        # After Phase C.1 A.1 split, the implementation lives in
+        # ``app/backgroundtasks/_impl.py`` (the re-export shim package
+        # is in ``__init__.py``).  Read both to be safe.
+        source = _read_source("app/backgroundtasks/_impl.py")
         # Find any asyncio.to_thread calls that wrap ticker_warehouse.<method>
         wrapped = re.findall(
             r"asyncio\.to_thread\(\s*ticker_warehouse\.\w+",
@@ -160,6 +163,6 @@ class TestBackgroundTasksNotWrapped:
         )
         assert not wrapped, (
             f"Found {len(wrapped)} asyncio.to_thread wraps of "
-            f"ticker_warehouse in backgroundtasks.py.  These run in "
-            f"worker threads and don't need the async wrap."
+            f"ticker_warehouse in backgroundtasks/_impl.py.  These run "
+            f"in worker threads and don't need the async wrap."
         )

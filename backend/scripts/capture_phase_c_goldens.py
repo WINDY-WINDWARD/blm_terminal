@@ -329,6 +329,11 @@ def install_mocks(SessionLocal):
     functions would read from the production ``data.db`` instead of
     our seeded fixture.
 
+    After Phase C.1 A.1 split, functions in ``_impl`` look up their
+    dependencies (e.g. ``_SyncSessionLocal``, ``_safe_fetch_*``) in
+    their own module globals, not the package's.  We patch BOTH
+    locations so the mocks take effect.
+
     Returns a dict of capture lists that the caller pops out at the end.
     """
     import app.backgroundtasks as bg
@@ -341,19 +346,25 @@ def install_mocks(SessionLocal):
         "scores_rows": [],
     }
 
+    def _patch(name, value):
+        """Patch a name on BOTH the package and the _impl module."""
+        setattr(bg, name, value)
+        setattr(bg._impl, name, value)
+
     # 0. REBIND the session factory — the most important patch.
-    bg._SyncSessionLocal = SessionLocal
+    _patch("_SyncSessionLocal", SessionLocal)
 
     # 1. Disable the job-gate (treat all jobs as enabled)
-    bg._is_job_enabled = lambda key: True
-    bg._is_first_run = lambda key: False
-    bg._set_first_run_complete = lambda key: None
-    bg._sleep_interruptible = lambda secs: False  # never sleep
-    bg._shutdown_event = MagicMock()
-    bg._shutdown_event.is_set.return_value = False
+    _patch("_is_job_enabled", lambda key: True)
+    _patch("_is_first_run", lambda key: False)
+    _patch("_set_first_run_complete", lambda key: None)
+    _patch("_sleep_interruptible", lambda secs: False)  # never sleep
+    mock_shutdown = MagicMock()
+    mock_shutdown.is_set.return_value = False
+    _patch("_shutdown_event", mock_shutdown)
 
     # 2. Mock update_job_status_sync (no-op)
-    bg.update_job_status_sync = lambda *a, **k: None
+    _patch("update_job_status_sync", lambda *a, **k: None)
 
     # 3. Mock get_notif_config (load from our seeded system_config)
     def fake_get_notif_config():
@@ -364,15 +375,15 @@ def install_mocks(SessionLocal):
                 )
             ).scalar_one()
         return json.loads(row)
-    bg.get_notif_config = fake_get_notif_config
+    _patch("get_notif_config", fake_get_notif_config)
 
     # 4. Mock _safe_fetch_* (return fixed data)
-    bg._safe_fetch_52week_high = lambda: {"SYM01": {"ltp": 250.0, "new52WHL": 250.0}}
-    bg._safe_fetch_52week_low = lambda: {}
-    bg._safe_fetch_volume_gainers = lambda: {"SYM02": {"week1volChange": 3.0}}
-    bg._safe_fetch_top_gainers = lambda: None
-    bg._safe_fetch_top_losers = lambda: None
-    bg._safe_fetch_largedeal_snapshot = lambda: {}
+    _patch("_safe_fetch_52week_high", lambda: {"SYM01": {"ltp": 250.0, "new52WHL": 250.0}})
+    _patch("_safe_fetch_52week_low", lambda: {})
+    _patch("_safe_fetch_volume_gainers", lambda: {"SYM02": {"week1volChange": 3.0}})
+    _patch("_safe_fetch_top_gainers", lambda: None)
+    _patch("_safe_fetch_top_losers", lambda: None)
+    _patch("_safe_fetch_largedeal_snapshot", lambda: {})
 
     # 5. Mock the bulk-upsert helpers (capture pending)
     def _capture_global(rows):
@@ -380,31 +391,31 @@ def install_mocks(SessionLocal):
     def _capture_watchlist(rows):
         captured["ticker_indicator_pending"].extend(rows)
         captured["intraday_indicator_pending"].extend(rows)
-    bg._bulk_upsert_global_notifications = _capture_global
-    bg._bulk_upsert_notifications = _capture_watchlist
+    _patch("_bulk_upsert_global_notifications", _capture_global)
+    _patch("_bulk_upsert_notifications", _capture_watchlist)
 
     # 6. Mock _get_seen_today / _get_global_seen_today (empty)
-    bg._get_seen_today = lambda: set()
-    bg._get_global_seen_today = lambda: set()
+    _patch("_get_seen_today", lambda: set())
+    _patch("_get_global_seen_today", lambda: set())
 
     # 7. Mock _get_watchlist_symbols
-    bg._get_watchlist_symbols = lambda: {WATCHLIST_ID: WATCHLIST_SYMBOLS}
+    _patch("_get_watchlist_symbols", lambda: {WATCHLIST_ID: WATCHLIST_SYMBOLS})
 
     # 8. Mock NSE fetchers (universe sync) — not used by the 5 target
-    # functions but we patch them for safety
-    bg._nse_client.get_stock_list = lambda: [f"SYM{i:02d}" for i in range(N_SYMBOLS)]
-    bg._nse_client.get_stock_metadata = lambda sym: {
+    # functions but we patch them for safety.
+    bg._impl._nse_client.get_stock_list = lambda: [f"SYM{i:02d}" for i in range(N_SYMBOLS)]
+    bg._impl._nse_client.get_stock_metadata = lambda sym: {
         "symbol": sym, "company_name": f"Test {sym}", "series": "EQ",
         "isin": f"INE{sym[3:]}", "industry": "IT",
     }
 
     # 9. Mock _parse_* helpers
-    bg._parse_52week_data = lambda raw: {
+    _patch("_parse_52week_data", lambda raw: {
         sym: {"ltp": d.get("ltp"), "new52WHL": d.get("new52WHL")}
         for sym, d in raw.items()
-    }
-    bg._parse_volume_gainers = lambda raw: raw
-    bg._parse_largedeal_snapshot = lambda raw: {}
+    })
+    _patch("_parse_volume_gainers", lambda raw: raw)
+    _patch("_parse_largedeal_snapshot", lambda raw: {})
 
     # 10. Mock ticker_warehouse helpers for the hourly stale check
     import app.services.ticker_warehouse as tw
@@ -413,7 +424,7 @@ def install_mocks(SessionLocal):
     tw.backfill_intraday_symbol = lambda sym, ivs: {iv: 1 for iv in ivs}
 
     # 11. Mock _screener_snapshot_sync (skip)
-    bg._screener_snapshot_sync = lambda *a, **k: None
+    _patch("_screener_snapshot_sync", lambda *a, **k: None)
 
     return captured
 
@@ -471,10 +482,10 @@ def capture_intraday_stale(SessionLocal) -> list[str]:
     update_job_status_sync calls, which are already mocked.
     """
     import app.backgroundtasks as bg
-    with patch.object(bg, "_shutdown_event", MagicMock(is_set=MagicMock(return_value=False))), \
+    with patch.object(bg._impl, "_shutdown_event", MagicMock(is_set=MagicMock(return_value=False))), \
          patch("app.services.ticker_warehouse.backfill_intraday_symbol", return_value={"1h": 0}), \
          patch("app.services.indicators.compute_intraday_indicators_for_all_rows", return_value=0), \
-         patch("app.backgroundtasks.time.sleep", return_value=None):
+         patch("app.backgroundtasks._impl.time.sleep", return_value=None):
         # Patch the 1h / 1h-1 capture path: we want to *observe* the
         # stale_symbols list, not the backfill output. Easiest: wrap
         # the function and intercept.

@@ -123,14 +123,22 @@ class TestThreadAsyncEngineRemoved:
         )
 
     def test_backgroundtasks_uses_main_session_local(self) -> None:
-        """The 4 ``_ThreadAsyncSessionLocal`` callers in backgroundtasks.py
-        must now use ``AsyncSessionLocal`` instead."""
-        from app import backgroundtasks
-        import inspect
+        """The 4 ``_ThreadAsyncSessionLocal`` callers in backgroundtasks
+        must now use ``AsyncSessionLocal`` instead.
 
-        source = inspect.getsource(backgroundtasks)
+        After Phase C.1 A.1 split, the implementation lives in
+        ``app/backgroundtasks/_impl.py`` — read the source of that
+        file (the re-export shim doesn't import the session factories
+        itself).
+        """
+        from pathlib import Path
+        impl_path = (
+            Path(__file__).resolve().parents[1]
+            / "app" / "backgroundtasks" / "_impl.py"
+        )
+        source = impl_path.read_text()
         assert "_ThreadAsyncSessionLocal" not in source, (
-            "backgroundtasks.py still references _ThreadAsyncSessionLocal"
+            "backgroundtasks/_impl.py still references _ThreadAsyncSessionLocal"
         )
         # And it should reference the main AsyncSessionLocal
         assert "AsyncSessionLocal" in source

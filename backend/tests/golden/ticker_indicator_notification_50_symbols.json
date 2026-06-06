@@ -29,6 +29,51 @@
   {
     "exchange": "NSE",
     "is_read": false,
+    "message": "SYM04 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM04",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM04 ATR% 5.0% > 4.0%",
+    "symbol": "SYM04",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM04 up 10 consecutive days",
+    "symbol": "SYM04",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM02 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM02",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM02 up 10 consecutive days",
+    "symbol": "SYM02",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
     "message": "SYM01 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM01",
     "trigger_type": "macd_bearish_cross",
@@ -40,51 +85,6 @@
     "is_read": false,
     "message": "SYM01 up 10 consecutive days",
     "symbol": "SYM01",
-    "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM07 RSI oversold: 25.0 < 30.0",
-    "symbol": "SYM07",
-    "trigger_type": "rsi_oversold",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM07 MACD bearish crossover (0.1000 \u2192 -0.1000)",
-    "symbol": "SYM07",
-    "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM07 up 10 consecutive days",
-    "symbol": "SYM07",
-    "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM06 MACD bullish crossover (-0.1000 \u2192 0.1000)",
-    "symbol": "SYM06",
-    "trigger_type": "macd_bullish_cross",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM06 up 10 consecutive days",
-    "symbol": "SYM06",
     "trigger_type": "streak_up_5d",
     "triggered_date": "2026-06-06",
     "watchlist_id": 1
@@ -112,51 +112,6 @@
     "is_read": false,
     "message": "SYM09 up 10 consecutive days",
     "symbol": "SYM09",
-    "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM02 MACD bearish crossover (0.1000 \u2192 -0.1000)",
-    "symbol": "SYM02",
-    "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM02 up 10 consecutive days",
-    "symbol": "SYM02",
-    "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM08 MACD bearish crossover (0.1000 \u2192 -0.1000)",
-    "symbol": "SYM08",
-    "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM08 ATR% 4.5% > 4.0%",
-    "symbol": "SYM08",
-    "trigger_type": "atr_expansion",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM08 up 10 consecutive days",
-    "symbol": "SYM08",
     "trigger_type": "streak_up_5d",
     "triggered_date": "2026-06-06",
     "watchlist_id": 1
@@ -200,6 +155,51 @@
   {
     "exchange": "NSE",
     "is_read": false,
+    "message": "SYM06 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM06",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM06 up 10 consecutive days",
+    "symbol": "SYM06",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM08",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 ATR% 4.5% > 4.0%",
+    "symbol": "SYM08",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 up 10 consecutive days",
+    "symbol": "SYM08",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
     "message": "SYM05 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM05",
     "trigger_type": "macd_bearish_cross",
@@ -218,8 +218,17 @@
   {
     "exchange": "NSE",
     "is_read": false,
-    "message": "SYM04 MACD bearish crossover (0.1000 \u2192 -0.1000)",
-    "symbol": "SYM04",
+    "message": "SYM07 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM07",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-06",
+    "watchlist_id": 1
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM07",
     "trigger_type": "macd_bearish_cross",
     "triggered_date": "2026-06-06",
     "watchlist_id": 1
@@ -227,17 +236,8 @@
   {
     "exchange": "NSE",
     "is_read": false,
-    "message": "SYM04 ATR% 5.0% > 4.0%",
-    "symbol": "SYM04",
-    "trigger_type": "atr_expansion",
-    "triggered_date": "2026-06-06",
-    "watchlist_id": 1
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM04 up 10 consecutive days",
-    "symbol": "SYM04",
+    "message": "SYM07 up 10 consecutive days",
+    "symbol": "SYM07",
     "trigger_type": "streak_up_5d",
     "triggered_date": "2026-06-06",
     "watchlist_id": 1
