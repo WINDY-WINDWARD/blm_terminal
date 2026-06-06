@@ -156,6 +156,13 @@ def seed_db(SessionLocal) -> None:
                 rsi = 50.0 + (i % 10)
             macd_hist = 0.1 if (i % 3) == 0 else -0.1
             atr_pct = 3.0 + (i % 5) * 0.5
+            # For 10 symbols, leave indicators_updated_at NULL on the
+            # most recent row so the indicator sync functions pick
+            # them up as "stale" / "never backfilled".
+            ind_updated_at = (
+                None if (i < 10 and d == N_DAILY_CANDLES - 1)
+                else datetime.combine(today, datetime.min.time())
+            )
             row = TickerDaily(
                 symbol=sym,
                 date=day,
@@ -183,7 +190,7 @@ def seed_db(SessionLocal) -> None:
                 hv_60=12.0 + (i % 5),
                 sharpe_60=0.5,
                 sharpe_126=0.6,
-                indicators_updated_at=datetime.combine(today, datetime.min.time()),
+                indicators_updated_at=ind_updated_at,
             )
             rows_for_sym.append(row)
 
@@ -204,6 +211,14 @@ def seed_db(SessionLocal) -> None:
                     ts = datetime.combine(
                         today - timedelta(days=offset), datetime.min.time()
                     ) + timedelta(hours=10)
+                    # Leave indicators_updated_at NULL on the newest
+                    # row for the first 5 symbols so the intraday
+                    # indicator sync function picks them up as
+                    # "stale" / "never backfilled".
+                    ind_updated_at = (
+                        None if (i < 5 and offset == 1)
+                        else datetime.combine(today, datetime.min.time())
+                    )
                     intraday_rows.append(TickerIntraday(
                         symbol=sym,
                         interval=interval,
@@ -229,7 +244,7 @@ def seed_db(SessionLocal) -> None:
                         hv_20=10.0,
                         hv_60=12.0,
                         sharpe_60=0.5,
-                        indicators_updated_at=datetime.combine(today, datetime.min.time()),
+                        indicators_updated_at=ind_updated_at,
                     ))
 
         # StockUniverse row: high_52w and low_52w for proximity tests
@@ -344,6 +359,14 @@ def install_mocks(SessionLocal):
         "intraday_indicator_pending": [],
         "stale_symbols": [],
         "scores_rows": [],
+        # Session 2 additions
+        "universe_symbols_after": [],
+        "bulk_insert_rows": [],
+        "backfill_symbols": [],
+        "intraday_calls": [],
+        "daily_call_log": [],
+        "indicators_items": [],
+        "intraday_indicators_items": [],
     }
 
     def _patch(name, value):
@@ -401,13 +424,31 @@ def install_mocks(SessionLocal):
     # 7. Mock _get_watchlist_symbols
     _patch("_get_watchlist_symbols", lambda: {WATCHLIST_ID: WATCHLIST_SYMBOLS})
 
-    # 8. Mock NSE fetchers (universe sync) — not used by the 5 target
-    # functions but we patch them for safety.
+    # 8. Mock NSE fetchers (universe sync). The function reads NSE
+    # metadata via attribute access (.symbol, .companyName, etc. in
+    # camelCase), not dict keys.  Use a small mock class.
+    class MockNseMetadata:
+        def __init__(self, sym: str):
+            self.symbol = sym
+            self.companyName = f"Test {sym}"
+            self.series = "EQ"
+            self.segment = "EQ"
+            self.isin = f"INE{sym[3:]}"
+            self.industry = "IT"
+            self.sectorPE = 20.0
+            self.symbolPE = 25.0
+            self.industryInfo = {}
+            self.lastUpdateTime = __import__("datetime").datetime.combine(
+                __import__("datetime").date(2025, 12, 1),
+                __import__("datetime").datetime.min.time(),
+            )
+            self.high_52w = 200.0
+            self.low_52w = 80.0
+            self.high_52w_date = __import__("datetime").date(2025, 6, 1)
+            self.low_52w_date = __import__("datetime").date(2025, 12, 1)
+
     bg._impl._nse_client.get_stock_list = lambda: [f"SYM{i:02d}" for i in range(N_SYMBOLS)]
-    bg._impl._nse_client.get_stock_metadata = lambda sym: {
-        "symbol": sym, "company_name": f"Test {sym}", "series": "EQ",
-        "isin": f"INE{sym[3:]}", "industry": "IT",
-    }
+    bg._impl._nse_client.get_stock_metadata = lambda sym: MockNseMetadata(sym)
 
     # 9. Mock _parse_* helpers
     _patch("_parse_52week_data", lambda raw: {
@@ -425,6 +466,25 @@ def install_mocks(SessionLocal):
 
     # 11. Mock _screener_snapshot_sync (skip)
     _patch("_screener_snapshot_sync", lambda *a, **k: None)
+
+    # 12. Mock warehouse functions for backfill / intraday goldens
+    backfill_symbols_for_golden = [f"SYM{i:02d}" for i in range(5)]
+    tw.get_symbols_needing_backfill = lambda: backfill_symbols_for_golden
+    tw.backfill_symbol = lambda sym, days: 10  # returns 10 rows added
+
+    intraday_call_log: list[dict] = []
+    def fake_backfill_intraday(sym, ivs, **kwargs):
+        intraday_call_log.append({
+            "symbol": sym,
+            "intervals": sorted(ivs) if ivs else [],
+        })
+        return {iv: 5 for iv in (ivs or [])}
+    tw.backfill_intraday_symbol = fake_backfill_intraday
+
+    # 13. _parallel_indicator_sync is mocked INLINE in each indicator
+    # capture function (one per call site: indicators_sync vs
+    # intraday_indicators_sync) so we can route to different
+    # captured["..."] keys.
 
     return captured
 
@@ -572,6 +632,237 @@ def capture_ticker_scores(captured, SessionLocal) -> int:
 # ─── 5. Main ──────────────────────────────────────────────────────────────
 
 
+# ─── Session 2 captures: goldens for the 7 moved functions ──────────────
+
+
+def capture_stock_universe_sync(captured, SessionLocal) -> int:
+    """Run _stock_universe_sync. The DB writes are real; we just read
+    the stock_universe row count after the function completes.
+    """
+    from app.backgroundtasks import _stock_universe_sync
+    _stock_universe_sync()
+    from app.models.stockuniverse import StockUniverse
+    from sqlalchemy import select
+    with SessionLocal() as s:
+        rows = s.execute(select(StockUniverse.symbol)).scalars().all()
+    captured["universe_symbols_after"] = sorted(rows)
+    return len(rows), _normalize(captured["universe_symbols_after"])
+
+
+def capture_bulk_insert_stock_universe(captured, SessionLocal) -> int:
+    """Call _bulk_insert_stock_universe directly with a 5-row batch.
+    Then snapshot the rows that were inserted.
+    """
+    from app.backgroundtasks import _bulk_insert_stock_universe
+    from app.services.data_sync.universe import _bulk_insert_stock_universe as _bi_direct
+    # Build a batch of MockNseMetadata-like objects (the function
+    # reads them via attribute access, not dict keys).
+    from types import SimpleNamespace
+    import datetime as _dt
+    batch = [
+        SimpleNamespace(
+            symbol=f"NEW{i:02d}",
+            companyName=f"New Test Co {i}",
+            series="EQ",
+            segment="EQ",
+            industry="IT",
+            sectorPE=20.0,
+            symbolPE=25.0,
+            industryInfo={},
+            lastUpdateTime=_dt.datetime.combine(_dt.date(2025, 12, 1), _dt.datetime.min.time()),
+            high_52w=200.0,
+            low_52w=80.0,
+            high_52w_date=_dt.date(2025, 6, 1),
+            low_52w_date=_dt.date(2025, 12, 1),
+        )
+        for i in range(5)
+    ]
+    with SessionLocal() as s:
+        _bi_direct(s, batch)
+        s.commit()
+        from app.models.stockuniverse import StockUniverse
+        from sqlalchemy import select
+        rows = s.execute(
+            select(StockUniverse).where(StockUniverse.symbol.like("NEW%"))
+        ).scalars().all()
+        captured["bulk_insert_rows"] = [
+            {
+                "symbol": r.symbol,
+                "company_name": r.company_name,
+                "series": r.series,
+            }
+            for r in rows
+        ]
+    return len(captured["bulk_insert_rows"]), _normalize(
+        sorted(captured["bulk_insert_rows"], key=lambda d: d["symbol"])
+    )
+
+
+def capture_ticker_backfill_sync(captured) -> int:
+    """Run _ticker_backfill_sync. The function calls backfill_symbol on
+    each symbol from get_symbols_needing_backfill. We capture the
+    backfill invocations.
+    """
+    from app.backgroundtasks import _ticker_backfill_sync
+    # Snapshot invocations via wrapping
+    import app.backgroundtasks as bg
+    original = bg._impl.ticker_warehouse.backfill_symbol
+    invocations: list[dict] = []
+    def fake_backfill_symbol(sym, days):
+        invocations.append({"symbol": sym, "days": days})
+        return 10
+    bg._impl.ticker_warehouse.backfill_symbol = fake_backfill_symbol
+    try:
+        _ticker_backfill_sync()
+    finally:
+        bg._impl.ticker_warehouse.backfill_symbol = original
+    captured["backfill_symbols"] = sorted(invocations, key=lambda d: d["symbol"])
+    return len(captured["backfill_symbols"]), _normalize(captured["backfill_symbols"])
+
+
+def capture_ticker_intraday_update_sync(captured, SessionLocal) -> int:
+    """Run _ticker_intraday_update_sync. The function calls
+    backfill_intraday_symbol on each (symbol, intervals) pair from the
+    watchlist. We capture those invocations.
+    """
+    from app.backgroundtasks import _ticker_intraday_update_sync
+    import app.backgroundtasks as bg
+    original = bg._impl.ticker_warehouse.backfill_intraday_symbol
+    invocations: list[dict] = []
+    def fake_backfill_intraday(sym, ivs, **kwargs):
+        invocations.append({
+            "symbol": sym,
+            "intervals": sorted(ivs) if ivs else [],
+        })
+        return {iv: 5 for iv in (ivs or [])}
+    bg._impl.ticker_warehouse.backfill_intraday_symbol = fake_backfill_intraday
+    try:
+        _ticker_intraday_update_sync(intervals=["1h"], scope="watchlist")
+    finally:
+        bg._impl.ticker_warehouse.backfill_intraday_symbol = original
+    captured["intraday_calls"] = sorted(
+        invocations, key=lambda d: (d["symbol"], d["intervals"])
+    )
+    return len(captured["intraday_calls"]), _normalize(captured["intraday_calls"])
+
+
+def capture_ticker_daily_update_sync(captured) -> int:
+    """The function early-returns on weekends, pre-market, or market
+    hours. We mock datetime.now() to a Sunday at noon IST and assert
+    the function returned without calling bulk_update_via_bhavcopy or
+    update_symbol_today.
+    """
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    from app.backgroundtasks import _ticker_daily_update_sync
+    import app.backgroundtasks as bg
+
+    # Pick a Sunday: 2025-12-07 is a Sunday
+    sunday_noon_ist = datetime(2025, 12, 7, 12, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    sunday_noon_utc = sunday_noon_ist.astimezone(timezone.utc)
+
+    class FakeDatetime:
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return sunday_noon_utc.replace(tzinfo=None)
+            return sunday_noon_utc.astimezone(tz)
+    bg._impl.datetime = FakeDatetime
+
+    # Also need to patch the one in the new module location (daily.py)
+    import app.services.data_sync.daily as daily_mod
+    original_daily_datetime = daily_mod.datetime
+    daily_mod.datetime = FakeDatetime
+
+    # Track if any external fetch was called
+    original_bulk = bg._impl.ticker_warehouse.bulk_update_via_bhavcopy
+    original_update = bg._impl.ticker_warehouse.update_symbol_today
+    call_log: list[str] = []
+    bg._impl.ticker_warehouse.bulk_update_via_bhavcopy = lambda d: call_log.append(f"bhavcopy:{d}") or 0
+    bg._impl.ticker_warehouse.update_symbol_today = lambda s, d: call_log.append(f"update_symbol_today:{s}") or 0
+
+    try:
+        _ticker_daily_update_sync()
+    finally:
+        bg._impl.datetime = original_daily_datetime if False else __import__("datetime")
+        daily_mod.datetime = original_daily_datetime
+        bg._impl.ticker_warehouse.bulk_update_via_bhavcopy = original_bulk
+        bg._impl.ticker_warehouse.update_symbol_today = original_update
+
+    captured["daily_call_log"] = call_log
+    return len(call_log), _normalize({
+        "weekday_check": "early_returned",
+        "external_calls_made": call_log,
+    })
+
+
+def capture_ticker_indicators_sync(captured) -> int:
+    """Run _ticker_indicators_sync. The function calls
+    _parallel_indicator_sync with a list of (symbol,) tuples. We
+    capture those items.
+    """
+    from app.backgroundtasks import _ticker_indicators_sync
+    import app.backgroundtasks as bg
+
+    def fake_parallel(items, *args, **kwargs):
+        captured["indicators_items"].extend([list(it) for it in items])
+        return {
+            "success": len(items),
+            "elapsed_s": 0.0,
+            "rows_written": len(items) * 10,
+        }
+    original = bg._impl._parallel_indicator_sync
+    bg._impl._parallel_indicator_sync = fake_parallel
+    # Also patch in the new module location (indicators.py)
+    import app.services.data_sync.indicators as ind_mod
+    original_ind = ind_mod._parallel_indicator_sync if hasattr(ind_mod, "_parallel_indicator_sync") else None
+    if hasattr(ind_mod, "_parallel_indicator_sync"):
+        ind_mod._parallel_indicator_sync = fake_parallel
+    try:
+        _ticker_indicators_sync()
+    finally:
+        bg._impl._parallel_indicator_sync = original
+        if original_ind is not None:
+            ind_mod._parallel_indicator_sync = original_ind
+    captured["indicators_items"] = sorted(captured["indicators_items"])
+    return len(captured["indicators_items"]), _normalize(captured["indicators_items"])
+
+
+def capture_ticker_intraday_indicators_sync(captured) -> int:
+    """Run _ticker_intraday_indicators_sync(["1h"]). The function
+    calls _parallel_indicator_sync with a list of (symbol, interval)
+    tuples.
+    """
+    from app.backgroundtasks import _ticker_intraday_indicators_sync
+    import app.backgroundtasks as bg
+
+    def fake_parallel(items, *args, **kwargs):
+        captured["intraday_indicators_items"].extend([list(it) for it in items])
+        return {
+            "success": len(items),
+            "elapsed_s": 0.0,
+            "rows_written": len(items) * 10,
+        }
+    original = bg._impl._parallel_indicator_sync
+    bg._impl._parallel_indicator_sync = fake_parallel
+    import app.services.data_sync.indicators as ind_mod
+    original_ind = ind_mod._parallel_indicator_sync if hasattr(ind_mod, "_parallel_indicator_sync") else None
+    if hasattr(ind_mod, "_parallel_indicator_sync"):
+        ind_mod._parallel_indicator_sync = fake_parallel
+    try:
+        _ticker_intraday_indicators_sync(["1h"])
+    finally:
+        bg._impl._parallel_indicator_sync = original
+        if original_ind is not None:
+            ind_mod._parallel_indicator_sync = original_ind
+    captured["intraday_indicators_items"] = sorted(
+        captured["intraday_indicators_items"]
+    )
+    return len(captured["intraday_indicators_items"]), _normalize(
+        captured["intraday_indicators_items"]
+    )
+
+
 def main() -> None:
     eng, SessionLocal = build_db()
     try:
@@ -603,7 +894,42 @@ def main() -> None:
         _write("ticker_scores_50_symbols", data)
         print(f"  → {n} score rows")
 
-        print(f"\nWrote 5 goldens to {GOLDEN_DIR}")
+        print("Capturing _stock_universe_sync …")
+        n, data = capture_stock_universe_sync(captured, SessionLocal)
+        _write("stock_universe_sync_50_symbols", data)
+        print(f"  → {n} symbols in stock_universe after")
+
+        print("Capturing _bulk_insert_stock_universe …")
+        n, data = capture_bulk_insert_stock_universe(captured, SessionLocal)
+        _write("bulk_insert_stock_universe_5_rows", data)
+        print(f"  → {n} rows inserted")
+
+        print("Capturing _ticker_backfill_sync …")
+        n, data = capture_ticker_backfill_sync(captured)
+        _write("ticker_backfill_sync_5_symbols", data)
+        print(f"  → {n} backfill invocations")
+
+        print("Capturing _ticker_intraday_update_sync …")
+        n, data = capture_ticker_intraday_update_sync(captured, SessionLocal)
+        _write("ticker_intraday_update_sync_watchlist", data)
+        print(f"  → {n} backfill_intraday invocations")
+
+        print("Capturing _ticker_daily_update_sync (weekend early return) …")
+        n, data = capture_ticker_daily_update_sync(captured)
+        _write("ticker_daily_update_sync_weekend_early_return", data)
+        print(f"  → {n} external calls (expect 0)")
+
+        print("Capturing _ticker_indicators_sync …")
+        n, data = capture_ticker_indicators_sync(captured)
+        _write("ticker_indicators_sync_50_symbols", data)
+        print(f"  → {n} symbol items processed")
+
+        print("Capturing _ticker_intraday_indicators_sync (1h) …")
+        n, data = capture_ticker_intraday_indicators_sync(captured)
+        _write("ticker_intraday_indicators_sync_1h", data)
+        print(f"  → {n} (symbol, interval) pairs processed")
+
+        print(f"\nWrote 12 goldens to {GOLDEN_DIR}")
     finally:
         eng.dispose()
 

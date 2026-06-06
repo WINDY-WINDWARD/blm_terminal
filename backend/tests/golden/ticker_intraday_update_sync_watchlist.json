@@ -1,0 +1,62 @@
+[
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM00"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM01"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM02"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM03"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM04"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM05"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM06"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM07"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM08"
+  },
+  {
+    "intervals": [
+      "1h"
+    ],
+    "symbol": "SYM09"
+  }
+]

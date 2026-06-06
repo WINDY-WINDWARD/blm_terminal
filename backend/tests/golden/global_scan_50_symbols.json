@@ -18,30 +18,6 @@
   {
     "exchange": "NSE",
     "is_read": false,
-    "message": "SYM00 [1h] MACD bullish crossover",
-    "symbol": "SYM00",
-    "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM00 [M] MACD bullish crossover",
-    "symbol": "SYM00",
-    "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM00 [W] MACD bullish crossover",
-    "symbol": "SYM00",
-    "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
     "message": "SYM00 RSI oversold: 25.0 < 30.0",
     "symbol": "SYM00",
     "trigger_type": "rsi_oversold",
@@ -74,30 +50,6 @@
   {
     "exchange": "NSE",
     "is_read": false,
-    "message": "SYM01 [1h] MACD bullish crossover",
-    "symbol": "SYM01",
-    "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM01 [M] MACD bullish crossover",
-    "symbol": "SYM01",
-    "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM01 [W] MACD bullish crossover",
-    "symbol": "SYM01",
-    "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
     "message": "SYM01 up 10 days",
     "symbol": "SYM01",
     "trigger_type": "streak_up_5d",
@@ -109,30 +61,6 @@
     "message": "SYM02 MACD bearish crossover",
     "symbol": "SYM02",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM02 [1h] MACD bullish crossover",
-    "symbol": "SYM02",
-    "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM02 [M] MACD bullish crossover",
-    "symbol": "SYM02",
-    "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM02 [W] MACD bullish crossover",
-    "symbol": "SYM02",
-    "trigger_type": "macd_bullish_cross_W",
     "triggered_date": "2026-06-06"
   },
   {
@@ -170,30 +98,6 @@
   {
     "exchange": "NSE",
     "is_read": false,
-    "message": "SYM03 [1h] MACD bullish crossover",
-    "symbol": "SYM03",
-    "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM03 [M] MACD bullish crossover",
-    "symbol": "SYM03",
-    "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM03 [W] MACD bullish crossover",
-    "symbol": "SYM03",
-    "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
     "message": "SYM03 up 10 days",
     "symbol": "SYM03",
     "trigger_type": "streak_up_5d",
@@ -213,30 +117,6 @@
     "message": "SYM04 MACD bearish crossover",
     "symbol": "SYM04",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM04 [1h] MACD bullish crossover",
-    "symbol": "SYM04",
-    "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM04 [M] MACD bullish crossover",
-    "symbol": "SYM04",
-    "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06"
-  },
-  {
-    "exchange": "NSE",
-    "is_read": false,
-    "message": "SYM04 [W] MACD bullish crossover",
-    "symbol": "SYM04",
-    "trigger_type": "macd_bullish_cross_W",
     "triggered_date": "2026-06-06"
   },
   {

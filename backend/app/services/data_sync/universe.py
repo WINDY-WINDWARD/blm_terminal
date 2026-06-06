@@ -207,6 +207,7 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
                 low_52w_date=metadata.low_52w_date,
                 series=metadata.series if hasattr(metadata, "series") else None,
                 review_status=None,
+                ticker_failure_count=0,
             )
             .on_conflict_do_update(
                 index_elements=["symbol"],
