@@ -577,63 +577,6 @@ def stock_universe_worker() -> None:
     logger.info("stock_universe_worker: stopped")
 
 
-def _ticker_backfill_sync() -> None:
-    """Perform the ticker backfill synchronization.
-
-    Processes up to 10 symbols concurrently using a thread pool. Each batch
-    of 10 is submitted together; results are collected before moving to the
-    next batch. One REQUEST_DELAY_SECONDS sleep is applied per batch (not per
-    symbol) to stay within NSE rate limits while improving throughput ~10x.
-    """
-    _BATCH_SIZE = 10
-
-    symbols = ticker_warehouse.get_symbols_needing_backfill()
-    total = len(symbols)
-    if total == 0:
-        logger.info("ticker_backfill_sync: no symbols need backfill")
-        update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="All symbols up to date")
-        return
-
-    logger.info(f"ticker_backfill_sync: {total} symbols need backfill (batch_size={_BATCH_SIZE})")
-
-    processed = 0
-    for batch_start in range(0, total, _BATCH_SIZE):
-        if _shutdown_event.is_set():
-            break
-
-        batch = symbols[batch_start : batch_start + _BATCH_SIZE]
-
-        # Refresh NSE session every 50 cumulative symbols
-        if processed > 0 and (processed // 50) != ((processed - len(batch)) // 50):
-            logger.info(f"ticker_backfill_sync: refreshing session after {processed} symbols")
-            ticker_warehouse._refresh_nse_session()
-
-        progress = int((batch_start / total) * 100)
-        update_job_status_sync(
-            "job.ticker_backfill",
-            "running",
-            progress=progress,
-            message=f"Backfilling {batch[0]}..{batch[-1]} ({batch_start + 1}-{min(batch_start + _BATCH_SIZE, total)}/{total})",
-        )
-
-        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
-            future_to_symbol = {
-                pool.submit(ticker_warehouse.backfill_symbol, sym, 365): sym
-                for sym in batch
-            }
-            for future in as_completed(future_to_symbol):
-                sym = future_to_symbol[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.warning(f"ticker_backfill_sync: failed for {sym}: {e}")
-
-        processed += len(batch)
-        time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
-
-    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
-    logger.info("ticker_backfill_sync: complete")
-
 
 def ticker_backfill_worker() -> None:
     """Daemon thread target for ticker backfill.
@@ -4852,4 +4795,7 @@ from app.services.data_sync.universe import (  # noqa: E402,F401
     _stock_universe_sync,
     _update_symbol_error_status,
     _bulk_insert_stock_universe,
+)
+from app.services.data_sync.backfill import (  # noqa: E402,F401
+    _ticker_backfill_sync,
 )

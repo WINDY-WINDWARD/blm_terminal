@@ -55,7 +55,7 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _update_symbol_error_status,
     _bulk_insert_stock_universe,
     stock_universe_worker,
-    # Ticker sync cores
+    # Backfill sync (moved to app.services.data_sync.backfill in A.4)
     _ticker_backfill_sync,
     ticker_backfill_worker,
     _ticker_daily_update_sync,
