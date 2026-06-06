@@ -98,6 +98,11 @@ from app.backgroundtasks._impl import (  # noqa: F401
     # final home (``app.workers.maintenance``) to avoid a circular
     # import via ``app.workers.__init__``.
     _run_cleanup_if_due,
+    CLEANUP_INTERVAL,
+    INTRADAY_1H_RETENTION_DAYS,
+    INTRADAY_W_RETENTION_YEARS,
+    NEWS_RETENTION_DAYS,
+    _cleanup_last_run,
     # Notification workers
     watchlist_notification_worker,
     _notification_cycle_full,
@@ -158,4 +163,5 @@ from app.backgroundtasks._impl import (  # noqa: F401
 from app.workers.maintenance import (  # noqa: E402,F401
     _run_vacuum,
     vacuum_worker,
+    VACUUM_CRON,
 )
