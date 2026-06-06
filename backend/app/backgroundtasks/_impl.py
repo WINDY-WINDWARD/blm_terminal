@@ -886,65 +886,6 @@ def _news_periodic_sync(backoff_secs: float) -> float:
         return backoff_secs
 
 
-def news_worker() -> None:
-    """Daemon thread target for news crawling (cron: */5 * * * * with backoff)."""
-    logger.info("news_worker: started")
-
-    if not _is_job_enabled("job.news"):
-        logger.info("news_worker: disabled, waiting...")
-        update_job_status_sync("job.news", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
-        logger.info("news_worker: stopped")
-        return
-
-    # Check first_run for startup execution
-    if _is_first_run("news"):
-        # Wait for stock universe before crawling news (universe provides symbol context)
-        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.news"):
-            update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
-            logger.info("news_worker: stopped")
-            return
-        update_job_status_sync("job.news", "running", progress=10, message="Starting initial news crawl...")
-        _news_sync()
-        _set_first_run_complete("news")
-    else:
-        logger.info("news_worker: first_run=False, skipping startup crawl")
-        update_job_status_sync("job.news", "waiting", progress=0, message="Waiting for cron schedule")
-
-    current_interval = _seconds_until_next_cron(NEWS_CRON)
-    while not _shutdown_event.is_set():
-        is_backoff = current_interval > _seconds_until_next_cron(NEWS_CRON)
-        logger.info("news_worker: next run in %.0f s (backoff: %s)", current_interval, is_backoff)
-        if is_backoff:
-            next_trig = datetime.now(timezone.utc) + timedelta(seconds=current_interval)
-            update_job_status_sync("job.news", "waiting", progress=0,
-                                   message=f"Next run in {current_interval:.0f}s (backoff)",
-                                   next_trigger=next_trig)
-        else:
-            _report_job_waiting("job.news", NEWS_CRON)
-        if _sleep_interruptible(current_interval):
-            break
-        if not _shutdown_event.is_set():
-            if not _is_job_enabled("job.news"):
-                update_job_status_sync("job.news", "waiting", progress=0, message="Disabled")
-                _sleep_interruptible(60)
-                continue
-            current_interval = _news_periodic_sync(current_interval)
-
-    update_job_status_sync("job.news", "idle", progress=0, message="Stopped")
-    try:
-        _run_async(news_fetcher.close())
-    except Exception:
-        logger.debug("news_worker: close() raised, ignoring (client may already be closed)")
-    logger.info("news_worker: stopped")
-
-
-# RSS News Worker - Multi-source RSS aggregation
-NEWS_RSS_CRON = "*/5 * * * *"  # Every 5 minutes
-
-
 def _news_rss_sync() -> None:
     """Fetch and store articles from all RSS sources."""
     logger.info("news_rss_sync: starting RSS aggregation")
@@ -1035,44 +976,6 @@ async def _news_rss_sync_async() -> None:
         logger.exception("news_rss_sync_async: failed with exception: %s", e)
 
 
-def news_rss_worker() -> None:
-    """Daemon thread target for RSS news aggregation (cron: */5 * * * *)."""
-    logger.info("news_rss_worker: started")
-
-    if not _is_job_enabled("job.news_rss"):
-        logger.info("news_rss_worker: disabled, waiting...")
-        update_job_status_sync("job.news_rss", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
-        logger.info("news_rss_worker: stopped")
-        return
-
-    # Run immediately on startup
-    logger.info("news_rss_worker: running initial sync")
-    update_job_status_sync("job.news_rss", "running", progress=10, message="Initial RSS sync...")
-    _run_async(_news_rss_sync_async())
-
-    # Then run on cron schedule
-    while not _shutdown_event.is_set():
-        wait_secs = _report_job_waiting("job.news_rss", NEWS_RSS_CRON)
-        logger.info("news_rss_worker: next run in %.0f s", wait_secs)
-        if _sleep_interruptible(wait_secs):
-            break
-
-        if not _shutdown_event.is_set():
-            if not _is_job_enabled("job.news_rss"):
-                update_job_status_sync("job.news_rss", "waiting", progress=0, message="Disabled")
-                _sleep_interruptible(60)
-                continue
-
-            update_job_status_sync("job.news_rss", "running", progress=50, message="Fetching RSS feeds...")
-            _run_async(_news_rss_sync_async())
-            update_job_status_sync("job.news_rss", "completed", progress=100, message="Sync complete")
-
-    update_job_status_sync("job.news_rss", "idle", progress=0, message="Stopped")
-    logger.info("news_rss_worker: stopped")
-
 
 # ---------------------------------------------------------------------------
 # Phase C: weekly SQLite VACUUM worker
@@ -1162,48 +1065,6 @@ def _watchlist_news_sync() -> None:
         logger.exception("watchlist_news_sync: unhandled exception; will retry next cycle")
 
 
-def watchlist_news_worker() -> None:
-    """Daemon thread target for watchlist news fetching (cron: */5 * * * *)."""
-    logger.info("watchlist_news_worker: started")
-
-    if not _is_job_enabled("job.watchlist_news"):
-        logger.info("watchlist_news_worker: disabled, waiting...")
-        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
-        logger.info("watchlist_news_worker: stopped")
-        return
-
-    # Check first_run for startup execution
-    if _is_first_run("watchlist_news"):
-        # Wait for stock universe to be populated before fetching per-symbol news
-        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.watchlist_news"):
-            update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
-            logger.info("watchlist_news_worker: stopped")
-            return
-        update_job_status_sync("job.watchlist_news", "running", progress=0, message="Starting initial fetch...")
-        _watchlist_news_sync()
-        _set_first_run_complete("watchlist_news")
-    else:
-        logger.info("watchlist_news_worker: first_run=False, skipping startup fetch")
-        update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Waiting for cron schedule")
-
-    while not _shutdown_event.is_set():
-        wait_secs = _report_job_waiting("job.watchlist_news", "*/5 * * * *")
-        if _sleep_interruptible(wait_secs):
-            break
-        if not _shutdown_event.is_set():
-            if not _is_job_enabled("job.watchlist_news"):
-                update_job_status_sync("job.watchlist_news", "waiting", progress=0, message="Disabled")
-                _sleep_interruptible(60)
-                continue
-            update_job_status_sync("job.watchlist_news", "running", progress=50, message="Fetching watchlist news...")
-            _watchlist_news_sync()
-
-    update_job_status_sync("job.watchlist_news", "idle", progress=0, message="Stopped")
-    logger.info("watchlist_news_worker: stopped")
-
 
 def _is_market_open() -> bool:
     """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST)."""
@@ -1285,60 +1146,6 @@ def _market_data_sync() -> None:
     except Exception:
         logger.exception("market_data_sync: unhandled exception; will retry next cycle")
 
-
-def market_data_worker() -> None:
-    """Daemon thread target for market data fetching (cron: */5 * * * *, market-hours only)."""
-    logger.info("market_data_worker: started")
-
-    if not _is_job_enabled("job.market_data"):
-        logger.info("market_data_worker: disabled, waiting...")
-        update_job_status_sync("job.market_data", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
-        logger.info("market_data_worker: stopped")
-        return
-
-    # Check first_run for startup execution
-    if _is_first_run("market_data"):
-        # Wait for stock universe before fetching market data
-        if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.market_data"):
-            update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
-            logger.info("market_data_worker: stopped")
-            return
-        update_job_status_sync("job.market_data", "running", progress=0, message="Starting initial sync...")
-        _market_data_sync()
-        _set_first_run_complete("market_data")
-    else:
-        logger.info("market_data_worker: first_run=False, skipping startup execution")
-        update_job_status_sync("job.market_data", "waiting", progress=0, message="Waiting for cron schedule")
-
-    while not _shutdown_event.is_set():
-        if _is_market_open():
-            wait = _report_job_waiting("job.market_data", "*/5 * * * *", f"Market open, next run soon")
-            logger.info("market_data_worker: market is open, next run in %.0f s", wait)
-            if _sleep_interruptible(wait):
-                break
-            if not _shutdown_event.is_set() and _is_market_open():
-                if not _is_job_enabled("job.market_data"):
-                    update_job_status_sync("job.market_data", "waiting", progress=0, message="Disabled")
-                    _sleep_interruptible(60)
-                    continue
-                update_job_status_sync("job.market_data", "running", progress=50, message="Fetching market data...")
-                _market_data_sync()
-        else:
-            wait = _seconds_until_market_open()
-            logger.info("market_data_worker: market is closed, next run in %.0f s (%.1f hours)", wait, wait / 3600)
-            update_job_status_sync("job.market_data", "waiting", progress=0, message=f"Market closed, opens in {wait/3600:.1f}h")
-            if _sleep_interruptible(wait):
-                break
-
-    update_job_status_sync("job.market_data", "idle", progress=0, message="Stopped")
-    try:
-        _run_async(market_data_fetcher.close())
-    except Exception:
-        logger.debug("market_data_worker: close() raised, ignoring (client may already be closed)")
-    logger.info("market_data_worker: stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -1478,52 +1285,6 @@ def _results_calendar_sync() -> None:
         logger.exception("results_calendar_sync: unhandled exception; will retry next cycle")
         update_job_status_sync("job.results_calendar", "failed", message="Unhandled exception")
 
-
-def results_calendar_worker() -> None:
-    """Daemon thread: syncs upcoming results notifications twice daily (8am + 2pm IST)."""
-    logger.info("results_calendar_worker: started")
-
-    if not _is_job_enabled("job.results_calendar"):
-        logger.info("results_calendar_worker: disabled, waiting...")
-        update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
-        logger.info("results_calendar_worker: stopped")
-        return
-
-    # Wait for stock universe to be ready (replaces the old fixed 15s delay)
-    if _wait_for_startup_event(_startup_stock_universe_done, "stock_universe", "job.results_calendar"):
-        update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
-        logger.info("results_calendar_worker: stopped")
-        return
-
-    # Check first_run for startup execution
-    if _is_first_run("results_calendar"):
-        update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
-        _results_calendar_sync()
-        _set_first_run_complete("results_calendar")
-    else:
-        logger.info("results_calendar_worker: first_run=False, skipping startup execution")
-        update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Waiting for cron schedule")
-
-    while not _shutdown_event.is_set():
-        wait_secs = _report_job_waiting("job.results_calendar", _RESULTS_CALENDAR_CRON)
-        logger.info(
-            "results_calendar_worker: sleeping %.0f s until next cron (%s)",
-            wait_secs, _RESULTS_CALENDAR_CRON,
-        )
-        if _sleep_interruptible(wait_secs):
-            break
-        if not _shutdown_event.is_set():
-            if not _is_job_enabled("job.results_calendar"):
-                update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Disabled")
-                _sleep_interruptible(60)
-                continue
-            _results_calendar_sync()
-
-    update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
-    logger.info("results_calendar_worker: stopped")
 
 
 async def start_all_workers() -> list[threading.Thread]:

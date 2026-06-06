@@ -112,11 +112,8 @@ EXPECTED_PUBLIC_SYMBOLS = [
     # NOTE: the 7 ticker-data worker daemons moved to
     # app.workers.{universe,data,ticker_compute} in audit C.1
     # A.9 step 2 — see TestMovedWorkers / MOVED_SYMBOLS
-    # News sync
-    "news_worker",
-    "news_rss_worker",
-    "watchlist_news_worker",
-    "market_data_worker",
+    # News sync functions (5 worker daemons moved to app.workers.{news,
+    # market_calendar} in A.9 step 4 — see TestMovedWorkers)
     "_crawl_news_async",
     "_news_sync",
     "_news_periodic_sync",
@@ -128,8 +125,8 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_seconds_until_market_open",
     "_refresh_market_data_async",
     "_market_data_sync",
-    # Results calendar
-    "results_calendar_worker",
+    # Results calendar sync (results_calendar_worker moved to
+    # app.workers.market_calendar in A.9 step 4)
     "_results_calendar_sync",
     # Maintenance (vacuum_worker moved to app.workers.maintenance — see TestMovedWorkers)
     "_run_cleanup_if_due",
@@ -241,6 +238,11 @@ MOVED_SYMBOLS = [
     ("ticker_intraday_hourly_indicators_worker", "app.workers.ticker_compute"),
     ("watchlist_notification_worker", "app.workers.notifications"),
     ("global_scan_worker", "app.workers.notifications"),
+    ("news_worker", "app.workers.news"),
+    ("news_rss_worker", "app.workers.news"),
+    ("watchlist_news_worker", "app.workers.news"),
+    ("market_data_worker", "app.workers.market_calendar"),
+    ("results_calendar_worker", "app.workers.market_calendar"),
 ]
 
 

@@ -542,7 +542,7 @@ Future A.9 steps (data, notifications, news workers) will add entries to `MOVED_
 - ~~`app/models/news.py` lines 56, 84, 99-100: duplicate-index bug~~ **FIXED** in commit `75ad010`.
 - ~~`tests/test_cleanup.py` collection error: `CLEANUP_INTERVAL` and `VACUUM_CRON` not re-exported in shim~~ **FIXED** in commit `8dd33ca`.
 
-**Test status:** 682/682 pure-unit suite passes (was 671/671, +11 from new `test_workers_notifications.py`).  All 12 phase C goldens stable on data (only `triggered_date` drifts 06-06 → 06-07 because the capture script uses `datetime.now()`; this is a capture-script date issue, NOT a refactor regression).
+**Test status:** 706/706 pure-unit suite passes (was 682/682, +24 from new `test_workers_news_market_calendar.py` parametrized across 2 module homes).  All 12 phase C goldens stable on data.
 
 ### 20.8 Handoff doc
 

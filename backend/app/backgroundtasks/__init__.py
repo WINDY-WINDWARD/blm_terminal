@@ -67,11 +67,8 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
     _screener_snapshot_sync,
-    # News sync
-    news_worker,
-    news_rss_worker,
-    watchlist_news_worker,
-    market_data_worker,
+    # News sync (news_worker + news_rss_worker + watchlist_news_worker
+    # moved to app.workers.news in A.9 step 4 — see TestMovedWorkers)
     _crawl_news_async,
     _news_sync,
     _news_periodic_sync,
@@ -83,8 +80,8 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _seconds_until_market_open,
     _refresh_market_data_async,
     _market_data_sync,
-    # Results calendar
-    results_calendar_worker,
+    # Results calendar (results_calendar_worker + market_data_worker
+    # moved to app.workers.market_calendar in A.9 step 4)
     _results_calendar_sync,
     # Maintenance
     # NOTE: ``vacuum_worker`` is imported separately below from its
@@ -172,4 +169,13 @@ from app.workers.ticker_compute import (  # noqa: E402,F401
 from app.workers.notifications import (  # noqa: E402,F401
     watchlist_notification_worker,
     global_scan_worker,
+)
+from app.workers.news import (  # noqa: E402,F401
+    news_worker,
+    news_rss_worker,
+    watchlist_news_worker,
+)
+from app.workers.market_calendar import (  # noqa: E402,F401
+    market_data_worker,
+    results_calendar_worker,
 )

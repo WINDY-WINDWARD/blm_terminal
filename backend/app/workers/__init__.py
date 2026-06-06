@@ -30,15 +30,6 @@ from app.backgroundtasks import (  # noqa: F401
     start_all_workers,
     stop_all_workers,
     start_cache_cleanup,
-    # News workers (re-exported here as a temporary bridge — they
-    # will move into ``news.py`` in a later commit of C.1).
-    news_worker,
-    news_rss_worker,
-    watchlist_news_worker,
-    market_data_worker,
-    # Results calendar (re-exported here as a temporary bridge — it
-    # will move into ``news.py`` or its own module in a later commit).
-    results_calendar_worker,
 )
 # Maintenance workers (moved to app.workers.maintenance in A.9).
 # Re-exported here from the new module to keep callers stable.
@@ -65,4 +56,14 @@ from app.workers.ticker_compute import (  # noqa: E402,F401
 from app.workers.notifications import (  # noqa: E402,F401
     watchlist_notification_worker,
     global_scan_worker,
+)
+# News + market workers (moved in A.9 step 4).
+from app.workers.news import (  # noqa: E402,F401
+    news_worker,
+    news_rss_worker,
+    watchlist_news_worker,
+)
+from app.workers.market_calendar import (  # noqa: E402,F401
+    market_data_worker,
+    results_calendar_worker,
 )
