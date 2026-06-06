@@ -68,6 +68,7 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _ticker_scores_sync,
     ticker_intraday_hourly_update_worker,
     _parallel_indicator_sync,
+    # Indicator sync (moved to app.services.data_sync.indicators in A.8)
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
     _screener_snapshot_sync,
