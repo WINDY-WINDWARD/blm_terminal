@@ -45,8 +45,14 @@ from app.backgroundtasks._impl import (  # noqa: F401
     reset_async_shutdown_event,
     set_async_shutdown_event,
     _shutdown_event,
+    _worker_threads,
     _pipeline_lock,
     _pipeline_idle,
+    _startup_stock_universe_done,
+    _startup_ticker_backfill_done,
+    _startup_ticker_indicators_done,
+    _startup_ticker_scores_done,
+    _startup_ticker_hourly_done,
     # First-run + job registry
     register_all_jobs,
     # Universe sync (moved to app.services.data_sync.universe in A.3)
