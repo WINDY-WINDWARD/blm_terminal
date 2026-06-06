@@ -104,11 +104,12 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_ticker_daily_update_sync",
     "_ticker_intraday_update_sync",
     "_ticker_intraday_hourly_stale_check_sync",
-    "_parallel_indicator_sync",
+    # NOTE: _parallel_indicator_sync and _screener_snapshot_sync
+    # moved to app.services.data_sync.{parallel,snapshot} in A.11
+    # part 1 — see MOVED_SYMBOLS / TestMovedWorkers
     "_ticker_indicators_sync",
     "_ticker_intraday_indicators_sync",
     "_ticker_scores_sync",
-    "_screener_snapshot_sync",
     # NOTE: the 7 ticker-data worker daemons moved to
     # app.workers.{universe,data,ticker_compute} in audit C.1
     # A.9 step 2 — see TestMovedWorkers / MOVED_SYMBOLS
@@ -243,6 +244,9 @@ MOVED_SYMBOLS = [
     ("watchlist_news_worker", "app.workers.news"),
     ("market_data_worker", "app.workers.market_calendar"),
     ("results_calendar_worker", "app.workers.market_calendar"),
+    # A.11 part 1 — split remaining sync cores (parallel + snapshot)
+    ("_parallel_indicator_sync", "app.services.data_sync.parallel"),
+    ("_screener_snapshot_sync", "app.services.data_sync.snapshot"),
 ]
 
 

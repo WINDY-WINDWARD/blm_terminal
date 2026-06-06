@@ -68,11 +68,9 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _ticker_intraday_hourly_stale_check_sync,
     # Scores sync (moved to app.services.data_sync.scores in A.7)
     _ticker_scores_sync,
-    _parallel_indicator_sync,
     # Indicator sync (moved to app.services.data_sync.indicators in A.8)
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
-    _screener_snapshot_sync,
     # News sync (news_worker + news_rss_worker + watchlist_news_worker
     # moved to app.workers.news in A.9 step 4 — see TestMovedWorkers)
     _crawl_news_async,
@@ -184,4 +182,16 @@ from app.workers.news import (  # noqa: E402,F401
 from app.workers.market_calendar import (  # noqa: E402,F401
     market_data_worker,
     results_calendar_worker,
+)
+
+# A.11 part 1 — sync cores moved out of _impl.py into
+# app.services.data_sync.{parallel,snapshot}.  Imported separately
+# (NOT through ``_impl``) so the re-export shim test
+# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can
+# pin the canonical home with ``is``-identity.
+from app.services.data_sync.parallel import (  # noqa: E402,F401
+    _parallel_indicator_sync,
+)
+from app.services.data_sync.snapshot import (  # noqa: E402,F401
+    _screener_snapshot_sync,
 )
