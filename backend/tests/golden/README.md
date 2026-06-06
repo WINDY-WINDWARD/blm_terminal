@@ -25,5 +25,27 @@ these files on every run.
 
 ## Current files
 
-(none yet — first refactor target is TQL LRU cache, which doesn't need
-a golden file; its test is a behavioural assertion in `test_tql_parser_parity.py`.)
+### Phase B / TQL
+- (none — TQL LRU cache uses a behavioural assertion in
+  `test_tql_parser_parity.py`, not a golden diff)
+
+### Phase C (audit items 3, 4, 7)
+Captured by `scripts/capture_phase_c_goldens.py` (run from `backend/`
+root, deterministic seed `20260106`, 50-symbol synthetic DB):
+
+- `global_scan_50_symbols.json` — output of
+  ``_global_scan_cycle()`` on a 50-symbol seeded DB.  ~168 pending
+  notifications, JSON-normalized (datetimes → ISO, floats → 4dp).
+  Used by ``tests/test_scan_cycle_goldens.py`` to lock the contract
+  before the B.2 (N+1 fix) and B.1 (alert-extract) refactors.
+- `ticker_indicator_notification_50_symbols.json` — output of
+  ``_ticker_indicator_notification_cycle()`` on a 5-symbol watchlist.
+  ~27 pending notifications.
+- `ticker_intraday_indicator_notification_50_symbols.json` — output
+  of ``_ticker_intraday_indicator_notification_cycle()`` on the
+  same watchlist.  ~59 pending notifications.
+- `intraday_hourly_stale_check_10_symbols.json` — list of stale
+  symbols from ``_ticker_intraday_hourly_stale_check_sync()``.
+- `ticker_scores_50_symbols.json` — rows upserted by
+  ``_ticker_scores_sync()`` to the ``ticker_scores`` table.
+  Used to lock the contract before the B.7 (window function) refactor.
