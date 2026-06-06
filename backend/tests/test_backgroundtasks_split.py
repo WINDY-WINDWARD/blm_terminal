@@ -133,14 +133,13 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_results_calendar_sync",
     # Maintenance (vacuum_worker moved to app.workers.maintenance — see TestMovedWorkers)
     "_run_cleanup_if_due",
-    # Notification workers
-    "watchlist_notification_worker",
+    # Notification workers (watchlist_notification_worker + global_scan_worker
+    # moved to app.workers.notifications in A.9 step 3 — see TestMovedWorkers)
     "_notification_cycle_full",
     "_notification_cycle_reduced",
     "_build_alerts",
     "_ticker_indicator_notification_cycle",
     "_ticker_intraday_indicator_notification_cycle",
-    "global_scan_worker",
     "_global_scan_cycle",
     # Worker lifecycle
     "start_all_workers",
@@ -240,6 +239,8 @@ MOVED_SYMBOLS = [
     ("ticker_scores_worker", "app.workers.ticker_compute"),
     ("ticker_indicators_worker", "app.workers.ticker_compute"),
     ("ticker_intraday_hourly_indicators_worker", "app.workers.ticker_compute"),
+    ("watchlist_notification_worker", "app.workers.notifications"),
+    ("global_scan_worker", "app.workers.notifications"),
 ]
 
 

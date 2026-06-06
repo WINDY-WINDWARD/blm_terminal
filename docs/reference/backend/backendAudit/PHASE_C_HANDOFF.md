@@ -87,7 +87,24 @@ Capture script: `backend/scripts/capture_phase_c_goldens.py` (944 LOC).
 
 ---
 
-## What's next (A.9 step 3-4, A.10-A.13)
+## What's next (A.9 step 4, A.10-A.13)
+
+### A.9 step 3 — `app/workers/notifications.py` ✅ DONE
+Moved 2 notification worker daemons to ``app/workers/notifications.py`` (137 LOC):
+- ``watchlist_notification_worker``
+- ``global_scan_worker``
+
+`_impl.py` net delta: 3590 → 3510 LOC (-80 LOC).
+Test status: 682/682 pure-unit suite passes (+11 from new `test_workers_notifications.py`).
+All 12 phase C goldens data-stable (only `triggered_date` drifts due to `datetime.now()` in capture script).
+
+### A.9 step 4 — `app/workers/news.py`
+Move 5 news/calendar workers:
+- `news_worker`
+- `news_rss_worker`
+- `watchlist_news_worker`
+- `market_data_worker`
+- `results_calendar_worker`
 
 ### A.9 step 2 — `app/workers/data.py` ✅ DONE
 Moved 7 ticker-data worker daemons to 3 new modules (single file would have been 391 LOC, over 200 cap; split along domain boundary):

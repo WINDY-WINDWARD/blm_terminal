@@ -96,14 +96,12 @@ from app.backgroundtasks._impl import (  # noqa: F401
     INTRADAY_W_RETENTION_YEARS,
     NEWS_RETENTION_DAYS,
     _cleanup_last_run,
-    # Notification workers
-    watchlist_notification_worker,
+    # Notification workers (moved to app.workers.notifications in A.9 step 3)
     _notification_cycle_full,
     _notification_cycle_reduced,
     _build_alerts,
     _ticker_indicator_notification_cycle,
     _ticker_intraday_indicator_notification_cycle,
-    global_scan_worker,
     _global_scan_cycle,
     # Worker lifecycle
     start_all_workers,
@@ -170,4 +168,8 @@ from app.workers.ticker_compute import (  # noqa: E402,F401
     ticker_scores_worker,
     ticker_indicators_worker,
     ticker_intraday_hourly_indicators_worker,
+)
+from app.workers.notifications import (  # noqa: E402,F401
+    watchlist_notification_worker,
+    global_scan_worker,
 )

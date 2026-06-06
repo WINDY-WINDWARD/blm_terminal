@@ -2789,50 +2789,6 @@ async def _fetch_insider_trades_async(symbol: str) -> list[dict]:
     return []
 
 
-def watchlist_notification_worker() -> None:
-    """Daemon thread: monitors watchlist stocks for significant market events.
-
-    Cron: */5 * * * * during market hours; */30 * * * * after hours.
-    """
-    logger.info("watchlist_notification_worker: started")
-
-    if not _is_job_enabled("job.notifications"):
-        logger.info("watchlist_notification_worker: disabled, waiting...")
-        update_job_status_sync("job.notifications", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
-        logger.info("watchlist_notification_worker: stopped")
-        return
-
-    # Wait for ticker scores to be ready before first notification cycle
-    update_job_status_sync("job.notifications", "waiting", progress=0, message="Waiting for startup pipeline...")
-    if _wait_for_startup_event(_startup_ticker_scores_done, "ticker_scores", "job.notifications"):
-        update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
-        logger.info("watchlist_notification_worker: stopped")
-        return
-
-    while not _shutdown_event.is_set():
-        if not _is_job_enabled("job.notifications"):
-            update_job_status_sync("job.notifications", "waiting", progress=0, message="Disabled")
-            _sleep_interruptible(60)
-            continue
-        # Wait for any active data pipeline (daily_update/indicators/scores) to finish
-        if _wait_for_pipeline("job.notifications", "watchlist_notification"):
-            break
-        if _is_market_open():
-            update_job_status_sync("job.notifications", "running", progress=50, message="Checking market events...")
-            _notification_cycle_full()
-            wait = _report_job_waiting("job.notifications", "*/5 * * * *")
-            _sleep_interruptible(wait)
-        else:
-            update_job_status_sync("job.notifications", "waiting", progress=0, message="Market closed, checking after-hours...")
-            _notification_cycle_reduced()
-            wait = _report_job_waiting("job.notifications", "*/30 * * * *")
-            _sleep_interruptible(wait)
-
-    update_job_status_sync("job.notifications", "idle", progress=0, message="Stopped")
-    logger.info("watchlist_notification_worker: stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -3186,42 +3142,6 @@ def _global_scan_cycle() -> None:
         logger.exception("global_scan_cycle: unhandled exception")
 
 
-def global_scan_worker() -> None:
-    """Daemon thread: scans all NSE stocks on cron */30 * * * *."""
-    logger.info("global_scan_worker: started")
-
-    if not _is_job_enabled("job.global_scan"):
-        logger.info("global_scan_worker: disabled, waiting...")
-        update_job_status_sync("job.global_scan", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
-        logger.info("global_scan_worker: stopped")
-        return
-
-    # Wait for ticker scores to be ready before first scan
-    update_job_status_sync("job.global_scan", "waiting", progress=0, message="Waiting for startup pipeline...")
-    if _wait_for_startup_event(_startup_ticker_scores_done, "ticker_scores", "job.global_scan"):
-        update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
-        logger.info("global_scan_worker: stopped")
-        return
-
-    while not _shutdown_event.is_set():
-        if not _is_job_enabled("job.global_scan"):
-            update_job_status_sync("job.global_scan", "waiting", progress=0, message="Disabled")
-            _sleep_interruptible(60)
-            continue
-        # Wait for any active data pipeline (daily_update/indicators/scores) to finish
-        if _wait_for_pipeline("job.global_scan", "global_scan"):
-            break
-        update_job_status_sync("job.global_scan", "running", progress=50, message="Scanning all NSE stocks...")
-        _global_scan_cycle()
-        wait = _report_job_waiting("job.global_scan", "*/30 * * * *")
-        if _sleep_interruptible(wait):
-            break
-
-    update_job_status_sync("job.global_scan", "idle", progress=0, message="Stopped")
-    logger.info("global_scan_worker: stopped")
 
 
 def stop_all_workers(timeout: float = 35.0) -> None:

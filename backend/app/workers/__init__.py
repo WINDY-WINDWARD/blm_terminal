@@ -36,10 +36,6 @@ from app.backgroundtasks import (  # noqa: F401
     news_rss_worker,
     watchlist_news_worker,
     market_data_worker,
-    # Notification workers (re-exported here as a temporary bridge —
-    # they will move into ``notifications.py`` in a later commit of C.1).
-    watchlist_notification_worker,
-    global_scan_worker,
     # Results calendar (re-exported here as a temporary bridge — it
     # will move into ``news.py`` or its own module in a later commit).
     results_calendar_worker,
@@ -63,4 +59,10 @@ from app.workers.ticker_compute import (  # noqa: E402,F401
     ticker_indicators_worker,
     ticker_intraday_hourly_indicators_worker,
     ticker_scores_worker,
+)
+# Notification workers (moved to app.workers.notifications in A.9 step 3).
+# Re-exported here from the new module to keep callers stable.
+from app.workers.notifications import (  # noqa: E402,F401
+    watchlist_notification_worker,
+    global_scan_worker,
 )
