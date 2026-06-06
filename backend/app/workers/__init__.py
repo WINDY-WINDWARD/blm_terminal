@@ -30,28 +30,37 @@ from app.backgroundtasks import (  # noqa: F401
     start_all_workers,
     stop_all_workers,
     start_cache_cleanup,
-    # Data workers (re-exported here as a temporary bridge — they
-    # will move into ``data.py`` in a later commit of C.1).
-    stock_universe_worker,
-    ticker_backfill_worker,
-    ticker_daily_update_worker,
-    ticker_intraday_hourly_update_worker,
-    ticker_indicators_worker,
-    ticker_intraday_hourly_indicators_worker,
-    ticker_scores_worker,
-    # News workers
+    # News workers (re-exported here as a temporary bridge — they
+    # will move into ``news.py`` in a later commit of C.1).
     news_worker,
     news_rss_worker,
     watchlist_news_worker,
     market_data_worker,
-    # Notification workers
+    # Notification workers (re-exported here as a temporary bridge —
+    # they will move into ``notifications.py`` in a later commit of C.1).
     watchlist_notification_worker,
     global_scan_worker,
-    # Results calendar
+    # Results calendar (re-exported here as a temporary bridge — it
+    # will move into ``news.py`` or its own module in a later commit).
     results_calendar_worker,
 )
 # Maintenance workers (moved to app.workers.maintenance in A.9).
 # Re-exported here from the new module to keep callers stable.
 from app.workers.maintenance import (  # noqa: E402,F401
     vacuum_worker,
+)
+# Data workers (moved to app.workers.{universe,data,ticker_compute} in A.9 step 2).
+# Re-exported here from the new modules to keep callers stable.
+from app.workers.universe import (  # noqa: E402,F401
+    stock_universe_worker,
+)
+from app.workers.data import (  # noqa: E402,F401
+    ticker_backfill_worker,
+    ticker_daily_update_worker,
+    ticker_intraday_hourly_update_worker,
+)
+from app.workers.ticker_compute import (  # noqa: E402,F401
+    ticker_indicators_worker,
+    ticker_intraday_hourly_indicators_worker,
+    ticker_scores_worker,
 )

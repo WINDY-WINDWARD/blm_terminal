@@ -53,11 +53,8 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _stock_universe_sync,
     _update_symbol_error_status,
     _bulk_insert_stock_universe,
-    stock_universe_worker,
     # Backfill sync (moved to app.services.data_sync.backfill in A.4)
     _ticker_backfill_sync,
-    ticker_backfill_worker,
-    ticker_daily_update_worker,
     # Intraday sync (moved to app.services.data_sync.intraday in A.5)
     _ticker_intraday_update_sync,
     # Daily update sync (moved to app.services.data_sync.daily in A.6)
@@ -65,15 +62,11 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _ticker_intraday_hourly_stale_check_sync,
     # Scores sync (moved to app.services.data_sync.scores in A.7)
     _ticker_scores_sync,
-    ticker_intraday_hourly_update_worker,
     _parallel_indicator_sync,
     # Indicator sync (moved to app.services.data_sync.indicators in A.8)
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
     _screener_snapshot_sync,
-    ticker_scores_worker,
-    ticker_indicators_worker,
-    ticker_intraday_hourly_indicators_worker,
     # News sync
     news_worker,
     news_rss_worker,
@@ -164,4 +157,17 @@ from app.workers.maintenance import (  # noqa: E402,F401
     _run_vacuum,
     vacuum_worker,
     VACUUM_CRON,
+)
+from app.workers.universe import (  # noqa: E402,F401
+    stock_universe_worker,
+)
+from app.workers.data import (  # noqa: E402,F401
+    ticker_backfill_worker,
+    ticker_daily_update_worker,
+    ticker_intraday_hourly_update_worker,
+)
+from app.workers.ticker_compute import (  # noqa: E402,F401
+    ticker_scores_worker,
+    ticker_indicators_worker,
+    ticker_intraday_hourly_indicators_worker,
 )

@@ -539,13 +539,57 @@ Future A.9 steps (data, notifications, news workers) will add entries to `MOVED_
 `_bulk_insert_stock_universe` in `app/services/data_sync/universe.py` did NOT set `ticker_failure_count=0` in the `INSERT … ON CONFLICT` set.  The model column is `NOT NULL` with no default, so any production insert would have raised `IntegrityError`.  Fixed in `d7fd354`.  Golden `bulk_insert_stock_universe_5_rows.json` catches regressions.
 
 **Pre-existing bugs (NOT YET FIXED, tracked separately):**
-- `app/models/news.py` lines 56, 84, 99-100: duplicate-index bug (`sentiment` and `threat_level` have both `index=True` and a hand-written `Index()` in `__table_args__`).
-- `tests/test_cleanup.py` collection error: imports `CLEANUP_INTERVAL` and `VACUUM_CRON` from `app.backgroundtasks` but these were never re-exported in the package shim.  Pre-existing since 589b0d1.  Fix: add `from app.backgroundtasks._impl import CLEANUP_INTERVAL` + `from app.workers.maintenance import VACUUM_CRON` to the shim.  Tracked as a separate low-priority commit.
+- ~~`app/models/news.py` lines 56, 84, 99-100: duplicate-index bug~~ **FIXED** in commit `75ad010`.
+- ~~`tests/test_cleanup.py` collection error: `CLEANUP_INTERVAL` and `VACUUM_CRON` not re-exported in shim~~ **FIXED** in commit `8dd33ca`.
 
-**Test status:** 634/634 pure-unit suite passes (was 627/627, +7 from new `test_workers_maintenance.py`).  All 12 phase C goldens still byte-identical.
+**Test status:** 671/671 pure-unit suite passes (was 638/638, +33 from new `test_workers_data.py` parametrized across 3 module homes).  All 12 phase C goldens still byte-stable (semantic; capture script changed indent 4→2 in earlier commit but data is identical).
 
 ### 20.8 Handoff doc
 
 `docs/reference/backend/PHASE_C_HANDOFF.md` — full session-by-session record of Phase C.1 progress, with: LOC reductions, new module inventory, test inventory, golden inventory, next-step roadmap (A.9 step 2 onwards), architectural invariants to preserve, capture-script gotchas, module-globals fragility caveats, monkey-patch caveat, and Phase C.1 completion criteria.  Read this FIRST when resuming the work in a new session.
+
+### 20.9 Session 4 — A.9 step 2 (7 ticker-data worker daemons, 3-module split)
+
+Completed: moved 7 ticker-data worker daemons from `app/backgroundtasks/_impl.py` to 3 new modules:
+- `app/workers/universe.py` (69 LOC, 1 worker): `stock_universe_worker`
+- `app/workers/data.py` (180 LOC, 3 workers): `ticker_backfill_worker`, `ticker_daily_update_worker`, `ticker_intraday_hourly_update_worker`
+- `app/workers/ticker_compute.py` (186 LOC, 3 workers): `ticker_scores_worker`, `ticker_indicators_worker`, `ticker_intraday_hourly_indicators_worker`
+
+Single-file `data.py` would have been 391 LOC (over 200 cap); split along domain boundary (universe vs data-sync vs compute-pipeline) to stay under cap.
+
+**`_impl.py` net delta:** 3934 → 3590 LOC (-344 LOC).  The `sed 547,1173d` block delete also accidentally took out `_parallel_indicator_sync` (immediately restored) and `_screener_snapshot_sync` (restored from git history at line 824 of commit `ff18517`; also reintroduced the `_INTRADAY_COLS` constant it depends on).  The function is still imported lazily by `app/services/data_sync/scores.py:46`.
+
+**Shim changes** (`backend/app/backgroundtasks/__init__.py`):
+- Removed 7 worker names from the `from app.backgroundtasks._impl import (...)` block.
+- Added a new `from app.workers.{universe,data,ticker_compute} import (...)` block that re-exports all 7 names with `is`-identity to the new homes.
+
+**`app/workers/__init__.py` changes** (circular-import fix):
+- 7 data workers now imported directly from `app.workers.{universe,data,ticker_compute}` (was previously from `app.backgroundtasks`).
+- This was needed because the shim no longer re-exports them via `_impl`, which would have caused a circular import when the workers package's `__init__` re-imported them through `app.backgroundtasks`.
+
+**Test contract** (`backend/tests/test_workers_data.py`, 33 tests, rewritten from prior 31):
+- 7 worker names × 4 contract tests (lives-in-canonical-module, not-in-impl, shim-is-identity, `__module__` points at canonical home) = 28 parametrized tests.
+- 3 module size sentinels (one per module, ≤200 LOC).
+- 2 smoke tests (zero-arg signature, callable from shim).
+
+**`test_backgroundtasks_split.py` update:** 7 entries in `MOVED_SYMBOLS` updated to point at the 3 new homes instead of all `app.workers.data`.
+
+**`app.workers.data` (pre-split) artifact:** The intermediate `data.py` (391 LOC) was created with all 7 workers, then split into the 3 final modules.  Only the 3 final modules exist in the working tree.  No content from the intermediate is lost — the git history (`git log --diff-filter=A -- app/workers/data.py` etc.) records the path if needed.
+
+**`tests/test_cleanup.py` and `tests/test_news_model_duplicate_index_fix.py`:** created/fixed in earlier commits of this session (8dd33ca, 75ad010), already in the audit log.
+
+### 20.10 A.9 step 2 next steps (queued)
+
+Still to do in Phase C.1:
+- **A.9 step 3**: `app/workers/notifications.py` (2 notif workers: `watchlist_notification_worker`, `global_scan_worker`).  Move functions out of `_impl`, add to shim, update `MOVED_SYMBOLS`.
+- **A.9 step 4**: `app/workers/news.py` (5 news/calendar workers: `news_worker`, `news_rss_worker`, `watchlist_news_worker`, `market_data_worker`, `results_calendar_worker`).  Same pattern.
+- **A.10**: `app/backgroundtasks/_runtime.py` (shutdown event, pipeline lock, sleep helpers, cron math).  Move 8 helpers (`_shutdown_event`, `_pipeline_lock`, `_pipeline_idle`, `_is_first_run`, `_set_first_run_complete`, `_sleep_interruptible`, `_wait_for_startup_event`, `_wait_for_pipeline`, `_run_async`, `_report_job_waiting`, `_seconds_until_next_cron`).
+- **A.11**: `data_sync/{snapshot,parallel,news,market,calendar}.py` (~800 LOC) — pure sync helpers already scattered across `_impl.py`.
+- **A.12**: `app/workers/cycles.py` + delete `_impl.py`.  Re-export shim becomes re-export of 4 worker modules.
+- **A.13**: caller audit — find every `from app.backgroundtasks._impl import ...` outside the shim and migrate.
+
+**`_impl.py` projected size after A.10-A.12**: 3590 → ~2800 → ~2000 → 0 LOC (deleted).
+
+**Test projection**: 671 → ~700 → ~720 → ~730 (parity tests grow with each split).
 
 ---

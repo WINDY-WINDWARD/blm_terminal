@@ -99,23 +99,19 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_stock_universe_sync",
     "_update_symbol_error_status",
     "_bulk_insert_stock_universe",
-    "stock_universe_worker",
     # Ticker sync cores
     "_ticker_backfill_sync",
-    "ticker_backfill_worker",
     "_ticker_daily_update_sync",
-    "ticker_daily_update_worker",
     "_ticker_intraday_update_sync",
     "_ticker_intraday_hourly_stale_check_sync",
-    "ticker_intraday_hourly_update_worker",
     "_parallel_indicator_sync",
     "_ticker_indicators_sync",
     "_ticker_intraday_indicators_sync",
     "_ticker_scores_sync",
     "_screener_snapshot_sync",
-    "ticker_scores_worker",
-    "ticker_indicators_worker",
-    "ticker_intraday_hourly_indicators_worker",
+    # NOTE: the 7 ticker-data worker daemons moved to
+    # app.workers.{universe,data,ticker_compute} in audit C.1
+    # A.9 step 2 — see TestMovedWorkers / MOVED_SYMBOLS
     # News sync
     "news_worker",
     "news_rss_worker",
@@ -236,6 +232,14 @@ class TestReExports:
 MOVED_SYMBOLS = [
     ("_run_vacuum", "app.workers.maintenance"),
     ("vacuum_worker", "app.workers.maintenance"),
+    # A.9 step 2 — ticker-data workers
+    ("stock_universe_worker", "app.workers.universe"),
+    ("ticker_backfill_worker", "app.workers.data"),
+    ("ticker_daily_update_worker", "app.workers.data"),
+    ("ticker_intraday_hourly_update_worker", "app.workers.data"),
+    ("ticker_scores_worker", "app.workers.ticker_compute"),
+    ("ticker_indicators_worker", "app.workers.ticker_compute"),
+    ("ticker_intraday_hourly_indicators_worker", "app.workers.ticker_compute"),
 ]
 
 

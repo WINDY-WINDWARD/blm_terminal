@@ -87,25 +87,20 @@ Capture script: `backend/scripts/capture_phase_c_goldens.py` (944 LOC).
 
 ---
 
-## What's next (A.9 step 2-4, A.10-A.13)
+## What's next (A.9 step 3-4, A.10-A.13)
 
-### A.9 step 2 — `app/workers/data.py`
-Move 7 ticker workers (currently re-exported from `app.backgroundtasks`):
-- `stock_universe_worker` (note: sync function `_stock_universe_sync` is already in `data_sync/universe.py`, only the worker daemon needs to move)
-- `ticker_backfill_worker`
-- `ticker_daily_update_worker`
-- `ticker_intraday_hourly_update_worker`
-- `ticker_indicators_worker`
-- `ticker_intraday_hourly_indicators_worker`
-- `ticker_scores_worker`
+### A.9 step 2 — `app/workers/data.py` ✅ DONE
+Moved 7 ticker-data worker daemons to 3 new modules (single file would have been 391 LOC, over 200 cap; split along domain boundary):
+- `app/workers/universe.py` (69 LOC, 1 worker): `stock_universe_worker`
+- `app/workers/data.py` (180 LOC, 3 workers): `ticker_backfill_worker`, `ticker_daily_update_worker`, `ticker_intraday_hourly_update_worker`
+- `app/workers/ticker_compute.py` (186 LOC, 3 workers): `ticker_scores_worker`, `ticker_indicators_worker`, `ticker_intraday_hourly_indicators_worker`
 
-Same pattern as `maintenance.py`:
-1. Create `app/workers/data.py` with lazy imports from `app.backgroundtasks._impl` (or direct imports from `app.services.data_sync.<sync_module>` for the sync helpers)
-2. Remove definitions from `_impl.py`
-3. Update `app.backgroundtasks/__init__.py`: remove from `_impl` import block, add to direct `from app.workers.data import (...)` block
-4. Update `app/workers/__init__.py`: re-export from `app.workers.data`
-5. Add entries to `MOVED_SYMBOLS` in `test_backgroundtasks_split.py`
-6. Create `tests/test_workers_data.py` with structural tests (sentinel LOC, `__module__`, identity, signature)
+`_impl.py` net delta: 3934 → 3590 LOC (-344 LOC).
+Test status: 671/671 pure-unit suite passes (+33 from new `test_workers_data.py` parametrized across 3 module homes).
+All 12 phase C goldens still byte-stable (semantic; capture script indent 4→2 is from an earlier unrelated update).
+
+### A.9 step 3 — `app/workers/notifications.py`
+Move 2 notification workers:
 
 ### A.9 step 3 — `app/workers/notifications.py`
 Move 2 notification workers:
