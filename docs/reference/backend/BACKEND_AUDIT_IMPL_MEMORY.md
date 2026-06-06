@@ -508,4 +508,44 @@ All 5 verified byte-identical across A.1-A.8 refactors.  Capture script: `backen
 - `backend/tests/test_ticker_warehouse_async_wrap.py`
 - `backend/tests/test_utcnow_migration_parity.py`
 
+### 20.7 Session 2 step 1 (A.9 maintenance extraction, 2026-06-06)
+
+**Commit:** `c58cde0` — `refactor(workers): extract maintenance module from backgroundtasks (A.9 step 1)`
+
+**What was done:**
+- Moved `vacuum_worker`, `_run_vacuum`, `VACUUM_CRON` from `_impl.py` to new `app/workers/maintenance.py` (132 LOC, under 200 sentinel).
+- `_impl.py` 4014 → 3934 LOC (-80).
+- 7 new tests in `tests/test_workers_maintenance.py` (size sentinel, `__module__` check, is-identity, caller-import smoke, signature).
+- New `TestMovedWorkers` class in `tests/test_backgroundtasks_split.py` enforces the contract for symbols that have left `_impl.py`.
+
+**Circular import resolution (the meat of this commit):**
+The re-import at the bottom of `_impl.py` (the "is-identity bridge" pattern) was REMOVED.  Instead, `app.backgroundtasks/__init__.py` imports the moved symbols DIRECTLY from `app.workers.maintenance`.  Reason: the re-import pattern created a cycle
+
+  `_impl` → `app.workers.maintenance` → `app.workers.__init__` → `app.backgroundtasks` (mid-init) → boom
+
+The direct-import pattern breaks the cycle because `app.workers.maintenance` does not trigger a re-entry into `app.backgroundtasks` on load (its imports of backgroundtasks symbols are all lazy, inside function bodies).  The is-identity guarantee is preserved by the direct import in `__init__.py`: `app.backgroundtasks.vacuum_worker is app.workers.maintenance.vacuum_worker`.
+
+`register_all_jobs` (still in `_impl.py` until A.13) uses a lazy import at the top of the function body to pull `VACUUM_CRON` and `_run_vacuum` from the new home.
+
+**TestMovedWorkers contract:**
+For each entry in `MOVED_SYMBOLS = [(name, new_home), ...]`:
+1. `bg.<name>` exists (re-export shim works)
+2. `_impl.<name>` does NOT exist (move is complete, not a stale local copy)
+3. `bg.<name> is <new_home>.<name>` (drift-proof identity)
+
+Future A.9 steps (data, notifications, news workers) will add entries to `MOVED_SYMBOLS` and satisfy this contract.
+
+**Bug surfaced & fixed in earlier commit `d7fd354` (goldens expansion):**
+`_bulk_insert_stock_universe` in `app/services/data_sync/universe.py` did NOT set `ticker_failure_count=0` in the `INSERT … ON CONFLICT` set.  The model column is `NOT NULL` with no default, so any production insert would have raised `IntegrityError`.  Fixed in `d7fd354`.  Golden `bulk_insert_stock_universe_5_rows.json` catches regressions.
+
+**Pre-existing bugs (NOT YET FIXED, tracked separately):**
+- `app/models/news.py` lines 56, 84, 99-100: duplicate-index bug (`sentiment` and `threat_level` have both `index=True` and a hand-written `Index()` in `__table_args__`).
+- `tests/test_cleanup.py` collection error: imports `CLEANUP_INTERVAL` and `VACUUM_CRON` from `app.backgroundtasks` but these were never re-exported in the package shim.  Pre-existing since 589b0d1.  Fix: add `from app.backgroundtasks._impl import CLEANUP_INTERVAL` + `from app.workers.maintenance import VACUUM_CRON` to the shim.  Tracked as a separate low-priority commit.
+
+**Test status:** 634/634 pure-unit suite passes (was 627/627, +7 from new `test_workers_maintenance.py`).  All 12 phase C goldens still byte-identical.
+
+### 20.8 Handoff doc
+
+`docs/reference/backend/PHASE_C_HANDOFF.md` — full session-by-session record of Phase C.1 progress, with: LOC reductions, new module inventory, test inventory, golden inventory, next-step roadmap (A.9 step 2 onwards), architectural invariants to preserve, capture-script gotchas, module-globals fragility caveats, monkey-patch caveat, and Phase C.1 completion criteria.  Read this FIRST when resuming the work in a new session.
+
 ---
