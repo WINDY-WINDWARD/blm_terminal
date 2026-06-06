@@ -58,10 +58,11 @@ from app.backgroundtasks._impl import (  # noqa: F401
     # Backfill sync (moved to app.services.data_sync.backfill in A.4)
     _ticker_backfill_sync,
     ticker_backfill_worker,
-    _ticker_daily_update_sync,
     ticker_daily_update_worker,
     # Intraday sync (moved to app.services.data_sync.intraday in A.5)
     _ticker_intraday_update_sync,
+    # Daily update sync (moved to app.services.data_sync.daily in A.6)
+    _ticker_daily_update_sync,
     _ticker_intraday_hourly_stale_check_sync,
     ticker_intraday_hourly_update_worker,
     _parallel_indicator_sync,
