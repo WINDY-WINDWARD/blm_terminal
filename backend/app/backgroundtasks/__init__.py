@@ -38,7 +38,6 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _wait_for_startup_event,
     _wait_for_pipeline,
     _run_async,
-    _run_vacuum,
     _report_job_waiting,
     _seconds_until_next_cron,
     # Shutdown / pipeline state
@@ -95,7 +94,9 @@ from app.backgroundtasks._impl import (  # noqa: F401
     results_calendar_worker,
     _results_calendar_sync,
     # Maintenance
-    vacuum_worker,
+    # NOTE: ``vacuum_worker`` is imported separately below from its
+    # final home (``app.workers.maintenance``) to avoid a circular
+    # import via ``app.workers.__init__``.
     _run_cleanup_if_due,
     # Notification workers
     watchlist_notification_worker,
@@ -148,4 +149,13 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _coerce_int,
     _coerce_float,
     _is_recent,
+)
+
+# Workers that have moved to ``app/workers/<domain>.py`` during the
+# Phase C.1 split.  Imported separately (NOT through ``_impl``) so
+# that ``app.workers.__init__`` can re-export these names without
+# re-entering this package mid-init and triggering a circular import.
+from app.workers.maintenance import (  # noqa: E402,F401
+    _run_vacuum,
+    vacuum_worker,
 )

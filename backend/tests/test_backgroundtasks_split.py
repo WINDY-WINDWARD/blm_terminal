@@ -83,7 +83,7 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_wait_for_startup_event",
     "_wait_for_pipeline",
     "_run_async",
-    "_run_vacuum",
+    # _run_vacuum moved to app.workers.maintenance — see TestMovedWorkers
     "_report_job_waiting",
     "_seconds_until_next_cron",
     # Shutdown / pipeline state
@@ -135,8 +135,7 @@ EXPECTED_PUBLIC_SYMBOLS = [
     # Results calendar
     "results_calendar_worker",
     "_results_calendar_sync",
-    # Maintenance
-    "vacuum_worker",
+    # Maintenance (vacuum_worker moved to app.workers.maintenance — see TestMovedWorkers)
     "_run_cleanup_if_due",
     # Notification workers
     "watchlist_notification_worker",
@@ -223,6 +222,56 @@ class TestReExports:
             f"app.backgroundtasks.{name} is not the same object as "
             f"_impl.{name} — re-export is broken (got {type(pkg_obj)} "
             f"vs {type(impl_obj)})"
+        )
+
+
+# Symbols that have been moved to a new home under ``app.workers.<domain>``
+# (or ``app.services.data_sync.*``) during the Phase C.1 split.  These
+# are NO LONGER defined in ``_impl.py`` — they live in their final
+# module — but ``app.backgroundtasks`` re-exports them so existing
+# callers (``from app.backgroundtasks import vacuum_worker``) keep
+# working unchanged.
+#
+# Mapping: name → final module
+MOVED_SYMBOLS = [
+    ("_run_vacuum", "app.workers.maintenance"),
+    ("vacuum_worker", "app.workers.maintenance"),
+]
+
+
+class TestMovedWorkers:
+    """Symbols moved to a new module must still be importable from
+    ``app.backgroundtasks`` (re-export shim contract) and must be the
+    same object as the one in their new home.
+    """
+
+    @pytest.mark.parametrize("name,new_home", MOVED_SYMBOLS)
+    def test_moved_symbol_re_exported(self, name, new_home):
+        import importlib
+        from app import backgroundtasks as bg
+
+        new_mod = importlib.import_module(new_home)
+
+        # Must be re-exported on the package
+        assert hasattr(bg, name), (
+            f"app.backgroundtasks.{name} not re-exported — external "
+            f"callers will break"
+        )
+        # Must NOT live in _impl anymore (otherwise the re-export
+        # is a stale local copy, not a forwarding import)
+        from app.backgroundtasks import _impl
+        assert not hasattr(_impl, name), (
+            f"_impl.{name} still defined — the move to {new_home} "
+            f"is incomplete (delete it from _impl to avoid drift)"
+        )
+        # Identity: bg.<name> must be the exact same object as
+        # <new_home>.<name>
+        new_obj = getattr(new_mod, name)
+        pkg_obj = getattr(bg, name)
+        assert pkg_obj is new_obj, (
+            f"app.backgroundtasks.{name} is not the same object as "
+            f"{new_home}.{name} — re-export is broken "
+            f"(got {type(pkg_obj)} vs {type(new_obj)})"
         )
 
 

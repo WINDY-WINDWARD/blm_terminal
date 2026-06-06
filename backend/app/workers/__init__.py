@@ -16,6 +16,14 @@ Until the migration completes, the package re-exports every public
 worker symbol from ``app.backgroundtasks`` so callers continue to
 work unchanged.  See ``tests/test_workers_skeleton.py`` for the
 contract.
+
+NOTE: We re-export ``start_all_workers``/``stop_all_workers``/etc
+from ``app.backgroundtasks`` (the legacy package), and the
+moved-per-domain workers (currently just ``vacuum_worker``) from
+their new homes under ``app.workers.<domain>``.  This avoids a
+circular import where ``app.workers.__init__`` triggers
+``app.backgroundtasks`` which triggers ``app.backgroundtasks._impl``
+which tries to import a worker back through ``app.workers``.
 """
 from app.backgroundtasks import (  # noqa: F401
     # Worker lifecycle (public)
@@ -39,7 +47,11 @@ from app.backgroundtasks import (  # noqa: F401
     # Notification workers
     watchlist_notification_worker,
     global_scan_worker,
-    # Results calendar + maintenance
+    # Results calendar
     results_calendar_worker,
+)
+# Maintenance workers (moved to app.workers.maintenance in A.9).
+# Re-exported here from the new module to keep callers stable.
+from app.workers.maintenance import (  # noqa: E402,F401
     vacuum_worker,
 )

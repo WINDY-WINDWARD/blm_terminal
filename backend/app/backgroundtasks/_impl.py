@@ -61,6 +61,12 @@ def _is_job_enabled(job_key: str) -> bool:
 
 def register_all_jobs() -> None:
     """Register all background jobs with the job registry."""
+    # Lazy imports for symbols that moved to app.workers.* in Phase C.1.
+    # Top-level import would create a circular reference
+    # (workers.* → _impl).  These are only used inside JobDefinition
+    # callables, so the cost is negligible.
+    from app.workers.maintenance import VACUUM_CRON, _run_vacuum
+
     jobs = [
         # --- Data warehouse (startup / daily) ---
         # NOTE: callables here are the *sync* (work) functions, not the worker
@@ -1421,97 +1427,6 @@ def news_rss_worker() -> None:
 # without adding meaningful write overhead.  This is a single-threaded
 # rebuild — takes 5-15 min on a 1-2GB DB.
 
-VACUUM_CRON = "0 4 * * 0"   # Every Sunday 04:00 (low-traffic window)
-
-
-def _run_vacuum() -> None:
-    """Run VACUUM on the SQLite warehouse to reclaim space from deleted rows.
-
-    Uses a dedicated short-lived connection because VACUUM cannot run inside
-    an open transaction.  Disables WAL briefly to allow the rebuild.
-    """
-    db_path = settings.db_path
-    logger.info("vacuum: starting VACUUM on %s", db_path)
-    update_job_status_sync("job.vacuum", "running", progress=10, message="Starting VACUUM...")
-    t0 = time.time()
-    try:
-        # VACUUM cannot be executed inside a transaction.  Use a fresh
-        # connection with isolation_level=None (autocommit) so each
-        # statement is its own transaction.
-        with sqlite3.connect(db_path, timeout=600, isolation_level=None) as con:
-            # 1. checkpoint WAL to fold pending writes into the main DB
-            update_job_status_sync("job.vacuum", "running", progress=20,
-                                   message="Checkpointing WAL...")
-            try:
-                con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except sqlite3.OperationalError as e:
-                logger.warning("vacuum: wal_checkpoint failed (continuing): %s", e)
-
-            # 2. rebuild the database file in place
-            update_job_status_sync("job.vacuum", "running", progress=50,
-                                   message="VACUUM in progress (may take 5-15 min)...")
-            con.execute("VACUUM")
-
-            # 3. update query planner stats
-            update_job_status_sync("job.vacuum", "running", progress=90,
-                                   message="Running ANALYZE...")
-            con.execute("ANALYZE")
-
-        elapsed = time.time() - t0
-        logger.info("vacuum: complete in %.1fs", elapsed)
-        update_job_status_sync("job.vacuum", "waiting", progress=100,
-                               message=f"Complete in {elapsed:.0f}s")
-    except Exception:
-        logger.exception("vacuum: failed")
-        update_job_status_sync("job.vacuum", "waiting", progress=0,
-                               message="Failed (will retry next week)")
-
-
-def vacuum_worker() -> None:
-    """Daemon thread: runs VACUUM weekly on Sunday 04:00.
-
-    Skips if disabled via system_config.  On first launch (first_run=True)
-    waits for ticker_scores to complete before triggering (we don't want to
-    race with the nightly pipeline).  Subsequent cycles use the cron schedule.
-    """
-    logger.info("vacuum_worker: started")
-
-    if not _is_job_enabled("job.vacuum"):
-        logger.info("vacuum_worker: disabled, waiting...")
-        update_job_status_sync("job.vacuum", "waiting", progress=0, message="Disabled")
-        while not _shutdown_event.is_set():
-            _sleep_interruptible(60)
-        update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
-        logger.info("vacuum_worker: stopped")
-        return
-
-    # Wait for ticker_scores to finish its first run so we don't fight for the
-    # DB lock during startup.  This is a soft check — if the worker hasn't
-    # started, just proceed.
-    if _is_first_run("vacuum") and _wait_for_startup_event(
-        _startup_ticker_scores_done, "ticker_scores", "job.vacuum"
-    ):
-        update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
-        return
-    if _is_first_run("vacuum"):
-        _set_first_run_complete("vacuum")
-
-    while not _shutdown_event.is_set():
-        wait_secs = _report_job_waiting("job.vacuum", VACUUM_CRON,
-                                        message="Weekly maintenance")
-        logger.info("vacuum_worker: sleeping %.0fs until next cron (%s)",
-                    wait_secs, VACUUM_CRON)
-        if _sleep_interruptible(wait_secs):
-            break
-        if not _shutdown_event.is_set():
-            if not _is_job_enabled("job.vacuum"):
-                update_job_status_sync("job.vacuum", "waiting", progress=0, message="Disabled")
-                _sleep_interruptible(60)
-                continue
-            _run_vacuum()
-
-    update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
-    logger.info("vacuum_worker: stopped")
 
 
 WATCHLIST_NEWS_STALE_SECONDS = 5 * 60
@@ -4012,3 +3927,8 @@ from app.services.data_sync.indicators import (  # noqa: E402,F401
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
 )
+# NOTE: ``vacuum_worker`` is re-exported from ``app.backgroundtasks``
+# via a direct import in its __init__.py (NOT through ``_impl``),
+# to avoid a circular import where ``_impl.py`` triggers
+# ``app.workers.maintenance`` which triggers ``app.workers.__init__``
+# which tries to import from ``app.backgroundtasks`` (mid-init).
