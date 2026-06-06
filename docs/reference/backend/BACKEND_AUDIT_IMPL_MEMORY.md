@@ -405,3 +405,107 @@ The audit also called out `_legacy_where` vs `_legacy_where_snapshot` (~200 LOC)
 - `app/routers/ticker.py` (B.12)
 
 ---
+
+## 20. Phase C.1 — file split of `backgroundtasks.py` (Session 1, 2026-06-06)
+
+**Status:** A.1-A.8 DONE.  A.9-A.13 pending.  627/627 pure-unit pass.
+
+### 20.1 What was done
+
+Track A.1-A.8 of audit C.1 (file split of `backgroundtasks.py` 4994 → 12 modules):
+
+| Step | Module | Functions | _impl.py LOC after | New module LOC | Tests |
+|---|---|---|---|---|---|
+| A.1 | `app/backgroundtasks/` package + shim | (skeleton) | 4994 | — | +108 |
+| A.2 | `app/workers/` + `app/services/data_sync/` | (skeletons) | 4994 | — | +36 |
+| A.3 | `app/services/data_sync/universe.py` | 3 | 4855 (-139) | 232 | +14 |
+| A.4 | `app/services/data_sync/backfill.py` | 1 | 4801 (-54) | 110 | +8 |
+| A.5 | `app/services/data_sync/intraday.py` | 2 | 4559 (-242) | 298 | +11 |
+| A.6 | `app/services/data_sync/daily.py` | 1 | 4405 (-154) | 197 | +8 |
+| A.7 | `app/services/data_sync/scores.py` | 1 | 4199 (-206) | 247 | +8 |
+| A.8 | `app/services/data_sync/indicators.py` | 2 | 4014 (-185) | 239 | +11 |
+| **Total moved** | | **12 functions** | **-980 LOC** | | **+204 tests** |
+
+**Sync cores remaining in `_impl.py`:** `_screener_snapshot_sync`, `_parallel_indicator_sync`, plus the 3 notification cycles (`_ticker_indicator_notification_cycle`, `_ticker_intraday_indicator_notification_cycle`, `_global_scan_cycle`).
+
+**Workers remaining in `_impl.py`:** `stock_universe_worker`, `ticker_backfill_worker`, `ticker_daily_update_worker`, `ticker_intraday_hourly_update_worker`, all notification workers (`ticker_indicators_worker`, `ticker_intraday_indicators_worker`, `ticker_indicator_notification_worker`, `ticker_intraday_indicator_notification_worker`, `global_scan_worker`, `notification_cycle_full_worker`), `ticker_scores_worker`, fair-value workers, news workers, `vacuum_worker`, `retention_worker`.
+
+### 20.2 Commit log (Phase C.1)
+
+| SHA | Subject |
+|---|---|
+| `41b59cd` | test(goldens): capture 5 phase C target function outputs (audit C.1 prep) |
+| `589b0d1` | refactor(backgroundtasks): package split with re-export shim (audit C.1 A.1) |
+| `a661705` | feat(workers,data_sync): package skeletons for C.1 A.2 |
+| `f2698e1` | refactor(data_sync): extract universe module from backgroundtasks (A.3) |
+| `05a1709` | refactor(data_sync): extract backfill module from backgroundtasks (A.4) |
+| `9bf6dbc` | refactor(data_sync): extract intraday module from backgroundtasks (A.5) |
+| `14dcde3` | refactor(data_sync): extract daily module from backgroundtasks (A.6) |
+| `02de51b` | refactor(data_sync): extract scores module from backgroundtasks (A.7) |
+| `24a17b2` | refactor(data_sync): extract indicators module from backgroundtasks (A.8) |
+
+### 20.3 Key technical decisions
+
+- **Re-export shim pattern**: `app/backgroundtasks/__init__.py` explicitly re-exports 80+ names from `_impl` (not `from _impl import *`); `_impl.py` re-imports the new modules at the bottom of its file.  This preserves `is`-identity (`bg.X is data_sync.Y`) for drift-proof tests.
+- **Lazy-resolve helpers**: each new module defines module-level helpers (`_shutdown_event()`, `_update_job_status_sync()`) that do `from app.backgroundtasks import _impl` and return the live reference.  This avoids import-order cycles (`_impl` re-exports the new modules, workers in new modules need `_impl` helpers).
+- **logger import inside function body, not module top**: `intraday.py` triggered a circular `ImportError` when `from app.backgroundtasks._impl import logger` was at module top.  Moved into the function body.  Now consistent across all data_sync modules.
+- **Naming**: `app/services/data_sync/indicators.py` SHADOWS the name `app.services.indicators` (the compute service).  Inside the new module we import the latter as `svc_indicators` to avoid confusion.
+- **Goldens stability**: `scripts/capture_phase_c_goldens.py` now sorts notification lists by `(symbol, trigger_type)` before writing JSON, because the source uses `set` iteration (hash-order, non-deterministic across Python sessions).  Verified byte-identical MD5 across 2 consecutive runs.
+- **Pre-existing bug discovered**: `app/models/news.py` line 56-99 — `sentiment` and `threat_level` have both `index=True` AND a hand-written `Index("ix_news_articles_sentiment", "sentiment")` in `__table_args__`.  `Base.metadata.create_all` fails with "index already exists".  `tests/conftest.py::in_memory_db` fixture is broken; no test actually uses it.  Workaround: de-duplicate auto-indexes in `Base.metadata` before `create_all` (same pattern as `tests/test_pagination_helper.py::async_db`).
+- **Module-globals fragility (post-A.1)**: after the package split, functions in `_impl` look up their dependencies in their own module globals, not the package's.  `monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", ...)` does NOT work — must patch `backgroundtasks._impl.AsyncSessionLocal`.  Affected `test_utcnow_migration_parity.py` (3 tests fixed).  Same pattern in capture script via `_patch(name, value)` helper that patches both `bg.X` and `bg._impl.X`.
+
+### 20.4 Pre-capture goldens (5 files in `tests/golden/`)
+
+- `global_scan_50_symbols.json` (168 pending)
+- `ticker_indicator_notification_50_symbols.json` (27 pending)
+- `ticker_intraday_indicator_notification_50_symbols.json` (59 pending)
+- `intraday_hourly_stale_check_10_symbols.json` (10 symbols)
+- `ticker_scores_50_symbols.json` (50 rows)
+
+All 5 verified byte-identical across A.1-A.8 refactors.  Capture script: `backend/scripts/capture_phase_c_goldens.py`.
+
+### 20.5 Next steps (Session 2+)
+
+| Step | Scope | LOC estimate |
+|---|---|---|
+| A.9 | Split workers: `app/workers/{data,news,notifications,fair_value,maintenance}.py` | -1200 LOC |
+| A.10 | Extract `_runtime.py` for shutdown/first-run helpers | -100 LOC |
+| A.11 | Split remaining sync cores (`_screener_snapshot_sync`, `_parallel_indicator_sync`, 3 notification cycles) | -800 LOC |
+| A.12 | Delete legacy `app/backgroundtasks.py` (keep package shim only) | -4014 LOC |
+| A.13 | Verify no external callers reference the old `app/backgroundtasks.py` (all use `app.backgroundtasks.*` package path) | — |
+| B.1-B.8 | Perf work (C.3 N+1, C.4 bulk insert/update, C.5 parallelize, C.6 async helper, C.7 window fn, C.8 alerts extract) | — |
+
+### 20.6 Files created in Phase C.1 Session 1
+
+**New modules:**
+- `backend/app/backgroundtasks/__init__.py` (re-export shim, 150 LOC)
+- `backend/app/backgroundtasks/_impl.py` (moved impl, 4014 LOC)
+- `backend/app/workers/__init__.py` (re-export shim, 45 LOC)
+- `backend/app/services/data_sync/__init__.py` (package marker, 18 LOC)
+- `backend/app/services/data_sync/universe.py` (3 fns, 232 LOC)
+- `backend/app/services/data_sync/backfill.py` (1 fn, 110 LOC)
+- `backend/app/services/data_sync/intraday.py` (2 fns, 298 LOC)
+- `backend/app/services/data_sync/daily.py` (1 fn, 197 LOC)
+- `backend/app/services/data_sync/scores.py` (1 fn, 247 LOC)
+- `backend/app/services/data_sync/indicators.py` (2 fns, 239 LOC)
+
+**New tests (8 files):**
+- `backend/tests/test_backgroundtasks_split.py` (108 tests)
+- `backend/tests/test_workers_skeleton.py` (18 tests)
+- `backend/tests/test_data_sync_skeleton.py` (18 tests)
+- `backend/tests/test_data_sync_universe.py` (14 tests)
+- `backend/tests/test_data_sync_backfill.py` (8 tests)
+- `backend/tests/test_data_sync_intraday.py` (11 tests)
+- `backend/tests/test_data_sync_daily.py` (8 tests)
+- `backend/tests/test_data_sync_scores.py` (8 tests)
+- `backend/tests/test_data_sync_indicators.py` (11 tests)
+
+**New tools:**
+- `backend/scripts/capture_phase_c_goldens.py` (5 goldens, byte-stable output)
+
+**Modified tests (3 pre-existing tests fixed to patch `_impl` namespace):**
+- `backend/tests/test_database_pragma_helper.py`
+- `backend/tests/test_ticker_warehouse_async_wrap.py`
+- `backend/tests/test_utcnow_migration_parity.py`
+
+---
