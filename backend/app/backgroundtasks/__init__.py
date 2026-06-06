@@ -64,11 +64,12 @@ from app.backgroundtasks._impl import (  # noqa: F401
     # Daily update sync (moved to app.services.data_sync.daily in A.6)
     _ticker_daily_update_sync,
     _ticker_intraday_hourly_stale_check_sync,
+    # Scores sync (moved to app.services.data_sync.scores in A.7)
+    _ticker_scores_sync,
     ticker_intraday_hourly_update_worker,
     _parallel_indicator_sync,
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
-    _ticker_scores_sync,
     _screener_snapshot_sync,
     ticker_scores_worker,
     ticker_indicators_worker,
