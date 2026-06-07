@@ -94,7 +94,8 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_pipeline_lock",
     "_pipeline_idle",
     # First-run
-    "register_all_jobs",
+    # NOTE: register_all_jobs moved to app.workers.jobs in A.12 part 1 —
+    # see MOVED_SYMBOLS / TestMovedWorkers
     # Universe sync
     "_stock_universe_sync",
     "_update_symbol_error_status",
@@ -116,33 +117,17 @@ EXPECTED_PUBLIC_SYMBOLS = [
     # NOTE: news + market + calendar sync cores moved to
     # app.services.data_sync.{news,market,calendar} in A.11 part 2 —
     # see MOVED_SYMBOLS / TestMovedWorkers
+    # NOTE: nse_parsing / cleanup / deal_significance / insider_trades
+    # / notifications + cycle functions moved to data_sync.* and
+    # app.workers.* in A.12 part 1 — see MOVED_SYMBOLS / TestMovedWorkers
     # Maintenance (vacuum_worker moved to app.workers.maintenance — see TestMovedWorkers)
-    "_run_cleanup_if_due",
     # Notification workers (watchlist_notification_worker + global_scan_worker
     # moved to app.workers.notifications in A.9 step 3 — see TestMovedWorkers)
-    "_notification_cycle_full",
-    "_notification_cycle_reduced",
-    "_build_alerts",
-    "_ticker_indicator_notification_cycle",
-    "_ticker_intraday_indicator_notification_cycle",
-    "_global_scan_cycle",
     # Worker lifecycle
     "start_all_workers",
     "stop_all_workers",
     "start_cache_cleanup",
-    # Notifications (sync helpers used by workers)
-    "_get_watchlist_symbols",
-    "_get_seen_today",
-    "_bulk_upsert_notifications",
-    "_get_global_seen_today",
-    "_bulk_upsert_global_notifications",
-    "get_notif_config",
-    "_fetch_deal_market_caps",
-    "_fetch_short_deal_close_prices",
-    "_is_deal_significant",
-    "_fetch_insider_trades_cached",
-    "_fetch_insider_trades_async",
-    # Fair value
+    # Fair value (will move to app.services.fair_value in A.12 part 2)
     "_batch_update_fair_values",
     "_batch_resolve_morningstar_ids",
     "sync_watchlist_fair_values",
@@ -153,21 +138,6 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "_get_full_lock",
     "_run_watchlist_scheduler",
     "_run_nightly_scheduler",
-    # Parsing helpers (used by global scan cycle)
-    "_parse_52week_data",
-    "_parse_volume_gainers",
-    "_parse_largedeal_snapshot",
-    "_safe_fetch_52week_high",
-    "_safe_fetch_52week_low",
-    "_safe_fetch_volume_gainers",
-    "_safe_fetch_top_gainers",
-    "_safe_fetch_top_losers",
-    "_safe_fetch_largedeal_snapshot",
-    # Misc
-    "DealRecord",
-    "_coerce_int",
-    "_coerce_float",
-    "_is_recent",
 ]
 
 
@@ -247,6 +217,57 @@ MOVED_SYMBOLS = [
     ("_refresh_market_data_async", "app.services.data_sync.market"),
     ("_market_data_sync", "app.services.data_sync.market"),
     ("_results_calendar_sync", "app.services.data_sync.calendar"),
+    # A.12 part 1 — nse_parsing (8 safe-fetch + parse helpers)
+    ("_parse_52week_data", "app.services.data_sync.nse_parsing"),
+    ("_parse_volume_gainers", "app.services.data_sync.nse_parsing"),
+    ("_safe_fetch_52week_high", "app.services.data_sync.nse_parsing"),
+    ("_safe_fetch_52week_low", "app.services.data_sync.nse_parsing"),
+    ("_safe_fetch_volume_gainers", "app.services.data_sync.nse_parsing"),
+    ("_safe_fetch_top_gainers", "app.services.data_sync.nse_parsing"),
+    ("_safe_fetch_top_losers", "app.services.data_sync.nse_parsing"),
+    ("_safe_fetch_largedeal_snapshot", "app.services.data_sync.nse_parsing"),
+    # A.12 part 1 — deal_significance (DealRecord + 7 helpers)
+    ("DealRecord", "app.services.data_sync.deal_significance"),
+    ("_coerce_int", "app.services.data_sync.deal_significance"),
+    ("_coerce_float", "app.services.data_sync.deal_significance"),
+    ("_is_recent", "app.services.data_sync.deal_significance"),
+    ("_parse_largedeal_snapshot", "app.services.data_sync.deal_significance"),
+    ("_fetch_deal_market_caps", "app.services.data_sync.deal_significance"),
+    ("_fetch_short_deal_close_prices", "app.services.data_sync.deal_significance"),
+    ("_is_deal_significant", "app.services.data_sync.deal_significance"),
+    # A.12 part 1 — insider_trades
+    ("_fetch_insider_trades_cached", "app.services.data_sync.insider_trades"),
+    ("_fetch_insider_trades_async", "app.services.data_sync.insider_trades"),
+    # A.12 part 1 — cleanup
+    ("_run_cleanup_if_due", "app.services.data_sync.cleanup"),
+    ("CLEANUP_READ_AFTER_DAYS", "app.services.data_sync.cleanup"),
+    ("CLEANUP_INTERVAL", "app.services.data_sync.cleanup"),
+    ("INTRADAY_1H_RETENTION_DAYS", "app.services.data_sync.cleanup"),
+    ("INTRADAY_W_RETENTION_YEARS", "app.services.data_sync.cleanup"),
+    ("NEWS_RETENTION_DAYS", "app.services.data_sync.cleanup"),
+    ("_cleanup_last_run", "app.services.data_sync.cleanup"),
+    # A.12 part 1 — notifications (helpers + _build_alerts)
+    ("NOTIFICATION_CHECK_INTERVAL", "app.services.data_sync.notifications"),
+    ("AFTER_HOURS_INTERVAL", "app.services.data_sync.notifications"),
+    ("DAILY_NOTIFICATION_WINDOW_DAYS", "app.services.data_sync.notifications"),
+    ("_get_watchlist_symbols", "app.services.data_sync.notifications"),
+    ("_get_seen_today", "app.services.data_sync.notifications"),
+    ("_bulk_upsert_notifications", "app.services.data_sync.notifications"),
+    ("_get_global_seen_today", "app.services.data_sync.notifications"),
+    ("_bulk_upsert_global_notifications", "app.services.data_sync.notifications"),
+    ("get_notif_config", "app.services.data_sync.notifications"),
+    ("_build_alerts", "app.services.data_sync.notifications"),
+    # A.12 part 1 — notification_cycles (4 watchlist cycle functions)
+    ("_notification_cycle_full", "app.workers.notification_cycles"),
+    ("_notification_cycle_reduced", "app.workers.notification_cycles"),
+    ("_ticker_indicator_notification_cycle", "app.workers.notification_cycles"),
+    ("_ticker_intraday_indicator_notification_cycle", "app.workers.notification_cycles"),
+    # A.12 part 1 — global_scan_cycle (1 function + 2 constants)
+    ("_global_scan_cycle", "app.workers.global_scan_cycle"),
+    ("GLOBAL_SCAN_BATCH_SIZE", "app.workers.global_scan_cycle"),
+    ("GLOBAL_SCAN_DELAY", "app.workers.global_scan_cycle"),
+    # A.12 part 1 — register_all_jobs moved to app.workers.jobs
+    ("register_all_jobs", "app.workers.jobs"),
 ]
 
 

@@ -1,7 +1,7 @@
 """Background tasks package — re-export shim during Phase C migration.
 
 The original 4994-LOC ``app/backgroundtasks.py`` is being split into
-12 modules under ``app/workers/`` and ``app/services/data_sync/``
+12+ modules under ``app/workers/`` and ``app/services/data_sync/``
 (see audit §4.3).  This package is the **expand-and-contract** shim
 that keeps every existing caller working unchanged during the
 migration.
@@ -27,6 +27,7 @@ original module.  Re-exports are explicit (no ``import *``) so that
 from app.backgroundtasks._impl import (  # noqa: F401
     AsyncSessionLocal,
     _SyncSessionLocal,
+    settings,
 )
 
 # Cross-cutting helpers (used by orchestrator + workers)
@@ -53,9 +54,12 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _startup_ticker_indicators_done,
     _startup_ticker_scores_done,
     _startup_ticker_hourly_done,
+    # (register_all_jobs lives in app.workers.jobs since A.12 part 1 —
+    # re-exported at the bottom of this shim)
     # First-run + job registry
-    register_all_jobs,
+    # (register_all_jobs imported separately below from app.workers.jobs) + job registry
     # Universe sync (moved to app.services.data_sync.universe in A.3)
+    # Re-exported from _impl (which itself re-exports from data_sync.universe)
     _stock_universe_sync,
     _update_symbol_error_status,
     _bulk_insert_stock_universe,
@@ -78,36 +82,14 @@ from app.backgroundtasks._impl import (  # noqa: F401
     # NOTE: ``vacuum_worker`` is imported separately below from its
     # final home (``app.workers.maintenance``) to avoid a circular
     # import via ``app.workers.__init__``.
-    _run_cleanup_if_due,
-    CLEANUP_INTERVAL,
-    INTRADAY_1H_RETENTION_DAYS,
-    INTRADAY_W_RETENTION_YEARS,
-    NEWS_RETENTION_DAYS,
-    _cleanup_last_run,
-    # Notification workers (moved to app.workers.notifications in A.9 step 3)
-    _notification_cycle_full,
-    _notification_cycle_reduced,
-    _build_alerts,
-    _ticker_indicator_notification_cycle,
-    _ticker_intraday_indicator_notification_cycle,
-    _global_scan_cycle,
+    # NOTE: cleanup, notifications, nse_parsing, deal_significance,
+    # insider_trades, and cycle functions moved to data_sync.* and
+    # app.workers.* in A.12 part 1 — see MOVED_SYMBOLS / TestMovedWorkers
     # Worker lifecycle
     start_all_workers,
     stop_all_workers,
     start_cache_cleanup,
-    # Notifications (sync helpers used by workers)
-    _get_watchlist_symbols,
-    _get_seen_today,
-    _bulk_upsert_notifications,
-    _get_global_seen_today,
-    _bulk_upsert_global_notifications,
-    get_notif_config,
-    _fetch_deal_market_caps,
-    _fetch_short_deal_close_prices,
-    _is_deal_significant,
-    _fetch_insider_trades_cached,
-    _fetch_insider_trades_async,
-    # Fair value
+    # Fair value (lives in _impl until A.12 part 2)
     _batch_update_fair_values,
     _batch_resolve_morningstar_ids,
     sync_watchlist_fair_values,
@@ -118,21 +100,6 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _get_full_lock,
     _run_watchlist_scheduler,
     _run_nightly_scheduler,
-    # Parsing helpers (used by global scan cycle)
-    _parse_52week_data,
-    _parse_volume_gainers,
-    _parse_largedeal_snapshot,
-    _safe_fetch_52week_high,
-    _safe_fetch_52week_low,
-    _safe_fetch_volume_gainers,
-    _safe_fetch_top_gainers,
-    _safe_fetch_top_losers,
-    _safe_fetch_largedeal_snapshot,
-    # Misc
-    DealRecord,
-    _coerce_int,
-    _coerce_float,
-    _is_recent,
 )
 
 # Workers that have moved to ``app/workers/<domain>.py`` during the
@@ -205,4 +172,96 @@ from app.services.data_sync.market import (  # noqa: E402,F401
 from app.services.data_sync.calendar import (  # noqa: E402,F401
     _results_calendar_sync,
     _RESULTS_CALENDAR_CRON,
+)
+# A.12 part 1 — leaf data_sync helpers + cycle functions + register_all_jobs
+from app.services.data_sync.nse_parsing import (  # noqa: E402,F401
+    _parse_52week_data,
+    _parse_volume_gainers,
+    _safe_fetch_52week_high,
+    _safe_fetch_52week_low,
+    _safe_fetch_volume_gainers,
+    _safe_fetch_top_gainers,
+    _safe_fetch_top_losers,
+    _safe_fetch_largedeal_snapshot,
+)
+from app.services.data_sync.deal_significance import (  # noqa: E402,F401
+    DealRecord,
+    _coerce_int,
+    _coerce_float,
+    _is_recent,
+    _parse_largedeal_snapshot,
+    _fetch_deal_market_caps,
+    _fetch_short_deal_close_prices,
+    _is_deal_significant,
+)
+from app.services.data_sync.insider_trades import (  # noqa: E402,F401
+    _fetch_insider_trades_cached,
+    _fetch_insider_trades_async,
+)
+from app.services.data_sync.cleanup import (  # noqa: E402,F401
+    _run_cleanup_if_due,
+    CLEANUP_READ_AFTER_DAYS,
+    CLEANUP_INTERVAL,
+    INTRADAY_1H_RETENTION_DAYS,
+    INTRADAY_W_RETENTION_YEARS,
+    NEWS_RETENTION_DAYS,
+    _cleanup_last_run,
+)
+from app.services.data_sync.notifications import (  # noqa: E402,F401
+    NOTIFICATION_CHECK_INTERVAL,
+    AFTER_HOURS_INTERVAL,
+    DAILY_NOTIFICATION_WINDOW_DAYS,
+    _get_watchlist_symbols,
+    _get_seen_today,
+    _bulk_upsert_notifications,
+    _get_global_seen_today,
+    _bulk_upsert_global_notifications,
+    get_notif_config,
+    _build_alerts,
+)
+from app.workers.notification_cycles import (  # noqa: E402,F401
+    _notification_cycle_full,
+    _notification_cycle_reduced,
+    _ticker_indicator_notification_cycle,
+    _ticker_intraday_indicator_notification_cycle,
+)
+from app.workers.global_scan_cycle import (  # noqa: E402,F401
+    _global_scan_cycle,
+    GLOBAL_SCAN_BATCH_SIZE,
+    GLOBAL_SCAN_DELAY,
+)
+# A.12 part 1 — register_all_jobs moved out of _impl to
+# app.workers.jobs.  Imported separately (NOT through ``_impl``) so
+# the re-export shim test
+# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can
+# pin the canonical home with ``is``-identity.
+from app.workers.jobs import (  # noqa: E402,F401
+    register_all_jobs,
+)
+# A.3-A.8 — universe, backfill, intraday, daily, scores, indicators
+# sync cores.  Imported directly from their final homes (NOT through
+# ``_impl``) so the re-export shim test
+# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can pin
+# the canonical home with ``is``-identity.
+from app.services.data_sync.universe import (  # noqa: E402,F401
+    _stock_universe_sync,
+    _update_symbol_error_status,
+    _bulk_insert_stock_universe,
+)
+from app.services.data_sync.backfill import (  # noqa: E402,F401
+    _ticker_backfill_sync,
+)
+from app.services.data_sync.intraday import (  # noqa: E402,F401
+    _ticker_intraday_update_sync,
+    _ticker_intraday_hourly_stale_check_sync,
+)
+from app.services.data_sync.daily import (  # noqa: E402,F401
+    _ticker_daily_update_sync,
+)
+from app.services.data_sync.scores import (  # noqa: E402,F401
+    _ticker_scores_sync,
+)
+from app.services.data_sync.indicators import (  # noqa: E402,F401
+    _ticker_indicators_sync,
+    _ticker_intraday_indicators_sync,
 )

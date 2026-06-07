@@ -31,6 +31,10 @@ def watchlist_notification_worker() -> None:
     Cron: */5 * * * * during market hours; */30 * * * * after hours.
     """
     from app.backgroundtasks import _impl as _bg_impl
+    from app.workers.notification_cycles import (
+        _notification_cycle_full,
+        _notification_cycle_reduced,
+    )
 
     logger = _bg_impl.logger
     _is_job_enabled = _bg_impl._is_job_enabled
@@ -42,8 +46,6 @@ def watchlist_notification_worker() -> None:
     _startup_ticker_scores_done = _bg_impl._startup_ticker_scores_done
     update_job_status_sync = _bg_impl.update_job_status_sync
     _report_job_waiting = _bg_impl._report_job_waiting
-    _notification_cycle_full = _bg_impl._notification_cycle_full
-    _notification_cycle_reduced = _bg_impl._notification_cycle_reduced
 
     logger.info("watchlist_notification_worker: started")
 
@@ -89,6 +91,7 @@ def watchlist_notification_worker() -> None:
 def global_scan_worker() -> None:
     """Daemon thread: scans all NSE stocks on cron */30 * * * *."""
     from app.backgroundtasks import _impl as _bg_impl
+    from app.workers.global_scan_cycle import _global_scan_cycle
 
     logger = _bg_impl.logger
     _is_job_enabled = _bg_impl._is_job_enabled
@@ -99,7 +102,6 @@ def global_scan_worker() -> None:
     _startup_ticker_scores_done = _bg_impl._startup_ticker_scores_done
     update_job_status_sync = _bg_impl.update_job_status_sync
     _report_job_waiting = _bg_impl._report_job_waiting
-    _global_scan_cycle = _bg_impl._global_scan_cycle
 
     logger.info("global_scan_worker: started")
 

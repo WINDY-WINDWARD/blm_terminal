@@ -430,31 +430,31 @@ class TestBuildAlerts:
 class TestSafeFetchWrappers:
     """Test safe fetch wrapper functions."""
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_52week_high_success(self, mock_client):
         mock_client.get_52week_high_stocks.return_value = {"data": []}
         result = _safe_fetch_52week_high()
         assert result == {"data": []}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_52week_high_failure(self, mock_client):
         mock_client.get_52week_high_stocks.side_effect = Exception("NSE error")
         result = _safe_fetch_52week_high()
         assert result == {}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_52week_low_success(self, mock_client):
         mock_client.get_52week_low_stocks.return_value = {"data": []}
         result = _safe_fetch_52week_low()
         assert result == {"data": []}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_volume_gainers_success(self, mock_client):
         mock_client.get_volume_gainers.return_value = {"data": []}
         result = _safe_fetch_volume_gainers()
         assert result == {"data": []}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_top_gainers_success(self, mock_client):
         df = pd.DataFrame([{"symbol": "TEST"}])
         mock_client.get_top_gainers.return_value = df
@@ -462,31 +462,31 @@ class TestSafeFetchWrappers:
         assert result is not None
         assert len(result) == 1
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_top_gainers_failure(self, mock_client):
         mock_client.get_top_gainers.side_effect = Exception("NSE error")
         result = _safe_fetch_top_gainers()
         assert result is None
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_largedeal_snapshot_success(self, mock_client):
         mock_client.get_largedeal_snapshot.return_value = {"BULK_DEALS_DATA": []}
         result = _safe_fetch_largedeal_snapshot()
         assert result == {"BULK_DEALS_DATA": []}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_largedeal_snapshot_failure(self, mock_client):
         mock_client.get_largedeal_snapshot.side_effect = Exception("NSE error")
         result = _safe_fetch_largedeal_snapshot()
         assert result == {}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_52week_low_failure(self, mock_client):
         mock_client.get_52week_low_stocks.side_effect = Exception("NSE error")
         result = _safe_fetch_52week_low()
         assert result == {}
     
-    @patch('app.backgroundtasks._nse_client')
+    @patch('app.services.data_sync.nse_parsing._nse_client')
     def test_safe_fetch_top_losers_failure(self, mock_client):
         mock_client.get_top_losers.side_effect = Exception("NSE error")
         result = _safe_fetch_top_losers()
@@ -496,17 +496,17 @@ class TestSafeFetchWrappers:
 class TestIntegration:
     """Integration tests for the full notification cycle."""
     
-    @patch('app.backgroundtasks._get_watchlist_symbols')
-    @patch('app.backgroundtasks._get_seen_today')
-    @patch('app.backgroundtasks._safe_fetch_52week_high')
-    @patch('app.backgroundtasks._safe_fetch_52week_low')
-    @patch('app.backgroundtasks._safe_fetch_volume_gainers')
-    @patch('app.backgroundtasks._safe_fetch_top_gainers')
-    @patch('app.backgroundtasks._safe_fetch_top_losers')
-    @patch('app.backgroundtasks._safe_fetch_largedeal_snapshot')
-    @patch('app.backgroundtasks._fetch_insider_trades_cached')
-    @patch('app.backgroundtasks._bulk_upsert_notifications')
-    @patch('app.backgroundtasks._run_cleanup_if_due')
+    @patch('app.services.data_sync.notifications._get_watchlist_symbols')
+    @patch('app.services.data_sync.notifications._get_seen_today')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_52week_high')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_52week_low')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_volume_gainers')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_top_gainers')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_top_losers')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_largedeal_snapshot')
+    @patch('app.services.data_sync.insider_trades._fetch_insider_trades_cached')
+    @patch('app.services.data_sync.notifications._bulk_upsert_notifications')
+    @patch('app.services.data_sync.cleanup._run_cleanup_if_due')
     def test_notification_cycle_full_with_alerts(
         self,
         mock_cleanup,
@@ -546,17 +546,17 @@ class TestIntegration:
         assert pending[0]["symbol"] == "TEST"
         assert pending[0]["watchlist_id"] == 1
     
-    @patch('app.backgroundtasks._get_watchlist_symbols')
-    @patch('app.backgroundtasks._get_seen_today')
-    @patch('app.backgroundtasks._safe_fetch_52week_high')
-    @patch('app.backgroundtasks._safe_fetch_52week_low')
-    @patch('app.backgroundtasks._safe_fetch_volume_gainers')
-    @patch('app.backgroundtasks._safe_fetch_top_gainers')
-    @patch('app.backgroundtasks._safe_fetch_top_losers')
-    @patch('app.backgroundtasks._safe_fetch_largedeal_snapshot')
-    @patch('app.backgroundtasks._fetch_insider_trades_cached')
-    @patch('app.backgroundtasks._bulk_upsert_notifications')
-    @patch('app.backgroundtasks._run_cleanup_if_due')
+    @patch('app.services.data_sync.notifications._get_watchlist_symbols')
+    @patch('app.services.data_sync.notifications._get_seen_today')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_52week_high')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_52week_low')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_volume_gainers')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_top_gainers')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_top_losers')
+    @patch('app.services.data_sync.nse_parsing._safe_fetch_largedeal_snapshot')
+    @patch('app.services.data_sync.insider_trades._fetch_insider_trades_cached')
+    @patch('app.services.data_sync.notifications._bulk_upsert_notifications')
+    @patch('app.services.data_sync.cleanup._run_cleanup_if_due')
     def test_notification_cycle_full_no_alerts(
         self,
         mock_cleanup,
