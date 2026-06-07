@@ -369,12 +369,31 @@ def install_mocks(SessionLocal):
         "intraday_indicators_items": [],
     }
 
-    def _patch(name, value):
-        """Patch a name on BOTH the package and the _impl module."""
-        setattr(bg, name, value)
-        setattr(bg._impl, name, value)
+    # After A.13 (shim collapse, _impl.py deleted), the target functions
+    # import their dependencies from canonical homes:
+    #   - Runtime symbols → ``app.backgroundtasks._runtime``
+    #   - ``_SyncSessionLocal`` → ``app.database``
+    #   - ``update_job_status_sync`` → ``app.jobs.runner``
+    #   - ``nse_client`` → ``app.services.nse_client``
+    #   - Notification helpers → ``app.services.data_sync.notifications``
+    #   - NSE parsing helpers → ``app.services.data_sync.nse_parsing``
+    # We patch the canonical homes directly.
+    import app.backgroundtasks._runtime as _runtime_mod
 
-    # 0. REBIND the session factory — the most important patch.
+    def _patch(name, value):
+        """Patch a name on the package AND the _runtime module (if it
+        lives there).  The _runtime patch is needed because cycle
+        functions import directly from ``_runtime`` (not through the
+        shim) after A.13.
+        """
+        setattr(bg, name, value)
+        if hasattr(_runtime_mod, name):
+            setattr(_runtime_mod, name, value)
+
+    # 0. Database session factory — patched on both the shim and
+    #    the ``app.database`` module (canonical home).
+    from app import database as _database_mod
+    _database_mod._SyncSessionLocal = SessionLocal
     _patch("_SyncSessionLocal", SessionLocal)
 
     # 1. Disable the job-gate (treat all jobs as enabled)
@@ -387,6 +406,8 @@ def install_mocks(SessionLocal):
     _patch("_shutdown_event", mock_shutdown)
 
     # 2. Mock update_job_status_sync (no-op)
+    from app.jobs import runner as _runner_mod
+    _runner_mod.update_job_status_sync = lambda *a, **k: None
     _patch("update_job_status_sync", lambda *a, **k: None)
 
     # 3. Mock get_notif_config (load from our seeded system_config)
@@ -398,15 +419,24 @@ def install_mocks(SessionLocal):
                 )
             ).scalar_one()
         return json.loads(row)
+    from app.services.data_sync import notifications as _notif_mod
+    _notif_mod.get_notif_config = fake_get_notif_config
     _patch("get_notif_config", fake_get_notif_config)
 
     # 4. Mock _safe_fetch_* (return fixed data)
-    _patch("_safe_fetch_52week_high", lambda: {"SYM01": {"ltp": 250.0, "new52WHL": 250.0}})
-    _patch("_safe_fetch_52week_low", lambda: {})
-    _patch("_safe_fetch_volume_gainers", lambda: {"SYM02": {"week1volChange": 3.0}})
-    _patch("_safe_fetch_top_gainers", lambda: None)
-    _patch("_safe_fetch_top_losers", lambda: None)
-    _patch("_safe_fetch_largedeal_snapshot", lambda: {})
+    from app.services.data_sync import nse_parsing as _nse_parsing_mod
+    _nse_parsing_mod._safe_fetch_52week_high = lambda: {"SYM01": {"ltp": 250.0, "new52WHL": 250.0}}
+    _nse_parsing_mod._safe_fetch_52week_low = lambda: {}
+    _nse_parsing_mod._safe_fetch_volume_gainers = lambda: {"SYM02": {"week1volChange": 3.0}}
+    _nse_parsing_mod._safe_fetch_top_gainers = lambda: None
+    _nse_parsing_mod._safe_fetch_top_losers = lambda: None
+    _nse_parsing_mod._safe_fetch_largedeal_snapshot = lambda: {}
+    _patch("_safe_fetch_52week_high", _nse_parsing_mod._safe_fetch_52week_high)
+    _patch("_safe_fetch_52week_low", _nse_parsing_mod._safe_fetch_52week_low)
+    _patch("_safe_fetch_volume_gainers", _nse_parsing_mod._safe_fetch_volume_gainers)
+    _patch("_safe_fetch_top_gainers", _nse_parsing_mod._safe_fetch_top_gainers)
+    _patch("_safe_fetch_top_losers", _nse_parsing_mod._safe_fetch_top_losers)
+    _patch("_safe_fetch_largedeal_snapshot", _nse_parsing_mod._safe_fetch_largedeal_snapshot)
 
     # 5. Mock the bulk-upsert helpers (capture pending)
     def _capture_global(rows):
@@ -414,14 +444,19 @@ def install_mocks(SessionLocal):
     def _capture_watchlist(rows):
         captured["ticker_indicator_pending"].extend(rows)
         captured["intraday_indicator_pending"].extend(rows)
+    _notif_mod._bulk_upsert_global_notifications = _capture_global
+    _notif_mod._bulk_upsert_notifications = _capture_watchlist
     _patch("_bulk_upsert_global_notifications", _capture_global)
     _patch("_bulk_upsert_notifications", _capture_watchlist)
 
     # 6. Mock _get_seen_today / _get_global_seen_today (empty)
+    _notif_mod._get_seen_today = lambda: set()
+    _notif_mod._get_global_seen_today = lambda: set()
     _patch("_get_seen_today", lambda: set())
     _patch("_get_global_seen_today", lambda: set())
 
     # 7. Mock _get_watchlist_symbols
+    _notif_mod._get_watchlist_symbols = lambda: {WATCHLIST_ID: WATCHLIST_SYMBOLS}
     _patch("_get_watchlist_symbols", lambda: {WATCHLIST_ID: WATCHLIST_SYMBOLS})
 
     # 8. Mock NSE fetchers (universe sync). The function reads NSE
@@ -447,16 +482,21 @@ def install_mocks(SessionLocal):
             self.high_52w_date = __import__("datetime").date(2025, 6, 1)
             self.low_52w_date = __import__("datetime").date(2025, 12, 1)
 
-    bg._impl._nse_client.get_stock_list = lambda: [f"SYM{i:02d}" for i in range(N_SYMBOLS)]
-    bg._impl._nse_client.get_stock_metadata = lambda sym: MockNseMetadata(sym)
+    from app.services import nse_client as _nse_client_mod
+    _nse_client_mod.nse_client.get_stock_list = lambda: [f"SYM{i:02d}" for i in range(N_SYMBOLS)]
+    _nse_client_mod.nse_client.get_stock_metadata = lambda sym: MockNseMetadata(sym)
 
     # 9. Mock _parse_* helpers
-    _patch("_parse_52week_data", lambda raw: {
+    _nse_parsing_mod._parse_52week_data = lambda raw: {
         sym: {"ltp": d.get("ltp"), "new52WHL": d.get("new52WHL")}
         for sym, d in raw.items()
-    })
-    _patch("_parse_volume_gainers", lambda raw: raw)
-    _patch("_parse_largedeal_snapshot", lambda raw: {})
+    }
+    _nse_parsing_mod._parse_volume_gainers = lambda raw: raw
+    from app.services.data_sync import deal_significance as _deal_mod
+    _deal_mod._parse_largedeal_snapshot = lambda raw: {}
+    _patch("_parse_52week_data", _nse_parsing_mod._parse_52week_data)
+    _patch("_parse_volume_gainers", _nse_parsing_mod._parse_volume_gainers)
+    _patch("_parse_largedeal_snapshot", _deal_mod._parse_largedeal_snapshot)
 
     # 10. Mock ticker_warehouse helpers for the hourly stale check
     import app.services.ticker_warehouse as tw
@@ -465,6 +505,8 @@ def install_mocks(SessionLocal):
     tw.backfill_intraday_symbol = lambda sym, ivs: {iv: 1 for iv in ivs}
 
     # 11. Mock _screener_snapshot_sync (skip)
+    from app.services.data_sync import snapshot as _snapshot_mod
+    _snapshot_mod._screener_snapshot_sync = lambda *a, **k: None
     _patch("_screener_snapshot_sync", lambda *a, **k: None)
 
     # 12. Mock warehouse functions for backfill / intraday goldens
@@ -552,11 +594,11 @@ def capture_intraday_stale(SessionLocal) -> list[str]:
     ``time.sleep`` to no-op. Then the only side effect is the
     update_job_status_sync calls, which are already mocked.
     """
-    import app.backgroundtasks as bg
-    with patch.object(bg._impl, "_shutdown_event", MagicMock(is_set=MagicMock(return_value=False))), \
+    import app.backgroundtasks._runtime as _runtime_mod
+    with patch.object(_runtime_mod, "_shutdown_event", MagicMock(is_set=MagicMock(return_value=False))), \
          patch("app.services.ticker_warehouse.backfill_intraday_symbol", return_value={"1h": 0}), \
          patch("app.services.indicators.compute_intraday_indicators_for_all_rows", return_value=0), \
-         patch("app.backgroundtasks._impl.time.sleep", return_value=None):
+         patch("time.sleep", return_value=None):
         # Patch the 1h / 1h-1 capture path: we want to *observe* the
         # stale_symbols list, not the backfill output. Easiest: wrap
         # the function and intercept.
@@ -704,18 +746,17 @@ def capture_ticker_backfill_sync(captured) -> int:
     backfill invocations.
     """
     from app.backgroundtasks import _ticker_backfill_sync
-    # Snapshot invocations via wrapping
-    import app.backgroundtasks as bg
-    original = bg._impl.ticker_warehouse.backfill_symbol
+    from app.services import ticker_warehouse as _tw_mod
+    original = _tw_mod.backfill_symbol
     invocations: list[dict] = []
     def fake_backfill_symbol(sym, days):
         invocations.append({"symbol": sym, "days": days})
         return 10
-    bg._impl.ticker_warehouse.backfill_symbol = fake_backfill_symbol
+    _tw_mod.backfill_symbol = fake_backfill_symbol
     try:
         _ticker_backfill_sync()
     finally:
-        bg._impl.ticker_warehouse.backfill_symbol = original
+        _tw_mod.backfill_symbol = original
     captured["backfill_symbols"] = sorted(invocations, key=lambda d: d["symbol"])
     return len(captured["backfill_symbols"]), _normalize(captured["backfill_symbols"])
 
@@ -726,8 +767,8 @@ def capture_ticker_intraday_update_sync(captured, SessionLocal) -> int:
     watchlist. We capture those invocations.
     """
     from app.backgroundtasks import _ticker_intraday_update_sync
-    import app.backgroundtasks as bg
-    original = bg._impl.ticker_warehouse.backfill_intraday_symbol
+    from app.services import ticker_warehouse as _tw_mod
+    original = _tw_mod.backfill_intraday_symbol
     invocations: list[dict] = []
     def fake_backfill_intraday(sym, ivs, **kwargs):
         invocations.append({
@@ -735,11 +776,11 @@ def capture_ticker_intraday_update_sync(captured, SessionLocal) -> int:
             "intervals": sorted(ivs) if ivs else [],
         })
         return {iv: 5 for iv in (ivs or [])}
-    bg._impl.ticker_warehouse.backfill_intraday_symbol = fake_backfill_intraday
+    _tw_mod.backfill_intraday_symbol = fake_backfill_intraday
     try:
         _ticker_intraday_update_sync(intervals=["1h"], scope="watchlist")
     finally:
-        bg._impl.ticker_warehouse.backfill_intraday_symbol = original
+        _tw_mod.backfill_intraday_symbol = original
     captured["intraday_calls"] = sorted(
         invocations, key=lambda d: (d["symbol"], d["intervals"])
     )
@@ -755,7 +796,7 @@ def capture_ticker_daily_update_sync(captured) -> int:
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
     from app.backgroundtasks import _ticker_daily_update_sync
-    import app.backgroundtasks as bg
+    from app.services import ticker_warehouse as _tw_mod
 
     # Pick a Sunday: 2025-12-07 is a Sunday
     sunday_noon_ist = datetime(2025, 12, 7, 12, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
@@ -767,27 +808,24 @@ def capture_ticker_daily_update_sync(captured) -> int:
             if tz is None:
                 return sunday_noon_utc.replace(tzinfo=None)
             return sunday_noon_utc.astimezone(tz)
-    bg._impl.datetime = FakeDatetime
 
-    # Also need to patch the one in the new module location (daily.py)
     import app.services.data_sync.daily as daily_mod
     original_daily_datetime = daily_mod.datetime
     daily_mod.datetime = FakeDatetime
 
     # Track if any external fetch was called
-    original_bulk = bg._impl.ticker_warehouse.bulk_update_via_bhavcopy
-    original_update = bg._impl.ticker_warehouse.update_symbol_today
+    original_bulk = _tw_mod.bulk_update_via_bhavcopy
+    original_update = _tw_mod.update_symbol_today
     call_log: list[str] = []
-    bg._impl.ticker_warehouse.bulk_update_via_bhavcopy = lambda d: call_log.append(f"bhavcopy:{d}") or 0
-    bg._impl.ticker_warehouse.update_symbol_today = lambda s, d: call_log.append(f"update_symbol_today:{s}") or 0
+    _tw_mod.bulk_update_via_bhavcopy = lambda d: call_log.append(f"bhavcopy:{d}") or 0
+    _tw_mod.update_symbol_today = lambda s, d: call_log.append(f"update_symbol_today:{s}") or 0
 
     try:
         _ticker_daily_update_sync()
     finally:
-        bg._impl.datetime = original_daily_datetime if False else __import__("datetime")
         daily_mod.datetime = original_daily_datetime
-        bg._impl.ticker_warehouse.bulk_update_via_bhavcopy = original_bulk
-        bg._impl.ticker_warehouse.update_symbol_today = original_update
+        _tw_mod.bulk_update_via_bhavcopy = original_bulk
+        _tw_mod.update_symbol_today = original_update
 
     captured["daily_call_log"] = call_log
     return len(call_log), _normalize({
@@ -802,7 +840,7 @@ def capture_ticker_indicators_sync(captured) -> int:
     capture those items.
     """
     from app.backgroundtasks import _ticker_indicators_sync
-    import app.backgroundtasks as bg
+    from app.services.data_sync import parallel as _parallel_mod
 
     def fake_parallel(items, *args, **kwargs):
         captured["indicators_items"].extend([list(it) for it in items])
@@ -811,19 +849,12 @@ def capture_ticker_indicators_sync(captured) -> int:
             "elapsed_s": 0.0,
             "rows_written": len(items) * 10,
         }
-    original = bg._impl._parallel_indicator_sync
-    bg._impl._parallel_indicator_sync = fake_parallel
-    # Also patch in the new module location (indicators.py)
-    import app.services.data_sync.indicators as ind_mod
-    original_ind = ind_mod._parallel_indicator_sync if hasattr(ind_mod, "_parallel_indicator_sync") else None
-    if hasattr(ind_mod, "_parallel_indicator_sync"):
-        ind_mod._parallel_indicator_sync = fake_parallel
+    original = _parallel_mod._parallel_indicator_sync
+    _parallel_mod._parallel_indicator_sync = fake_parallel
     try:
         _ticker_indicators_sync()
     finally:
-        bg._impl._parallel_indicator_sync = original
-        if original_ind is not None:
-            ind_mod._parallel_indicator_sync = original_ind
+        _parallel_mod._parallel_indicator_sync = original
     captured["indicators_items"] = sorted(captured["indicators_items"])
     return len(captured["indicators_items"]), _normalize(captured["indicators_items"])
 
@@ -834,7 +865,7 @@ def capture_ticker_intraday_indicators_sync(captured) -> int:
     tuples.
     """
     from app.backgroundtasks import _ticker_intraday_indicators_sync
-    import app.backgroundtasks as bg
+    from app.services.data_sync import parallel as _parallel_mod
 
     def fake_parallel(items, *args, **kwargs):
         captured["intraday_indicators_items"].extend([list(it) for it in items])
@@ -843,18 +874,12 @@ def capture_ticker_intraday_indicators_sync(captured) -> int:
             "elapsed_s": 0.0,
             "rows_written": len(items) * 10,
         }
-    original = bg._impl._parallel_indicator_sync
-    bg._impl._parallel_indicator_sync = fake_parallel
-    import app.services.data_sync.indicators as ind_mod
-    original_ind = ind_mod._parallel_indicator_sync if hasattr(ind_mod, "_parallel_indicator_sync") else None
-    if hasattr(ind_mod, "_parallel_indicator_sync"):
-        ind_mod._parallel_indicator_sync = fake_parallel
+    original = _parallel_mod._parallel_indicator_sync
+    _parallel_mod._parallel_indicator_sync = fake_parallel
     try:
         _ticker_intraday_indicators_sync(["1h"])
     finally:
-        bg._impl._parallel_indicator_sync = original
-        if original_ind is not None:
-            ind_mod._parallel_indicator_sync = original_ind
+        _parallel_mod._parallel_indicator_sync = original
     captured["intraday_indicators_items"] = sorted(
         captured["intraday_indicators_items"]
     )
