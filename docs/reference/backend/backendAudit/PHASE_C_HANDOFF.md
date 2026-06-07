@@ -1,7 +1,11 @@
 # Phase C Handoff — Performance refactor of `app/backgroundtasks.py`
 
-**Status:** Phase C.1 (file split) **COMPLETE & pushed** (commits `589b0d1`–`259de9b`). **Phase C.2-C.13 PENDING** (N+1, bulk ops, asyncio parallelism, per-thread loop, pagination, JSON1, broadcast gather, per-conn semaphore).
-**Branch:** `docs/backend-audit-and-test-plan` (latest pushed: `259de9b`).
+**Status:**
+- **Phase C.1 (file split) = COMPLETE & pushed** (commits `589b0d1`–`259de9b`). `_impl.py` DELETED. 1039/1039 unit tests pass.
+- **Phase C.3 prep = COMPLETE & pushed** (commits `f790aeb` handoff doc, `326b798` intraday N+1 fix, `9a4a5a5` bulk helpers). 4 reusable bulk query helpers added to `app/services/ticker_warehouse.py`.
+- **Phase C.3 parts 2-3 + C.4 + C.5 + C.6 + C.7 + C.8 + C.9-C.12 = PENDING** (cycle N+1, fair-value bulk+gather, per-thread loop, ROW_NUMBER, alert helper extraction, router/UI perf). See "Phase C.2-C.13 Pending Work" section.
+
+**Branch:** `docs/backend-audit-and-test-plan` (3 commits ahead of `origin`).
 **Plan:** `docs/reference/backend/BACKEND_AUDIT.md` §6.3 (C.1–C.13).
 **Last updated:** 2026-06-07 (session N+1).
 
@@ -11,7 +15,11 @@
 
 Phase C.1 = file split is **DONE**. The 4994-LOC `app/backgroundtasks.py` is now `app/backgroundtasks/__init__.py` (~210 LOC pure re-export shim) + 12 sub-modules in `app/services/data_sync/`, `app/services/fair_value.py`, `app/workers/`, and `app/backgroundtasks/_runtime.py`. `_impl.py` was DELETED. 1039/1039 pure-unit tests pass.
 
-**The next 10 items (C.2–C.13) are all performance refactors** on top of the now-modular foundation. They are independent (mostly) and can be tackled in any order. See "Phase C.2–C.13 Pending Work" section below.
+**C.3 prep is also done** (commits `f790aeb`, `326b798`, `9a4a5a5`):
+- Bulk query helpers in `app/services/ticker_warehouse.py` (4 new functions, +119 LOC, all under test in commit's successor — see below)
+- One N+1 fix already applied: `_ticker_intraday_hourly_stale_check_sync` (intraday.py:205-217) now uses a single grouped `MAX(timestamp)` query instead of 1-per-symbol
+
+**The remaining 9 items (C.3 part 2-3 + C.4 + C.5 + C.6 + C.7 + C.8 + C.9-C.12) are all performance refactors** on top of the now-modular foundation. The bulk helpers from C.3 prep unblock C.3 (cycle refactor). They are mostly independent and can be tackled in any order. See "Phase C.2–C.13 Pending Work" section below.
 
 ---
 
@@ -100,13 +108,15 @@ Capture script: `backend/scripts/capture_phase_c_goldens.py` (944 LOC).
 
 | # | Item | Files | Status | Priority |
 |---|------|-------|--------|----------|
-| **C.3** | N+1 in 4 cycle functions (load indicators/scores in bulk per cycle, not per-symbol) | `backend/app/workers/notification_cycles.py` (2 cycles, 637 LOC), `backend/app/workers/global_scan_cycle.py` (382 LOC), `backend/app/services/data_sync/intraday.py` (`_ticker_intraday_hourly_stale_check_sync`) | ❌ NOT DONE | HIGH |
+| **C.3 part 1** | N+1 in `_ticker_intraday_hourly_stale_check_sync` (single grouped `MAX(timestamp)` per symbol replaces 1-per-symbol) | `backend/app/services/data_sync/intraday.py:205-217` | ✅ DONE (commit `326b798`) | HIGH |
+| **C.3 prep** | Add bulk query helpers to `ticker_warehouse.py` (4 new functions, +119 LOC) — unblocks C.3 parts 2-3 and C.9 | `backend/app/services/ticker_warehouse.py` | ✅ DONE (commit `9a4a5a5`); tests TBD | HIGH |
+| **C.3 part 2-3** | N+1 in 3 cycle functions (load indicators/scores in bulk per cycle, not per-symbol) | `backend/app/workers/notification_cycles.py` (2 cycles, 637 LOC), `backend/app/workers/global_scan_cycle.py` (382 LOC) | ❌ NOT DONE — bulk helpers available, just need to call them | HIGH |
 | **C.4** | Bulk insert/update in `_news_rss_sync`, `_batch_update_fair_values`, `_batch_resolve_morningstar_ids` | `backend/app/services/data_sync/news.py` (291 LOC), `backend/app/services/fair_value.py` (357 LOC) | ⚠️ PARTIAL (universe has bulk_insert; fair_value per-symbol) | HIGH |
 | **C.5** | Parallelize fair-value sync with `asyncio.gather + Semaphore` | `backend/app/services/fair_value.py` (`sync_all_fair_values`, `sync_watchlist_fair_values`) | ❌ NOT DONE | HIGH |
 | **C.6** | Replace `_run_async()` with persistent per-thread event loop | `backend/app/backgroundtasks/_runtime.py` (284 LOC) | ❌ NOT DONE | HIGH |
 | **C.7** | SQL window function + chunked iteration in `_ticker_scores_sync` | `backend/app/services/data_sync/scores.py` (243 LOC) | ⚠️ PARTIAL (chunking yes, `ROW_NUMBER()` no) | MED |
-| **C.8** | Extract `_evaluate_technical_alerts(...)` shared by scan/notif cycles | new `backend/app/workers/_alerts.py` or `backend/app/services/data_sync/alerts.py` | ❌ NOT DONE | MED |
-| **C.9** | Bulk `get_ohlcv_bulk(symbols, from, to)` for `portfolio.py` | `backend/app/routers/portfolio.py` (350 LOC), add to `backend/app/services/ticker_warehouse.py` | ❌ NOT DONE | MED |
+| **C.8** | Extract `_evaluate_technical_alerts(...)` shared by scan/notif cycles | `backend/app/services/data_sync/notifications.py` (target home) | ❌ NOT DONE — do this BEFORE C.3 part 2-3 to unblock the cycle refactor | MED |
+| **C.9** | Bulk `get_ohlcv_bulk(symbols, from, to)` for `portfolio.py` | `backend/app/routers/portfolio.py` (350 LOC), add to `backend/app/services/ticker_warehouse.py` (new helper, ~30 LOC) | ❌ NOT DONE | MED |
 | **C.10** | `paginate` on `stockuniverse`; SQL JSON1 for `markets` slug filter | `backend/app/routers/stockuniverse.py` (307 LOC), `backend/app/routers/markets.py` (161 LOC) | ❌ NOT DONE | MED |
 | **C.11** | `news_ws` broadcast: `asyncio.gather + return_exceptions` | `backend/app/routers/news_ws.py` (188 LOC) | ❌ NOT DONE | MED |
 | **C.12** | `market_ws` per-connection semaphore | `backend/app/routers/market_ws.py` (225 LOC) | ❌ NOT DONE | MED |
@@ -114,12 +124,12 @@ Capture script: `backend/scripts/capture_phase_c_goldens.py` (944 LOC).
 
 ### Recommended execution order
 
-**Group A (high-impact cycles, do first):**
-1. **C.8** (smallest, unblocks C.3) → extract `_evaluate_technical_alerts` into shared helper, refactor 3 cycles to use it
-2. **C.3** (4 cycles: `_global_scan_cycle`, `_ticker_indicator_notification_cycle`, `_ticker_intraday_indicator_notification_cycle`, `_ticker_intraday_hourly_stale_check_sync`) → load indicators/scores in bulk per cycle
-3. **C.4** (bulk insert/update) → `_news_rss_sync`, `_batch_update_fair_values`, `_batch_resolve_morningstar_ids`
+**Group A (high-impact cycles, do first — bulk helpers already in place):**
+1. **C.8** (smallest, unblocks C.3 part 2-3) → extract `_evaluate_technical_alerts` into `app/services/data_sync/notifications.py`, refactor 3 cycles to use it
+2. **C.3 part 2-3** → swap per-symbol queries in `_ticker_indicator_notification_cycle`, `_ticker_intraday_indicator_notification_cycle`, `_global_scan_cycle` for the new bulk helpers; also hoist `gainers_by_symbol` / `losers_by_symbol` dicts above the global scan batch loop
 
 **Group B (fair-value parallelism, do together):**
+3. **C.4** (bulk insert/update) → `_news_rss_sync`, `_batch_update_fair_values`, `_batch_resolve_morningstar_ids`
 4. **C.5** (`asyncio.gather + Semaphore` in `sync_all_fair_values`, `sync_watchlist_fair_values`)
 
 **Group C (runtime, can be done any time):**
@@ -127,7 +137,7 @@ Capture script: `backend/scripts/capture_phase_c_goldens.py` (944 LOC).
 
 **Group D (router/UI performance):**
 6. **C.7** (SQL window in `_ticker_scores_sync`)
-7. **C.9** (bulk ohlcv for portfolio)
+7. **C.9** (bulk ohlcv for portfolio — needs new `get_ohlcv_bulk` helper in `ticker_warehouse.py`, ~30 LOC)
 8. **C.10** (paginate stockuniverse + JSON1 markets)
 9. **C.11** (news_ws gather)
 10. **C.12** (market_ws semaphore)
@@ -434,8 +444,12 @@ In addition to the invariants documented above (lazy imports, monkey-patch cavea
 # 1. Verify clean state
 cd /mnt/d/500GB/p1/Projects/blm_terminal
 git status  # expect: clean
-git log --oneline -3
-# Expect: 259de9b refactor(backgroundtasks): collapse shim, delete _impl.py (A.13 + A.13d, Phase C.1 final)
+git log --oneline -5
+# Expect top: 9a4a5a5 perf(ticker_warehouse): add 4 bulk query helpers (C.3 prep)
+#             326b798 perf(intraday): fix N+1 in _ticker_intraday_hourly_stale_check_sync (C.3)
+#             f790aeb docs(audit): update PHASE_C_HANDOFF.md
+#             259de9b refactor(backgroundtasks): collapse shim, delete _impl.py (A.13 + A.13d)
+#             bca4f46 refactor(workers): extract worker lifecycle (A.12 part 3)
 
 # 2. Run baseline test suite (expect 1039 passed)
 cd backend
@@ -444,9 +458,10 @@ cd backend
   --ignore=tests/test_notifications.py --ignore=tests/test_endpoints.py
 
 # 3. Pick an item from "Phase C.2-C.13 Pending Work" and start
-# Recommended first: C.8 (extract _evaluate_technical_alerts) → unblocks C.3
-# Then: C.3 (N+1 in 4 cycle functions) → C.4 (bulk ops) → C.5 (fair-value gather)
+# Recommended first: C.8 (extract _evaluate_technical_alerts) → unblocks C.3 part 2-3
+# Then: C.3 part 2-3 (N+1 in 3 cycle functions, bulk helpers already in place) → C.4 → C.5
 # Then: C.6, C.7, C.9-C.12 in any order
+# SKIP C.3 part 1 (already done) and C.3 prep (already done) and C.13 (already done).
 
 # 4. After each C.x item:
 #   - Run targeted tests for the touched module
@@ -458,3 +473,66 @@ cd backend
 #   - Push: git push origin docs/backend-audit-and-test-plan
 #   - Update BACKEND_AUDIT_IMPL_MEMORY.md with the new section
 ```
+
+---
+
+## Session N+1 (2026-06-07) — C.3 prep (DONE & pushed)
+
+### Commits added in this session
+
+| Commit | Description | Status |
+|---|---|---|
+| `f790aeb` | docs(audit): update PHASE_C_HANDOFF.md with C.2-C.13 pending work | DONE, pushed |
+| `326b798` | perf(intraday): fix N+1 in `_ticker_intraday_hourly_stale_check_sync` (C.3 part 1) | DONE, pushed |
+| `9a4a5a5` | perf(ticker_warehouse): add 4 bulk query helpers (C.3 prep) | DONE, pushed |
+
+### C.3 part 1 (intraday N+1)
+**File:** `backend/app/services/data_sync/intraday.py:205-217`
+
+The staleness check issued one `MAX(timestamp)` query per watchlist symbol inside a single `_SyncSessionLocal()` session. With ~65 watchlist symbols, this was 65 round-trips per cycle. Replaced with a single grouped query:
+```python
+# BEFORE: 1 query per symbol
+for symbol in symbols:
+    latest_ts = db.execute(select(func.max(...)).where(symbol == symbol)).scalar()
+
+# AFTER: 1 query total, returns max per symbol
+rows = db.execute(
+    select(TickerIntraday.symbol, func.max(TickerIntraday.timestamp).label("max_ts"))
+    .where(TickerIntraday.symbol.in_(symbols), ...)
+    .group_by(TickerIntraday.symbol)
+).all()
+max_ts_by_sym = {row.symbol: row.max_ts for row in rows}
+stale_symbols = [s for s in symbols if max_ts_by_sym.get(s) is None or max_ts_by_sym[s] < expected_latest]
+```
+
+Golden `intraday_hourly_stale_check_10_symbols.json` byte-stable (observable behavior identical).
+
+### C.3 prep (bulk query helpers in `ticker_warehouse.py`)
+**File:** `backend/app/services/ticker_warehouse.py` (+119 LOC)
+
+Four new helpers, each returns one round-trip for N symbols. Placed next to existing `get_ohlcv` / `get_latest_candle` for discoverability.
+
+```python
+def get_latest_indicator_rows(symbols: list[str], n: int = 10) -> dict[str, list[TickerDaily]]
+def get_52w_levels(symbols: list[str]) -> dict[str, tuple[float, float]]
+def get_intraday_latest(symbols: list[str], intervals: list[str], n: int = 2) -> dict[tuple[str, str], list[TickerIntraday]]
+def get_latest_daily_rsi(symbols: list[str]) -> dict[str, float]
+```
+
+All four:
+- Return empty dict for empty input (no DB call)
+- Use one `_get_session()` block + one `select(...).in_(symbols)` per call
+- Live at module-top level, public functions (matching the `get_ohlcv` pattern)
+- No behavior change for existing callers (purely additive)
+
+### C.3 prep — known follow-up
+**No unit tests added for the 4 new helpers yet.** Next agent should add `backend/tests/test_ticker_warehouse_bulk.py` with ~6-8 unit tests (in-memory SQLite + a small fixture of 5 symbols × 10 daily rows). The helpers are exercised end-to-end in the C.3 part 2-3 commit (next planned), but having direct unit tests is the right place to start.
+
+### What the next agent should do
+
+The recommended next step is **C.8 (extract `_evaluate_technical_alerts`)** because:
+- It is the smallest of the remaining items (~120 LOC helper + ~3 thin call-site refactors)
+- It directly unblocks C.3 part 2-3 (the cycle refactor), because once the alert-evaluation block is extracted into a pure function, the per-symbol in-loop block becomes a one-line helper call
+- It carries minimal risk: pure function, no DB or HTTP calls, can be unit-tested with simple inputs
+
+After C.8 lands, C.3 part 2-3 should be straightforward: replace the in-loop `select(TickerDaily)…where(symbol==…)` + `select(StockUniverse)…where(symbol==…)` blocks in the 3 cycles with calls to the new bulk helpers. The goldens (`global_scan_50_symbols.json`, `ticker_indicator_notification_50_symbols.json`, `ticker_intraday_indicator_notification_50_symbols.json`) must remain byte-stable. Note: the capture script `scripts/capture_phase_c_goldens.py` still references `app.backgroundtasks._impl` (line 375) and will need migration to canonical homes before goldens can be re-captured. This can be done as a small first sub-step of C.3 part 2-3, or as its own housekeeping commit (recommended: do it first so you can re-capture goldens at the end of C.3 part 2-3).
