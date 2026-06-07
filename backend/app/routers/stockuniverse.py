@@ -30,6 +30,9 @@ from app.services.nse_client import NSEClient
 
 router = APIRouter()
 
+ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
+REVIEW_STATUS_REMOVED = "removed"
+
 
 def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
     """Map ORM model to pydantic schema (field-name translation)."""
@@ -70,23 +73,6 @@ async def list_stock_universe(
     res = await db.execute(q)
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
-
-
-@router.get(
-    "/stockuniverse/{symbol}",
-    response_model=StockUniverseSchema,
-    tags=["stockuniverse"],
-)
-async def get_stock_universe(
-    symbol: str, db: AsyncSession = Depends(get_db)
-) -> StockUniverseSchema:
-    """Return a single stock universe record by `symbol` from the database."""
-    rec = await db.get(StockUniverseModel, symbol)
-    if rec is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found"
-        )
-    return _orm_to_schema(rec)
 
 
 @router.get(
@@ -163,8 +149,24 @@ async def confirm_match(
     return _orm_to_schema(rec)
 
 
-ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
-REVIEW_STATUS_REMOVED = "removed"
+# NOTE: {symbol} path-param routes must come AFTER all specific sub-paths
+# (pending-review, search/{prefix}, {symbol}/confirm-match) to prevent
+# FastAPI from matching "pending-review" as a symbol name.
+@router.get(
+    "/stockuniverse/{symbol}",
+    response_model=StockUniverseSchema,
+    tags=["stockuniverse"],
+)
+async def get_stock_universe(
+    symbol: str, db: AsyncSession = Depends(get_db)
+) -> StockUniverseSchema:
+    """Return a single stock universe record by `symbol` from the database."""
+    rec = await db.get(StockUniverseModel, symbol)
+    if rec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found"
+        )
+    return _orm_to_schema(rec)
 
 
 errors_router = APIRouter()

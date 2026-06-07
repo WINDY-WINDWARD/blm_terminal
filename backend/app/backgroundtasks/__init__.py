@@ -233,9 +233,14 @@ from app.services.fair_value import (  # noqa: E402,F401
     sync_watchlist_fair_values,
 )
 
-# ─── A.12 part 3 — worker lifecycle moved to ``app.workers.lifecycle``
-from app.workers.lifecycle import (  # noqa: E402,F401
-    start_all_workers,
-    stop_all_workers,
-    start_cache_cleanup,
-)
+# A.12 part 3 — lazy re-export via __getattr__ to avoid the circular
+# import chain: lifecycle → _runtime → __init__ → lifecycle.
+_LIFECYCLE_NAMES = {"start_all_workers", "stop_all_workers", "start_cache_cleanup"}
+
+
+def __getattr__(name):
+    if name in _LIFECYCLE_NAMES:
+        import importlib
+        mod = importlib.import_module("app.workers.lifecycle")
+        return getattr(mod, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
