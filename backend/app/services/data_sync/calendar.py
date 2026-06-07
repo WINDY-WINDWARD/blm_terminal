@@ -1,4 +1,4 @@
-"""Results calendar sync core (audit C.1, A.11 part 2).
+"""Results calendar sync core (audit C.1, A.11 part 2, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.  Holds the
 NSE results calendar sync core called by the
@@ -25,16 +25,15 @@ symbol, trigger_type, triggered_date) ensures each alert fires
 only once per meeting date per watchlist — re-running the job
 produces no duplicates.
 
-NOTE: We import ``logger``, ``_get_watchlist_symbols``,
-``_bulk_upsert_notifications``, and ``update_job_status_sync``
-lazily inside the function body to avoid a circular import:
-``app.backgroundtasks._impl`` re-exports us at the bottom of
-its own module, so a top-level import from ``_impl`` here would
-deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
+
+
+logger = logging.getLogger(__name__)
 
 
 _RESULTS_CALENDAR_CRON = "0 8,14 * * 1-5"  # 8am + 2pm IST on trading days
@@ -54,12 +53,11 @@ def _results_calendar_sync() -> None:
     trigger_type, triggered_date) ensures each alert fires only once per
     meeting date per watchlist — re-running the job produces no duplicates.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _get_watchlist_symbols = _bg_impl._get_watchlist_symbols
-    _bulk_upsert_notifications = _bg_impl._bulk_upsert_notifications
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.notifications import (
+        _bulk_upsert_notifications,
+        _get_watchlist_symbols,
+    )
 
     try:
         logger.info("results_calendar_sync: starting")

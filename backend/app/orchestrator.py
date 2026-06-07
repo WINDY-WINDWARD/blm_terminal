@@ -72,18 +72,18 @@ class Orchestrator:
 
         Called from main.py lifespan after DB migrations complete.
         """
-        # Import here to avoid circular imports at module load time
-        from app.backgroundtasks import (
-            start_all_workers,
-            reset_async_shutdown_event,
-            get_async_shutdown_event,
-            sync_all_fair_values,
-            sync_watchlist_fair_values,
-            _is_first_run,
-            _set_first_run_complete,
-            _should_trigger_full_sync,
-        )
+        # Imports kept lazy to avoid module-load-time circular imports.
+        # A.13: migrated from ``app.backgroundtasks`` shim to canonical
+        # homes — ``app.backgroundtasks._runtime`` (events + lifecycle
+        # helpers), ``app.workers.lifecycle`` (start/stop), and
+        # ``app.services.fair_value`` (Morningstar sync functions).
+        from app.backgroundtasks._runtime import (_is_first_run,
+            _set_first_run_complete, get_async_shutdown_event,
+            reset_async_shutdown_event)
+        from app.services.fair_value import (_should_trigger_full_sync,
+            sync_all_fair_values, sync_watchlist_fair_values)
         from app.services.morningstar_client import init_client
+        from app.workers.lifecycle import start_all_workers
 
         # Init Morningstar client (was in main.py)
         await init_client()
@@ -129,15 +129,13 @@ class Orchestrator:
 
     async def stop(self) -> None:
         """Cancel all orchestrator-owned asyncio tasks and stop all workers."""
-        from app.backgroundtasks import (
-            set_async_shutdown_event,
-            stop_all_workers,
-        )
+        from app.backgroundtasks._runtime import set_async_shutdown_event
         from app.services.morningstar_client import close_client
         from app.services.ai_summarizer import ai_summarizer
         from app.services.nse_client import nse_client
         from app.services.screener_client import screener_client
         from app.services.news_fetcher import news_fetcher
+        from app.workers.lifecycle import stop_all_workers
 
         logger.info("Orchestrator: shutting down...")
 
@@ -169,7 +167,7 @@ class Orchestrator:
         threading _pipeline_lock/_pipeline_idle mechanism, and triggered for one
         immediate cycle once stage 4 (ticker_scores) completes.
         """
-        from app.backgroundtasks import _is_job_enabled
+        from app.backgroundtasks._runtime import _is_job_enabled
 
         pipeline_job_key = (
             "job.pipeline.startup" if mode == PipelineMode.STARTUP else "job.pipeline.nightly"
@@ -226,12 +224,8 @@ class Orchestrator:
         if shutdown was requested during this stage (caller should bail
         out of the rest of the pipeline).
         """
-        from app.backgroundtasks import (
-            _is_job_enabled,
-            _pipeline_idle,
-            _pipeline_lock,
-            _shutdown_event,
-        )
+        from app.backgroundtasks._runtime import (_is_job_enabled,
+            _pipeline_idle, _pipeline_lock, _shutdown_event)
         from app.jobs.runner import update_job_status
 
         if requires_mode is not None and mode not in requires_mode:
@@ -298,24 +292,24 @@ class Orchestrator:
         stage blocks (~270 LOC) into 1 helper + ~120 LOC of stage
         configuration.
         """
-        from app.backgroundtasks import (
-            _global_scan_cycle,
-            _notification_cycle_full,
-            _shutdown_event,
-            _startup_stock_universe_done,
-            _startup_ticker_backfill_done,
-            _startup_ticker_indicators_done,
-            _startup_ticker_scores_done,
-            _stock_universe_sync,
-            _ticker_backfill_sync,
-            _ticker_daily_update_sync,
-            _ticker_indicators_sync,
-            _ticker_intraday_hourly_stale_check_sync,
-            _ticker_intraday_indicators_sync,
-            _ticker_intraday_update_sync,
-            _ticker_scores_sync,
-        )
+        # A.13: imports migrated from ``app.backgroundtasks`` shim to
+        # canonical homes — gate events from ``_runtime``, sync
+        # functions from ``app.services.data_sync.<domain>``, scan /
+        # notification cycles from ``app.workers.<domain>``.
+        from app.backgroundtasks._runtime import (_shutdown_event,
+            _startup_stock_universe_done, _startup_ticker_backfill_done,
+            _startup_ticker_indicators_done, _startup_ticker_scores_done)
         from app.jobs.runner import update_job_status
+        from app.services.data_sync.backfill import _ticker_backfill_sync
+        from app.services.data_sync.daily import _ticker_daily_update_sync
+        from app.services.data_sync.indicators import (_ticker_indicators_sync,
+            _ticker_intraday_indicators_sync)
+        from app.services.data_sync.intraday import (
+            _ticker_intraday_hourly_stale_check_sync, _ticker_intraday_update_sync)
+        from app.services.data_sync.scores import _ticker_scores_sync
+        from app.services.data_sync.universe import _stock_universe_sync
+        from app.workers.global_scan_cycle import _global_scan_cycle
+        from app.workers.notification_cycles import _notification_cycle_full
 
         pipeline_job_key = (
             "job.pipeline.startup" if mode == PipelineMode.STARTUP else "job.pipeline.nightly"
@@ -460,7 +454,7 @@ class Orchestrator:
             logger.info("Orchestrator [%s] Stage 6: scan + notif", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=90,
                                     message="Stage 6/7: Running scan and notifications...")
-            from app.backgroundtasks import _is_job_enabled
+            from app.backgroundtasks._runtime import _is_job_enabled
             stage6_tasks = []
             if _is_job_enabled("job.global_scan"):
                 loop = asyncio.get_running_loop()
@@ -550,10 +544,8 @@ class Orchestrator:
 
     async def _run_watchlist_fair_value_scheduler(self) -> None:
         """Asyncio loop: run watchlist fair value sync every 3 hours."""
-        from app.backgroundtasks import (
-            _seconds_until_next_cron,
-            sync_watchlist_fair_values,
-        )
+        from app.backgroundtasks._runtime import _seconds_until_next_cron
+        from app.services.fair_value import sync_watchlist_fair_values
 
         await _cron_loop(
             cron_expr="0 */3 * * *",
@@ -566,7 +558,7 @@ class Orchestrator:
 
     async def _run_full_fair_value_scheduler(self) -> None:
         """Asyncio loop: run full universe fair value sync daily at 23:30 IST."""
-        from app.backgroundtasks import sync_all_fair_values
+        from app.services.fair_value import sync_all_fair_values
 
         await _cron_loop(
             cron_expr="30 23 * * *",  # 23:30 IST
@@ -651,7 +643,7 @@ async def _cron_loop(
     are NOT caught here — the caller's task will fail and the
     orchestrator's broader error handler will log it.
     """
-    from app.backgroundtasks import get_async_shutdown_event
+    from app.backgroundtasks._runtime import get_async_shutdown_event
 
     shutdown_event = get_async_shutdown_event()
     while not shutdown_event.is_set():

@@ -49,7 +49,7 @@ def fresh_orchestrator():
 @pytest.fixture
 def mock_background_symbols():
     """Patch the symbols that ``_run_stage`` imports from
-    ``app.backgroundtasks``."""
+    ``app.backgroundtasks._runtime`` (A.13 canonical home)."""
     return {
         "_is_job_enabled": MagicMock(return_value=True),
         "_pipeline_idle": MagicMock(),
@@ -72,7 +72,7 @@ class TestRunStageHappyPath:
         """
         sync_fn = MagicMock(return_value=None)
         with patch.multiple(
-            "app.backgroundtasks",
+            "app.backgroundtasks._runtime",
             **mock_background_symbols,
         ), patch("app.jobs.runner.update_job_status", new=AsyncMock()), \
              patch("app.orchestrator._run_pipeline_stage", new=MagicMock()) as mock_stage:
@@ -103,7 +103,7 @@ class TestRunStageHappyPath:
         """
         sync_fn = MagicMock(return_value=None)
         with patch.multiple(
-            "app.backgroundtasks",
+            "app.backgroundtasks._runtime",
             **mock_background_symbols,
         ), patch("app.jobs.runner.update_job_status", new=AsyncMock()), \
              patch("app.orchestrator._run_pipeline_stage", new=MagicMock()) as mock_stage:
@@ -149,7 +149,7 @@ class TestRunStageShutdown:
         )
         sync_fn = MagicMock()
         with patch.multiple(
-            "app.backgroundtasks",
+            "app.backgroundtasks._runtime",
             **mock_background_symbols,
         ), patch("app.jobs.runner.update_job_status", new=AsyncMock()):
             ok = await fresh_orchestrator._run_stage(
@@ -179,7 +179,7 @@ class TestRunStageModeSkip:
         """
         sync_fn = MagicMock()
         with patch.multiple(
-            "app.backgroundtasks",
+            "app.backgroundtasks._runtime",
             **mock_background_symbols,
         ), patch("app.jobs.runner.update_job_status", new=AsyncMock()):
             ok = await fresh_orchestrator._run_stage(
@@ -210,7 +210,7 @@ class TestRunStageOnComplete:
         on_complete = MagicMock()
         sync_fn = MagicMock()
         with patch.multiple(
-            "app.backgroundtasks",
+            "app.backgroundtasks._runtime",
             **mock_background_symbols,
         ), patch("app.jobs.runner.update_job_status", new=AsyncMock()), \
              patch("asyncio.get_running_loop") as mock_get_loop:
@@ -245,7 +245,7 @@ class TestRunStageDisabled:
         mock_background_symbols["_is_job_enabled"] = MagicMock(return_value=False)
         sync_fn = MagicMock()
         with patch.multiple(
-            "app.backgroundtasks",
+            "app.backgroundtasks._runtime",
             **mock_background_symbols,
         ), patch("app.jobs.runner.update_job_status", new=AsyncMock()) as mock_status:
             ok = await fresh_orchestrator._run_stage(

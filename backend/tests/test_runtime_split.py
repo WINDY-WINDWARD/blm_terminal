@@ -22,13 +22,15 @@ Functions:
 
 Contracts pinned here:
 1. Each symbol exists on ``app.backgroundtasks._runtime`` (final home).
-2. Each symbol is re-exported from ``app.backgroundtasks._impl``
-   with ``is``-identity to the new home.  This is what worker modules
-   rely on: ``from app.backgroundtasks import _impl as _bg_impl;
-   _bg_impl._shutdown_event``.
-3. Each symbol is re-exported from the package shim
-   ``app.backgroundtasks`` with ``is``-identity to ``_impl``.
-4. Size sentinel: ``app/backgroundtasks/_runtime.py`` ≤ 300 LOC.
+2. Each symbol is re-exported from the package shim
+   ``app.backgroundtasks`` with ``is``-identity to the new home.
+   Workers do ``from app.backgroundtasks import X`` (or import
+   lazily ``from app.backgroundtasks._runtime import X``).
+3. Size sentinel: ``app/backgroundtasks/_runtime.py`` ≤ 300 LOC.
+
+A.13 note: the intermediate ``_impl.py`` shim is gone.  All
+runtime symbols now live exclusively in ``_runtime`` and are
+re-exported by the package ``__init__.py`` with ``is``-identity.
 """
 from __future__ import annotations
 
@@ -71,11 +73,6 @@ def runtime():
 
 
 @pytest.fixture(scope="module")
-def bg_impl():
-    return importlib.import_module("app.backgroundtasks._impl")
-
-
-@pytest.fixture(scope="module")
 def backgroundtasks():
     return importlib.import_module("app.backgroundtasks")
 
@@ -84,19 +81,6 @@ def backgroundtasks():
 def test_symbol_lives_in_runtime_module(runtime, name: str) -> None:
     assert hasattr(runtime, name), (
         f"{name!r} not on app.backgroundtasks._runtime — move not complete"
-    )
-
-
-@pytest.mark.parametrize("name", RUNTIME_SYMBOLS)
-def test_symbol_reexported_from_impl_with_is_identity(runtime, bg_impl, name: str) -> None:
-    """`_impl.<name> is _runtime.<name>` — workers do
-    `from app.backgroundtasks import _impl as _bg_impl; _bg_impl.<name>`."""
-    impl_attr = getattr(bg_impl, name, None)
-    rt_attr = getattr(runtime, name, None)
-    assert impl_attr is not None, f"_impl.{name} missing — re-export broken"
-    assert rt_attr is not None, f"_runtime.{name} missing"
-    assert impl_attr is rt_attr, (
-        f"_impl.{name} is NOT _runtime.{name} — identity drift breaks worker lazy imports"
     )
 
 

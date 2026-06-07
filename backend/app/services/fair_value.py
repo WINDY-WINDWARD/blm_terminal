@@ -1,4 +1,4 @@
-"""Morningstar fair-value sync (Phase C.1, A.12 part 2).
+"""Morningstar fair-value sync (Phase C.1, A.12 part 2, A.13).
 
 Background sync of stock fair values from Morningstar.
 
@@ -15,6 +15,11 @@ per-job lock so they never run concurrently.  Progress is reported via
 ``update_job_status`` so the frontend Jobs panel can show live progress.
 
 Migrated from ``app.backgroundtasks._impl`` (audit C.1, A.12 part 2).
+
+A.13: migrated ``_bg_impl`` references to canonical imports (kept LAZY
+inside function bodies — the shim imports this module during its
+own init, so a top-level import of ``app.backgroundtasks._runtime``
+would deadlock).
 """
 import asyncio
 import logging
@@ -41,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Imported lazily inside function bodies to break the circular
 # dependency: ``app.backgroundtasks.__init__`` (the shim) imports
 # symbols from this module, so we cannot import
-# ``app.backgroundtasks._impl`` at module level here.  See
+# ``app.backgroundtasks._runtime`` at module level here.  See
 # ``tests/test_backgroundtasks_split.py`` for the shim contract.
 
 
@@ -189,8 +194,8 @@ async def _batch_resolve_morningstar_ids(
 
 async def sync_watchlist_fair_values():
     """Fetch fair values for all watchlist stocks every 3 hours."""
-    from app.backgroundtasks import _impl as _bg_impl
-    if not _bg_impl._is_job_enabled("job.watchlist_fair_value"):
+    from app.backgroundtasks._runtime import _is_job_enabled
+    if not _is_job_enabled("job.watchlist_fair_value"):
         logger.info("watchlist_fair_value sync disabled, skipping")
         return
 
@@ -232,8 +237,8 @@ async def sync_watchlist_fair_values():
 
 async def sync_all_fair_values():
     """Fetch fair values for all stocks in stock_universe."""
-    from app.backgroundtasks import _impl as _bg_impl
-    if not _bg_impl._is_job_enabled("job.full_fair_value"):
+    from app.backgroundtasks._runtime import _is_job_enabled
+    if not _is_job_enabled("job.full_fair_value"):
         logger.info("full_fair_value sync disabled, skipping")
         return
 
@@ -324,10 +329,13 @@ async def _should_trigger_full_sync() -> bool:
 
 async def _run_watchlist_scheduler():
     """Run every 3 hours (cron: 0 */3 * * *)."""
-    from app.backgroundtasks import _impl as _bg_impl
-    shutdown_event = _bg_impl.get_async_shutdown_event()
+    from app.backgroundtasks._runtime import (
+        _seconds_until_next_cron,
+        get_async_shutdown_event,
+    )
+    shutdown_event = get_async_shutdown_event()
     while not shutdown_event.is_set():
-        await asyncio.sleep(_bg_impl._seconds_until_next_cron("0 */3 * * *"))
+        await asyncio.sleep(_seconds_until_next_cron("0 */3 * * *"))
         if shutdown_event.is_set():
             break
         await sync_watchlist_fair_values()
@@ -336,10 +344,13 @@ async def _run_watchlist_scheduler():
 
 async def _run_nightly_scheduler():
     """Run at 8:30 PM UTC daily (cron: 30 20 * * *)."""
-    from app.backgroundtasks import _impl as _bg_impl
-    shutdown_event = _bg_impl.get_async_shutdown_event()
+    from app.backgroundtasks._runtime import (
+        _seconds_until_next_cron,
+        get_async_shutdown_event,
+    )
+    shutdown_event = get_async_shutdown_event()
     while not shutdown_event.is_set():
-        await asyncio.sleep(_bg_impl._seconds_until_next_cron("30 20 * * *"))
+        await asyncio.sleep(_seconds_until_next_cron("30 20 * * *"))
         if shutdown_event.is_set():
             break
         await sync_all_fair_values()

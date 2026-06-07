@@ -1,4 +1,4 @@
-"""Ticker daily update sync core (audit C.1, A.6).
+"""Ticker daily update sync core (audit C.1, A.6, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.
@@ -13,20 +13,19 @@ Public function:
   ``_ticker_scores_sync()`` so indicator-based alerts are
   evaluated on the freshest data.
 
-NOTE: We import ``logger``, ``settings``, ``ticker_warehouse``,
-``update_job_status_sync``, ``_SyncSessionLocal``, and the two
-downstream sync functions lazily inside the function body to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
-us at the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from time import sleep
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+
+
+logger = logging.getLogger(__name__)
 
 
 def _ticker_daily_update_sync() -> None:
@@ -46,17 +45,15 @@ def _ticker_daily_update_sync() -> None:
     on the freshest data.
     """
     from sqlalchemy import func
-    from app.backgroundtasks import _impl as _bg_impl
+
+    from app.config import settings
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
     from app.models.ticker import TickerDaily
     from app.models.watchlist import WatchlistItem
-
-    logger = _bg_impl.logger
-    settings = _bg_impl.settings
-    ticker_warehouse = _bg_impl.ticker_warehouse
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    _ticker_indicator_notification_cycle = _bg_impl._ticker_indicator_notification_cycle
-    _ticker_scores_sync = _bg_impl._ticker_scores_sync
+    from app.services import ticker_warehouse
+    from app.workers.notification_cycles import _ticker_indicator_notification_cycle
+    from app.services.data_sync.scores import _ticker_scores_sync
 
     CATCH_UP_DAYS = 5  # look back at most this many weekdays
     BHAVCOPY_MIN_ROWS = 2000  # minimum rows expected from a valid bhavcopy

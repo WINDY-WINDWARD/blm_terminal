@@ -1,4 +1,4 @@
-"""Global NSE scan cycle (audit C.1, A.12 part 1).
+"""Global NSE scan cycle (audit C.1, A.12 part 1, A.13).
 
 Single cycle callable: ``_global_scan_cycle`` — scans all NSE
 stocks (not just watchlist) for technical and market alerts.  Runs
@@ -12,6 +12,8 @@ global NSE scan feed on the frontend.
 
 Migrated from ``app.backgroundtasks._impl`` (audit C.1, A.12 part 1).
 
+A.13: migrated ``_bg_impl`` references to canonical imports.
+
 Helper symbols from the new data_sync modules are imported lazily inside
 the cycle function so test ``mock.patch`` calls targeting the original
 modules take effect at call time.
@@ -21,7 +23,6 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.backgroundtasks import _impl as _bg_impl
 from app.services.data_sync import (
     deal_significance as _deal_sig_mod,
     nse_parsing as _nse_parsing_mod,
@@ -45,12 +46,14 @@ def _global_scan_cycle() -> None:
     - Deal triggers (bulk/block/short deals)
     - Momentum triggers (momentum_surge, return_1w_spike) from ticker_scores cache
     """
+    from app.backgroundtasks._runtime import (
+        _shutdown_event,
+        _sleep_interruptible,
+    )
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
     from app.models.ticker import TickerDaily, TickerScore, TickerIntraday
     from app.models.stockuniverse import StockUniverse
-
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    update_job_status_sync = _bg_impl.update_job_status_sync
 
     try:
         logger.info("global_scan_cycle: starting")
@@ -69,7 +72,7 @@ def _global_scan_cycle() -> None:
         deal_sig_pct = float(cfg["notif.deal_significance_pct"])
         deal_abs_cr  = float(cfg["notif.deal_absolute_threshold_cr"])
 
-        with _bg_impl._SyncSessionLocal() as db:
+        with _SyncSessionLocal() as db:
             result = db.execute(
                 select(TickerDaily.symbol)
                 .where(TickerDaily.indicators_updated_at.isnot(None))
@@ -86,7 +89,7 @@ def _global_scan_cycle() -> None:
 
         scores_cache: dict[str, TickerScore] = {}
         try:
-            with _bg_impl._SyncSessionLocal() as db:
+            with _SyncSessionLocal() as db:
                 rows = db.execute(
                     select(TickerScore)
                     .where(TickerScore.compute_date == today_date)
@@ -136,7 +139,7 @@ def _global_scan_cycle() -> None:
                                 processed, total_symbols, processed / total_symbols * 100)
 
                 try:
-                    with _bg_impl._SyncSessionLocal() as db:
+                    with _SyncSessionLocal() as db:
                         rows = list(
                             db.execute(
                                 select(TickerDaily)
@@ -232,7 +235,7 @@ def _global_scan_cycle() -> None:
                     # --- Intraday / Weekly / Monthly indicator triggers ---
                     try:
                         intraday_rows: dict[str, list] = {}
-                        with _bg_impl._SyncSessionLocal() as db:
+                        with _SyncSessionLocal() as db:
                             for interval in ("1h", "W", "M"):
                                 iv_rows = list(
                                     db.execute(

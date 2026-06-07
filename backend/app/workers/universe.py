@@ -1,4 +1,4 @@
-"""Ticker universe refresh worker (audit C.1, A.9 step 2).
+"""Ticker universe refresh worker (audit C.1, A.9 step 2, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.  This is the **daemon
@@ -11,29 +11,27 @@ Public workers:
 - ``stock_universe_worker()`` — daily cron at 00:00 IST refreshes
   the universe metadata.  Startup is owned by the orchestrator.
 
-NOTE: We import all `_impl` helpers (logger, settings, sync work
-functions, shutdown state, etc.) lazily inside the worker body to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
-us at the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: ``_bg_impl.<X>`` references migrated to direct canonical
+homes (``app.backgroundtasks._runtime`` for shared state/helpers,
+``app.services.data_sync.universe`` for ``_stock_universe_sync``,
+``app.jobs.runner`` for ``update_job_status_sync``).  All imports
+remain **lazy** (inside function bodies) to avoid the
+``app.backgroundtasks`` ⇄ ``app.workers`` circular import.
 """
 from __future__ import annotations
 
 
 def stock_universe_worker() -> None:
     """Daemon thread target for stock universe refresh."""
-    from app.backgroundtasks import _impl as _bg_impl
+    import logging
 
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _stock_universe_sync = _bg_impl._stock_universe_sync
+    from app.backgroundtasks._runtime import (_is_first_run,
+        _is_job_enabled, _report_job_waiting, _set_first_run_complete,
+        _shutdown_event, _sleep_interruptible)
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.universe import _stock_universe_sync
 
+    logger = logging.getLogger(__name__)
     logger.info("stock_universe_worker: started")
 
     if not _is_job_enabled("job.stock_universe"):

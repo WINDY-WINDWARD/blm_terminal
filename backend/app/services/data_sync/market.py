@@ -1,4 +1,4 @@
-"""Market data sync cores (audit C.1, A.11 part 2).
+"""Market data sync cores (audit C.1, A.11 part 2, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.  Holds the
 market-data sync cores (work bodies) called by the
@@ -13,23 +13,21 @@ Public functions (4):
   industry + sector data from MoneyControl
 - ``_market_data_sync()`` — sync wrapper called by the worker
 
-NOTE: We import ``logger``, ``_run_async``, ``AsyncSessionLocal``
-and ``settings`` lazily inside the function bodies to avoid a
-circular import: ``app.backgroundtasks._impl`` re-exports us at
-the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 
+logger = logging.getLogger(__name__)
+
+
 def _is_market_open() -> bool:
     """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST)."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    settings = _bg_impl.settings
+    from app.config import settings
 
     now_utc = datetime.now(timezone.utc)
     now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
@@ -55,9 +53,7 @@ def _is_market_open() -> bool:
 
 def _seconds_until_market_open() -> float:
     """Calculate seconds until the next market open time (09:15 IST)."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    settings = _bg_impl.settings
+    from app.config import settings
 
     now_utc = datetime.now(timezone.utc)
     now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
@@ -100,10 +96,8 @@ async def _refresh_market_data_async() -> None:
     thread-safe; each ``engine.connect()`` opens a fresh DBAPI connection
     bound to the loop that opened it.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    AsyncSessionLocal = _bg_impl.AsyncSessionLocal
-    market_data_fetcher = _bg_impl.market_data_fetcher
+    from app.database import AsyncSessionLocal
+    from app.services.mc_market_fetcher import market_data_fetcher
 
     async with AsyncSessionLocal() as session:
         await market_data_fetcher.refresh_all(session)
@@ -111,10 +105,7 @@ async def _refresh_market_data_async() -> None:
 
 def _market_data_sync() -> None:
     """Fetch and store all industry and sector data from MoneyControl."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _run_async = _bg_impl._run_async
+    from app.backgroundtasks._runtime import _run_async
 
     try:
         logger.info("market_data_sync: starting")

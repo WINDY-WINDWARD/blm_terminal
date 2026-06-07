@@ -1,4 +1,4 @@
-"""Watchlist notification cycles (audit C.1, A.12 part 1).
+"""Watchlist notification cycles (audit C.1, A.12 part 1, A.13).
 
 Each function in this module is a *cycle callable* — a single
 unit of work executed by a daemon worker thread (see
@@ -27,17 +27,19 @@ Migrated from ``app.backgroundtasks._impl`` (audit C.1, A.12 part 1).
 The ``_build_alerts`` helper used by the NSE cycles now lives in
 ``app.services.data_sync.notifications`` and is imported here.
 
-Helper symbols from the new data_sync modules are imported lazily inside
-each cycle function so test ``mock.patch`` calls targeting the original
-modules (e.g. ``app.services.data_sync.nse_parsing._safe_fetch_52week_high``)
-take effect at call time.
+A.13: ``_bg_impl._shutdown_event`` / ``_bg_impl._SyncSessionLocal``
+replaced with direct canonical-home imports
+(``app.backgroundtasks._runtime._shutdown_event``,
+``app.database._SyncSessionLocal``).  Kept **lazy** (inside each
+cycle function) so test ``mock.patch`` calls targeting these
+helpers take effect at call time, and so we don't grow the module
+top-level import surface.
 """
 import logging
 from datetime import datetime
 
 from sqlalchemy import select
 
-from app.backgroundtasks import _impl as _bg_impl
 from app.services.data_sync import (
     cleanup as _cleanup_mod,
     deal_significance as _deal_sig_mod,
@@ -63,10 +65,10 @@ def _ticker_indicator_notification_cycle() -> None:
     per call, which previously caused the per-symbol loop to hang for hours when
     invoked across the 65-symbol watchlist.
     """
+    from app.backgroundtasks._runtime import _shutdown_event
+    from app.database import _SyncSessionLocal
     from app.models.ticker import TickerDaily, TickerScore
     from app.models.stockuniverse import StockUniverse
-
-    _shutdown_event = _bg_impl._shutdown_event
 
     try:
         logger.info("ticker_indicator_notification_cycle: starting")
@@ -99,7 +101,7 @@ def _ticker_indicator_notification_cycle() -> None:
         # instead of O(watchlist × universe).
         scores_cache: dict[str, TickerScore] = {}
         try:
-            with _bg_impl._SyncSessionLocal() as db:
+            with _SyncSessionLocal() as db:
                 rows = db.execute(
                     select(TickerScore).where(TickerScore.compute_date == today_date)
                 )
@@ -127,7 +129,7 @@ def _ticker_indicator_notification_cycle() -> None:
                             processed, total_symbols, processed / total_symbols * 100)
 
             try:
-                with _bg_impl._SyncSessionLocal() as db:
+                with _SyncSessionLocal() as db:
                     # Last 10 candles for streak + indicator comparison
                     rows = list(
                         db.execute(
@@ -295,8 +297,6 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
     from app.models.ticker import TickerIntraday, TickerDaily
     from app.models.stockuniverse import StockUniverse
 
-    _shutdown_event = _bg_impl._shutdown_event
-
     try:
         logger.info("ticker_intraday_indicator_notification_cycle: starting")
         now = datetime.now()
@@ -331,7 +331,7 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
             try:
                 # Load latest 2 rows per interval for crossover detection
                 intraday_rows: dict[str, list] = {}
-                with _bg_impl._SyncSessionLocal() as db:
+                with _SyncSessionLocal() as db:
                     for interval in ("1h", "W", "M"):
                         rows = list(
                             db.execute(
@@ -406,7 +406,7 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
                     monthly_rsi = None
                     if "1h" in intraday_rows:
                         # 1h is not used for MTF; use daily from ticker_daily if available
-                        with _bg_impl._SyncSessionLocal() as db:
+                        with _SyncSessionLocal() as db:
                             daily_row = db.execute(
                                 select(TickerDaily.rsi_14)
                                 .where(TickerDaily.symbol == symbol)
@@ -462,7 +462,7 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
 
 def _notification_cycle_full() -> None:
     """Full cycle: check all 9 trigger types. Called in a worker thread."""
-    _shutdown_event = _bg_impl._shutdown_event
+    from app.backgroundtasks._runtime import _shutdown_event
 
     try:
         logger.info("notification_cycle_full: starting")
@@ -560,7 +560,7 @@ def _notification_cycle_full() -> None:
 
 def _notification_cycle_reduced() -> None:
     """Reduced cycle: deals + insider only. Outside market hours."""
-    _shutdown_event = _bg_impl._shutdown_event
+    from app.backgroundtasks._runtime import _shutdown_event
 
     try:
         logger.info("notification_cycle_reduced: starting")

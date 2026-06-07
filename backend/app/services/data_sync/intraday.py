@@ -1,4 +1,4 @@
-"""Ticker intraday sync cores (audit C.1, A.5).
+"""Ticker intraday sync cores (audit C.1, A.5, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.
@@ -12,13 +12,11 @@ Public functions:
   expected slot for the current/last session, backfill them, and
   recompute intraday indicators.
 
-NOTE: We import ``logger`` lazily inside each function body to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
-us at the bottom of its module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as dt_time
 from time import sleep
@@ -28,23 +26,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 
-def _shutdown_event():
-    r"""Lazy-resolve the threading.Event instance from ``app.backgroundtasks``.
-
-    The original ``_impl.py`` defines ``_shutdown_event`` as a
-    ``threading.Event()`` instance (not a callable).  Imported
-    lazily so this module doesn't depend on the package's import
-    order (after the split, ``_impl.py`` imports the workers, and
-    the workers in turn depend on ``_shutdown_event``).
-    """
-    from app.backgroundtasks import _impl
-    return _impl._shutdown_event
-
-
-def _update_job_status_sync(*args, **kwargs):
-    r"""Lazy-resolve the job-status updater helper."""
-    from app.backgroundtasks import _impl
-    return _impl.update_job_status_sync(*args, **kwargs)
+logger = logging.getLogger(__name__)
 
 
 def _ticker_intraday_update_sync(
@@ -71,7 +53,7 @@ def _ticker_intraday_update_sync(
     Called from workers/orchestrator. Loops symbols, calls backfill_intraday_symbol()
     for each, logs counts. 1 s delay between symbols to avoid NSE charting API rate limits.
     """
-    from app.backgroundtasks._impl import logger
+    from app.backgroundtasks._runtime import _shutdown_event
     from app.services.ticker_warehouse import (
         backfill_intraday_symbol,
         get_all_universe_symbols,
@@ -124,7 +106,7 @@ def _ticker_intraday_update_sync(
     _BATCH_SIZE = 10
 
     for batch_start in range(0, len(symbols_to_process), _BATCH_SIZE):
-        if _shutdown_event().is_set():
+        if _shutdown_event.is_set():
             break
 
         batch = symbols_to_process[batch_start : batch_start + _BATCH_SIZE]
@@ -169,8 +151,9 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     After backfilling a stale symbol, recompute its 1h indicators immediately so
     downstream pipeline stages see fresh data.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-    from app.backgroundtasks._impl import logger
+    from app.backgroundtasks._runtime import _shutdown_event
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
     from app.models.ticker import TickerIntraday
     from app.services.indicators import compute_intraday_indicators_for_all_rows
     from app.services.ticker_warehouse import backfill_intraday_symbol, get_last_trading_day, get_watchlist_symbols
@@ -179,7 +162,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     symbols = get_watchlist_symbols()
     if not symbols:
         logger.info("[hourly_stale_check] no watchlist symbols to inspect")
-        _update_job_status_sync(
+        update_job_status_sync(
             "job.ticker_intraday_hourly_stale_check",
             "idle",
             progress=100,
@@ -211,7 +194,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
 
     if expected_latest is None:
         logger.info("[hourly_stale_check] before first hourly slot; nothing to do")
-        _update_job_status_sync(
+        update_job_status_sync(
             "job.ticker_intraday_hourly_stale_check",
             "idle",
             progress=100,
@@ -220,7 +203,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
         return
 
     stale_symbols: list[str] = []
-    with _bg_impl._SyncSessionLocal() as db:
+    with _SyncSessionLocal() as db:
         for symbol in symbols:
             latest_ts = db.execute(
                 select(func.max(TickerIntraday.timestamp))
@@ -240,7 +223,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
             len(symbols),
             expected_latest.strftime("%Y-%m-%d %H:%M"),
         )
-        _update_job_status_sync(
+        update_job_status_sync(
             "job.ticker_intraday_hourly_stale_check",
             "idle",
             progress=100,
@@ -260,11 +243,11 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     errors = 0
 
     for idx, symbol in enumerate(stale_symbols, start=1):
-        if _shutdown_event().is_set():
+        if _shutdown_event.is_set():
             logger.info("[hourly_stale_check] shutdown requested, aborting")
             break
 
-        _update_job_status_sync(
+        update_job_status_sync(
             "job.ticker_intraday_hourly_stale_check",
             "running",
             progress=int((idx - 1) / total * 100),
@@ -280,7 +263,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
             errors += 1
         sleep(1.0)
 
-    _update_job_status_sync(
+    update_job_status_sync(
         "job.ticker_intraday_hourly_stale_check",
         "idle",
         progress=100,

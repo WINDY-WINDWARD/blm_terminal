@@ -1,33 +1,34 @@
 """Tests for the backgroundtasks package split (audit C.1, Phase A.1).
 
-The 4994-LOC ``app/backgroundtasks.py`` is being split into 12 modules
+The 4994-LOC ``app/backgroundtasks.py`` was split into 12 modules
 under ``app/workers/`` and ``app/services/data_sync/`` (see audit §4.3).
-To make this an incremental, low-risk refactor, we use the
-**expand-and-contract** pattern:
+The final shape is:
 
-1. The current ``backgroundtasks.py`` is renamed to
-   ``app/backgroundtasks/_impl.py`` (private).
-2. ``app/backgroundtasks/__init__.py`` re-exports every public symbol
-   from ``_impl``.
-3. Every caller continues to work unchanged during the migration.
-4. Once all symbols are migrated to their final homes, the ``_impl``
-   module is deleted and callers are updated to import from the new
-   locations.
+- ``app/backgroundtasks/_runtime.py`` — cross-cutting runtime helpers
+  (state + scheduling primitives) that worker modules use.
+- ``app/workers/<domain>`` — domain-specific worker daemons.
+- ``app/services/data_sync/<domain>`` — sync cores.
+- ``app/services/fair_value`` — Morningstar fair-value sync.
+- ``app/backgroundtasks/__init__.py`` — re-export shim that re-exports
+  the public API for backward compatibility with every existing
+  caller (``from app.backgroundtasks import X``).
 
-These tests pin the contract of step 1-3 so future commits cannot
-break the re-export shim or accidentally lose a public symbol.
+These tests pin the shim contract: every public symbol of the
+original module is still reachable through the package, and the
+re-exported symbol is the **same object** (``is``) as the one in its
+final home (drift-proof: a future commit that re-defines a symbol
+locally without re-exporting will fail).
 
 Coverage:
 
 - ``app/backgroundtasks`` is a package (not a module).
 - All public symbols of the original module are re-exported.
-- The re-exported symbols are **the same object** (``is``) as the
-  definitions in ``_impl`` (drift-proof: a future commit that
-  re-defines a symbol locally without re-exporting will fail).
+- The re-exported symbols are ``is``-identical to their canonical
+  homes.
 - External imports (``from app.backgroundtasks import X``) still
   resolve.
-- The ``_impl.py`` file is smaller than the original (sanity check
-  that the split is actually happening).
+- All current callers (orchestrator, main.py, mcp_server, routers) still
+  import.
 """
 from __future__ import annotations
 
@@ -129,12 +130,13 @@ class TestReExports:
 
     @pytest.mark.parametrize("name", EXPECTED_PUBLIC_SYMBOLS)
     def test_symbol_re_exported(self, name):
-        from app.backgroundtasks import _impl
+        from app.backgroundtasks import _runtime
         from app import backgroundtasks as bg
 
-        # The symbol must exist on _impl (the original definitions)
-        assert hasattr(_impl, name), (
-            f"_impl.{name} missing — the original symbol was lost "
+        # The symbol must exist on _runtime (the final home for
+        # cross-cutting runtime helpers).
+        assert hasattr(_runtime, name), (
+            f"_runtime.{name} missing — the original symbol was lost "
             f"during the package split"
         )
 
@@ -145,14 +147,14 @@ class TestReExports:
         )
 
         # The re-exported symbol must be the SAME object as the
-        # original (drift-proof: prevents accidentally re-defining
+        # final home (drift-proof: prevents accidentally re-defining
         # locally and breaking identity tests in callers).
-        impl_obj = getattr(_impl, name)
+        rt_obj = getattr(_runtime, name)
         pkg_obj = getattr(bg, name)
-        assert pkg_obj is impl_obj, (
+        assert pkg_obj is rt_obj, (
             f"app.backgroundtasks.{name} is not the same object as "
-            f"_impl.{name} — re-export is broken (got {type(pkg_obj)} "
-            f"vs {type(impl_obj)})"
+            f"_runtime.{name} — re-export is broken (got {type(pkg_obj)} "
+            f"vs {type(rt_obj)})"
         )
 
 
@@ -301,13 +303,6 @@ class TestMovedWorkers:
             f"app.backgroundtasks.{name} not re-exported — external "
             f"callers will break"
         )
-        # Must NOT live in _impl anymore (otherwise the re-export
-        # is a stale local copy, not a forwarding import)
-        from app.backgroundtasks import _impl
-        assert not hasattr(_impl, name), (
-            f"_impl.{name} still defined — the move to {new_home} "
-            f"is incomplete (delete it from _impl to avoid drift)"
-        )
         # Identity: bg.<name> must be the exact same object as
         # <new_home>.<name>
         new_obj = getattr(new_mod, name)
@@ -365,38 +360,3 @@ class TestCallerImports:
         assert callable(stop_all_workers)
         assert callable(get_async_shutdown_event)
 
-
-# ─── _impl.py size regression check ───────────────────────────────────────
-
-
-class TestImplFileShrinks:
-    """The ``_impl.py`` file must shrink over time as symbols migrate
-    to their final modules.  This test pins the initial size so we
-    can detect accidental bloat.
-    """
-
-    def test_impl_starts_smaller_than_original(self):
-        """The original was 4994 LOC.  After the package split, the
-        _impl file should be at most the original size (ideally
-        smaller as we migrate symbols out).
-
-        This is a **regression sentinel** — if a future commit adds
-        code to _impl.py instead of moving it to a new module, the
-        test fails.  We assert ``<= original_size + 50`` to allow
-        the trivial boilerplate of the package re-export.
-        """
-        impl_path = ROOT / "app" / "backgroundtasks" / "_impl.py"
-        assert impl_path.exists(), f"_impl.py not found at {impl_path}"
-        impl_loc = sum(1 for _ in impl_path.read_text().splitlines())
-
-        # The original was 4994 LOC.  After the split, _impl should
-        # be at most original + 50 lines (for any incidental re-
-        # export boilerplate in the package init).
-        # NOTE: For A.1, _impl IS the original (just renamed), so
-        # this is exactly 4994 today.  Future commits will shrink it.
-        assert impl_loc <= 4994 + 50, (
-            f"_impl.py is {impl_loc} LOC, expected <= {4994 + 50}. "
-            f"The file should shrink as symbols migrate to their "
-            f"final modules.  If you added code to _impl.py instead "
-            f"of moving it, move it."
-        )

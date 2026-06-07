@@ -8,14 +8,16 @@ Audit C.1, A.9 step 2.  The 7 workers moved from
 - ``app.workers.ticker_compute`` — ticker_scores_worker, ticker_indicators_worker,
   ticker_intraday_hourly_indicators_worker
 
+A.13: ``_impl.py`` is gone — the package shim
+``app.backgroundtasks`` re-exports the workers from their final
+homes, so callers do ``from app.backgroundtasks import <worker>``.
+
 Contracts pinned here:
 1. Each worker symbol exists on its canonical module (final home).
-2. Each worker symbol does NOT exist on ``app.backgroundtasks._impl``
-   (move is complete, no stale local copy).
-3. Each worker symbol is re-exported from the package shim
+2. Each worker symbol is re-exported from the package shim
    ``app.backgroundtasks`` with ``is``-identity to the new home.
-4. Size sentinel: each of the 3 modules ≤ 200 LOC.
-5. Each worker's ``__module__`` points at the canonical home
+3. Size sentinel: each of the 3 modules ≤ 200 LOC.
+4. Each worker's ``__module__`` points at the canonical home
    (catches accidental re-wrapping via the shim).
 """
 from __future__ import annotations
@@ -45,11 +47,6 @@ def backgroundtasks():
 
 
 @pytest.fixture(scope="module")
-def bg_impl():
-    return importlib.import_module("app.backgroundtasks._impl")
-
-
-@pytest.fixture(scope="module")
 def homes():
     return {mod: importlib.import_module(mod) for mod in set(WORKER_HOMES.values())}
 
@@ -58,14 +55,6 @@ def homes():
 def test_worker_lives_in_canonical_module(homes, name: str, home_module: str) -> None:
     assert hasattr(homes[home_module], name), (
         f"{name!r} not on {home_module} — move not complete"
-    )
-
-
-@pytest.mark.parametrize("name", WORKER_NAMES)
-def test_worker_not_in_impl(bg_impl, name: str) -> None:
-    assert not hasattr(bg_impl, name), (
-        f"{name!r} still on app.backgroundtasks._impl — "
-        "stale local copy, remove it from _impl"
     )
 
 

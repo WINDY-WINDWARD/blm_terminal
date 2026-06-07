@@ -1,4 +1,4 @@
-"""Screener snapshot sync core (audit C.1, A.11).
+"""Screener snapshot sync core (audit C.1, A.11, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.
 
@@ -15,14 +15,11 @@ The phase-B constant ``_INTRADAY_COLS`` is co-located here so
 both the column list and the function that consumes it move as a
 unit.
 
-NOTE: We import ``logger``, ``_SyncSessionLocal`` and
-``update_job_status_sync`` lazily inside the function body to avoid
-a circular import: ``app.backgroundtasks._impl`` re-exports us at
-the bottom of its own module, so a top-level import from ``_impl``
-here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 
 import pandas as pd
@@ -31,6 +28,9 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.models.stockuniverse import StockUniverse
 from app.models.ticker import TickerIntraday, TickerScreenerSnapshot
+
+
+logger = logging.getLogger(__name__)
 
 
 # Phase B: fields to copy from latest 1h/W/M ticker_intraday row into snapshot.
@@ -68,11 +68,8 @@ def _screener_snapshot_sync(
     Snapshot is one row per symbol with all screener fields denormalized.
     TQL→SQL queries read this table via INNER JOIN with ticker_scores.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
 
     update_job_status_sync(
         "job.ticker_scores", "running", progress=95,

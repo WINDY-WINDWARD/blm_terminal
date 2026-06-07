@@ -1,12 +1,13 @@
-"""Notification workers (audit C.1, A.9 step 3).
+"""Notification workers (audit C.1, A.9 step 3, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.  These are the
 **daemon thread loops** that own the cron schedule for the
 notification cycles (watchlist-specific + global NSE scan).
 The actual cycle functions (``_notification_cycle_full``,
-``_notification_cycle_reduced``, ``_global_scan_cycle``) stay
-in ``_impl.py`` for now and will move in A.11/A.12.
+``_notification_cycle_reduced``, ``_global_scan_cycle``) live in
+their canonical homes (``app.workers.notification_cycles`` and
+``app.workers.global_scan_cycle``).
 
 Public workers:
 - ``watchlist_notification_worker()`` — cron ``*/5`` during market
@@ -16,9 +17,9 @@ Public workers:
   lock wait.  Scans all NSE stocks (not just watchlist) for
   technical & market alerts.
 
-NOTE: We import all `_impl` helpers (logger, settings, sync cycle
-functions, shutdown state, etc.) lazily inside the worker body to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
+A.13: imports migrated from ``_bg_impl.<X>`` to direct canonical
+homes.  All imports remain **lazy** (inside function bodies) to
+avoid a circular import: ``app.backgroundtasks.__init__`` re-exports
 us at the bottom of its own module, so a top-level import from
 ``_impl`` here would deadlock the import machinery.
 """
@@ -30,23 +31,18 @@ def watchlist_notification_worker() -> None:
 
     Cron: */5 * * * * during market hours; */30 * * * * after hours.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-    from app.workers.notification_cycles import (
-        _notification_cycle_full,
-        _notification_cycle_reduced,
-    )
+    import logging
 
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _is_market_open = _bg_impl._is_market_open
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _wait_for_pipeline = _bg_impl._wait_for_pipeline
-    _startup_ticker_scores_done = _bg_impl._startup_ticker_scores_done
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
+    from app.backgroundtasks._runtime import (_is_job_enabled,
+        _report_job_waiting, _shutdown_event, _sleep_interruptible,
+        _startup_ticker_scores_done, _wait_for_pipeline,
+        _wait_for_startup_event)
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.market import _is_market_open
+    from app.workers.notification_cycles import (_notification_cycle_full,
+        _notification_cycle_reduced)
 
+    logger = logging.getLogger(__name__)
     logger.info("watchlist_notification_worker: started")
 
     if not _is_job_enabled("job.notifications"):
@@ -90,19 +86,16 @@ def watchlist_notification_worker() -> None:
 
 def global_scan_worker() -> None:
     """Daemon thread: scans all NSE stocks on cron */30 * * * *."""
-    from app.backgroundtasks import _impl as _bg_impl
+    import logging
+
+    from app.backgroundtasks._runtime import (_is_job_enabled,
+        _report_job_waiting, _shutdown_event, _sleep_interruptible,
+        _startup_ticker_scores_done, _wait_for_pipeline,
+        _wait_for_startup_event)
+    from app.jobs.runner import update_job_status_sync
     from app.workers.global_scan_cycle import _global_scan_cycle
 
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _wait_for_pipeline = _bg_impl._wait_for_pipeline
-    _startup_ticker_scores_done = _bg_impl._startup_ticker_scores_done
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
-
+    logger = logging.getLogger(__name__)
     logger.info("global_scan_worker: started")
 
     if not _is_job_enabled("job.global_scan"):

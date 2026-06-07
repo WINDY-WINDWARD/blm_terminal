@@ -15,13 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import sys
 import threading
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app import database
 from app.config import settings
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 # ---------------------------------------------------------------------------
@@ -126,22 +132,27 @@ class TestThreadAsyncEngineRemoved:
         """The 4 ``_ThreadAsyncSessionLocal`` callers in backgroundtasks
         must now use ``AsyncSessionLocal`` instead.
 
-        After Phase C.1 A.1 split, the implementation lives in
-        ``app/backgroundtasks/_impl.py`` — read the source of that
-        file (the re-export shim doesn't import the session factories
-        itself).
+        After Phase C.1 A.1 + A.13 split, the implementation lives in
+        ``app/workers/<domain>.py`` and
+        ``app/services/data_sync/<domain>.py``.  Read every file
+        under those trees to ensure no worker references the legacy
+        ``_ThreadAsyncSessionLocal``.
         """
         from pathlib import Path
-        impl_path = (
-            Path(__file__).resolve().parents[1]
-            / "app" / "backgroundtasks" / "_impl.py"
+
+        offenders: list[str] = []
+        for sub in ("app/workers", "app/services/data_sync"):
+            base = ROOT / sub
+            if not base.exists():
+                continue
+            for py in base.rglob("*.py"):
+                source = py.read_text()
+                if "_ThreadAsyncSessionLocal" in source:
+                    offenders.append(str(py))
+        assert not offenders, (
+            f"backgroundtasks modules still reference _ThreadAsyncSessionLocal: "
+            f"{offenders}"
         )
-        source = impl_path.read_text()
-        assert "_ThreadAsyncSessionLocal" not in source, (
-            "backgroundtasks/_impl.py still references _ThreadAsyncSessionLocal"
-        )
-        # And it should reference the main AsyncSessionLocal
-        assert "AsyncSessionLocal" in source
 
     def test_worker_thread_session_works_with_main_engine(self) -> None:
         """A session created via ``AsyncSessionLocal`` in a worker thread

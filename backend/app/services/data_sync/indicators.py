@@ -1,4 +1,4 @@
-"""Ticker indicator sync cores (audit C.1, A.8).
+"""Ticker indicator sync cores (audit C.1, A.8, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.
@@ -13,13 +13,7 @@ Public functions:
   intraday candles (1h/W/M).  Triggers
   ``_ticker_intraday_indicator_notification_cycle()`` after.
 
-NOTE: We import ``logger``, ``_SyncSessionLocal``, ``_shutdown_event``,
-``update_job_status_sync``, ``_parallel_indicator_sync``, and the
-two downstream ``_ticker_*_notification_cycle`` functions lazily
-inside the function body to avoid a circular import:
-``app.backgroundtasks._impl`` re-exports us at the bottom of its
-own module, so a top-level import from ``_impl`` here would
-deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 
 NOTE 2: This module is named ``indicators.py`` to live under
 ``app/services/data_sync/``, but it must NOT be confused with
@@ -29,9 +23,13 @@ our own module name.
 """
 from __future__ import annotations
 
+import logging
 from time import monotonic
 
 from sqlalchemy import func, select
+
+
+logger = logging.getLogger(__name__)
 
 
 def _ticker_indicators_sync() -> None:
@@ -46,15 +44,12 @@ def _ticker_indicators_sync() -> None:
     `INDICATOR_INTER_BATCH_SLEEP_S`, default 0).  Triggers
     _ticker_indicator_notification_cycle() after completing.
     """
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
     from app.models.ticker import TickerDaily
     from app.services import indicators as svc_indicators
-
-    logger = _bg_impl.logger
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _parallel_indicator_sync = _bg_impl._parallel_indicator_sync
-    _ticker_indicator_notification_cycle = _bg_impl._ticker_indicator_notification_cycle
+    from app.services.data_sync.parallel import _parallel_indicator_sync
+    from app.workers.notification_cycles import _ticker_indicator_notification_cycle
 
     logger.info(
         "ticker_indicators_sync: scanning ticker_daily for stale/null symbols "
@@ -141,15 +136,12 @@ def _ticker_intraday_indicators_sync(intervals: list[str] = None) -> None:
     `INDICATOR_INTER_BATCH_SLEEP_S`, default 0).  Triggers
     _ticker_intraday_indicator_notification_cycle() after completing.
     """
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
     from app.models.ticker import TickerIntraday
     from app.services import indicators as svc_indicators
-
-    logger = _bg_impl.logger
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _parallel_indicator_sync = _bg_impl._parallel_indicator_sync
-    _ticker_intraday_indicator_notification_cycle = _bg_impl._ticker_intraday_indicator_notification_cycle
+    from app.services.data_sync.parallel import _parallel_indicator_sync
+    from app.workers.notification_cycles import _ticker_intraday_indicator_notification_cycle
 
     intervals = intervals or ["1h", "W", "M"]
     job_key = "job.ticker_intraday_indicators" if set(intervals) == {"1h", "W", "M"} else (

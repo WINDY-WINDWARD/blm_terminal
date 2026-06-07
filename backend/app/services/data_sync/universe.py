@@ -1,11 +1,11 @@
-r"""Stock universe sync core (audit C.1, A.3).
+r"""Stock universe sync core (audit C.1, A.3, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` (the original
 4994-LOC module).  This module is the **sync core** that the
 ``stock_universe_worker`` daemon-thread runs once per day:
 
-  1. Fetch the full NSE stock list (``_nse_client.get_stock_list()``).
-  2. For each symbol, fetch metadata (``_nse_client.get_stock_metadata()``).
+  1. Fetch the full NSE stock list (``nse_client.get_stock_list()``).
+  2. For each symbol, fetch metadata (``nse_client.get_stock_metadata()``).
   3. Skip symbols that were updated within the stale window
      (``stale_delta = 12 hours``).
   4. Batch the metadata and ``_bulk_insert_stock_universe`` into
@@ -14,13 +14,10 @@ Extracted from ``app/backgroundtasks/_impl.py`` (the original
   5. On ``SymbolNotFoundError``, call
      ``_update_symbol_error_status`` to mark the row as 'unknown'.
 
-The worker (``stock_universe_worker()``) stays in
-``app/backgroundtasks/_impl.py`` for now (A.9 will move it into
-``app/workers/data.py``).
+The worker (``stock_universe_worker()``) lives in
+``app.workers.universe``.
 
-Re-export shim: the three functions remain importable from
-``app.backgroundtasks`` as ``is``-identical objects
-(see ``app/backgroundtasks/__init__.py``).
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
@@ -35,7 +32,7 @@ from sqlalchemy.exc import OperationalError as _SAOperationalError
 from app.database import _SyncSessionLocal
 from app.jobs.runner import update_job_status_sync
 from app.models import stockuniverse
-from app.services.nse_client import SymbolNotFoundError
+from app.services.nse_client import SymbolNotFoundError, nse_client
 
 logger = logging.getLogger(__name__)
 
@@ -50,26 +47,18 @@ logger = logging.getLogger(__name__)
 
 
 def _shutdown_event():
-    r"""Lazy-resolve the threading.Event from ``app.backgroundtasks``.
+    r"""Lazy-resolve the threading.Event from ``app.backgroundtasks._runtime``.
 
     Imported lazily so this module doesn't depend on the package's
-    import order (the original ``_impl.py`` defines both the
-    helpers and the workers; after the split, ``_impl.py``
-    imports the workers, and the workers in turn depend on
-    ``_shutdown_event``).
+    import order.
     """
-    from app.backgroundtasks import _impl
-    return _impl._shutdown_event
+    from app.backgroundtasks._runtime import _shutdown_event
+    return _shutdown_event
 
 
 def _sleep_interruptible(seconds: float) -> bool:
-    from app.backgroundtasks import _impl
-    return _impl._sleep_interruptible(seconds)
-
-
-def _nse_client():
-    from app.backgroundtasks import _impl
-    return _impl._nse_client
+    from app.backgroundtasks._runtime import _sleep_interruptible
+    return _sleep_interruptible(seconds)
 
 
 # ─── Sync core ────────────────────────────────────────────────────────────
@@ -79,8 +68,7 @@ def _stock_universe_sync() -> None:
     """Populate or refresh the stock universe table. Runs synchronously in a worker thread."""
     try:
         logger.info("stock_universe_sync: starting")
-        nse = _nse_client()
-        stock_list: list[str] = nse.get_stock_list()
+        stock_list: list[str] = nse_client.get_stock_list()
         total = len(stock_list)
         logger.info("stock_universe_sync: %d symbols to process", total)
 
@@ -126,7 +114,7 @@ def _stock_universe_sync() -> None:
                         )
 
                 try:
-                    metadata = nse.get_stock_metadata(symbol)
+                    metadata = nse_client.get_stock_metadata(symbol)
                     batch.append(metadata)
                     if len(batch) >= batch_size:
                         _bulk_insert_stock_universe(session, batch)

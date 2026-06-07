@@ -1,4 +1,4 @@
-"""Maintenance workers (audit C.1, A.9).
+"""Maintenance workers (audit C.1, A.9, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.
@@ -10,19 +10,17 @@ Public worker:
   complete on the first launch to avoid racing with the nightly
   pipeline.
 
-NOTE: We import ``logger``, ``settings``, ``_is_job_enabled``,
-``_is_first_run``, ``_set_first_run_complete``, ``_shutdown_event``,
-``_sleep_interruptible``, ``_wait_for_startup_event``,
-``_startup_ticker_scores_done``, ``update_job_status_sync``, and
-``_report_job_waiting`` lazily inside the worker body to avoid a
-circular import: ``app.backgroundtasks._impl`` re-exports us at
-the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
+
+
+logger = logging.getLogger(__name__)
+
 
 VACUUM_CRON = "0 4 * * 0"   # Every Sunday 04:00 (low-traffic window)
 
@@ -33,11 +31,12 @@ def _run_vacuum() -> None:
     Uses a dedicated short-lived connection because VACUUM cannot run inside
     an open transaction.  Disables WAL briefly to allow the rebuild.
     """
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.config import settings
+    from app.jobs.runner import update_job_status_sync
 
-    db_path = _bg_impl.settings.db_path
-    _bg_impl.logger.info("vacuum: starting VACUUM on %s", db_path)
-    _bg_impl.update_job_status_sync("job.vacuum", "running", progress=10, message="Starting VACUUM...")
+    db_path = settings.db_path
+    logger.info("vacuum: starting VACUUM on %s", db_path)
+    update_job_status_sync("job.vacuum", "running", progress=10, message="Starting VACUUM...")
     t0 = time.time()
     try:
         # VACUUM cannot be executed inside a transaction.  Use a fresh
@@ -45,30 +44,30 @@ def _run_vacuum() -> None:
         # statement is its own transaction.
         with sqlite3.connect(db_path, timeout=600, isolation_level=None) as con:
             # 1. checkpoint WAL to fold pending writes into the main DB
-            _bg_impl.update_job_status_sync("job.vacuum", "running", progress=20,
+            update_job_status_sync("job.vacuum", "running", progress=20,
                                             message="Checkpointing WAL...")
             try:
                 con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except sqlite3.OperationalError as e:
-                _bg_impl.logger.warning("vacuum: wal_checkpoint failed (continuing): %s", e)
+                logger.warning("vacuum: wal_checkpoint failed (continuing): %s", e)
 
             # 2. rebuild the database file in place
-            _bg_impl.update_job_status_sync("job.vacuum", "running", progress=50,
+            update_job_status_sync("job.vacuum", "running", progress=50,
                                             message="VACUUM in progress (may take 5-15 min)...")
             con.execute("VACUUM")
 
             # 3. update query planner stats
-            _bg_impl.update_job_status_sync("job.vacuum", "running", progress=90,
+            update_job_status_sync("job.vacuum", "running", progress=90,
                                             message="Running ANALYZE...")
             con.execute("ANALYZE")
 
         elapsed = time.time() - t0
-        _bg_impl.logger.info("vacuum: complete in %.1fs", elapsed)
-        _bg_impl.update_job_status_sync("job.vacuum", "waiting", progress=100,
+        logger.info("vacuum: complete in %.1fs", elapsed)
+        update_job_status_sync("job.vacuum", "waiting", progress=100,
                                         message=f"Complete in {elapsed:.0f}s")
     except Exception:
-        _bg_impl.logger.exception("vacuum: failed")
-        _bg_impl.update_job_status_sync("job.vacuum", "waiting", progress=0,
+        logger.exception("vacuum: failed")
+        update_job_status_sync("job.vacuum", "waiting", progress=0,
                                         message="Failed (will retry next week)")
 
 
@@ -79,18 +78,17 @@ def vacuum_worker() -> None:
     waits for ticker_scores to complete before triggering (we don't want to
     race with the nightly pipeline).  Subsequent cycles use the cron schedule.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _startup_ticker_scores_done = _bg_impl._startup_ticker_scores_done
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
+    from app.backgroundtasks._runtime import (
+        _is_first_run,
+        _is_job_enabled,
+        _report_job_waiting,
+        _set_first_run_complete,
+        _shutdown_event,
+        _sleep_interruptible,
+        _startup_ticker_scores_done,
+        _wait_for_startup_event,
+    )
+    from app.jobs.runner import update_job_status_sync
 
     logger.info("vacuum_worker: started")
 

@@ -1,7 +1,7 @@
-"""News worker daemons (audit C.1, A.9 step 4).
+"""News worker daemons (audit C.1, A.9 step 4, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.  The actual sync
-functions stay in ``_impl.py`` for now and move in A.11.
+functions live in ``app/services/data_sync/news.py``.
 
 Public workers:
 - ``news_worker()`` — cron ``*/5 * * * *`` with backoff; waits for
@@ -9,33 +9,27 @@ Public workers:
 - ``news_rss_worker()`` — cron ``*/5 * * * *``; multi-source RSS.
 - ``watchlist_news_worker()`` — cron ``*/5 * * * *``; per-symbol.
 
-NOTE: Lazy imports from ``_impl`` to avoid circular import deadlock.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def news_worker() -> None:
     """Daemon thread target for news crawling (cron: */5 * * * * with backoff)."""
     from datetime import datetime, timedelta, timezone
 
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _seconds_until_next_cron = _bg_impl._seconds_until_next_cron
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _startup_stock_universe_done = _bg_impl._startup_stock_universe_done
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _news_sync = _bg_impl._news_sync
-    _news_periodic_sync = _bg_impl._news_periodic_sync
-    NEWS_CRON = _bg_impl.NEWS_CRON
-    news_fetcher = _bg_impl.news_fetcher
-    _run_async = _bg_impl._run_async
+    from app.backgroundtasks._runtime import (_is_first_run, _is_job_enabled,
+        _report_job_waiting, _run_async, _seconds_until_next_cron,
+        _set_first_run_complete, _shutdown_event, _sleep_interruptible,
+        _startup_stock_universe_done, _wait_for_startup_event)
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.news import NEWS_CRON, _news_periodic_sync, _news_sync
+    from app.services.news_fetcher import news_fetcher
 
     logger.info("news_worker: started")
 
@@ -92,17 +86,17 @@ def news_worker() -> None:
 
 def news_rss_worker() -> None:
     """Daemon thread target for RSS news aggregation (cron: */5 * * * *)."""
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.backgroundtasks._runtime import (
+        _is_job_enabled,
+        _report_job_waiting,
+        _run_async,
+        _shutdown_event,
+        _sleep_interruptible,
+    )
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.news import _news_rss_sync_async
 
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _run_async = _bg_impl._run_async
-    _news_rss_sync_async = _bg_impl._news_rss_sync_async
-    NEWS_RSS_CRON = _bg_impl.NEWS_RSS_CRON
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    NEWS_RSS_CRON = "*/5 * * * *"
 
     logger.info("news_rss_worker: started")
 
@@ -143,19 +137,18 @@ def news_rss_worker() -> None:
 
 def watchlist_news_worker() -> None:
     """Daemon thread target for watchlist news fetching (cron: */5 * * * *)."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _startup_stock_universe_done = _bg_impl._startup_stock_universe_done
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _watchlist_news_sync = _bg_impl._watchlist_news_sync
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    from app.backgroundtasks._runtime import (
+        _is_first_run,
+        _is_job_enabled,
+        _report_job_waiting,
+        _set_first_run_complete,
+        _shutdown_event,
+        _sleep_interruptible,
+        _startup_stock_universe_done,
+        _wait_for_startup_event,
+    )
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.news import _watchlist_news_sync
 
     logger.info("watchlist_news_worker: started")
 

@@ -1,4 +1,4 @@
-"""Background-job registry (audit C.1, A.12 part 1).
+"""Background-job registry (audit C.1, A.12 part 1, A.13).
 
 Defines every job (cron + callable) the system runs and registers
 them with the ``JobRegistry``.  The daemons in ``app.workers.*``
@@ -12,6 +12,8 @@ it here isolates it from the rest of ``_impl`` and gives the
 call-sites (``start_all_workers``) a single import.
 
 Migrated from ``app.backgroundtasks._impl`` (audit C.1, A.12 part 1).
+
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 import logging
 
@@ -31,6 +33,7 @@ from app.services.data_sync.market import _market_data_sync
 from app.services.data_sync.news import _news_sync, _watchlist_news_sync
 from app.services.data_sync.scores import _ticker_scores_sync
 from app.services.data_sync.universe import _stock_universe_sync
+from app.services.fair_value import sync_all_fair_values, sync_watchlist_fair_values
 from app.workers.global_scan_cycle import _global_scan_cycle
 from app.workers.maintenance import VACUUM_CRON, _run_vacuum
 from app.workers.notification_cycles import (
@@ -198,17 +201,13 @@ def register_all_jobs() -> None:
             is_async=False,
         ),
         # --- Fair value (async) ---
-        # NOTE: these callables resolve through ``app.backgroundtasks`` which
-        # re-exports them from ``app.services.fair_value`` (see A.12 part 2).
-        # Importing them lazily here avoids a hard import-time cycle while
-        # fair_value.py still lives under ``app.backgroundtasks._impl``.
         JobDefinition(
             job_key="job.watchlist_fair_value",
             name="watchlist_fair_value",
             description="Fetch Morningstar fair values for watchlist",
             category="analytics",
             cron_expression="0 */3 * * *",
-            callable=lambda: _run_fair_value_callable("sync_watchlist_fair_values"),
+            callable=sync_watchlist_fair_values,
             is_async=True,
         ),
         JobDefinition(
@@ -217,7 +216,7 @@ def register_all_jobs() -> None:
             description="Fetch Morningstar fair values for all stocks",
             category="analytics",
             cron_expression="30 20 * * *",
-            callable=lambda: _run_fair_value_callable("sync_all_fair_values"),
+            callable=sync_all_fair_values,
             is_async=True,
         ),
         JobDefinition(
@@ -234,15 +233,3 @@ def register_all_jobs() -> None:
     for job in jobs:
         JobRegistry.register(job)
         logger.info(f"Registered job: {job.job_key}")
-
-
-def _run_fair_value_callable(name: str):
-    """Resolve and return a fair-value coroutine for JobDefinition.callable.
-
-    The fair-value functions live in ``app.backgroundtasks._impl`` (until
-    A.12 part 2 moves them to ``app.services.fair_value``).  This wrapper
-    defers the resolution until call time so we don't have a top-level
-    import cycle between ``app.workers.jobs`` and ``_impl``.
-    """
-    from app.backgroundtasks import _impl as _bg_impl
-    return getattr(_bg_impl, name)()

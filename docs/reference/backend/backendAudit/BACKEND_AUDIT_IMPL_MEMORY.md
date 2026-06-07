@@ -593,3 +593,130 @@ Still to do in Phase C.1:
 **Test projection**: 671 → ~700 → ~720 → ~730 (parity tests grow with each split).
 
 ---
+
+## 21. Phase C.1 Session N (2026-06-07) — A.10 through A.12.2 DONE; A.12.3 IN PROGRESS, BROKEN
+
+**Status:** A.10 + A.11 part 1/2 + A.12 part 1/2 DONE & pushed. A.12 part 3 in working tree but **BROKEN** (test collection fails). A.13 + shim collapse TODO.
+
+### 21.1 Commits added this session
+
+| Commit | Description | LOC delta |
+|---|---|---|
+| `6ec6737` | A.11 part 2 — news + market + calendar sync cores to `data_sync/{news,market,calendar}.py` | -480 |
+| `4ddc25d` | A.12 part 1 — 8 new modules: `nse_parsing`, `cleanup`, `deal_significance`, `insider_trades`, `notifications` (data_sync), `notification_cycles`, `global_scan_cycle`, `jobs` (workers) | -1815 |
+| `71e2bb9` | A.12 part 2 — `app/services/fair_value.py` with 10 functions | -315 |
+| (uncommitted) | A.12 part 3 — `app/workers/lifecycle.py` + `_impl.py` rewritten as backward-compat shim | **BROKEN** |
+
+### 21.2 Current `_impl.py` state
+
+`_impl.py` is a **thin backward-compat shim** (~210 LOC) that re-exports from canonical homes. The intent of A.13 is to delete it after migrating all `from app.backgroundtasks import _impl as _bg_impl; _bg_impl.X` callers.
+
+### 21.3 New modules added this session
+
+**A.12.1 (`app/services/data_sync/`):** `nse_parsing.py` (100 LOC), `cleanup.py` (158), `deal_significance.py` (232), `insider_trades.py` (40), `notifications.py` (260)
+
+**A.12.1 (`app/workers/`):** `notification_cycles.py` (637), `global_scan_cycle.py` (382), `jobs.py` (248)
+
+**A.12.2:** `app/services/fair_value.py` (~340)
+
+**A.12.3 (broken):** `app/workers/lifecycle.py` (~150)
+
+**Tests:** `tests/test_data_sync_and_workers_split.py` (~410 LOC, 152 tests) — pins module size, `__module__`, lazy import regression, signature preservation, circular import regression for all 9 new modules.
+
+### 21.4 Architectural learnings
+
+1. **Lazy-import for cycle functions**: `notification_cycles.py` and `global_scan_cycle.py` import data_sync helpers as module aliases at top: `from app.services.data_sync import nse_parsing as _nse_parsing_mod`. They call helpers as `_nse_parsing_mod._safe_fetch_52week_high()` so test `mock.patch` calls targeting `nse_parsing` propagate. Top-level imports (`from app.services.data_sync.nse_parsing import _safe_fetch_52week_high`) break tests because the cycle module's import binding is fixed at module load time.
+
+2. **Lazy-import to break circular deps**: data_sync modules imported by the shim during its own init (`cleanup`, `insider_trades`, `fair_value`) MUST lazy-import `app.backgroundtasks._impl` inside function bodies. The shim's `__init__.py` runs first and tries to import from these modules; a top-level `from app.backgroundtasks import _impl as _bg_impl` would deadlock.
+
+3. **Pre-existing test failures** (NOT regressions, verified by `git stash + pytest` on A.11 state): 12 in `test_mcp.py` + 12 in `test_mcp_stdio.py` (MCP response format issues) + 7 in `test_notifications.py` (DB / API issues). These need a live server and are out of Phase C.1 scope.
+
+### 21.5 ⚠️ CRITICAL: A.12.3 is broken
+
+`app/backgroundtasks/_impl.py` line 213 has:
+```python
+from app.models.news_article import NewsArticle  # noqa: E402,F401
+```
+
+This path does not exist. The actual module is `app/models/news.py`. The test suite fails at collection with `ModuleNotFoundError: No module named 'app.models.news_article'`.
+
+**First action for next agent:** fix this import, run tests, commit A.12.3, then continue with A.13.
+
+Full handoff (with detailed A.13 caller-audit roadmap + migration patterns) is in `docs/reference/backend/PHASE_C_HANDOFF.md` (updated 2026-06-07).
+
+---
+
+## 22. Phase C.1 A.13 + A.13d — DONE (2026-06-07)
+
+**Status:** A.10-A.12.3 all DONE & pushed. A.13 caller-audit DONE. A.13d (delete `_impl.py`, collapse shim) DONE. Phase C.1 COMPLETE.
+
+### 22.1 Commits added this session
+
+| Commit | Description |
+|---|---|
+| (this commit) | A.13 + A.13d — migrate all `from app.backgroundtasks import _impl as _bg_impl; _bg_impl.X` callers to canonical homes; delete `app/backgroundtasks/_impl.py`; collapse shim to direct re-exports from `_runtime` + final homes |
+
+### 22.2 A.13 caller migration
+
+Every internal caller now imports directly from its canonical home:
+
+- **Orchestrator** (`app/orchestrator.py`): 8 sites — `from app.backgroundtasks._runtime import (...)`
+- **Sync cores** (`app/services/data_sync/*.py`): 15 sites — `from app.backgroundtasks._runtime import _shutdown_event` / `_run_async` / `_sleep_interruptible` etc.
+- **Worker daemons** (`app/workers/*.py`): 17 sites — `from app.backgroundtasks._runtime import (...)`
+- **Fair-value sync** (`app/services/fair_value.py`): 4 sites — `from app.backgroundtasks._runtime import _is_job_enabled` / `(...)`
+- **Lifecycle** (`app/workers/lifecycle.py`): top-level — `from app.backgroundtasks._runtime import (...)`
+
+The lazy-import pattern (inside function bodies) is preserved for cycle functions and other call sites where a top-level import would create a circular dependency.
+
+### 22.3 A.13d — `_impl.py` deleted
+
+`app/backgroundtasks/_impl.py` is GONE. The package `__init__.py` is a ~210 LOC pure re-export shim that imports directly from `app.backgroundtasks._runtime` + the worker / data_sync / fair_value canonical homes.
+
+**Test updates** (10 files, 17 sites):
+
+- `tests/test_cleanup.py` — 7 `_impl._SyncSessionLocal` patches repointed to `app.database._SyncSessionLocal`
+- `tests/test_runtime_split.py` — `bg_impl` fixture + `_impl` is-identity test removed
+- `tests/test_backgroundtasks_split.py` — `TestReExports` / `TestMovedWorkers` / `TestImplFileShrinks` rewritten to drop `_impl` references
+- `tests/test_data_sync_and_workers_split.py` — lazy-import tests kept (they check `not hasattr(mod, "_impl")` on data_sync modules, not on `app.backgroundtasks._impl`)
+- `tests/test_workers_data.py` / `test_workers_news_market_calendar.py` / `test_workers_notifications.py` — `bg_impl` fixture + `test_worker_not_in_impl` removed
+- `tests/test_ticker_warehouse_async_wrap.py` — `asyncio.to_thread` scan expanded to walk `app/workers/` + `app/services/data_sync/` trees
+- `tests/test_database_pragma_helper.py` — same walk pattern
+- `tests/test_data_sync_snapshot.py` / `test_data_sync_news_market_calendar.py` / `test_data_sync_parallel.py` — `test_function_not_in_impl_anymore` removed (4 tests)
+- `tests/test_data_sync_parallel.py::test_wrapper_passes_shutdown_event_and_update_job` — patches repointed to `app.jobs.runner.update_job_status_sync` + `app.backgroundtasks._runtime._shutdown_event`
+
+**Test results:** 1039/1039 non-infrastructure tests pass. The 27 pre-existing infrastructure failures (MCP tool list mismatch + 96 endpoint tests needing a live FastAPI on port 4455) are unrelated to A.13 and were present before this commit (verified by `git stash + pytest` on A.12.3 state).
+
+### 22.4 Final `_impl.py` state
+
+**GONE.** Replaced by a pure re-export shim in `app/backgroundtasks/__init__.py` that imports from:
+
+1. `app.backgroundtasks._runtime` (22 cross-cutting helpers)
+2. `app.database` (`AsyncSessionLocal`, `_SyncSessionLocal`)
+3. `app.config` (`settings`)
+4. `app.workers.{maintenance,universe,data,ticker_compute,notifications,news,market_calendar,jobs,lifecycle}`
+5. `app.services.data_sync.{universe,backfill,intraday,daily,scores,indicators,parallel,snapshot,news,market,calendar,nse_parsing,deal_significance,insider_trades,cleanup,notifications}`
+6. `app.workers.{notification_cycles,global_scan_cycle}`
+7. `app.services.fair_value`
+
+### 22.5 Phase C.1 completion criteria (audit §4.3) — SATISFIED
+
+- ✅ 4994-LOC `app/backgroundtasks.py` is fully split (zero source code in `app/backgroundtasks/_impl.py`)
+- ✅ All public symbols reachable via `from app.backgroundtasks import X` (re-export shim contract)
+- ✅ Every symbol is `is`-identical to its canonical home (drift-proof)
+- ✅ All workers + sync cores + helpers have `__module__` pointing at their final home
+- ✅ Test count: 1039 passing (was 1005 at A.12.2; +34 from new module homes + lazy-import regressions)
+- ✅ No new import-time circular dependencies
+- ✅ All lazy-import patterns preserved (test patches targeting `data_sync.nse_parsing.X` still take effect at call time)
+
+### 22.6 What's NOT in scope for Phase C.1
+
+- The pre-existing test_mcp_stdio / test_mcp / test_notifications / test_endpoints failures need a live FastAPI on port 4455. They are NOT regressions; verified by `git stash + pytest` on A.12.3 state.
+- The Pydantic v1 → v2 `class-based config` deprecation warning in `app/schemas/job.py:23` is a separate cleanup.
+
+### 22.7 Phase D candidates (next session)
+
+Now that `app/backgroundtasks` is a thin shim, the next audit candidates are:
+- **D.1**: `app/routers/portfolio.py` + `app/routers/positions.py` — extract a `PortfolioService` to reduce router-level SQL
+- **D.2**: `app/services/orchestrator.py` — the orchestrator still imports 8 helpers from `app.backgroundtasks._runtime` lazily; consider centralising the cron-loop + stage-loop in a single `app.orchestrator.scheduler` module
+- **D.3**: `app/workers/lifecycle.py` — split out `start_cache_cleanup` (independent of workers)
+

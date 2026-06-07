@@ -65,12 +65,12 @@ def _run_cleanup_if_due() -> None:
         return
 
     # Lazy import to break the circular dep with the shim.
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.database import _SyncSessionLocal
 
     # 1) notifications
     try:
         cutoff = datetime.combine(now.date() - timedelta(days=CLEANUP_READ_AFTER_DAYS), datetime.min.time())
-        with _bg_impl._SyncSessionLocal() as session:
+        with _SyncSessionLocal() as session:
             deleted = session.execute(
                 delete(Notification).where(
                     Notification.is_read == True,
@@ -91,7 +91,7 @@ def _run_cleanup_if_due() -> None:
     #    (SQLAlchemy ORM delete() does a SELECT-then-DELETE-per-row)
     try:
         news_cutoff = now - timedelta(days=NEWS_RETENTION_DAYS)
-        with _bg_impl._SyncSessionLocal() as session:
+        with _SyncSessionLocal() as session:
             deleted = session.execute(
                 text("DELETE FROM news_articles WHERE publish_date < :cutoff"),
                 {"cutoff": news_cutoff},
@@ -110,7 +110,7 @@ def _run_cleanup_if_due() -> None:
         cutoff_1h = now - timedelta(days=INTRADAY_1H_RETENTION_DAYS)
         total_1h = 0
         for _ in range(50):  # up to 50 batches per cleanup cycle
-            with _bg_impl._SyncSessionLocal() as session:
+            with _SyncSessionLocal() as session:
                 deleted = session.execute(
                     text(
                         "DELETE FROM ticker_intraday WHERE rowid IN ("
@@ -139,7 +139,7 @@ def _run_cleanup_if_due() -> None:
         cutoff_w = now - timedelta(days=365 * INTRADAY_W_RETENTION_YEARS)
         total_W = 0
         for _ in range(50):
-            with _bg_impl._SyncSessionLocal() as session:
+            with _SyncSessionLocal() as session:
                 deleted = session.execute(
                     text(
                         "DELETE FROM ticker_intraday WHERE rowid IN ("

@@ -92,7 +92,7 @@ class TestCronLoop:
         event = asyncio.Event()
         target = AsyncMock()
 
-        with patch("app.backgroundtasks.get_async_shutdown_event", return_value=event):
+        with patch("app.backgroundtasks._runtime.get_async_shutdown_event", return_value=event):
             task = asyncio.create_task(_cron_loop(
                 cron_expr="* * * * *",
                 job_key="test.job",
@@ -118,7 +118,7 @@ class TestCronLoop:
         event = asyncio.Event()
         target = AsyncMock()
 
-        with patch("app.backgroundtasks.get_async_shutdown_event", return_value=event):
+        with patch("app.backgroundtasks._runtime.get_async_shutdown_event", return_value=event):
             task = asyncio.create_task(_cron_loop(
                 cron_expr="* * * * *",
                 job_key="test.job",
@@ -146,7 +146,7 @@ class TestCronLoop:
         def fake_update(job_key, next_trigger, wait_secs):
             captured_calls.append((job_key, wait_secs))
 
-        with patch("app.backgroundtasks.get_async_shutdown_event", return_value=event), \
+        with patch("app.backgroundtasks._runtime.get_async_shutdown_event", return_value=event), \
              patch("app.orchestrator._update_fv_job_waiting", side_effect=fake_update):
             task = asyncio.create_task(_cron_loop(
                 cron_expr="* * * * *",
@@ -174,7 +174,7 @@ class TestCronLoop:
         event = asyncio.Event()
         target = AsyncMock()
 
-        with patch("app.backgroundtasks.get_async_shutdown_event", return_value=event), \
+        with patch("app.backgroundtasks._runtime.get_async_shutdown_event", return_value=event), \
              patch("app.orchestrator.logger") as mock_logger:
             task = asyncio.create_task(_cron_loop(
                 cron_expr="* * * * *",

@@ -40,7 +40,7 @@ from app.routers import (
     watchlist_router,
     jobs_router,
 )
-from app.backgroundtasks import start_cache_cleanup
+from app.workers.lifecycle import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
 from app.services.screener_client import screener_client

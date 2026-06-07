@@ -1,4 +1,4 @@
-"""Ticker scores sync core (audit C.1, A.7).
+"""Ticker scores sync core (audit C.1, A.7, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.
@@ -12,21 +12,20 @@ Public function:
   snapshot via ``_screener_snapshot_sync`` (Phase B).  Triggered
   by ``_ticker_daily_update_sync()`` after bhavcopy/fallback.
 
-NOTE: We import ``logger``, ``_SyncSessionLocal``, ``_shutdown_event``,
-``update_job_status_sync``, and the downstream
-``_screener_snapshot_sync`` lazily inside the function body to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
-us at the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Optional
 
 import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+
+logger = logging.getLogger(__name__)
 
 
 def _ticker_scores_sync() -> None:
@@ -36,14 +35,11 @@ def _ticker_scores_sync() -> None:
     then computes all returns in-memory. Upserts to ticker_scores table.
     Triggered by _ticker_daily_update_sync() after bhavcopy/fallback.
     """
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.backgroundtasks._runtime import _shutdown_event
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
     from app.models.ticker import TickerDaily, TickerScore
-
-    logger = _bg_impl.logger
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    _shutdown_event = _bg_impl._shutdown_event
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _screener_snapshot_sync = _bg_impl._screener_snapshot_sync
+    from app.services.data_sync.snapshot import _screener_snapshot_sync
 
     try:
         logger.info("ticker_scores_sync: starting")

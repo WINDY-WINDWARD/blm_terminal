@@ -88,16 +88,6 @@ class TestSnapshotCoreExtraction:
             "_screener_snapshot_sync — re-export broken"
         )
 
-    def test_function_not_in_impl_anymore(self):
-        """A.11 part 1 moves the symbol OUT of ``_impl.py``."""
-        from app.backgroundtasks import _impl
-
-        assert not hasattr(_impl, "_screener_snapshot_sync"), (
-            "_impl._screener_snapshot_sync still defined — the move "
-            "to app.services.data_sync.snapshot is incomplete "
-            "(delete it from _impl to avoid drift)"
-        )
-
     def test_function_signature_preserved(self):
         """Callers depend on the exact signature; refactor must not
         rename/remove/change parameter order."""

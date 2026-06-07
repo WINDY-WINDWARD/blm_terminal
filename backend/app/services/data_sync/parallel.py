@@ -21,6 +21,7 @@ here would deadlock the import machinery.
 """
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional
 
 
@@ -48,12 +49,11 @@ def _parallel_indicator_sync(
     be unit-tested without importing the heavy transitive dependencies of
     `app.backgroundtasks` (NSE client, news aggregator, etc.).
     """
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.backgroundtasks._runtime import _shutdown_event
+    from app.jobs.runner import update_job_status_sync
     from app.services.parallel_sync import parallel_indicator_sync
 
-    logger = _bg_impl.logger
-    _shutdown_event = _bg_impl._shutdown_event
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    logger = logging.getLogger(__name__)
 
     def _on_progress(enqueued: int, total: int, elapsed_s: float, rate: float) -> None:
         logger.info(

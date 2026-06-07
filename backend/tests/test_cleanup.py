@@ -95,7 +95,7 @@ class TestCleanupSuite:
         )
         small_db.commit()
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         _run_cleanup_if_due()
@@ -112,7 +112,7 @@ class TestCleanupSuite:
         )
         small_db.commit()
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         _run_cleanup_if_due()
@@ -135,7 +135,7 @@ class TestCleanupSuite:
         )
         small_db.commit()
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         _run_cleanup_if_due()
@@ -154,7 +154,7 @@ class TestCleanupSuite:
             )
         small_db.commit()
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         _run_cleanup_if_due()
@@ -178,7 +178,7 @@ class TestCleanupSuite:
         )
         small_db.commit()
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         _run_cleanup_if_due()
@@ -190,7 +190,7 @@ class TestCleanupSuite:
     def test_24h_gate_prevents_re_runs(self, monkeypatch, small_db):
         # First call runs
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         _run_cleanup_if_due()
@@ -214,7 +214,7 @@ class TestCleanupSuite:
         small_db.execute("DROP TABLE news_articles")
         small_db.commit()
         monkeypatch.setattr(
-            "app.backgroundtasks._impl._SyncSessionLocal",
+            "app.database._SyncSessionLocal",
             lambda: _FakeSession(small_db),
         )
         # Should not raise

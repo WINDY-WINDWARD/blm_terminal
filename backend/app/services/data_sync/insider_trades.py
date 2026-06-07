@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 def _fetch_insider_trades_cached(symbol: str) -> list[dict]:
     """Fetch insider trades from screener.in, returning a list of trade dicts."""
     # Lazy import to break the circular dep with the shim.
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.backgroundtasks._runtime import _run_async
     try:
-        result = _bg_impl._run_async(_fetch_insider_trades_async(symbol))
+        result = _run_async(_fetch_insider_trades_async(symbol))
         return result
     except Exception:
         logger.debug("insider_trades: failed for %s, skipping", symbol)

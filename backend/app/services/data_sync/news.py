@@ -1,4 +1,4 @@
-"""News sync cores (audit C.1, A.11 part 2).
+"""News sync cores (audit C.1, A.11 part 2, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.  Holds all
 news-related sync cores (work bodies) called by the news
@@ -24,15 +24,14 @@ Public constants (3):
 - ``WATCHLIST_NEWS_STALE_SECONDS`` — skip re-fetch if a
   symbol's news is fresher than 5 min
 
-NOTE: We import ``logger``, ``_SyncSessionLocal``,
-``AsyncSessionLocal``, ``_run_async``, ``_seconds_until_next_cron``,
-``_shutdown_event``, ``_sleep_interruptible`` and
-``update_job_status_sync`` lazily inside the function bodies to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
-us at the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 NEWS_CRON = "*/5 * * * *"
@@ -48,10 +47,8 @@ async def _crawl_news_async(pages: int) -> int:
     thread-safe; each ``engine.connect()`` opens a fresh DBAPI connection
     bound to the loop that opened it.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    AsyncSessionLocal = _bg_impl.AsyncSessionLocal
-    news_fetcher = _bg_impl.news_fetcher
+    from app.database import AsyncSessionLocal
+    from app.services.news_fetcher import news_fetcher
 
     async with AsyncSessionLocal() as session:
         return await news_fetcher.crawl_and_store(pages=pages, db=session)
@@ -59,11 +56,8 @@ async def _crawl_news_async(pages: int) -> int:
 
 def _news_sync() -> None:
     """Crawl and persist global news. Runs synchronously in a worker thread."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _run_async = _bg_impl._run_async
+    from app.backgroundtasks._runtime import _run_async
+    from app.jobs.runner import update_job_status_sync
 
     try:
         logger.info("news_sync: starting")
@@ -84,12 +78,8 @@ def _news_periodic_sync(backoff_secs: float) -> float:
     Returns the next sleep duration: resets to cron interval on success,
     doubles (up to NEWS_CRAWL_MAX_INTERVAL) on empty result.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _run_async = _bg_impl._run_async
-    _seconds_until_next_cron = _bg_impl._seconds_until_next_cron
+    from app.backgroundtasks._runtime import _run_async, _seconds_until_next_cron
+    from app.jobs.runner import update_job_status_sync
 
     base = _seconds_until_next_cron(NEWS_CRON)
     try:
@@ -113,15 +103,12 @@ def _news_periodic_sync(backoff_secs: float) -> float:
 
 def _news_rss_sync() -> None:
     """Fetch and store articles from all RSS sources."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    _run_async = _bg_impl._run_async
-    NewsArticle = _bg_impl.NewsArticle
-    fetch_all_feeds = _bg_impl.fetch_all_feeds
-    HIGH_PRIORITY_SOURCES = _bg_impl.HIGH_PRIORITY_SOURCES
-    broadcast_news_update = _bg_impl.broadcast_news_update
+    from app.backgroundtasks._runtime import _run_async
+    from app.database import _SyncSessionLocal
+    from app.models.news import NewsArticle
+    from app.routers.news_ws import broadcast_news_update
+    from app.services.news_sources import HIGH_PRIORITY_SOURCES
+    from app.services.rss_parser import fetch_all_feeds
 
     logger.info("news_rss_sync: starting RSS aggregation")
     try:
@@ -179,12 +166,9 @@ def _news_rss_sync() -> None:
 
 async def _news_rss_sync_async() -> None:
     """Async version of news RSS sync for use in worker threads."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    AsyncSessionLocal = _bg_impl.AsyncSessionLocal
-    broadcast_news_update = _bg_impl.broadcast_news_update
-    HIGH_PRIORITY_SOURCES = _bg_impl.HIGH_PRIORITY_SOURCES
+    from app.database import AsyncSessionLocal
+    from app.routers.news_ws import broadcast_news_update
+    from app.services.news_sources import HIGH_PRIORITY_SOURCES
 
     from app.services.news_aggregator import fetch_and_process_all, store_articles
 
@@ -229,10 +213,8 @@ async def _fetch_company_news_async(symbol: str) -> int:
     Note: We can't easily cancel HTTP requests mid-flight, but we can at least
     check for shutdown between symbols in the caller.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    AsyncSessionLocal = _bg_impl.AsyncSessionLocal
-    news_fetcher = _bg_impl.news_fetcher
+    from app.database import AsyncSessionLocal
+    from app.services.news_fetcher import news_fetcher
 
     try:
         async with AsyncSessionLocal() as session:
@@ -247,16 +229,13 @@ def _watchlist_news_sync() -> None:
 
     from sqlalchemy import func, select
 
-    from app.backgroundtasks import _impl as _bg_impl
+    from app.backgroundtasks._runtime import _shutdown_event, _sleep_interruptible
+    from app.database import _SyncSessionLocal
+    from app.jobs.runner import update_job_status_sync
+    from app.models.news import NewsArticle
+    from app.models.watchlist import WatchlistItem
 
-    logger = _bg_impl.logger
-    _SyncSessionLocal = _bg_impl._SyncSessionLocal
-    _run_async = _bg_impl._run_async
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    WatchlistItem = _bg_impl.WatchlistItem
-    NewsArticle = _bg_impl.NewsArticle
+    from app.backgroundtasks._runtime import _run_async
 
     try:
         logger.info("watchlist_news_sync: starting")

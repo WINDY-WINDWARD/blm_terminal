@@ -1,36 +1,42 @@
-"""Market data + results calendar worker daemons (audit C.1, A.9 step 4).
+"""Market data + results calendar worker daemons (audit C.1, A.9 step 4, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.  The actual sync
-functions stay in ``_impl.py`` for now and move in A.11.
+functions live in ``app/services/data_sync/{market,calendar}.py``.
 
 Public workers:
 - ``market_data_worker()`` — cron ``*/5 * * * *`` during market hours.
 - ``results_calendar_worker()`` — cron ``0 8,14 * * 1-5``.
 
-NOTE: Lazy imports from ``_impl`` to avoid circular import deadlock.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def market_data_worker() -> None:
     """Daemon thread target for market data fetching (cron: */5 * * * *, market-hours only)."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _is_market_open = _bg_impl._is_market_open
-    _seconds_until_market_open = _bg_impl._seconds_until_market_open
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _startup_stock_universe_done = _bg_impl._startup_stock_universe_done
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _market_data_sync = _bg_impl._market_data_sync
-    _run_async = _bg_impl._run_async
-    market_data_fetcher = _bg_impl.market_data_fetcher
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    from app.backgroundtasks._runtime import (
+        _is_first_run,
+        _is_job_enabled,
+        _report_job_waiting,
+        _run_async,
+        _set_first_run_complete,
+        _shutdown_event,
+        _sleep_interruptible,
+        _startup_stock_universe_done,
+        _wait_for_startup_event,
+    )
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.market import (
+        _is_market_open,
+        _market_data_sync,
+        _seconds_until_market_open,
+    )
+    from app.services.mc_market_fetcher import market_data_fetcher
 
     logger.info("market_data_worker: started")
 
@@ -87,20 +93,21 @@ def market_data_worker() -> None:
 
 def results_calendar_worker() -> None:
     """Daemon thread: syncs upcoming results notifications twice daily (8am + 2pm IST)."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    _wait_for_startup_event = _bg_impl._wait_for_startup_event
-    _startup_stock_universe_done = _bg_impl._startup_stock_universe_done
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _results_calendar_sync = _bg_impl._results_calendar_sync
-    _RESULTS_CALENDAR_CRON = _bg_impl._RESULTS_CALENDAR_CRON
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    from app.backgroundtasks._runtime import (
+        _is_first_run,
+        _is_job_enabled,
+        _report_job_waiting,
+        _set_first_run_complete,
+        _shutdown_event,
+        _sleep_interruptible,
+        _startup_stock_universe_done,
+        _wait_for_startup_event,
+    )
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.calendar import (
+        _RESULTS_CALENDAR_CRON,
+        _results_calendar_sync,
+    )
 
     logger.info("results_calendar_worker: started")
 

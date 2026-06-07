@@ -1,73 +1,76 @@
-"""Background tasks package — re-export shim during Phase C migration.
+"""Background tasks package — pure re-export shim (audit C.1, A.13d final state).
 
-The original 4994-LOC ``app/backgroundtasks.py`` is being split into
-12+ modules under ``app/workers/`` and ``app/services/data_sync/``
-(see audit §4.3).  This package is the **expand-and-contract** shim
-that keeps every existing caller working unchanged during the
-migration.
+The original 4994-LOC ``app/backgroundtasks.py`` is fully split into:
 
-Once all symbols have been moved to their final homes and all
-callers have been updated, this re-export shim is deleted and the
-``_impl.py`` file is removed.  See ``tests/test_backgroundtasks_split.py``
-for the contract this shim must maintain.
+  - ``app.backgroundtasks._runtime`` — cross-cutting runtime helpers
+    (state + scheduling primitives) that worker modules use.
+  - ``app.workers.<domain>``         — domain-specific worker daemons.
+  - ``app.services.data_sync.<domain>`` — sync cores.
+  - ``app.services.fair_value``      — Morningstar fair-value sync.
 
-Public API of this package is the union of the public API of the
-original module.  Re-exports are explicit (no ``import *``) so that
-``from app.backgroundtasks import X`` resolves to a real symbol on
-``_impl`` (and the ``is``-identity test in
-``test_backgroundtasks_split.py`` catches accidental local re-definitions).
+Every internal caller now imports directly from the canonical home
+(``from app.backgroundtasks._runtime import _shutdown_event`` etc.),
+so this package exists ONLY to keep external callers working
+unchanged: ``from app.backgroundtasks import X`` resolves to the
+same object as ``from app.<canonical_home> import X``.
+
+The intermediate ``_impl.py`` shim that lived between A.1 and A.13
+is GONE.  Re-exports below pull from ``_runtime`` and the
+domain-specific final homes directly.
+
+Public API is the union of every symbol any historical caller has
+imported from this package.  Re-exports are explicit (no
+``import *``) so that ``from app.backgroundtasks import X`` resolves
+to a real symbol on its final home.
 """
 
-# Session factories and re-exported stdlib — re-exported so that
-# tests can ``monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", ...)``
-# without the AttributeError.  These come directly from
-# ``app.database`` / ``app.config`` (not from ``_impl`` — which
-# after A.12 part 3 no longer re-exports them).
+# ─── Session factories + settings (re-exported from canonical homes) ──────
+# These are the original symbols at the top of the old backgroundtasks.py.
+# Re-exported so callers can do ``from app.backgroundtasks import AsyncSessionLocal``
+# or ``monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", ...)``.
 from app.database import (  # noqa: E402,F401
     AsyncSessionLocal,
     _SyncSessionLocal,
 )
 from app.config import settings  # noqa: E402,F401
 
-# Cross-cutting helpers (used by orchestrator + workers)
-from app.backgroundtasks._impl import (  # noqa: F401
-    _is_job_enabled,
-    _is_first_run,
-    _set_first_run_complete,
-    _sleep_interruptible,
-    _wait_for_startup_event,
-    _wait_for_pipeline,
-    _run_async,
-    _report_job_waiting,
-    _seconds_until_next_cron,
+# ─── Cross-cutting runtime helpers (state + scheduling primitives) ────────
+# These are the 22 helpers migrated to ``_runtime`` in audit C.1 A.10.
+# Pulled in directly from ``_runtime`` so this shim has no transitive
+# dependency on a separate ``_impl`` module.
+from app.backgroundtasks._runtime import (  # noqa: E402,F401
     # Shutdown / pipeline state
-    get_async_shutdown_event,
-    reset_async_shutdown_event,
-    set_async_shutdown_event,
     _shutdown_event,
     _worker_threads,
     _pipeline_lock,
     _pipeline_idle,
+    # First-run gates
+    _is_first_run,
+    _set_first_run_complete,
+    # Job-state predicates
+    _is_job_enabled,
+    _report_job_waiting,
+    # Lifecycle / scheduling primitives
+    _wait_for_startup_event,
+    _wait_for_pipeline,
+    _run_async,
+    _sleep_interruptible,
+    _seconds_until_next_cron,
+    get_async_shutdown_event,
+    reset_async_shutdown_event,
+    set_async_shutdown_event,
+    # Startup-done gate events
     _startup_stock_universe_done,
     _startup_ticker_backfill_done,
     _startup_ticker_indicators_done,
     _startup_ticker_scores_done,
     _startup_ticker_hourly_done,
-    # NOTE: A.3-A.8 sync cores (universe, backfill, intraday, daily,
-    # scores, indicators) + A.11 part 1/2 + A.12 part 1/2 are all
-    # imported separately below from their final homes — see
-    # MOVED_SYMBOLS / TestMovedWorkers.
-    # NOTE: register_all_jobs lives in app.workers.jobs since A.12
-    # part 1 — re-exported at the bottom of this shim.
-    # NOTE: start_all_workers / stop_all_workers / start_cache_cleanup
-    # moved to app.workers.lifecycle in A.12 part 3 — see
-    # MOVED_SYMBOLS / TestMovedWorkers.
 )
 
-# Workers that have moved to ``app/workers/<domain>.py`` during the
-# Phase C.1 split.  Imported separately (NOT through ``_impl``) so
-# that ``app.workers.__init__`` can re-export these names without
-# re-entering this package mid-init and triggering a circular import.
+# ─── Workers that have moved to ``app/workers/<domain>.py`` (audit C.1 A.9) ─
+# Each domain module is imported directly (NOT through a chain) so the
+# identity check in ``tests/test_backgroundtasks_split.py::TestMovedWorkers``
+# can pin the canonical home with ``is``-identity.
 from app.workers.maintenance import (  # noqa: E402,F401
     _run_vacuum,
     vacuum_worker,
@@ -100,19 +103,13 @@ from app.workers.market_calendar import (  # noqa: E402,F401
     results_calendar_worker,
 )
 
-# A.11 part 1 — sync cores moved out of _impl.py into
-# app.services.data_sync.{parallel,snapshot}.  Imported separately
-# (NOT through ``_impl``) so the re-export shim test
-# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can
-# pin the canonical home with ``is``-identity.
+# ─── Sync cores that moved to ``app/services/data_sync/<domain>`` (A.3-A.8) ──
 from app.services.data_sync.parallel import (  # noqa: E402,F401
     _parallel_indicator_sync,
 )
 from app.services.data_sync.snapshot import (  # noqa: E402,F401
     _screener_snapshot_sync,
 )
-# A.11 part 2 — news + market + calendar sync cores moved out of
-# _impl.py into app.services.data_sync.{news,market,calendar}.
 from app.services.data_sync.news import (  # noqa: E402,F401
     _crawl_news_async,
     _news_sync,
@@ -135,7 +132,8 @@ from app.services.data_sync.calendar import (  # noqa: E402,F401
     _results_calendar_sync,
     _RESULTS_CALENDAR_CRON,
 )
-# A.12 part 1 — leaf data_sync helpers + cycle functions + register_all_jobs
+
+# ─── Leaf data_sync helpers + cycle functions (audit C.1 A.12 part 1) ──────
 from app.services.data_sync.nse_parsing import (  # noqa: E402,F401
     _parse_52week_data,
     _parse_volume_gainers,
@@ -192,19 +190,11 @@ from app.workers.global_scan_cycle import (  # noqa: E402,F401
     GLOBAL_SCAN_BATCH_SIZE,
     GLOBAL_SCAN_DELAY,
 )
-# A.12 part 1 — register_all_jobs moved out of _impl to
-# app.workers.jobs.  Imported separately (NOT through ``_impl``) so
-# the re-export shim test
-# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can
-# pin the canonical home with ``is``-identity.
 from app.workers.jobs import (  # noqa: E402,F401
     register_all_jobs,
 )
-# A.3-A.8 — universe, backfill, intraday, daily, scores, indicators
-# sync cores.  Imported directly from their final homes (NOT through
-# ``_impl``) so the re-export shim test
-# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can pin
-# the canonical home with ``is``-identity.
+
+# ─── A.3-A.8 universe / backfill / intraday / daily / scores / indicators ──
 from app.services.data_sync.universe import (  # noqa: E402,F401
     _stock_universe_sync,
     _update_symbol_error_status,
@@ -227,11 +217,8 @@ from app.services.data_sync.indicators import (  # noqa: E402,F401
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
 )
-# A.12 part 2 — Morningstar fair-value sync moved to
-# ``app.services.fair_value``.  Imported directly (NOT through
-# ``_impl``) so the re-export shim test
-# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can pin
-# the canonical home with ``is``-identity.
+
+# ─── A.12 part 2 — Morningstar fair-value sync moved to ``app.services.fair_value``
 from app.services.fair_value import (  # noqa: E402,F401
     _batch_resolve_morningstar_ids,
     _batch_update_fair_values,
@@ -244,10 +231,8 @@ from app.services.fair_value import (  # noqa: E402,F401
     sync_all_fair_values,
     sync_watchlist_fair_values,
 )
-# A.12 part 3 — worker lifecycle moved to ``app.workers.lifecycle``.
-# Imported directly (NOT through ``_impl``) so the re-export shim test
-# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can pin
-# the canonical home with ``is``-identity.
+
+# ─── A.12 part 3 — worker lifecycle moved to ``app.workers.lifecycle``
 from app.workers.lifecycle import (  # noqa: E402,F401
     start_all_workers,
     stop_all_workers,

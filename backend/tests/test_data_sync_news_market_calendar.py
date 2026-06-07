@@ -34,7 +34,7 @@ Moves 3 sections (12 functions + 5 constants) from
   - ``_RESULTS_CALENDAR_CRON`` — "0 8,14 * * 1-5" cron
 
 Each module uses the lazy-import pattern via
-``app.backgroundtasks._impl`` to avoid circular imports.
+``app.backgroundtasks._runtime`` to avoid circular imports.
 
 Tests pin the refactor invariants per module home:
 
@@ -152,16 +152,6 @@ class TestNewsCoreExtraction:
             f"app.services.data_sync.news.{name} — re-export broken"
         )
 
-    @pytest.mark.parametrize("name", NEWS_FUNCTIONS)
-    def test_function_not_in_impl_anymore(self, name: str):
-        """A.11 part 2 moves the symbol OUT of ``_impl.py``."""
-        from app.backgroundtasks import _impl
-
-        assert not hasattr(_impl, name), (
-            f"_impl.{name} still defined — the move to "
-            f"app.services.data_sync.news is incomplete"
-        )
-
     def test_news_constants_preserved(self):
         from app.services.data_sync import news as news_mod
 
@@ -260,15 +250,6 @@ class TestMarketCoreExtraction:
         )
 
     @pytest.mark.parametrize("name", MARKET_FUNCTIONS)
-    def test_function_not_in_impl_anymore(self, name: str):
-        from app.backgroundtasks import _impl
-
-        assert not hasattr(_impl, name), (
-            f"_impl.{name} still defined — the move to "
-            f"app.services.data_sync.market is incomplete"
-        )
-
-    @pytest.mark.parametrize("name", MARKET_FUNCTIONS)
     def test_market_function_is_callable(self, name: str):
         from app.services.data_sync import market as market_mod
 
@@ -330,14 +311,6 @@ class TestCalendarCoreExtraction:
             "app.backgroundtasks._results_calendar_sync is not the same "
             "object as app.services.data_sync.calendar."
             "_results_calendar_sync — re-export broken"
-        )
-
-    def test_function_not_in_impl_anymore(self):
-        from app.backgroundtasks import _impl
-
-        assert not hasattr(_impl, "_results_calendar_sync"), (
-            "_impl._results_calendar_sync still defined — the move to "
-            "app.services.data_sync.calendar is incomplete"
         )
 
     def test_function_signature_preserved(self):

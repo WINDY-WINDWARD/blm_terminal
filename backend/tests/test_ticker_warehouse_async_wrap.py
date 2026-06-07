@@ -152,17 +152,25 @@ class TestBackgroundTasksNotWrapped:
     """
 
     def test_no_unnecessary_to_thread_in_backgroundtasks(self):
-        # After Phase C.1 A.1 split, the implementation lives in
-        # ``app/backgroundtasks/_impl.py`` (the re-export shim package
-        # is in ``__init__.py``).  Read both to be safe.
-        source = _read_source("app/backgroundtasks/_impl.py")
-        # Find any asyncio.to_thread calls that wrap ticker_warehouse.<method>
-        wrapped = re.findall(
-            r"asyncio\.to_thread\(\s*ticker_warehouse\.\w+",
-            source,
-        )
-        assert not wrapped, (
-            f"Found {len(wrapped)} asyncio.to_thread wraps of "
-            f"ticker_warehouse in backgroundtasks/_impl.py.  These run "
-            f"in worker threads and don't need the async wrap."
-        )
+        # After Phase C.1 A.1 + A.13 split, the worker daemons live
+        # in ``app/workers/<domain>.py`` (data, ticker_compute,
+        # universe, …) and the sync cores in
+        # ``app/services/data_sync/<domain>.py``.  Read every file
+        # under those trees to ensure no warehouse call is wrapped.
+        from pathlib import Path
+
+        for sub in ("app/workers", "app/services/data_sync"):
+            base = ROOT / sub
+            if not base.exists():
+                continue
+            for py in base.rglob("*.py"):
+                source = py.read_text()
+                wrapped = re.findall(
+                    r"asyncio\.to_thread\(\s*ticker_warehouse\.\w+",
+                    source,
+                )
+                assert not wrapped, (
+                    f"Found {len(wrapped)} asyncio.to_thread wraps of "
+                    f"ticker_warehouse in {py}.  These run in worker "
+                    f"threads and don't need the async wrap."
+                )

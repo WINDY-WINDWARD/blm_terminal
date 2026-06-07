@@ -183,7 +183,7 @@ async def trigger_notification_cycle() -> dict:
             status_code=403,
             detail="Notification trigger endpoint is disabled in production",
         )
-    from app.backgroundtasks import _notification_cycle_full
+    from app.workers.notification_cycles import _notification_cycle_full
 
     loop = __import__("asyncio").get_running_loop()
     await loop.run_in_executor(None, _notification_cycle_full)

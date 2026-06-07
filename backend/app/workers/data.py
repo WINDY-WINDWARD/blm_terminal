@@ -1,4 +1,4 @@
-"""Ticker data-pipeline sync workers (audit C.1, A.9 step 2).
+"""Ticker data-pipeline sync workers (audit C.1, A.9 step 2, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.  These are the
@@ -19,13 +19,14 @@ Public workers:
   ``15 9,10,11,12,13,14,15 * * 1-5``; first-run triggers the initial
   hourly backfill.
 
-NOTE: We import all `_impl` helpers (logger, settings, sync work
-functions, shutdown state, etc.) lazily inside the worker body to
-avoid a circular import: ``app.backgroundtasks._impl`` re-exports
-us at the bottom of its own module, so a top-level import from
-``_impl`` here would deadlock the import machinery.
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def ticker_backfill_worker() -> None:
@@ -35,13 +36,12 @@ def ticker_backfill_worker() -> None:
     get_symbols_needing_backfill() now checks both row count and staleness, so
     when data is current this completes near-instantly with no symbols to process.
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    update_job_status_sync = _bg_impl.update_job_status_sync
+    from app.backgroundtasks._runtime import (
+        _is_job_enabled,
+        _shutdown_event,
+        _sleep_interruptible,
+    )
+    from app.jobs.runner import update_job_status_sync
 
     logger.info("ticker_backfill_worker: started")
 
@@ -66,17 +66,16 @@ def ticker_backfill_worker() -> None:
 
 def ticker_daily_update_worker() -> None:
     """Daemon thread target for ticker daily updates (cron: */30 15,16,17,18,19,20 * * 1-5)."""
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _pipeline_lock = _bg_impl._pipeline_lock
-    _pipeline_idle = _bg_impl._pipeline_idle
-    _ticker_daily_update_sync = _bg_impl._ticker_daily_update_sync
+    from app.backgroundtasks._runtime import (
+        _is_job_enabled,
+        _pipeline_idle,
+        _pipeline_lock,
+        _report_job_waiting,
+        _shutdown_event,
+        _sleep_interruptible,
+    )
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.daily import _ticker_daily_update_sync
 
     logger.info("ticker_daily_update_worker: started")
 
@@ -119,18 +118,17 @@ def ticker_intraday_hourly_update_worker() -> None:
     Cron: at :15 past each trading hour 09:15-15:15 IST on weekdays.
     Also executes once at startup (first_run pattern).
     """
-    from app.backgroundtasks import _impl as _bg_impl
-
-    logger = _bg_impl.logger
-    _is_job_enabled = _bg_impl._is_job_enabled
-    _is_first_run = _bg_impl._is_first_run
-    _set_first_run_complete = _bg_impl._set_first_run_complete
-    _shutdown_event = _bg_impl._shutdown_event
-    _sleep_interruptible = _bg_impl._sleep_interruptible
-    update_job_status_sync = _bg_impl.update_job_status_sync
-    _report_job_waiting = _bg_impl._report_job_waiting
-    _startup_ticker_hourly_done = _bg_impl._startup_ticker_hourly_done
-    _ticker_intraday_update_sync = _bg_impl._ticker_intraday_update_sync
+    from app.backgroundtasks._runtime import (
+        _is_first_run,
+        _is_job_enabled,
+        _report_job_waiting,
+        _set_first_run_complete,
+        _shutdown_event,
+        _sleep_interruptible,
+        _startup_ticker_hourly_done,
+    )
+    from app.jobs.runner import update_job_status_sync
+    from app.services.data_sync.intraday import _ticker_intraday_update_sync
 
     logger.info("ticker_intraday_hourly_update_worker: started")
 

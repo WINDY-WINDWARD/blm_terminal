@@ -1,4 +1,4 @@
-"""Ticker backfill sync core (audit C.1, A.4).
+"""Ticker backfill sync core (audit C.1, A.4, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py`` so the heavy
 ``_impl.py`` shrinks toward its target size.
@@ -7,47 +7,19 @@ Public function:
 - ``_ticker_backfill_sync()`` — pull ~365 days of OHLCV data for
   symbols whose warehouse rows are stale, processed in batches of
   10 with NSE session refresh every 50 symbols.
+
+A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 from app.services import ticker_warehouse
 
 
-def _shutdown_event():
-    r"""Lazy-resolve the threading.Event from ``app.backgroundtasks``.
-
-    Imported lazily so this module doesn't depend on the package's
-    import order (the original ``_impl.py`` defines both the
-    helpers and the workers; after the split, ``_impl.py``
-    imports the workers, and the workers in turn depend on
-    ``_shutdown_event``).
-    """
-    from app.backgroundtasks import _impl
-    return _impl._shutdown_event
-
-
-def _sleep_interruptible(seconds: float) -> bool:
-    r"""Lazy-resolve the interruptible sleep helper.
-
-    Returns True if shutdown was requested during the sleep.
-    """
-    from app.backgroundtasks import _impl
-    return _impl._sleep_interruptible(seconds)
-
-
-def _is_job_enabled(name: str) -> bool:
-    r"""Lazy-resolve the job-enabled check helper."""
-    from app.backgroundtasks import _impl
-    return _impl._is_job_enabled(name)
-
-
-def _update_job_status_sync(*args, **kwargs):
-    r"""Lazy-resolve the job-status updater helper."""
-    from app.backgroundtasks import _impl
-    return _impl.update_job_status_sync(*args, **kwargs)
+logger = logging.getLogger(__name__)
 
 
 def _ticker_backfill_sync() -> None:
@@ -58,7 +30,12 @@ def _ticker_backfill_sync() -> None:
     next batch. One REQUEST_DELAY_SECONDS sleep is applied per batch (not per
     symbol) to stay within NSE rate limits while improving throughput ~10x.
     """
-    from app.backgroundtasks._impl import logger
+    from app.backgroundtasks._runtime import (
+        _is_job_enabled,
+        _shutdown_event,
+        _sleep_interruptible,
+    )
+    from app.jobs.runner import update_job_status_sync
 
     _BATCH_SIZE = 10
 
@@ -66,14 +43,14 @@ def _ticker_backfill_sync() -> None:
     total = len(symbols)
     if total == 0:
         logger.info("ticker_backfill_sync: no symbols need backfill")
-        _update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="All symbols up to date")
+        update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="All symbols up to date")
         return
 
     logger.info(f"ticker_backfill_sync: {total} symbols need backfill (batch_size={_BATCH_SIZE})")
 
     processed = 0
     for batch_start in range(0, total, _BATCH_SIZE):
-        if _shutdown_event().is_set():
+        if _shutdown_event.is_set():
             break
 
         batch = symbols[batch_start : batch_start + _BATCH_SIZE]
@@ -84,7 +61,7 @@ def _ticker_backfill_sync() -> None:
             ticker_warehouse._refresh_nse_session()
 
         progress = int((batch_start / total) * 100)
-        _update_job_status_sync(
+        update_job_status_sync(
             "job.ticker_backfill",
             "running",
             progress=progress,
@@ -106,5 +83,5 @@ def _ticker_backfill_sync() -> None:
         processed += len(batch)
         time.sleep(ticker_warehouse.REQUEST_DELAY_SECONDS)
 
-    _update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
+    update_job_status_sync("job.ticker_backfill", "idle", progress=100, message="Backfill complete")
     logger.info("ticker_backfill_sync: complete")

@@ -86,17 +86,6 @@ class TestParallelCoreExtraction:
             "_parallel_indicator_sync — re-export broken"
         )
 
-    def test_function_not_in_impl_anymore(self):
-        """A.11 part 1 moves the symbol OUT of ``_impl.py`` (it
-        re-exports elsewhere but the original definition is gone)."""
-        from app.backgroundtasks import _impl
-
-        assert not hasattr(_impl, "_parallel_indicator_sync"), (
-            "_impl._parallel_indicator_sync still defined — the move "
-            "to app.services.data_sync.parallel is incomplete "
-            "(delete it from _impl to avoid drift)"
-        )
-
     def test_function_signature_preserved(self):
         """Callers depend on the exact signature; refactor must not
         rename/remove/change parameter order."""
@@ -169,11 +158,15 @@ class TestParallelCoreWiring:
         fake_module = type(sys)("fake")
         fake_module.parallel_indicator_sync = fake_parallel
         with patch.dict(sys.modules, {"app.services.parallel_sync": fake_module}):
-            # Stub update_job_status_sync via the _impl re-export pattern.
-            from app.backgroundtasks import _impl as _bg_impl
+            # Stub update_job_status_sync via its canonical home
+            # (A.13 — the wrapper imports directly from
+            # ``app.jobs.runner``, not via the shim).
+            from app.backgroundtasks import _runtime
+            from app.jobs import runner as jobs_runner
+
             captured_status: list = []
             with patch.object(
-                _bg_impl,
+                jobs_runner,
                 "update_job_status_sync",
                 side_effect=lambda *a, **kw: captured_status.append((a, kw)),
             ):
@@ -184,9 +177,9 @@ class TestParallelCoreWiring:
                     job_key="job.test",
                 )
 
-        # The wrapper must wire the shutdown event from _impl and
-        # the status callback that calls update_job_status_sync.
-        assert captured["shutdown_event"] is _bg_impl._shutdown_event
+        # The wrapper must wire the shutdown event from _runtime
+        # and the status callback that calls update_job_status_sync.
+        assert captured["shutdown_event"] is _runtime._shutdown_event
         assert callable(captured["update_job_status_fn"])
         assert captured["job_key"] == "job.test"
         assert captured["items"] == [("sym1",)]
@@ -209,11 +202,11 @@ class TestParallelCoreWiring:
         fake_module = type(sys)("fake")
         fake_module.parallel_indicator_sync = fake_parallel
         with patch.dict(sys.modules, {"app.services.parallel_sync": fake_module}):
-            from app.backgroundtasks import _impl as _bg_impl
+            from app.jobs import runner as jobs_runner
 
             status_calls: list = []
             with patch.object(
-                _bg_impl,
+                jobs_runner,
                 "update_job_status_sync",
                 side_effect=lambda key, status, **kw: status_calls.append((key, status, kw)),
             ):
