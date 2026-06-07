@@ -204,17 +204,24 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
 
     stale_symbols: list[str] = []
     with _SyncSessionLocal() as db:
-        for symbol in symbols:
-            latest_ts = db.execute(
-                select(func.max(TickerIntraday.timestamp))
-                .where(
-                    TickerIntraday.symbol == symbol,
-                    TickerIntraday.interval == "1h",
-                    func.date(TickerIntraday.timestamp) == target_date.isoformat(),
-                )
-            ).scalar()
-            if latest_ts is None or latest_ts < expected_latest:
-                stale_symbols.append(symbol)
+        rows = db.execute(
+            select(
+                TickerIntraday.symbol,
+                func.max(TickerIntraday.timestamp).label("max_ts"),
+            )
+            .where(
+                TickerIntraday.symbol.in_(symbols),
+                TickerIntraday.interval == "1h",
+                func.date(TickerIntraday.timestamp) == target_date.isoformat(),
+            )
+            .group_by(TickerIntraday.symbol)
+        ).all()
+        max_ts_by_sym = {row.symbol: row.max_ts for row in rows}
+        stale_symbols = [
+            sym
+            for sym in symbols
+            if max_ts_by_sym.get(sym) is None or max_ts_by_sym[sym] < expected_latest
+        ]
 
     total = len(stale_symbols)
     if total == 0:
