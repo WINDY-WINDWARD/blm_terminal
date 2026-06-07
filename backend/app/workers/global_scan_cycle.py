@@ -52,8 +52,9 @@ def _global_scan_cycle() -> None:
     )
     from app.database import _SyncSessionLocal
     from app.jobs.runner import update_job_status_sync
-    from app.models.ticker import TickerDaily, TickerScore, TickerIntraday
-    from app.models.stockuniverse import StockUniverse
+    from app.models.ticker import TickerDaily, TickerScore
+    from app.services import ticker_warehouse as _tw_mod
+    from app.services.data_sync import alerts as _alerts_mod
 
     try:
         logger.info("global_scan_cycle: starting")
@@ -61,14 +62,6 @@ def _global_scan_cycle() -> None:
         today_date = now.date()
 
         cfg = _notifications_mod.get_notif_config()
-        rsi_oversold_thr = float(cfg["notif.rsi_oversold_threshold"])
-        rsi_overbought_thr = float(cfg["notif.rsi_overbought_threshold"])
-        vol_spike_ratio = float(cfg["notif.volatility_spike_ratio"])
-        atr_exp_thr = float(cfg["notif.atr_expansion_threshold"])
-        momentum_thr = float(cfg["notif.momentum_surge_threshold"])
-        return_1w_thr = float(cfg["notif.return_1w_spike_threshold"])
-        streak_thr = int(cfg["notif.streak_days_threshold"])
-        near52w_thr = float(cfg["notif.near_52w_threshold"])
         deal_sig_pct = float(cfg["notif.deal_significance_pct"])
         deal_abs_cr  = float(cfg["notif.deal_absolute_threshold_cr"])
 
@@ -121,6 +114,22 @@ def _global_scan_cycle() -> None:
         short_deals_list  = [d for ds in deals.values() for d in ds if d.deal_type == "short"]
         deal_short_px     = _deal_sig_mod._fetch_short_deal_close_prices(short_deals_list)
 
+        # Hoist gainers/losers DataFrames into O(1) dicts
+        gainers_by_symbol: dict[str, float] = {}
+        if gainers_df is not None:
+            for row in gainers_df.itertuples():
+                sym = row.symbol
+                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+                if pchg:
+                    gainers_by_symbol[sym] = float(pchg)
+        losers_by_symbol: dict[str, float] = {}
+        if losers_df is not None:
+            for row in losers_df.itertuples():
+                sym = row.symbol
+                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
+                if pchg:
+                    losers_by_symbol[sym] = float(pchg)
+
         processed = 0
         alerts_generated = 0
 
@@ -131,6 +140,18 @@ def _global_scan_cycle() -> None:
                 return
 
             batch = all_symbols[i:i + GLOBAL_SCAN_BATCH_SIZE]
+
+            # Bulk-fetch daily data and intraday data for this batch
+            daily_bulk = _tw_mod.get_latest_indicator_rows(batch, n=10)
+            su_bulk = _tw_mod.get_52w_levels(batch)
+            intraday_bulk = _tw_mod.get_intraday_latest(batch, ["1h", "W", "M"], n=2)
+            # Filter intraday rows to those with indicators computed
+            intraday_bulk = {
+                k: [r for r in v if r.indicators_updated_at is not None]
+                for k, v in intraday_bulk.items()
+                if any(r.indicators_updated_at is not None for r in v)
+            }
+
             for symbol in batch:
                 processed += 1
 
@@ -139,29 +160,16 @@ def _global_scan_cycle() -> None:
                                 processed, total_symbols, processed / total_symbols * 100)
 
                 try:
-                    with _SyncSessionLocal() as db:
-                        rows = list(
-                            db.execute(
-                                select(TickerDaily)
-                                .where(TickerDaily.symbol == symbol)
-                                .order_by(TickerDaily.date.desc())
-                                .limit(10)
-                            ).scalars()
-                        )
-                        su_row = db.execute(
-                            select(StockUniverse).where(StockUniverse.symbol == symbol)
-                        ).scalar_one_or_none()
-
-                    if not rows or len(rows) < 2:
+                    rows = daily_bulk.get(symbol, [])
+                    if len(rows) < 2:
                         continue
 
-                    rows_asc = list(reversed(rows))
-                    latest = rows_asc[-1]
-                    prev = rows_asc[-2]
+                    latest = rows[-1]
+                    prev = rows[-2]
 
                     up_streak = 0
                     dn_streak = 0
-                    for r in reversed(rows_asc):
+                    for r in reversed(rows):
                         if r.close is None or r.open is None:
                             break
                         if r.close > r.open:
@@ -177,126 +185,44 @@ def _global_scan_cycle() -> None:
 
                     pct_from_52w_high: float | None = None
                     pct_from_52w_low: float | None = None
-                    if su_row and su_row.high_52w and su_row.low_52w and latest.close:
-                        if su_row.high_52w > 0:
-                            pct_from_52w_high = (latest.close - su_row.high_52w) / su_row.high_52w * 100
-                        if su_row.low_52w > 0:
-                            pct_from_52w_low = (latest.close - su_row.low_52w) / su_row.low_52w * 100
+                    su_level = su_bulk.get(symbol)
+                    if su_level and latest.close:
+                        high_52w, low_52w = su_level
+                        if high_52w > 0:
+                            pct_from_52w_high = (latest.close - high_52w) / high_52w * 100
+                        if low_52w > 0:
+                            pct_from_52w_low = (latest.close - low_52w) / low_52w * 100
+
+                    ts = scores_cache.get(symbol)
 
                     alerts: list[tuple[str, str]] = []
-
-                    if latest.rsi_14 is not None:
-                        if latest.rsi_14 < rsi_oversold_thr:
-                            alerts.append(("rsi_oversold",
-                                f"{symbol} RSI oversold: {latest.rsi_14:.1f} < {rsi_oversold_thr}"))
-                        elif latest.rsi_14 > rsi_overbought_thr:
-                            alerts.append(("rsi_overbought",
-                                f"{symbol} RSI overbought: {latest.rsi_14:.1f} > {rsi_overbought_thr}"))
-
-                    if latest.macd_histogram is not None and prev.macd_histogram is not None:
-                        if prev.macd_histogram < 0 and latest.macd_histogram >= 0:
-                            alerts.append(("macd_bullish_cross",
-                                f"{symbol} MACD bullish crossover"))
-                        elif prev.macd_histogram > 0 and latest.macd_histogram <= 0:
-                            alerts.append(("macd_bearish_cross",
-                                f"{symbol} MACD bearish crossover"))
-
-                    if latest.bb_squeeze == "Y":
-                        alerts.append(("bb_squeeze_alert",
-                            f"{symbol} Bollinger Band squeeze (bb_width={latest.bb_width})"))
-                    if latest.close is not None and latest.bb_upper is not None and latest.close > latest.bb_upper:
-                        alerts.append(("bb_upper_break",
-                            f"{symbol} broke above BB upper"))
-                    if latest.close is not None and latest.bb_lower is not None and latest.close < latest.bb_lower:
-                        alerts.append(("bb_lower_break",
-                            f"{symbol} broke below BB lower"))
-
-                    if (latest.hv_20 is not None and latest.hv_60 is not None
-                            and latest.hv_60 > 0
-                            and latest.hv_20 > latest.hv_60 * vol_spike_ratio):
-                        alerts.append(("volatility_spike",
-                            f"{symbol} HV20 > {vol_spike_ratio}x HV60"))
-                    if latest.atr_percent is not None and latest.atr_percent > atr_exp_thr:
-                        alerts.append(("atr_expansion",
-                            f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
-
-                    if up_streak >= streak_thr:
-                        alerts.append(("streak_up_5d", f"{symbol} up {up_streak} days"))
-                    if dn_streak >= streak_thr:
-                        alerts.append(("streak_down_5d", f"{symbol} down {dn_streak} days"))
-
-                    if pct_from_52w_high is not None and -near52w_thr <= pct_from_52w_high <= 0:
-                        alerts.append(("near_52w_high",
-                            f"{symbol} within {near52w_thr}% of 52W high"))
-                    if pct_from_52w_low is not None and 0 <= pct_from_52w_low <= near52w_thr:
-                        alerts.append(("near_52w_low",
-                            f"{symbol} within {near52w_thr}% of 52W low"))
+                    alerts.extend(_alerts_mod.evaluate_technical_alerts(
+                        symbol, latest, prev, cfg,
+                        ts=ts,
+                        up_streak=up_streak,
+                        dn_streak=dn_streak,
+                        pct_from_52w_high=pct_from_52w_high,
+                        pct_from_52w_low=pct_from_52w_low,
+                    ))
 
                     # --- Intraday / Weekly / Monthly indicator triggers ---
                     try:
                         intraday_rows: dict[str, list] = {}
-                        with _SyncSessionLocal() as db:
-                            for interval in ("1h", "W", "M"):
-                                iv_rows = list(
-                                    db.execute(
-                                        select(TickerIntraday)
-                                        .where(TickerIntraday.symbol == symbol)
-                                        .where(TickerIntraday.interval == interval)
-                                        .where(TickerIntraday.indicators_updated_at.isnot(None))
-                                        .order_by(TickerIntraday.timestamp.desc())
-                                        .limit(2)
-                                    ).scalars()
-                                )
-                                if iv_rows:
-                                    intraday_rows[interval] = list(reversed(iv_rows))
+                        for interval in ("1h", "W", "M"):
+                            key = (symbol, interval)
+                            if key in intraday_bulk:
+                                intraday_rows[interval] = intraday_bulk[key]
 
                         for interval, iv_rows in intraday_rows.items():
                             if len(iv_rows) < 1:
                                 continue
                             latest_iv = iv_rows[-1]
                             prev_iv = iv_rows[-2] if len(iv_rows) >= 2 else None
-                            sfx = f"_{interval}"
-
-                            if latest_iv.rsi_14 is not None:
-                                if latest_iv.rsi_14 < rsi_oversold_thr:
-                                    alerts.append((f"rsi_oversold{sfx}",
-                                        f"{symbol} [{interval}] RSI oversold: {latest_iv.rsi_14:.1f}"))
-                                elif latest_iv.rsi_14 > rsi_overbought_thr:
-                                    alerts.append((f"rsi_overbought{sfx}",
-                                        f"{symbol} [{interval}] RSI overbought: {latest_iv.rsi_14:.1f}"))
-
-                            if prev_iv and latest_iv.macd_histogram is not None and prev_iv.macd_histogram is not None:
-                                if prev_iv.macd_histogram < 0 and latest_iv.macd_histogram >= 0:
-                                    alerts.append((f"macd_bullish_cross{sfx}",
-                                        f"{symbol} [{interval}] MACD bullish crossover"))
-                                elif prev_iv.macd_histogram > 0 and latest_iv.macd_histogram <= 0:
-                                    alerts.append((f"macd_bearish_cross{sfx}",
-                                        f"{symbol} [{interval}] MACD bearish crossover"))
-
-                            if latest_iv.bb_squeeze == "Y":
-                                alerts.append((f"bb_squeeze_alert{sfx}",
-                                    f"{symbol} [{interval}] BB squeeze"))
-                            if latest_iv.close is not None and latest_iv.bb_upper is not None and latest_iv.close > latest_iv.bb_upper:
-                                alerts.append((f"bb_upper_break{sfx}",
-                                    f"{symbol} [{interval}] close > BB upper"))
-                            if latest_iv.close is not None and latest_iv.bb_lower is not None and latest_iv.close < latest_iv.bb_lower:
-                                alerts.append((f"bb_lower_break{sfx}",
-                                    f"{symbol} [{interval}] close < BB lower"))
-
-                            if interval == "1h" and latest_iv.atr_percent is not None and latest_iv.atr_percent > atr_exp_thr:
-                                alerts.append((f"atr_expansion{sfx}",
-                                    f"{symbol} [1h] ATR% {latest_iv.atr_percent:.1f}% > {atr_exp_thr}%"))
+                            alerts.extend(_alerts_mod.evaluate_intraday_alerts(
+                                symbol, latest_iv, prev_iv, cfg, interval,
+                            ))
                     except Exception:
                         logger.debug("global_scan_cycle: intraday eval failed for %s", symbol, exc_info=True)
-
-                    ts = scores_cache.get(symbol)
-                    if ts:
-                        if ts.momentum_score is not None and ts.momentum_score > momentum_thr:
-                            alerts.append(("momentum_surge",
-                                f"{symbol} momentum {ts.momentum_score:.1f} > {momentum_thr}"))
-                        if ts.return_1w is not None and ts.return_1w > return_1w_thr:
-                            alerts.append(("return_1w_spike",
-                                f"{symbol} 1w return {ts.return_1w:+.1f}% > {return_1w_thr}%"))
 
                     if high52_data and symbol in high52_data:
                         row = high52_data[symbol]
@@ -312,21 +238,11 @@ def _global_scan_cycle() -> None:
                         ratio = vol_data[symbol].get("week1volChange", 0)
                         alerts.append(("volume_breakout", f"{symbol} vol {ratio:+.0f}x"))
 
-                    if gainers_df is not None:
-                        for row in gainers_df.itertuples():
-                            if row.symbol == symbol:
-                                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
-                                if pchg:
-                                    alerts.append(("top_gainer", f"{symbol} +{pchg:.1f}%"))
-                                break
+                    if symbol in gainers_by_symbol:
+                        alerts.append(("top_gainer", f"{symbol} +{gainers_by_symbol[symbol]:.1f}%"))
 
-                    if losers_df is not None:
-                        for row in losers_df.itertuples():
-                            if row.symbol == symbol:
-                                pchg = getattr(row, "pChange", None) or getattr(row, "perChange", 0) or 0
-                                if pchg:
-                                    alerts.append(("top_loser", f"{symbol} {pchg:.1f}%"))
-                                break
+                    if symbol in losers_by_symbol:
+                        alerts.append(("top_loser", f"{symbol} {losers_by_symbol[symbol]:.1f}%"))
 
                     if deals and symbol in deals:
                         for deal in deals[symbol]:

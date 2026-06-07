@@ -36,20 +36,22 @@ class NewsConnectionManager:
         logger.info(f"News WS: client disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict) -> None:
-        """Broadcast a message to all connected clients."""
+        """Broadcast a message to all connected clients in parallel."""
         if not self.active_connections:
             return
 
         message_str = json.dumps(message)
-        disconnected = set()
+        connections = list(self.active_connections)
 
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message_str)
-            except Exception:
-                disconnected.add(connection)
+        results = await asyncio.gather(
+            *[conn.send_text(message_str) for conn in connections],
+            return_exceptions=True,
+        )
 
-        # Clean up disconnected clients
+        disconnected = {
+            conn for conn, exc in zip(connections, results)
+            if isinstance(exc, Exception)
+        }
         self.active_connections -= disconnected
 
     async def send_personal(self, websocket: WebSocket, message: dict) -> None:

@@ -17,11 +17,12 @@ function in the background-tasks package:
 - **Sleep / cron math / job-status helpers** (``_sleep_interruptible``,
   ``_seconds_until_next_cron``, ``_report_job_waiting``,
   ``_is_job_enabled``).
-- **Async coroutine runner** — ``_run_async`` creates a fresh event
-  loop per worker thread (news_fetcher / market_data_fetcher carry
-  Semaphore/Event objects created at module load in the main thread,
+- **Async coroutine runner** — ``_run_async`` uses a persistent
+  per-thread event loop (reused across calls); ``_cleanup_run_async_loops``
+  closes all loops during shutdown.  news_fetcher / market_data_fetcher
+  carry Semaphore/Event objects created at module load in the main thread,
   so we can't reuse the main loop without "bound to a different
-  event loop" errors).
+  event loop" errors.
 
 Moved here in A.10 to shrink ``_impl.py`` toward its target size
 before the A.11/A.12 cycle-function split and ``_impl`` deletion.
@@ -228,24 +229,39 @@ def _sleep_interruptible(seconds: float) -> bool:
     return _shutdown_event.wait(timeout=seconds)
 
 
+_run_async_lock = threading.Lock()
+_run_async_loops: dict[int, asyncio.AbstractEventLoop] = {}
+
+
 def _run_async(coro):
     """
-    Run an async coroutine to completion using a fresh event loop.
+    Run an async coroutine using a persistent per-thread event loop.
 
-    Creates a new event loop in the worker thread, runs the coroutine, and
-    closes the loop. The Semaphore/Event in news_fetcher (created at module
-    load in the main thread) is passed as an argument, so it's used within
-    the same fresh loop — avoiding "bound to a different event loop" errors.
+    Reuses the same event loop across calls within the same worker thread,
+    avoiding the overhead of creating + closing a fresh loop on every call.
+    The Semaphore/Event objects in news_fetcher / market_data_fetcher are
+    created at module load in the main thread and carried into the worker
+    thread — using a per-thread loop ensures "bound to a different event
+    loop" errors do not occur.
 
     NEVER call this from the main async event loop.
     """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
+    tid = threading.get_ident()
+    with _run_async_lock:
+        loop = _run_async_loops.get(tid)
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            _run_async_loops[tid] = loop
+    return loop.run_until_complete(coro)
+
+
+def _cleanup_run_async_loops() -> None:
+    with _run_async_lock:
+        for loop in _run_async_loops.values():
+            try: loop.close()
+            except Exception: pass
+        _run_async_loops.clear()
 
 
 def _seconds_until_next_cron(cron_expr: str) -> float:

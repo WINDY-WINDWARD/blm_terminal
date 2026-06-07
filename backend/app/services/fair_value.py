@@ -34,7 +34,6 @@ from app.models.stockuniverse import StockUniverse
 from app.models.system_config import SystemConfig
 from app.models.watchlist import WatchlistItem
 from app.services.morningstar_client import (
-    REQUEST_DELAY,
     DB_BATCH_SIZE,
     morningstar_client,
 )
@@ -76,35 +75,55 @@ async def _batch_update_fair_values(
     progress_start: int = 0,
     progress_end: int = 100,
 ) -> tuple[int, int]:
-    """Batch update fair values for symbols. Returns (updated, failed)."""
-    updated = 0
-    failed = 0
-    pending: list[tuple] = []
+    """Batch update fair values for symbols. Returns (updated, failed).
+
+    Fetches fair values in parallel (Semaphore(5)), then writes in
+    batches of DB_BATCH_SIZE within a single transaction.
+    """
+    if not symbols:
+        return 0, 0
+
+    sem = asyncio.Semaphore(5)
     total = len(symbols)
 
-    async with AsyncSessionLocal() as db:
-        for i, symbol in enumerate(symbols, 1):
+    async def fetch_one(sym: str) -> tuple[str, dict | None]:
+        async with sem:
             try:
-                result = await morningstar_client.get_fair_value_by_symbol(symbol)
-                fair_value = result.get("fairValue")
-
-                if fair_value:
-                    values: dict = {
-                        "fair_value": fair_value,
-                        "fair_value_updated_at": datetime.now(timezone.utc),
-                    }
-                    if update_morningstar_id:
-                        values["morningstar_id"] = result.get("morningstarId")
-
-                    pending.append((values, symbol))
-                    updated += 1
-                else:
-                    failed += 1
+                result = await morningstar_client.get_fair_value_by_symbol(sym)
+                return sym, result
             except Exception as e:
-                logger.warning(f"Failed to fetch fair value for {symbol}: {e}")
+                logger.warning("Failed to fetch fair value for %s: %s", sym, e)
+                return sym, None
+
+    updated = 0
+    failed = 0
+    i = 0
+
+    for chunk_start in range(0, total, DB_BATCH_SIZE):
+        chunk = symbols[chunk_start:chunk_start + DB_BATCH_SIZE]
+        results = await asyncio.gather(*[fetch_one(sym) for sym in chunk])
+
+        pending: list[tuple[dict, str]] = []
+        for symbol, result in results:
+            i += 1
+            if result is None:
+                failed += 1
+                continue
+            fair_value = result.get("fairValue")
+            if fair_value:
+                values: dict = {
+                    "fair_value": fair_value,
+                    "fair_value_updated_at": datetime.now(timezone.utc),
+                }
+                if update_morningstar_id:
+                    values["morningstar_id"] = result.get("morningstarId")
+                pending.append((values, symbol))
+                updated += 1
+            else:
                 failed += 1
 
-            if len(pending) >= DB_BATCH_SIZE:
+        if pending:
+            async with AsyncSessionLocal() as db:
                 for values, sym in pending:
                     stmt = (
                         update(stockuniverse.StockUniverse)
@@ -113,26 +132,14 @@ async def _batch_update_fair_values(
                     )
                     await db.execute(stmt)
                 await db.commit()
-                if progress_job_key and total:
-                    pct = progress_start + int((i / total) * (progress_end - progress_start))
-                    await update_job_status(
-                        progress_job_key, "running", progress=pct,
-                        message=f"Fetching fair values: {i}/{total}",
-                    )
-                logger.debug(f"Fair value sync progress: {i}/{total}")
-                pending = []
 
-            await asyncio.sleep(REQUEST_DELAY)
-
-        if pending:
-            for values, sym in pending:
-                stmt = (
-                    update(stockuniverse.StockUniverse)
-                    .where(stockuniverse.StockUniverse.symbol == sym)
-                    .values(**values)
-                )
-                await db.execute(stmt)
-            await db.commit()
+        if progress_job_key and total:
+            pct = progress_start + int((i / total) * (progress_end - progress_start))
+            await update_job_status(
+                progress_job_key, "running", progress=pct,
+                message=f"Fetching fair values: {i}/{total}",
+            )
+        logger.debug("Fair value sync progress: %d/%d", i, total)
 
     return updated, failed
 
@@ -143,23 +150,43 @@ async def _batch_resolve_morningstar_ids(
     progress_start: int = 0,
     progress_end: int = 100,
 ) -> int:
-    """Batch resolve Morningstar IDs for symbols. Returns count of resolved IDs."""
-    resolved = 0
-    pending: list[tuple] = []
+    """Batch resolve Morningstar IDs for symbols. Returns count of resolved IDs.
+
+    Resolves IDs in parallel (Semaphore(5)), then writes in batches
+    of DB_BATCH_SIZE within a single transaction.
+    """
+    if not symbols:
+        return 0
+
+    sem = asyncio.Semaphore(5)
     total = len(symbols)
 
-    async with AsyncSessionLocal() as db:
-        for i, symbol in enumerate(symbols, 1):
+    async def fetch_one(sym: str) -> tuple[str, str | None]:
+        async with sem:
             try:
-                ms_id = await morningstar_client.resolve_symbol_to_id(symbol)
-                if ms_id:
-                    pending.append((ms_id, symbol))
-                    resolved += 1
-                    logger.debug(f"Resolved {symbol} -> {ms_id}")
+                ms_id = await morningstar_client.resolve_symbol_to_id(sym)
+                return sym, ms_id
             except Exception as e:
-                logger.warning(f"Failed to resolve ID for {symbol}: {e}")
+                logger.warning("Failed to resolve ID for %s: %s", sym, e)
+                return sym, None
 
-            if len(pending) >= DB_BATCH_SIZE:
+    resolved = 0
+    i = 0
+
+    for chunk_start in range(0, total, DB_BATCH_SIZE):
+        chunk = symbols[chunk_start:chunk_start + DB_BATCH_SIZE]
+        results = await asyncio.gather(*[fetch_one(sym) for sym in chunk])
+
+        pending: list[tuple[str, str]] = []
+        for symbol, ms_id in results:
+            i += 1
+            if ms_id:
+                pending.append((ms_id, symbol))
+                resolved += 1
+                logger.debug("Resolved %s -> %s", symbol, ms_id)
+
+        if pending:
+            async with AsyncSessionLocal() as db:
                 for mid, sym in pending:
                     stmt = (
                         update(stockuniverse.StockUniverse)
@@ -168,26 +195,14 @@ async def _batch_resolve_morningstar_ids(
                     )
                     await db.execute(stmt)
                 await db.commit()
-                if progress_job_key and total:
-                    pct = progress_start + int((i / total) * (progress_end - progress_start))
-                    await update_job_status(
-                        progress_job_key, "running", progress=pct,
-                        message=f"Resolving Morningstar IDs: {i}/{total}",
-                    )
-                logger.info(f"ID sync progress: {i}/{total}")
-                pending = []
 
-            await asyncio.sleep(REQUEST_DELAY)
-
-        if pending:
-            for mid, sym in pending:
-                stmt = (
-                    update(stockuniverse.StockUniverse)
-                    .where(stockuniverse.StockUniverse.symbol == sym)
-                    .values(morningstar_id=mid)
-                )
-                await db.execute(stmt)
-            await db.commit()
+        if progress_job_key and total:
+            pct = progress_start + int((i / total) * (progress_end - progress_start))
+            await update_job_status(
+                progress_job_key, "running", progress=pct,
+                message=f"Resolving Morningstar IDs: {i}/{total}",
+            )
+        logger.info("ID sync progress: %d/%d", i, total)
 
     return resolved
 

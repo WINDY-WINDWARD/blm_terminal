@@ -67,8 +67,9 @@ def _ticker_indicator_notification_cycle() -> None:
     """
     from app.backgroundtasks._runtime import _shutdown_event
     from app.database import _SyncSessionLocal
-    from app.models.ticker import TickerDaily, TickerScore
-    from app.models.stockuniverse import StockUniverse
+    from app.models.ticker import TickerScore
+    from app.services import ticker_warehouse as _tw_mod
+    from app.services.data_sync import alerts as _alerts_mod
 
     try:
         logger.info("ticker_indicator_notification_cycle: starting")
@@ -76,14 +77,6 @@ def _ticker_indicator_notification_cycle() -> None:
         today_date = now.date()
 
         cfg = _notifications_mod.get_notif_config()
-        rsi_oversold_thr   = float(cfg["notif.rsi_oversold_threshold"])
-        rsi_overbought_thr = float(cfg["notif.rsi_overbought_threshold"])
-        vol_spike_ratio    = float(cfg["notif.volatility_spike_ratio"])
-        atr_exp_thr        = float(cfg["notif.atr_expansion_threshold"])
-        momentum_thr       = float(cfg["notif.momentum_surge_threshold"])
-        return_1w_thr      = float(cfg["notif.return_1w_spike_threshold"])
-        streak_thr         = int(cfg["notif.streak_days_threshold"])
-        near52w_thr        = float(cfg["notif.near_52w_threshold"])
 
         symbols_by_watchlist = _notifications_mod._get_watchlist_symbols()
         if not symbols_by_watchlist:
@@ -112,6 +105,10 @@ def _ticker_indicator_notification_cycle() -> None:
         except Exception as e:
             logger.warning("ticker_indicator_notification_cycle: failed to load ticker_scores: %s", e)
 
+        # Bulk-fetch daily indicator rows + 52W levels once for all symbols
+        daily_bulk = _tw_mod.get_latest_indicator_rows(all_symbols, n=10)
+        su_bulk = _tw_mod.get_52w_levels(all_symbols)
+
         seen_today = _notifications_mod._get_seen_today()
         pending: list[dict] = []
         processed = 0
@@ -129,31 +126,17 @@ def _ticker_indicator_notification_cycle() -> None:
                             processed, total_symbols, processed / total_symbols * 100)
 
             try:
-                with _SyncSessionLocal() as db:
-                    # Last 10 candles for streak + indicator comparison
-                    rows = list(
-                        db.execute(
-                            select(TickerDaily)
-                            .where(TickerDaily.symbol == symbol)
-                            .order_by(TickerDaily.date.desc())
-                            .limit(10)
-                        ).scalars()
-                    )
-                    su_row = db.execute(
-                        select(StockUniverse).where(StockUniverse.symbol == symbol)
-                    ).scalar_one_or_none()
-
-                if not rows or len(rows) < 2:
+                rows = daily_bulk.get(symbol, [])
+                if len(rows) < 2:
                     continue
 
-                rows_asc = list(reversed(rows))  # oldest → newest
-                latest = rows_asc[-1]
-                prev   = rows_asc[-2]
+                latest = rows[-1]
+                prev   = rows[-2]
 
                 # --- consecutive day streak (close vs open) ---
                 up_streak = 0
                 dn_streak = 0
-                for r in reversed(rows_asc):
+                for r in reversed(rows):
                     if r.close is None or r.open is None:
                         break
                     if r.close > r.open:
@@ -170,90 +153,30 @@ def _ticker_indicator_notification_cycle() -> None:
                 # --- 52W proximity ---
                 pct_from_52w_high: float | None = None
                 pct_from_52w_low:  float | None = None
-                if su_row and su_row.high_52w and su_row.low_52w and latest.close:
-                    if su_row.high_52w > 0:
-                        pct_from_52w_high = (latest.close - su_row.high_52w) / su_row.high_52w * 100
-                    if su_row.low_52w > 0:
-                        pct_from_52w_low  = (latest.close - su_row.low_52w) / su_row.low_52w  * 100
+                su_level = su_bulk.get(symbol)
+                if su_level and latest.close:
+                    high_52w, low_52w = su_level
+                    if high_52w > 0:
+                        pct_from_52w_high = (latest.close - high_52w) / high_52w * 100
+                    if low_52w > 0:
+                        pct_from_52w_low  = (latest.close - low_52w) / low_52w * 100
 
                 # --- momentum and return_1w from pre-computed TickerScore cache ---
-                # Avoid get_momentum_score/get_returns: those are O(universe_size)
-                # per call and were the root cause of the Stage 3 hang.
                 ts = scores_cache.get(symbol)
-                momentum_score = ts.momentum_score if ts else None
-                return_1w      = ts.return_1w      if ts else None
 
                 # --- build alerts per watchlist that contains this symbol ---
                 for wl_id, wl_symbols in symbols_by_watchlist.items():
                     if symbol not in wl_symbols:
                         continue
 
-                    alerts: list[tuple[str, str]] = []
-
-                    # RSI
-                    if latest.rsi_14 is not None:
-                        if latest.rsi_14 < rsi_oversold_thr:
-                            alerts.append(("rsi_oversold",
-                                f"{symbol} RSI oversold: {latest.rsi_14:.1f} < {rsi_oversold_thr}"))
-                        elif latest.rsi_14 > rsi_overbought_thr:
-                            alerts.append(("rsi_overbought",
-                                f"{symbol} RSI overbought: {latest.rsi_14:.1f} > {rsi_overbought_thr}"))
-
-                    # MACD crossover (requires 2 rows with stored histograms)
-                    if latest.macd_histogram is not None and prev.macd_histogram is not None:
-                        if prev.macd_histogram < 0 and latest.macd_histogram >= 0:
-                            alerts.append(("macd_bullish_cross",
-                                f"{symbol} MACD bullish crossover "
-                                f"({prev.macd_histogram:.4f} → {latest.macd_histogram:.4f})"))
-                        elif prev.macd_histogram > 0 and latest.macd_histogram <= 0:
-                            alerts.append(("macd_bearish_cross",
-                                f"{symbol} MACD bearish crossover "
-                                f"({prev.macd_histogram:.4f} → {latest.macd_histogram:.4f})"))
-
-                    # Bollinger Bands
-                    if latest.bb_squeeze == "Y":
-                        alerts.append(("bb_squeeze_alert",
-                            f"{symbol} Bollinger Band squeeze detected (bb_width={latest.bb_width})"))
-                    if latest.close is not None and latest.bb_upper is not None and latest.close > latest.bb_upper:
-                        alerts.append(("bb_upper_break",
-                            f"{symbol} close ₹{latest.close} broke above BB upper ₹{latest.bb_upper}"))
-                    if latest.close is not None and latest.bb_lower is not None and latest.close < latest.bb_lower:
-                        alerts.append(("bb_lower_break",
-                            f"{symbol} close ₹{latest.close} broke below BB lower ₹{latest.bb_lower}"))
-
-                    # Volatility
-                    if (latest.hv_20 is not None and latest.hv_60 is not None
-                            and latest.hv_60 > 0
-                            and latest.hv_20 > latest.hv_60 * vol_spike_ratio):
-                        alerts.append(("volatility_spike",
-                            f"{symbol} HV20 {latest.hv_20:.1f}% > {vol_spike_ratio}× HV60 {latest.hv_60:.1f}%"))
-                    if latest.atr_percent is not None and latest.atr_percent > atr_exp_thr:
-                        alerts.append(("atr_expansion",
-                            f"{symbol} ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
-
-                    # Momentum / returns (read from TickerScore cache)
-                    if momentum_score is not None and momentum_score > momentum_thr:
-                        alerts.append(("momentum_surge",
-                            f"{symbol} momentum score {momentum_score:.1f} > {momentum_thr}"))
-                    if return_1w is not None and return_1w > return_1w_thr:
-                        alerts.append(("return_1w_spike",
-                            f"{symbol} 1W return {return_1w:+.1f}% > {return_1w_thr}%"))
-
-                    # Streaks
-                    if up_streak >= streak_thr:
-                        alerts.append(("streak_up_5d",
-                            f"{symbol} up {up_streak} consecutive days"))
-                    if dn_streak >= streak_thr:
-                        alerts.append(("streak_down_5d",
-                            f"{symbol} down {dn_streak} consecutive days"))
-
-                    # 52W proximity
-                    if pct_from_52w_high is not None and -near52w_thr <= pct_from_52w_high <= 0:
-                        alerts.append(("near_52w_high",
-                            f"{symbol} within {near52w_thr}% of 52W high ({pct_from_52w_high:+.1f}%)"))
-                    if pct_from_52w_low is not None and 0 <= pct_from_52w_low <= near52w_thr:
-                        alerts.append(("near_52w_low",
-                            f"{symbol} within {near52w_thr}% of 52W low ({pct_from_52w_low:+.1f}%)"))
+                    alerts = _alerts_mod.evaluate_technical_alerts(
+                        symbol, latest, prev, cfg,
+                        ts=ts,
+                        up_streak=up_streak,
+                        dn_streak=dn_streak,
+                        pct_from_52w_high=pct_from_52w_high,
+                        pct_from_52w_low=pct_from_52w_low,
+                    )
 
                     for trigger_type, message in alerts:
                         key = (wl_id, symbol, trigger_type)
@@ -294,8 +217,9 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
     Evaluates RSI, MACD, Bollinger, ATR, and MTF alignment triggers against
     the latest stored ticker_intraday indicator columns for 1h, W, and M.
     """
-    from app.models.ticker import TickerIntraday, TickerDaily
-    from app.models.stockuniverse import StockUniverse
+    from app.backgroundtasks._runtime import _shutdown_event
+    from app.services import ticker_warehouse as _tw_mod
+    from app.services.data_sync import alerts as _alerts_mod
 
     try:
         logger.info("ticker_intraday_indicator_notification_cycle: starting")
@@ -303,9 +227,6 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
         today_date = now.date()
 
         cfg = _notifications_mod.get_notif_config()
-        rsi_oversold_thr   = float(cfg.get("notif.rsi_oversold_threshold", "30.0"))
-        rsi_overbought_thr = float(cfg.get("notif.rsi_overbought_threshold", "70.0"))
-        atr_exp_thr        = float(cfg.get("notif.atr_expansion_threshold", "4.0"))
 
         symbols_by_watchlist = _notifications_mod._get_watchlist_symbols()
         if not symbols_by_watchlist:
@@ -314,6 +235,10 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
 
         all_symbols = list({s for wl_symbols in symbols_by_watchlist.values() for s in wl_symbols})
         total_symbols = len(all_symbols)
+
+        # Bulk-fetch intraday rows + daily RSI once for all symbols
+        intraday_bulk = _tw_mod.get_intraday_latest(all_symbols, ["1h", "W", "M"], n=2)
+        daily_rsi_bulk = _tw_mod.get_latest_daily_rsi(all_symbols)
 
         seen_today = _notifications_mod._get_seen_today()
         pending: list[dict] = []
@@ -329,25 +254,12 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
                 logger.info("ticker_intraday_indicator_notification_cycle: progress %d/%d", processed, total_symbols)
 
             try:
-                # Load latest 2 rows per interval for crossover detection
+                # Reconstruct per-interval dict from bulk data
                 intraday_rows: dict[str, list] = {}
-                with _SyncSessionLocal() as db:
-                    for interval in ("1h", "W", "M"):
-                        rows = list(
-                            db.execute(
-                                select(TickerIntraday)
-                                .where(TickerIntraday.symbol == symbol)
-                                .where(TickerIntraday.interval == interval)
-                                .order_by(TickerIntraday.timestamp.desc())
-                                .limit(2)
-                            ).scalars()
-                        )
-                        if rows:
-                            intraday_rows[interval] = list(reversed(rows))  # oldest → newest
-
-                    su_row = db.execute(
-                        select(StockUniverse).where(StockUniverse.symbol == symbol)
-                    ).scalar_one_or_none()
+                for interval in ("1h", "W", "M"):
+                    key = (symbol, interval)
+                    if key in intraday_bulk:
+                        intraday_rows[interval] = intraday_bulk[key]
 
                 if not intraday_rows:
                     continue
@@ -364,68 +276,18 @@ def _ticker_intraday_indicator_notification_cycle() -> None:
                             continue
                         latest = rows[-1]
                         prev = rows[-2] if len(rows) >= 2 else None
-                        sfx = f"_{interval}"
-
-                        # RSI
-                        if latest.rsi_14 is not None:
-                            if latest.rsi_14 < rsi_oversold_thr:
-                                alerts.append((f"rsi_oversold{sfx}",
-                                    f"{symbol} [{interval}] RSI oversold: {latest.rsi_14:.1f} < {rsi_oversold_thr}"))
-                            elif latest.rsi_14 > rsi_overbought_thr:
-                                alerts.append((f"rsi_overbought{sfx}",
-                                    f"{symbol} [{interval}] RSI overbought: {latest.rsi_14:.1f} > {rsi_overbought_thr}"))
-
-                        # MACD crossover
-                        if prev and latest.macd_histogram is not None and prev.macd_histogram is not None:
-                            if prev.macd_histogram < 0 and latest.macd_histogram >= 0:
-                                alerts.append((f"macd_bullish_cross{sfx}",
-                                    f"{symbol} [{interval}] MACD bullish crossover"))
-                            elif prev.macd_histogram > 0 and latest.macd_histogram <= 0:
-                                alerts.append((f"macd_bearish_cross{sfx}",
-                                    f"{symbol} [{interval}] MACD bearish crossover"))
-
-                        # Bollinger Bands
-                        if latest.bb_squeeze == "Y":
-                            alerts.append((f"bb_squeeze_alert{sfx}",
-                                f"{symbol} [{interval}] BB squeeze (width={latest.bb_width})"))
-                        if latest.close is not None and latest.bb_upper is not None and latest.close > latest.bb_upper:
-                            alerts.append((f"bb_upper_break{sfx}",
-                                f"{symbol} [{interval}] close > BB upper"))
-                        if latest.close is not None and latest.bb_lower is not None and latest.close < latest.bb_lower:
-                            alerts.append((f"bb_lower_break{sfx}",
-                                f"{symbol} [{interval}] close < BB lower"))
-
-                        # ATR expansion (1h only — meaningful for intraday)
-                        if interval == "1h" and latest.atr_percent is not None and latest.atr_percent > atr_exp_thr:
-                            alerts.append((f"atr_expansion{sfx}",
-                                f"{symbol} [1h] ATR% {latest.atr_percent:.1f}% > {atr_exp_thr}%"))
+                        alerts.extend(_alerts_mod.evaluate_intraday_alerts(
+                            symbol, latest, prev, cfg, interval,
+                        ))
 
                     # MTF alignment (daily + weekly + monthly RSI all same direction)
-                    daily_rsi = None
-                    weekly_rsi = None
-                    monthly_rsi = None
-                    if "1h" in intraday_rows:
-                        # 1h is not used for MTF; use daily from ticker_daily if available
-                        with _SyncSessionLocal() as db:
-                            daily_row = db.execute(
-                                select(TickerDaily.rsi_14)
-                                .where(TickerDaily.symbol == symbol)
-                                .order_by(TickerDaily.date.desc())
-                                .limit(1)
-                            ).scalar_one_or_none()
-                            daily_rsi = daily_row
-                    if "W" in intraday_rows:
-                        weekly_rsi = intraday_rows["W"][-1].rsi_14
-                    if "M" in intraday_rows:
-                        monthly_rsi = intraday_rows["M"][-1].rsi_14
+                    daily_rsi = daily_rsi_bulk.get(symbol)
+                    weekly_rsi = intraday_rows["W"][-1].rsi_14 if "W" in intraday_rows else None
+                    monthly_rsi = intraday_rows["M"][-1].rsi_14 if "M" in intraday_rows else None
 
-                    if daily_rsi is not None and weekly_rsi is not None and monthly_rsi is not None:
-                        if daily_rsi > 50 and weekly_rsi > 50 and monthly_rsi > 50:
-                            alerts.append(("mtf_bullish_alignment",
-                                f"{symbol} MTF bullish: D={daily_rsi:.1f} W={weekly_rsi:.1f} M={monthly_rsi:.1f} all > 50"))
-                        elif daily_rsi < 50 and weekly_rsi < 50 and monthly_rsi < 50:
-                            alerts.append(("mtf_bearish_alignment",
-                                f"{symbol} MTF bearish: D={daily_rsi:.1f} W={weekly_rsi:.1f} M={monthly_rsi:.1f} all < 50"))
+                    alerts.extend(_alerts_mod.evaluate_mtf_alignment(
+                        symbol, daily_rsi, weekly_rsi, monthly_rsi,
+                    ))
 
                     for trigger_type, message in alerts:
                         key = (wl_id, symbol, trigger_type)

@@ -390,11 +390,14 @@ def install_mocks(SessionLocal):
         if hasattr(_runtime_mod, name):
             setattr(_runtime_mod, name, value)
 
-    # 0. Database session factory — patched on both the shim and
-    #    the ``app.database`` module (canonical home).
+    # 0. Database session factory — patched on the shim, the database
+    #    module, and any module that imported _SyncSessionLocal at load
+    #    time (e.g. ticker_warehouse, which uses _get_session()).
     from app import database as _database_mod
     _database_mod._SyncSessionLocal = SessionLocal
     _patch("_SyncSessionLocal", SessionLocal)
+    from app.services import ticker_warehouse as _tw_mod_session
+    _tw_mod_session._SyncSessionLocal = SessionLocal
 
     # 1. Disable the job-gate (treat all jobs as enabled)
     _patch("_is_job_enabled", lambda key: True)

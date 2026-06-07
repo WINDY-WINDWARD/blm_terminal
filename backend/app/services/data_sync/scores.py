@@ -64,10 +64,21 @@ def _ticker_scores_sync() -> None:
         update_job_status_sync("job.ticker_scores", "running", progress=10, message=f"Loading candle data for {universe_size} symbols...")
 
         with _SyncSessionLocal() as db:
-            raw = db.execute(
-                select(TickerDaily)
+            rn_col = func.row_number().over(
+                partition_by=TickerDaily.symbol,
+                order_by=TickerDaily.date.desc(),
+            ).label("rn")
+            ranked_cte = (
+                select(TickerDaily, rn_col)
                 .where(TickerDaily.symbol.in_(symbols_with_data))
-                .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+                .cte("_ranked")
+            )
+            from sqlalchemy.orm import aliased
+            RankedTD = aliased(TickerDaily, ranked_cte)
+            raw = db.execute(
+                select(RankedTD)
+                .where(ranked_cte.c.rn <= 253)
+                .order_by(RankedTD.symbol, RankedTD.date.desc())
             )
             all_rows = list(raw.scalars().all())
 

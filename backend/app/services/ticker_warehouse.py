@@ -612,6 +612,53 @@ def get_ohlcv(
         ]
 
 
+def get_ohlcv_bulk(
+    symbols: list[str],
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+) -> dict[str, list[dict]]:
+    """Bulk-fetch OHLCV data for multiple symbols in one query.
+
+    Returns a dict keyed by symbol, each value a list of OHLCV dicts
+    sorted by date ascending.  Default date range is 365 days.
+    """
+    if from_date is None:
+        from_date = date.today() - timedelta(days=DEFAULT_BACKFILL_DAYS)
+    if to_date is None:
+        to_date = date.today()
+
+    with _get_session() as db:
+        stmt = (
+            select(TickerDaily)
+            .where(
+                and_(
+                    TickerDaily.symbol.in_(symbols),
+                    TickerDaily.date >= from_date,
+                    TickerDaily.date <= to_date,
+                )
+            )
+            .order_by(TickerDaily.symbol, TickerDaily.date)
+        )
+        result = db.execute(stmt)
+        rows = result.scalars().all()
+
+    result: dict[str, list[dict]] = {s: [] for s in symbols}
+    for r in rows:
+        result[r.symbol].append({
+            "symbol": r.symbol,
+            "date": r.date,
+            "series": r.series,
+            "open": r.open,
+            "high": r.high,
+            "low": r.low,
+            "close": r.close,
+            "volume": r.volume,
+            "value": r.value,
+            "source": r.source,
+        })
+    return result
+
+
 def get_latest_candle(symbol: str) -> Optional[dict]:
     """Get the most recent OHLCV candle for a symbol."""
     with _get_session() as db:
@@ -681,14 +728,14 @@ def get_52w_levels(symbols: list[str]) -> dict[str, tuple[float, float]]:
         rows = db.execute(
             select(
                 StockUniverse.symbol,
-                StockUniverse.year_high,
-                StockUniverse.year_low,
+                StockUniverse.high_52w,
+                StockUniverse.low_52w,
             ).where(StockUniverse.symbol.in_(symbols))
         ).all()
     out: dict[str, tuple[float, float]] = {}
-    for sym, yh, yl in rows:
-        if yh is not None and yl is not None:
-            out[sym] = (float(yh), float(yl))
+    for sym, hi, lo in rows:
+        if hi is not None and lo is not None:
+            out[sym] = (float(hi), float(lo))
     return out
 
 

@@ -36,6 +36,7 @@ from app.backgroundtasks._runtime import (  # noqa: F401
     set_async_shutdown_event,
     _sleep_interruptible,
     _seconds_until_next_cron,
+    _cleanup_run_async_loops,
     get_async_shutdown_event,
 )
 from app.jobs.runner import sync_all_jobs_to_db
@@ -138,6 +139,8 @@ def stop_all_workers(timeout: float = 35.0) -> None:
     """Signal all workers to stop and wait up to `timeout` seconds for each to exit.
 
     Default timeout is 35 seconds to allow for HTTP requests to complete (max 30s).
+    After all threads exit, closes the persistent per-thread event loops
+    created by ``_run_async`` (C.6).
     """
     logger.info("stop_all_workers: setting shutdown event")
     _shutdown_event.set()
@@ -147,6 +150,7 @@ def stop_all_workers(timeout: float = 35.0) -> None:
             logger.warning("stop_all_workers: %s did not exit within %.1fs, abandoning", t.name, timeout)
         else:
             logger.info("stop_all_workers: %s exited cleanly", t.name)
+    _cleanup_run_async_loops()
 
 
 async def start_cache_cleanup(interval: float = 600.0) -> asyncio.Task:

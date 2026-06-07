@@ -46,6 +46,20 @@ _SYMBOL_DATA_TTL = 60.0
 # Maximum symbols allowed per batch request to avoid overloading the backend
 _MAX_SYMBOLS_PER_REQUEST = 50
 
+# Bounded concurrency for NSE API fetches within a single WS message
+_MAX_CONCURRENT_NSE_FETCHES = 10
+_nse_fetch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_NSE_FETCHES)
+
+
+async def _bounded_change_ranges(symbol: str) -> tuple[str, object]:
+    async with _nse_fetch_semaphore:
+        return await _fetch_change_ranges_for_symbol(symbol)
+
+
+async def _bounded_symbol_data(symbol: str) -> tuple[str, object]:
+    async with _nse_fetch_semaphore:
+        return await _fetch_symbol_data_for_symbol(symbol)
+
 
 def _clean_nan(obj):
     """Recursively replace NaN/Inf floats with None for JSON safety."""
@@ -132,7 +146,7 @@ async def _handle_get_change_ranges(websocket: WebSocket, symbols: list[str]) ->
     symbols = symbols[:_MAX_SYMBOLS_PER_REQUEST]
 
     results = await asyncio.gather(
-        *[_fetch_change_ranges_for_symbol(s) for s in symbols],
+        *[_bounded_change_ranges(s) for s in symbols],
         return_exceptions=False,
     )
 
@@ -149,7 +163,7 @@ async def _handle_get_symbol_data(websocket: WebSocket, symbols: list[str]) -> N
     symbols = symbols[:_MAX_SYMBOLS_PER_REQUEST]
 
     results = await asyncio.gather(
-        *[_fetch_symbol_data_for_symbol(s) for s in symbols],
+        *[_bounded_symbol_data(s) for s in symbols],
         return_exceptions=False,
     )
 

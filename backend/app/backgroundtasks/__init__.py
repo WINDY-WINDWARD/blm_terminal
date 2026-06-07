@@ -54,6 +54,7 @@ from app.backgroundtasks._runtime import (  # noqa: E402,F401
     _wait_for_startup_event,
     _wait_for_pipeline,
     _run_async,
+    _cleanup_run_async_loops,
     _sleep_interruptible,
     _seconds_until_next_cron,
     get_async_shutdown_event,

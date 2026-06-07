@@ -5,7 +5,7 @@
     "message": "SYM00 Bollinger Band squeeze detected (bb_width=0.04)",
     "symbol": "SYM00",
     "trigger_type": "bb_squeeze_alert",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -14,7 +14,7 @@
     "message": "SYM00 MACD bullish crossover (-0.1000 \u2192 0.1000)",
     "symbol": "SYM00",
     "trigger_type": "macd_bullish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -23,7 +23,7 @@
     "message": "SYM00 [1h] MACD bullish crossover",
     "symbol": "SYM00",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -32,7 +32,7 @@
     "message": "SYM00 [M] MACD bullish crossover",
     "symbol": "SYM00",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -41,7 +41,7 @@
     "message": "SYM00 [W] MACD bullish crossover",
     "symbol": "SYM00",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -50,7 +50,7 @@
     "message": "SYM00 MTF bearish: D=25.0 W=45.0 M=45.0 all < 50",
     "symbol": "SYM00",
     "trigger_type": "mtf_bearish_alignment",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -59,7 +59,7 @@
     "message": "SYM00 RSI oversold: 25.0 < 30.0",
     "symbol": "SYM00",
     "trigger_type": "rsi_oversold",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -68,7 +68,7 @@
     "message": "SYM00 up 10 consecutive days",
     "symbol": "SYM00",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -77,7 +77,7 @@
     "message": "SYM01 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM01",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -86,7 +86,7 @@
     "message": "SYM01 [1h] MACD bullish crossover",
     "symbol": "SYM01",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -95,7 +95,7 @@
     "message": "SYM01 [M] MACD bullish crossover",
     "symbol": "SYM01",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -104,7 +104,7 @@
     "message": "SYM01 [W] MACD bullish crossover",
     "symbol": "SYM01",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -113,7 +113,7 @@
     "message": "SYM01 up 10 consecutive days",
     "symbol": "SYM01",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -122,7 +122,7 @@
     "message": "SYM02 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM02",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -131,7 +131,7 @@
     "message": "SYM02 [1h] MACD bullish crossover",
     "symbol": "SYM02",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -140,7 +140,7 @@
     "message": "SYM02 [M] MACD bullish crossover",
     "symbol": "SYM02",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -149,7 +149,7 @@
     "message": "SYM02 [W] MACD bullish crossover",
     "symbol": "SYM02",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -158,7 +158,7 @@
     "message": "SYM02 up 10 consecutive days",
     "symbol": "SYM02",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -167,7 +167,7 @@
     "message": "SYM03 ATR% 4.5% > 4.0%",
     "symbol": "SYM03",
     "trigger_type": "atr_expansion",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -176,7 +176,7 @@
     "message": "SYM03 MACD bullish crossover (-0.1000 \u2192 0.1000)",
     "symbol": "SYM03",
     "trigger_type": "macd_bullish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -185,7 +185,7 @@
     "message": "SYM03 [1h] MACD bullish crossover",
     "symbol": "SYM03",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -194,7 +194,7 @@
     "message": "SYM03 [M] MACD bullish crossover",
     "symbol": "SYM03",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -203,7 +203,7 @@
     "message": "SYM03 [W] MACD bullish crossover",
     "symbol": "SYM03",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -212,7 +212,7 @@
     "message": "SYM03 up 10 consecutive days",
     "symbol": "SYM03",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -221,7 +221,7 @@
     "message": "SYM04 ATR% 5.0% > 4.0%",
     "symbol": "SYM04",
     "trigger_type": "atr_expansion",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -230,7 +230,7 @@
     "message": "SYM04 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM04",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -239,7 +239,7 @@
     "message": "SYM04 [1h] MACD bullish crossover",
     "symbol": "SYM04",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -248,7 +248,7 @@
     "message": "SYM04 [M] MACD bullish crossover",
     "symbol": "SYM04",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -257,7 +257,7 @@
     "message": "SYM04 [W] MACD bullish crossover",
     "symbol": "SYM04",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -266,7 +266,7 @@
     "message": "SYM04 up 10 consecutive days",
     "symbol": "SYM04",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -275,7 +275,7 @@
     "message": "SYM05 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM05",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -284,7 +284,7 @@
     "message": "SYM05 [1h] MACD bullish crossover",
     "symbol": "SYM05",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -293,7 +293,7 @@
     "message": "SYM05 [M] MACD bullish crossover",
     "symbol": "SYM05",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -302,7 +302,7 @@
     "message": "SYM05 [W] MACD bullish crossover",
     "symbol": "SYM05",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -311,7 +311,7 @@
     "message": "SYM05 up 10 consecutive days",
     "symbol": "SYM05",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -320,7 +320,7 @@
     "message": "SYM06 MACD bullish crossover (-0.1000 \u2192 0.1000)",
     "symbol": "SYM06",
     "trigger_type": "macd_bullish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -329,7 +329,7 @@
     "message": "SYM06 [1h] MACD bullish crossover",
     "symbol": "SYM06",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -338,7 +338,7 @@
     "message": "SYM06 [M] MACD bullish crossover",
     "symbol": "SYM06",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -347,7 +347,7 @@
     "message": "SYM06 [W] MACD bullish crossover",
     "symbol": "SYM06",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -356,7 +356,7 @@
     "message": "SYM06 up 10 consecutive days",
     "symbol": "SYM06",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -365,7 +365,7 @@
     "message": "SYM07 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM07",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -374,7 +374,7 @@
     "message": "SYM07 [1h] MACD bullish crossover",
     "symbol": "SYM07",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -383,7 +383,7 @@
     "message": "SYM07 [M] MACD bullish crossover",
     "symbol": "SYM07",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -392,7 +392,7 @@
     "message": "SYM07 [W] MACD bullish crossover",
     "symbol": "SYM07",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -401,7 +401,7 @@
     "message": "SYM07 MTF bearish: D=25.0 W=47.0 M=47.0 all < 50",
     "symbol": "SYM07",
     "trigger_type": "mtf_bearish_alignment",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -410,7 +410,7 @@
     "message": "SYM07 RSI oversold: 25.0 < 30.0",
     "symbol": "SYM07",
     "trigger_type": "rsi_oversold",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -419,7 +419,7 @@
     "message": "SYM07 up 10 consecutive days",
     "symbol": "SYM07",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -428,7 +428,7 @@
     "message": "SYM08 ATR% 4.5% > 4.0%",
     "symbol": "SYM08",
     "trigger_type": "atr_expansion",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -437,7 +437,7 @@
     "message": "SYM08 MACD bearish crossover (0.1000 \u2192 -0.1000)",
     "symbol": "SYM08",
     "trigger_type": "macd_bearish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -446,7 +446,7 @@
     "message": "SYM08 [1h] MACD bullish crossover",
     "symbol": "SYM08",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -455,7 +455,7 @@
     "message": "SYM08 [M] MACD bullish crossover",
     "symbol": "SYM08",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -464,7 +464,7 @@
     "message": "SYM08 [W] MACD bullish crossover",
     "symbol": "SYM08",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -473,7 +473,7 @@
     "message": "SYM08 up 10 consecutive days",
     "symbol": "SYM08",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -482,7 +482,7 @@
     "message": "SYM09 ATR% 5.0% > 4.0%",
     "symbol": "SYM09",
     "trigger_type": "atr_expansion",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -491,7 +491,7 @@
     "message": "SYM09 MACD bullish crossover (-0.1000 \u2192 0.1000)",
     "symbol": "SYM09",
     "trigger_type": "macd_bullish_cross",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -500,7 +500,7 @@
     "message": "SYM09 [1h] MACD bullish crossover",
     "symbol": "SYM09",
     "trigger_type": "macd_bullish_cross_1h",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -509,7 +509,7 @@
     "message": "SYM09 [M] MACD bullish crossover",
     "symbol": "SYM09",
     "trigger_type": "macd_bullish_cross_M",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -518,7 +518,7 @@
     "message": "SYM09 [W] MACD bullish crossover",
     "symbol": "SYM09",
     "trigger_type": "macd_bullish_cross_W",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   },
   {
@@ -527,7 +527,7 @@
     "message": "SYM09 up 10 consecutive days",
     "symbol": "SYM09",
     "trigger_type": "streak_up_5d",
-    "triggered_date": "2026-06-06",
+    "triggered_date": "2026-06-08",
     "watchlist_id": 1
   }
 ]

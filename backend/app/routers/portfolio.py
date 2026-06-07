@@ -46,10 +46,11 @@ def _expected_trading_days(period: str) -> int:
 
 def _fetch_prices_from_db(symbols: list[str], from_date: date, to_date: date) -> pd.DataFrame:
     """Build a close-price DataFrame from ticker_daily. Returns DataFrame indexed by date."""
+    bulk = ticker_warehouse.get_ohlcv_bulk(symbols, from_date, to_date)
     all_data: dict[str, pd.Series] = {}
 
     for sym in symbols:
-        candles = ticker_warehouse.get_ohlcv(sym, from_date, to_date)
+        candles = bulk.get(sym, [])
         if not candles:
             continue
         df_sym = pd.DataFrame(candles)

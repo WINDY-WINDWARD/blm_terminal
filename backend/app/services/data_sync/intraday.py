@@ -188,7 +188,7 @@ def _ticker_intraday_hourly_stale_check_sync() -> None:
     # After market close, expect the full session through 15:15.
     if target_date == now_ist.date() and now_ist.weekday() < 5:
         slots_elapsed = [slot for slot in session_slots if now_ist >= slot.replace(tzinfo=ist)]
-        expected_latest = slots_elapsed[-1] if slots_elapsed else None
+        expected_latest = slots_elapsed[-1].replace(tzinfo=None) if slots_elapsed else None
     else:
         expected_latest = session_slots[-1]
 

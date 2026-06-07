@@ -56,10 +56,17 @@ def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
     "/stockuniverse", response_model=List[StockUniverseSchema], tags=["stockuniverse"]
 )
 async def list_stock_universe(
+    limit: int = 200,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ) -> List[StockUniverseSchema]:
-    """Return all stock universe records from the database."""
-    q = select(StockUniverseModel).order_by(StockUniverseModel.symbol)
+    """Return stock universe records with pagination."""
+    q = (
+        select(StockUniverseModel)
+        .order_by(StockUniverseModel.symbol)
+        .limit(limit)
+        .offset(offset)
+    )
     res = await db.execute(q)
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
@@ -88,9 +95,12 @@ async def get_stock_universe(
     tags=["stockuniverse"],
 )
 async def search_stock_universe(
-    prefix: str, db: AsyncSession = Depends(get_db)
+    prefix: str,
+    limit: int = 200,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
 ) -> List[StockUniverseSchema]:
-    """Return stock universe records that match the prefix in symbol or company name."""
+    """Return stock universe records matching prefix with pagination."""
     q = (
         select(StockUniverseModel)
         .where(
@@ -98,6 +108,8 @@ async def search_stock_universe(
             | StockUniverseModel.company_name.ilike(f"{prefix}%")
         )
         .order_by(StockUniverseModel.symbol)
+        .limit(limit)
+        .offset(offset)
     )
     res = await db.execute(q)
     rows = res.scalars().all()
