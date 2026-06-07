@@ -639,6 +639,125 @@ def get_latest_candle(symbol: str) -> Optional[dict]:
         }
 
 
+def get_latest_indicator_rows(
+    symbols: list[str], n: int = 10
+) -> dict[str, list[TickerDaily]]:
+    """Bulk-fetch the last ``n`` TickerDaily rows per symbol, ASC by date.
+
+    Replaces per-symbol ``select(TickerDaily)…order_by(date.desc()).limit(n)``
+    calls in cycle functions. Returns ``{symbol: [row, ...]}`` with at most
+    ``n`` rows per symbol, oldest→newest. Symbols with no rows are absent.
+
+    One round-trip for all symbols.
+    """
+    if not symbols:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(TickerDaily)
+            .where(TickerDaily.symbol.in_(symbols))
+            .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+        ).scalars().all()
+    by_sym: dict[str, list[TickerDaily]] = {}
+    for r in rows:
+        bucket = by_sym.setdefault(r.symbol, [])
+        if len(bucket) < n:
+            bucket.append(r)
+    for sym in by_sym:
+        by_sym[sym].reverse()
+    return by_sym
+
+
+def get_52w_levels(symbols: list[str]) -> dict[str, tuple[float, float]]:
+    """Bulk-fetch ``(high_52w, low_52w)`` from StockUniverse for many symbols.
+
+    Returns ``{symbol: (high_52w, low_52w)}`` for symbols that have non-null
+    52w values. Symbols missing or with nulls are absent from the dict.
+    One round-trip for all symbols.
+    """
+    if not symbols:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(
+                StockUniverse.symbol,
+                StockUniverse.year_high,
+                StockUniverse.year_low,
+            ).where(StockUniverse.symbol.in_(symbols))
+        ).all()
+    out: dict[str, tuple[float, float]] = {}
+    for sym, yh, yl in rows:
+        if yh is not None and yl is not None:
+            out[sym] = (float(yh), float(yl))
+    return out
+
+
+def get_intraday_latest(
+    symbols: list[str], intervals: list[str], n: int = 2
+) -> dict[tuple[str, str], list[TickerIntraday]]:
+    """Bulk-fetch the last ``n`` TickerIntraday rows per (symbol, interval), ASC by ts.
+
+    Returns ``{(symbol, interval): [row, ...]}`` with at most ``n`` rows per
+    (symbol, interval) pair, oldest→newest. Missing pairs are absent.
+
+    Replaces per-symbol ``select(TickerIntraday)…limit(2)`` calls that the
+    notification and global-scan cycles issued 3 times per symbol. One
+    round-trip for all (symbol, interval) pairs.
+    """
+    if not symbols or not intervals:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(TickerIntraday)
+            .where(
+                TickerIntraday.symbol.in_(symbols),
+                TickerIntraday.interval.in_(intervals),
+            )
+            .order_by(
+                TickerIntraday.symbol,
+                TickerIntraday.interval,
+                TickerIntraday.timestamp.desc(),
+            )
+        ).scalars().all()
+    out: dict[tuple[str, str], list[TickerIntraday]] = {}
+    for r in rows:
+        key = (r.symbol, r.interval)
+        bucket = out.setdefault(key, [])
+        if len(bucket) < n:
+            bucket.append(r)
+    for key in out:
+        out[key].reverse()
+    return out
+
+
+def get_latest_daily_rsi(symbols: list[str]) -> dict[str, float]:
+    """Bulk-fetch the most-recent ``rsi_14`` per symbol from TickerDaily.
+
+    Returns ``{symbol: rsi_14}`` for symbols with at least one row. Used by
+    the intraday cycle's MTF-alignment check, which previously opened a
+    second ``_SyncSessionLocal()`` per symbol.
+    """
+    if not symbols:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(TickerDaily.symbol, TickerDaily.rsi_14)
+            .where(
+                TickerDaily.symbol.in_(symbols),
+                TickerDaily.rsi_14.isnot(None),
+            )
+            .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+        ).all()
+    seen: set[str] = set()
+    out: dict[str, float] = {}
+    for sym, rsi in rows:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        out[sym] = float(rsi)
+    return out
+
+
 def get_warehouse_status() -> dict:
     """Get warehouse statistics."""
     last_trading_day = get_last_trading_day()
