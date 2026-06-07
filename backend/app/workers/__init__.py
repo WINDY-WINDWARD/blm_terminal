@@ -10,23 +10,23 @@ specific concern:
 - ``notifications.py`` — Watchlist + global scan notification cycles
 - ``fair_value.py``   — Morningstar fair-value batch resolvers
 - ``maintenance.py`` — Vacuum + retention workers
-- ``__init__.py``     — ``start_all_workers`` / ``stop_all_workers``
+- ``lifecycle.py``   — ``start_all_workers`` / ``stop_all_workers``
+                       / ``start_cache_cleanup`` (A.12 part 3)
 
 Until the migration completes, the package re-exports every public
-worker symbol from ``app.backgroundtasks`` so callers continue to
-work unchanged.  See ``tests/test_workers_skeleton.py`` for the
-contract.
+worker symbol from their new homes under ``app.workers.<domain>`` so
+callers continue to work unchanged.  See
+``tests/test_workers_skeleton.py`` for the contract.
 
-NOTE: We re-export ``start_all_workers``/``stop_all_workers``/etc
-from ``app.backgroundtasks`` (the legacy package), and the
-moved-per-domain workers (currently just ``vacuum_worker``) from
-their new homes under ``app.workers.<domain>``.  This avoids a
-circular import where ``app.workers.__init__`` triggers
-``app.backgroundtasks`` which triggers ``app.backgroundtasks._impl``
-which tries to import a worker back through ``app.workers``.
+NOTE: lifecycle functions are imported from ``app.workers.lifecycle``
+directly (NOT from ``app.backgroundtasks``) to avoid a circular
+import where ``app.workers.__init__`` triggers
+``app.backgroundtasks`` which triggers
+``app.backgroundtasks._impl`` which re-imports lifecycle back through
+``app.workers``.
 """
-from app.backgroundtasks import (  # noqa: F401
-    # Worker lifecycle (public)
+# Worker lifecycle (moved to app.workers.lifecycle in A.12 part 3).
+from app.workers.lifecycle import (  # noqa: F401
     start_all_workers,
     stop_all_workers,
     start_cache_cleanup,

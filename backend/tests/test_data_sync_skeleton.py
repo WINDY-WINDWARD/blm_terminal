@@ -8,17 +8,17 @@ sync cores (the business logic that runs in a worker thread).
 This file tests the **skeleton**:
 
 - The package is importable.
-- Future-targeted sync-core symbols (``_stock_universe_sync``,
-  ``_ticker_backfill_sync``, ``_ticker_daily_update_sync``,
-  ``_ticker_intraday_update_sync``, ``_ticker_indicators_sync``,
-  ``_ticker_scores_sync``) are still accessible via
-  ``app.backgroundtasks`` (they will be **moved** to this
-  package in subsequent A.x commits).
 - Caller imports (``main.py``, ``orchestrator.py``) still work.
 
-The actual re-exports from ``app.services.data_sync.X`` will be
-added when each module is created (A.3 onwards).  For A.2, the
-package is empty and we only assert it can be imported.
+The actual re-exports from ``app.services.data_sync.X`` were
+added in A.3-A.12.  The per-symbol re-export contract is
+exhaustively pinned by
+``tests/test_backgroundtasks_split.py::TestMovedWorkers`` (identity
+to canonical home) and ``tests/test_workers_data.py`` / the
+per-module split tests.  The previous ``TestSyncCoresStillAccessible``
+class was removed in A.12 part 3 because it became redundant
+(its assertions — "symbol is in ``_impl``" — are no longer
+true post-A.3).
 """
 from __future__ import annotations
 
@@ -54,46 +54,6 @@ class TestDataSyncPackageShape:
         pkg = importlib.import_module("app.services.data_sync")
         assert pkg is not None
         assert "__init__.py" in pkg.__file__
-
-
-# ─── Sync-core symbols still accessible ───────────────────────────────────
-
-
-# These 6 sync cores are slated to MOVE from ``app.backgroundtasks``
-# into dedicated ``app/services/data_sync/{universe,backfill,daily,
-# intrayday,indicators,scores}.py`` modules in A.3-A.7.  For A.2 they
-# must still be importable from ``app.backgroundtasks`` (no
-# re-exports needed yet; just confirm they're not gone).
-SYNC_CORES = [
-    "_stock_universe_sync",
-    "_ticker_backfill_sync",
-    "_ticker_daily_update_sync",
-    "_ticker_intraday_update_sync",
-    "_ticker_indicators_sync",
-    "_ticker_scores_sync",
-]
-
-
-class TestSyncCoresStillAccessible:
-    """The 6 sync-core symbols must still be accessible from
-    ``app.backgroundtasks`` (they haven't been moved yet).
-    """
-
-    @pytest.mark.parametrize("name", SYNC_CORES)
-    def test_sync_core_still_in_backgroundtasks(self, name):
-        from app import backgroundtasks as bg
-        from app.backgroundtasks import _impl
-
-        assert hasattr(_impl, name), (
-            f"_impl.{name} missing — the original sync core was lost"
-        )
-        assert hasattr(bg, name), (
-            f"app.backgroundtasks.{name} no longer re-exported"
-        )
-        assert getattr(bg, name) is getattr(_impl, name), (
-            f"app.backgroundtasks.{name} is not the same object as "
-            f"_impl.{name} — re-export is broken"
-        )
 
 
 # ─── Caller import smoke test ─────────────────────────────────────────────

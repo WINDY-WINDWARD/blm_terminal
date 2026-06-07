@@ -20,15 +20,14 @@ original module.  Re-exports are explicit (no ``import *``) so that
 
 # Session factories and re-exported stdlib — re-exported so that
 # tests can ``monkeypatch.setattr(backgroundtasks, "AsyncSessionLocal", ...)``
-# without the AttributeError.  Functions in ``_impl`` still look up
-# these names in their own module globals; tests that need to mock
-# must also patch ``backgroundtasks._impl.AsyncSessionLocal`` (and
-# friends) directly.  See ``tests/test_utcnow_migration_parity.py``.
-from app.backgroundtasks._impl import (  # noqa: F401
+# without the AttributeError.  These come directly from
+# ``app.database`` / ``app.config`` (not from ``_impl`` — which
+# after A.12 part 3 no longer re-exports them).
+from app.database import (  # noqa: E402,F401
     AsyncSessionLocal,
     _SyncSessionLocal,
-    settings,
 )
+from app.config import settings  # noqa: E402,F401
 
 # Cross-cutting helpers (used by orchestrator + workers)
 from app.backgroundtasks._impl import (  # noqa: F401
@@ -54,41 +53,15 @@ from app.backgroundtasks._impl import (  # noqa: F401
     _startup_ticker_indicators_done,
     _startup_ticker_scores_done,
     _startup_ticker_hourly_done,
-    # (register_all_jobs lives in app.workers.jobs since A.12 part 1 —
-    # re-exported at the bottom of this shim)
-    # First-run + job registry
-    # (register_all_jobs imported separately below from app.workers.jobs) + job registry
-    # Universe sync (moved to app.services.data_sync.universe in A.3)
-    # Re-exported from _impl (which itself re-exports from data_sync.universe)
-    _stock_universe_sync,
-    _update_symbol_error_status,
-    _bulk_insert_stock_universe,
-    # Backfill sync (moved to app.services.data_sync.backfill in A.4)
-    _ticker_backfill_sync,
-    # Intraday sync (moved to app.services.data_sync.intraday in A.5)
-    _ticker_intraday_update_sync,
-    # Daily update sync (moved to app.services.data_sync.daily in A.6)
-    _ticker_daily_update_sync,
-    _ticker_intraday_hourly_stale_check_sync,
-    # Scores sync (moved to app.services.data_sync.scores in A.7)
-    _ticker_scores_sync,
-    # Indicator sync (moved to app.services.data_sync.indicators in A.8)
-    _ticker_indicators_sync,
-    _ticker_intraday_indicators_sync,
-    # NOTE: news + market + calendar sync cores moved to
-    # app.services.data_sync.{news,market,calendar} in A.11 part 2 —
-    # see MOVED_SYMBOLS / TestMovedWorkers
-    # Maintenance
-    # NOTE: ``vacuum_worker`` is imported separately below from its
-    # final home (``app.workers.maintenance``) to avoid a circular
-    # import via ``app.workers.__init__``.
-    # NOTE: cleanup, notifications, nse_parsing, deal_significance,
-    # insider_trades, and cycle functions moved to data_sync.* and
-    # app.workers.* in A.12 part 1 — see MOVED_SYMBOLS / TestMovedWorkers
-    # Worker lifecycle
-    start_all_workers,
-    stop_all_workers,
-    start_cache_cleanup,
+    # NOTE: A.3-A.8 sync cores (universe, backfill, intraday, daily,
+    # scores, indicators) + A.11 part 1/2 + A.12 part 1/2 are all
+    # imported separately below from their final homes — see
+    # MOVED_SYMBOLS / TestMovedWorkers.
+    # NOTE: register_all_jobs lives in app.workers.jobs since A.12
+    # part 1 — re-exported at the bottom of this shim.
+    # NOTE: start_all_workers / stop_all_workers / start_cache_cleanup
+    # moved to app.workers.lifecycle in A.12 part 3 — see
+    # MOVED_SYMBOLS / TestMovedWorkers.
 )
 
 # Workers that have moved to ``app/workers/<domain>.py`` during the
@@ -270,4 +243,13 @@ from app.services.fair_value import (  # noqa: E402,F401
     _update_sync_timestamp,
     sync_all_fair_values,
     sync_watchlist_fair_values,
+)
+# A.12 part 3 — worker lifecycle moved to ``app.workers.lifecycle``.
+# Imported directly (NOT through ``_impl``) so the re-export shim test
+# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can pin
+# the canonical home with ``is``-identity.
+from app.workers.lifecycle import (  # noqa: E402,F401
+    start_all_workers,
+    stop_all_workers,
+    start_cache_cleanup,
 )

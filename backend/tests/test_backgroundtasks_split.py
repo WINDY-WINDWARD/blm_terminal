@@ -96,21 +96,12 @@ EXPECTED_PUBLIC_SYMBOLS = [
     # First-run
     # NOTE: register_all_jobs moved to app.workers.jobs in A.12 part 1 —
     # see MOVED_SYMBOLS / TestMovedWorkers
-    # Universe sync
-    "_stock_universe_sync",
-    "_update_symbol_error_status",
-    "_bulk_insert_stock_universe",
-    # Ticker sync cores
-    "_ticker_backfill_sync",
-    "_ticker_daily_update_sync",
-    "_ticker_intraday_update_sync",
-    "_ticker_intraday_hourly_stale_check_sync",
+    # NOTE: A.3-A.8 sync cores (universe, backfill, intraday, daily,
+    # scores, indicators) moved to app.services.data_sync.<domain> —
+    # see MOVED_SYMBOLS / TestMovedWorkers
     # NOTE: _parallel_indicator_sync and _screener_snapshot_sync
     # moved to app.services.data_sync.{parallel,snapshot} in A.11
     # part 1 — see MOVED_SYMBOLS / TestMovedWorkers
-    "_ticker_indicators_sync",
-    "_ticker_intraday_indicators_sync",
-    "_ticker_scores_sync",
     # NOTE: the 7 ticker-data worker daemons moved to
     # app.workers.{universe,data,ticker_compute} in audit C.1
     # A.9 step 2 — see TestMovedWorkers / MOVED_SYMBOLS
@@ -120,13 +111,14 @@ EXPECTED_PUBLIC_SYMBOLS = [
     # NOTE: nse_parsing / cleanup / deal_significance / insider_trades
     # / notifications + cycle functions moved to data_sync.* and
     # app.workers.* in A.12 part 1 — see MOVED_SYMBOLS / TestMovedWorkers
+    # NOTE: fair-value sync moved to app.services.fair_value in A.12
+    # part 2 — see MOVED_SYMBOLS / TestMovedWorkers
     # Maintenance (vacuum_worker moved to app.workers.maintenance — see TestMovedWorkers)
     # Notification workers (watchlist_notification_worker + global_scan_worker
     # moved to app.workers.notifications in A.9 step 3 — see TestMovedWorkers)
-    # Worker lifecycle
-    "start_all_workers",
-    "stop_all_workers",
-    "start_cache_cleanup",
+    # NOTE: start_all_workers / stop_all_workers / start_cache_cleanup
+    # moved to app.workers.lifecycle in A.12 part 3 — see
+    # MOVED_SYMBOLS / TestMovedWorkers.
 ]
 
 
@@ -175,6 +167,22 @@ class TestReExports:
 MOVED_SYMBOLS = [
     ("_run_vacuum", "app.workers.maintenance"),
     ("vacuum_worker", "app.workers.maintenance"),
+    # A.3 — universe sync (split out of _impl in audit C.1 A.3)
+    ("_stock_universe_sync", "app.services.data_sync.universe"),
+    ("_update_symbol_error_status", "app.services.data_sync.universe"),
+    ("_bulk_insert_stock_universe", "app.services.data_sync.universe"),
+    # A.4 — backfill sync
+    ("_ticker_backfill_sync", "app.services.data_sync.backfill"),
+    # A.5 — intraday sync
+    ("_ticker_intraday_update_sync", "app.services.data_sync.intraday"),
+    ("_ticker_intraday_hourly_stale_check_sync", "app.services.data_sync.intraday"),
+    # A.6 — daily update sync
+    ("_ticker_daily_update_sync", "app.services.data_sync.daily"),
+    # A.7 — scores sync
+    ("_ticker_scores_sync", "app.services.data_sync.scores"),
+    # A.8 — indicator sync
+    ("_ticker_indicators_sync", "app.services.data_sync.indicators"),
+    ("_ticker_intraday_indicators_sync", "app.services.data_sync.indicators"),
     # A.9 step 2 — ticker-data workers
     ("stock_universe_worker", "app.workers.universe"),
     ("ticker_backfill_worker", "app.workers.data"),
@@ -268,6 +276,10 @@ MOVED_SYMBOLS = [
     ("_get_full_lock", "app.services.fair_value"),
     ("_run_watchlist_scheduler", "app.services.fair_value"),
     ("_run_nightly_scheduler", "app.services.fair_value"),
+    # A.12 part 3 — worker lifecycle moved to app.workers.lifecycle
+    ("start_all_workers", "app.workers.lifecycle"),
+    ("stop_all_workers", "app.workers.lifecycle"),
+    ("start_cache_cleanup", "app.workers.lifecycle"),
 ]
 
 

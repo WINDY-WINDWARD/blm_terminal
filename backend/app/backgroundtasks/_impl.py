@@ -1,7 +1,37 @@
-import asyncio
-import logging
-import threading
+"""A.12 part 3 — thin backward-compat shim for ``_impl``.
 
+After A.12 part 3, ``_impl`` no longer contains implementation code.
+All actual logic now lives in their final homes:
+
+  - ``app.backgroundtasks._runtime`` — cross-cutting runtime helpers
+    (state + scheduling primitives) that worker modules use.
+  - ``app.workers.lifecycle`` — ``start_all_workers`` /
+    ``stop_all_workers`` / ``start_cache_cleanup``.
+  - ``app.workers.<domain>`` — domain-specific worker daemons.
+  - ``app.services.data_sync.<domain>`` — sync cores.
+  - ``app.services.fair_value`` — Morningstar fair-value sync.
+
+This file re-exports ONLY the **frequently-imported primitives** that
+worker modules and data_sync cores reach through ``_bg_impl`` for
+historical reasons:
+
+  - ``logger`` — module-level logger (``logging.getLogger(__name__)``)
+  - ``AsyncSessionLocal`` / ``_SyncSessionLocal`` — DB session factories
+  - ``settings`` — pydantic settings
+  - ``update_job_status`` / ``update_job_status_sync`` /
+    ``sync_all_jobs_to_db`` — job-runner helpers
+
+Moved symbols (sync cores, workers, cycles, lifecycle, news helpers)
+are NOT re-exported here.  A.13 migrates the lazy ``_bg_impl`` callers
+in data_sync / workers / orchestrator to import from canonical homes
+directly.  After A.13, this file is deleted.
+
+Symbols that *are* re-exported (logger, session factories, settings,
+job-runner helpers) are ``is``-identical to their canonical homes
+(``app.database``, ``app.config``, ``app.jobs.runner``) so tests can
+pin the move.
+"""
+# ─── Runtime helpers + state ─────────────────────────────────────────────
 from app.backgroundtasks._runtime import (  # noqa: F401
     _shutdown_event,
     _worker_threads,
@@ -25,163 +55,23 @@ from app.backgroundtasks._runtime import (  # noqa: F401
     _seconds_until_next_cron,
     get_async_shutdown_event,
 )
-from app.database import _SyncSessionLocal, AsyncSessionLocal
-from app.config import settings
-from app.jobs.runner import sync_all_jobs_to_db, update_job_status_sync
 
-
-logger = logging.getLogger(__name__)
-
-
-async def start_all_workers() -> list[threading.Thread]:
-    """Register jobs and spawn all background worker threads.
-
-    Startup ordering is strictly enforced via threading.Event gates:
-
-      1. stock_universe_worker               — runs first; sets _startup_stock_universe_done
-                                                 All other workers wait on this before their first-run.
-      2. ticker_backfill_worker              — waits stock_universe_done; sets _startup_ticker_backfill_done
-      3. ticker_indicators_worker            — waits ticker_backfill_done; sets _startup_ticker_indicators_done
-      4. ticker_scores_worker                — waits ticker_indicators_done; sets _startup_ticker_scores_done
-      5. ticker_daily_update_worker          — waits ticker_backfill_done (runs its own inline pipeline)
-      6. ticker_intraday_hourly_update_worker    — runs independently; sets _startup_ticker_hourly_done
-      6b. ticker_intraday_hourly_indicators_worker — waits _startup_ticker_hourly_done
-      7. global_scan_worker                  — waits ticker_scores_done; polls _pipeline_idle on every cycle
-      8. watchlist_notification_worker       — waits ticker_scores_done; polls _pipeline_idle on every cycle
-      9. news_worker                         — waits stock_universe_done; then runs independently
-      10. watchlist_news_worker              — waits stock_universe_done; then runs independently
-      11. market_data_worker                 — waits stock_universe_done; then runs independently
-      12. results_calendar_worker            — waits stock_universe_done; then runs independently
-      13. vacuum_worker                      — waits ticker_scores_done; weekly Sunday 04:00 cron
-
-    Cron-cycle ordering is enforced via _pipeline_lock + _pipeline_idle:
-      ticker_daily_update / ticker_indicators / ticker_scores each acquire
-      _pipeline_lock and clear _pipeline_idle while running. global_scan and
-      watchlist_notification call _wait_for_pipeline() before each cycle, so
-      they will not start a new cycle while a pipeline run is known to be in
-      progress. Note: there is an inherent narrow race where a consumer passes
-      the idle check and a producer then starts — this is accepted because scan
-      workers are DB-read-only and the window is sub-millisecond.
-
-    Weekly/Monthly (W/M) candle sync + indicators are NOT run by standalone
-    workers — they are Stage 5 of the nightly orchestrator pipeline (see
-    orchestrator.py) so that W/M data is fresh before the nightly scan.
-    """
-    from app.workers.jobs import register_all_jobs
-    from app.workers.universe import stock_universe_worker
-    from app.workers.data import (
-        ticker_backfill_worker,
-        ticker_daily_update_worker,
-        ticker_intraday_hourly_update_worker,
-    )
-    from app.workers.ticker_compute import (
-        ticker_indicators_worker,
-        ticker_intraday_hourly_indicators_worker,
-        ticker_scores_worker,
-    )
-    from app.workers.notifications import (
-        global_scan_worker,
-        watchlist_notification_worker,
-    )
-    from app.workers.news import (
-        news_rss_worker,
-        news_worker,
-        watchlist_news_worker,
-    )
-    from app.workers.market_calendar import market_data_worker, results_calendar_worker
-    from app.workers.maintenance import vacuum_worker
-
-    reset_async_shutdown_event()
-    register_all_jobs()
-    await sync_all_jobs_to_db()
-
-    targets = [
-        ticker_backfill_worker,                      # 1 — candle history first
-        stock_universe_worker,                       # 2 — symbol metadata
-        ticker_indicators_worker,                    # 3 — indicator backfill
-        ticker_scores_worker,                          # 4 — momentum scores
-        ticker_daily_update_worker,                  # 5 — daily bhavcopy + refresh
-        ticker_intraday_hourly_update_worker,       # 6 — 1h candles during market hours
-        ticker_intraday_hourly_indicators_worker,   # 6b — 1h indicators during market hours
-        market_data_worker,                          # 7 — live market data
-        global_scan_worker,                          # 8 — full-universe scan
-        watchlist_notification_worker,               # 9 — watchlist alerts
-        news_worker,                                 # 10 — global news (MoneyControl)
-        news_rss_worker,                             # 11 — RSS news aggregation
-        watchlist_news_worker,                       # 12 — per-symbol news
-        results_calendar_worker,                     # 13 — upcoming results alerts
-        vacuum_worker,                               # 14 — weekly VACUUM (Sunday 04:00)
-    ]
-    for target in targets:
-        t = threading.Thread(target=target, daemon=True, name=target.__name__)
-        t.start()
-        _worker_threads.append(t)
-        logger.info("start_all_workers: spawned %s", t.name)
-        # Stagger launches so all workers don't simultaneously hammer the DB
-        # at startup. 500 ms per worker = 4.5 s spread across 10 workers.
-        await asyncio.sleep(0.5)
-    return _worker_threads
-
-
-def stop_all_workers(timeout: float = 35.0) -> None:
-    """Signal all workers to stop and wait up to `timeout` seconds for each to exit.
-
-    Default timeout is 35 seconds to allow for HTTP requests to complete (max 30s).
-    """
-    logger.info("stop_all_workers: setting shutdown event")
-    _shutdown_event.set()
-    for t in _worker_threads:
-        t.join(timeout=timeout)
-        if t.is_alive():
-            logger.warning("stop_all_workers: %s did not exit within %.1fs, abandoning", t.name, timeout)
-        else:
-            logger.info("stop_all_workers: %s exited cleanly", t.name)
-
-
-async def start_cache_cleanup(interval: float = 600.0) -> asyncio.Task:
-    """No-op: cachetools.TTLCache auto-evicts expired entries.
-
-    Kept for backward compatibility with existing callers.
-    """
-    async def _noop() -> None:
-        while True:
-            await asyncio.sleep(interval)
-
-    task = asyncio.create_task(_noop(), name="cache-cleanup-noop")
-    logger.info("Cache cleanup: using cachetools.TTLCache (auto-eviction, no manual cleanup needed)")
-    return task
-
-
-# Re-exports from split submodules (audit C.1, A.3-A.8).
-#
-# Each of these was moved out of this file to a dedicated submodule
-# (e.g. ``app/services/data_sync/universe.py``).  The re-exports here
-# keep the package-level import path working and preserve
-# ``is``-identity for tests that pin the move.  See
-# ``tests/test_data_sync_universe.py`` etc. for the contract.
-#
-# These are SAFE to re-export at module level: the data_sync modules
-# use lazy imports inside their function bodies, so importing them
-# here at the bottom of _impl does not create a circular import.
-from app.services.data_sync.universe import (  # noqa: E402,F401
-    _stock_universe_sync,
-    _update_symbol_error_status,
-    _bulk_insert_stock_universe,
+# ─── Session factories + config ──────────────────────────────────────────
+from app.database import (  # noqa: F401
+    AsyncSessionLocal,
+    _SyncSessionLocal,
 )
-from app.services.data_sync.backfill import (  # noqa: E402,F401
-    _ticker_backfill_sync,
-)
-from app.services.data_sync.intraday import (  # noqa: E402,F401
-    _ticker_intraday_update_sync,
-    _ticker_intraday_hourly_stale_check_sync,
-)
-from app.services.data_sync.daily import (  # noqa: E402,F401
-    _ticker_daily_update_sync,
-)
-from app.services.data_sync.scores import (  # noqa: E402,F401
-    _ticker_scores_sync,
-)
-from app.services.data_sync.indicators import (  # noqa: E402,F401
-    _ticker_indicators_sync,
-    _ticker_intraday_indicators_sync,
+from app.config import settings  # noqa: F401
+
+# ─── Logger ──────────────────────────────────────────────────────────────
+# Worker modules lazy-import ``_bg_impl.logger`` — keep the historical
+# module-level logger re-exported.
+import logging as _logging
+logger = _logging.getLogger(__name__)
+
+# ─── Job runner helpers ──────────────────────────────────────────────────
+from app.jobs.runner import (  # noqa: F401
+    sync_all_jobs_to_db,
+    update_job_status,
+    update_job_status_sync,
 )
