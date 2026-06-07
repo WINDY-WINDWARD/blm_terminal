@@ -89,17 +89,6 @@ from app.backgroundtasks._impl import (  # noqa: F401
     start_all_workers,
     stop_all_workers,
     start_cache_cleanup,
-    # Fair value (lives in _impl until A.12 part 2)
-    _batch_update_fair_values,
-    _batch_resolve_morningstar_ids,
-    sync_watchlist_fair_values,
-    sync_all_fair_values,
-    _update_sync_timestamp,
-    _should_trigger_full_sync,
-    _get_watchlist_lock,
-    _get_full_lock,
-    _run_watchlist_scheduler,
-    _run_nightly_scheduler,
 )
 
 # Workers that have moved to ``app/workers/<domain>.py`` during the
@@ -264,4 +253,21 @@ from app.services.data_sync.scores import (  # noqa: E402,F401
 from app.services.data_sync.indicators import (  # noqa: E402,F401
     _ticker_indicators_sync,
     _ticker_intraday_indicators_sync,
+)
+# A.12 part 2 — Morningstar fair-value sync moved to
+# ``app.services.fair_value``.  Imported directly (NOT through
+# ``_impl``) so the re-export shim test
+# (``tests/test_backgroundtasks_split.py::TestMovedWorkers``) can pin
+# the canonical home with ``is``-identity.
+from app.services.fair_value import (  # noqa: E402,F401
+    _batch_resolve_morningstar_ids,
+    _batch_update_fair_values,
+    _get_full_lock,
+    _get_watchlist_lock,
+    _run_nightly_scheduler,
+    _run_watchlist_scheduler,
+    _should_trigger_full_sync,
+    _update_sync_timestamp,
+    sync_all_fair_values,
+    sync_watchlist_fair_values,
 )

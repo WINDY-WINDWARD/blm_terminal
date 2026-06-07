@@ -67,6 +67,7 @@ def _make_frozen_datetime_class(frozen: datetime):
 async def test_should_trigger_full_sync_returns_true_when_no_last_update(monkeypatch):
     """No fair_value_updated_at row in DB -> always trigger."""
     from app import backgroundtasks
+    from app.services import fair_value
 
     # Mock the AsyncSessionLocal context manager to return a session that
     # yields no max() (None). We can't easily patch AsyncSessionLocal here
@@ -89,13 +90,14 @@ async def test_should_trigger_full_sync_returns_true_when_no_last_update(monkeyp
         async def commit(self):
             pass
 
-    # After Phase C.1 A.1 split, the implementation lives in
-    # ``_impl`` — patch there because functions defined in ``_impl``
-    # look up their own module globals, not the package's.
-    monkeypatch.setattr(backgroundtasks._impl, "AsyncSessionLocal", lambda: _StubSession())
+    # After Phase C.1 A.12 part 2, the implementation lives in
+    # ``app.services.fair_value`` — patch there because functions
+    # defined in ``fair_value`` look up their own module globals,
+    # not the package's.
+    monkeypatch.setattr(fair_value, "AsyncSessionLocal", lambda: _StubSession())
 
     frozen = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(backgroundtasks._impl, "datetime", _make_frozen_datetime_class(frozen))
+    monkeypatch.setattr(fair_value, "datetime", _make_frozen_datetime_class(frozen))
 
     assert await backgroundtasks._should_trigger_full_sync() is True
 
@@ -104,6 +106,7 @@ async def test_should_trigger_full_sync_returns_true_when_no_last_update(monkeyp
 async def test_should_trigger_full_sync_returns_true_when_stale(monkeypatch):
     """last_update > 24h ago -> trigger sync."""
     from app import backgroundtasks
+    from app.services import fair_value
 
     # last_update 25 hours before the frozen "now"
     frozen = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
@@ -129,8 +132,8 @@ async def test_should_trigger_full_sync_returns_true_when_stale(monkeypatch):
         async def commit(self):
             pass
 
-    monkeypatch.setattr(backgroundtasks._impl, "AsyncSessionLocal", lambda: _StubSession())
-    monkeypatch.setattr(backgroundtasks._impl, "datetime", _make_frozen_datetime_class(frozen))
+    monkeypatch.setattr(fair_value, "AsyncSessionLocal", lambda: _StubSession())
+    monkeypatch.setattr(fair_value, "datetime", _make_frozen_datetime_class(frozen))
 
     assert await backgroundtasks._should_trigger_full_sync() is True
 
@@ -139,6 +142,7 @@ async def test_should_trigger_full_sync_returns_true_when_stale(monkeypatch):
 async def test_should_trigger_full_sync_returns_false_when_recent(monkeypatch):
     """last_update within 24h -> skip sync."""
     from app import backgroundtasks
+    from app.services import fair_value
 
     # last_update 23 hours before the frozen "now" (within 24h)
     frozen = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
@@ -164,11 +168,12 @@ async def test_should_trigger_full_sync_returns_false_when_recent(monkeypatch):
         async def commit(self):
             pass
 
-    # After Phase C.1 A.1 split, the implementation lives in
-    # ``_impl`` — patch there because functions defined in ``_impl``
-    # look up their own module globals, not the package's.
-    monkeypatch.setattr(backgroundtasks._impl, "AsyncSessionLocal", lambda: _StubSession())
-    monkeypatch.setattr(backgroundtasks._impl, "datetime", _make_frozen_datetime_class(frozen))
+    # After Phase C.1 A.12 part 2, the implementation lives in
+    # ``app.services.fair_value`` — patch there because functions
+    # defined in ``fair_value`` look up their own module globals,
+    # not the package's.
+    monkeypatch.setattr(fair_value, "AsyncSessionLocal", lambda: _StubSession())
+    monkeypatch.setattr(fair_value, "datetime", _make_frozen_datetime_class(frozen))
 
     assert await backgroundtasks._should_trigger_full_sync() is False
 

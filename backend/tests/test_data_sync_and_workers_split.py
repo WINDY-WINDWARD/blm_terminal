@@ -1,4 +1,4 @@
-"""Tests for the A.12 part 1 module extraction (audit C.1).
+"""Tests for the A.12 module extractions (audit C.1).
 
 Moves cycle functions + helpers out of ``app/backgroundtasks/_impl.py``
 into 8 new modules:
@@ -11,6 +11,7 @@ into 8 new modules:
   - ``app/workers/notification_cycles.py`` — 4 watchlist cycle functions
   - ``app/workers/global_scan_cycle.py`` — ``_global_scan_cycle`` + 2 constants
   - ``app/workers/jobs.py`` — ``register_all_jobs``
+  - ``app/services/fair_value.py`` — 10 morningstar fair-value functions (A.12 part 2)
 
 Tests pin the refactor invariants:
 
@@ -53,6 +54,7 @@ class TestNewModuleSizes:
         ("app/workers/notification_cycles.py", 700),
         ("app/workers/global_scan_cycle.py", 500),
         ("app/workers/jobs.py", 350),
+        ("app/services/fair_value.py", 400),
     ])
     def test_module_under_loc_limit(self, rel_path, limit):
         path = ROOT / rel_path
@@ -132,6 +134,19 @@ GLOBAL_SCAN_CYCLE_SYMBOLS = [
 
 JOBS_FUNCTIONS = [
     "register_all_jobs",
+]
+
+FAIR_VALUE_FUNCTIONS = [
+    "_batch_resolve_morningstar_ids",
+    "_batch_update_fair_values",
+    "_get_full_lock",
+    "_get_watchlist_lock",
+    "_run_nightly_scheduler",
+    "_run_watchlist_scheduler",
+    "_should_trigger_full_sync",
+    "_update_sync_timestamp",
+    "sync_all_fair_values",
+    "sync_watchlist_fair_values",
 ]
 
 
@@ -326,6 +341,80 @@ class TestJobsModule:
         assert len(sig.parameters) == 0
 
 
+class TestFairValueModule:
+    """A.12 part 2 — fair-value sync moved to ``app.services.fair_value``."""
+
+    @pytest.mark.parametrize("name", FAIR_VALUE_FUNCTIONS)
+    def test_function_lives_in_fair_value(self, name):
+        from app.services import fair_value
+
+        assert hasattr(fair_value, name), f"fair_value.{name} missing"
+        fn = getattr(fair_value, name)
+        assert fn.__module__ == "app.services.fair_value", (
+            f"{name}.__module__ = {fn.__module__!r}, expected "
+            f"'app.services.fair_value'"
+        )
+
+    def test_fair_value_imports_bg_impl_lazily(self):
+        """``fair_value`` uses ``_bg_impl._is_job_enabled`` + ``_seconds_until_next_cron``
+        + ``get_async_shutdown_event``.  If these were top-level imports
+        they would create a circular import (the shim imports fair_value
+        during its own init).
+        """
+        from app.services import fair_value
+
+        # The pattern is to import lazily inside function bodies.  The
+        # module attribute ``_bg_impl`` is intentionally NOT a module
+        # attribute — only function-local references exist.
+        assert not hasattr(fair_value, "_bg_impl"), (
+            "fair_value imported _bg_impl at module level — must be lazy"
+        )
+
+    @pytest.mark.parametrize("name", [
+        "sync_watchlist_fair_values",
+        "sync_all_fair_values",
+        "_should_trigger_full_sync",
+        "_run_watchlist_scheduler",
+        "_run_nightly_scheduler",
+    ])
+    def test_fair_value_cycles_take_no_args(self, name):
+        from app.services import fair_value
+
+        fn = getattr(fair_value, name)
+        sig = inspect.signature(fn)
+        assert len(sig.parameters) == 0, (
+            f"{name} should take no args, got {sig}"
+        )
+
+    def test_batch_update_fair_values_signature(self):
+        from app.services.fair_value import _batch_update_fair_values
+
+        sig = inspect.signature(_batch_update_fair_values)
+        # symbols (positional), then keyword-only args
+        assert "symbols" in sig.parameters
+        assert "update_morningstar_id" in sig.parameters
+        assert "update_fair_value" in sig.parameters
+        assert "progress_job_key" in sig.parameters
+        assert "progress_start" in sig.parameters
+        assert "progress_end" in sig.parameters
+
+    def test_batch_resolve_morningstar_ids_signature(self):
+        from app.services.fair_value import _batch_resolve_morningstar_ids
+
+        sig = inspect.signature(_batch_resolve_morningstar_ids)
+        assert "symbols" in sig.parameters
+        assert "progress_job_key" in sig.parameters
+        assert "progress_start" in sig.parameters
+        assert "progress_end" in sig.parameters
+
+    def test_update_sync_timestamp_takes_key(self):
+        from app.services.fair_value import _update_sync_timestamp
+
+        sig = inspect.signature(_update_sync_timestamp)
+        assert len(sig.parameters) == 1
+        assert "key" in sig.parameters
+
+
 # ─── Re-export shim contract (each moved symbol reachable via bg.X) ───────
 
 
@@ -338,6 +427,7 @@ RE_EXPORT_SYMBOLS = (
     + NOTIFICATION_CYCLE_FUNCTIONS
     + [n for n, _ in GLOBAL_SCAN_CYCLE_SYMBOLS]
     + JOBS_FUNCTIONS
+    + FAIR_VALUE_FUNCTIONS
 )
 
 

@@ -127,17 +127,6 @@ EXPECTED_PUBLIC_SYMBOLS = [
     "start_all_workers",
     "stop_all_workers",
     "start_cache_cleanup",
-    # Fair value (will move to app.services.fair_value in A.12 part 2)
-    "_batch_update_fair_values",
-    "_batch_resolve_morningstar_ids",
-    "sync_watchlist_fair_values",
-    "sync_all_fair_values",
-    "_update_sync_timestamp",
-    "_should_trigger_full_sync",
-    "_get_watchlist_lock",
-    "_get_full_lock",
-    "_run_watchlist_scheduler",
-    "_run_nightly_scheduler",
 ]
 
 
@@ -268,6 +257,17 @@ MOVED_SYMBOLS = [
     ("GLOBAL_SCAN_DELAY", "app.workers.global_scan_cycle"),
     # A.12 part 1 — register_all_jobs moved to app.workers.jobs
     ("register_all_jobs", "app.workers.jobs"),
+    # A.12 part 2 — fair-value sync moved to app.services.fair_value
+    ("_batch_update_fair_values", "app.services.fair_value"),
+    ("_batch_resolve_morningstar_ids", "app.services.fair_value"),
+    ("sync_watchlist_fair_values", "app.services.fair_value"),
+    ("sync_all_fair_values", "app.services.fair_value"),
+    ("_update_sync_timestamp", "app.services.fair_value"),
+    ("_should_trigger_full_sync", "app.services.fair_value"),
+    ("_get_watchlist_lock", "app.services.fair_value"),
+    ("_get_full_lock", "app.services.fair_value"),
+    ("_run_watchlist_scheduler", "app.services.fair_value"),
+    ("_run_nightly_scheduler", "app.services.fair_value"),
 ]
 
 
