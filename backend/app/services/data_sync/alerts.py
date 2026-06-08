@@ -21,7 +21,7 @@ def evaluate_technical_alerts(
     symbol: str,
     latest: Any | None,
     prev: Any | None,
-    cfg: dict[str, str],
+    cfg: dict[str, float],
     *,
     ts: Any | None = None,
     up_streak: int = 0,
@@ -42,8 +42,8 @@ def evaluate_technical_alerts(
         Most recent daily row (must have indicator columns populated).
     prev : TickerDaily | None
         Previous daily row (needed for MACD crossover detection).
-    cfg : dict[str, str]
-        Notification threshold config (keys like ``notif.rsi_oversold_threshold``).
+    cfg : dict[str, float]
+        Notification threshold config (keys like ``notif.rsi_oversold_threshold``; values are float).
     ts : TickerScore | None
         Pre-computed momentum/return scores (optional, skips those alerts).
     up_streak : int
@@ -147,7 +147,7 @@ def evaluate_intraday_alerts(
     symbol: str,
     latest: Any | None,
     prev: Any | None,
-    cfg: dict[str, str],
+    cfg: dict[str, float],
     interval: str,
 ) -> list[tuple[str, str]]:
     """Evaluate intraday-level technical alerts for a single symbol x interval.
