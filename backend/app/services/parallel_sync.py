@@ -210,23 +210,24 @@ def parallel_indicator_sync(
     last_heartbeat = pipeline_start_time
     enqueued = 0
 
-    def _emit_progress() -> None:
+    def _emit_progress(item_label: str = "") -> None:
         elapsed = time.monotonic() - pipeline_start_time
         rate = enqueued / elapsed if elapsed > 0 else 0
         if progress_fn is not None:
             progress_fn(enqueued, total, elapsed, rate)
+        pct = int((enqueued / total) * 100) if total > 0 else 0
+        job_msg = f"Processing {enqueued}/{total} items"
+        if item_label:
+            job_msg += f" ({item_label})"
+        if len(job_msg) > 80:
+            job_msg = job_msg[:77] + "..."
+        if job_key and update_job_status_fn is not None:
+            update_job_status_fn(job_key, "running", progress=pct, message=job_msg)
         if pipeline_job_key and pipeline_progress_start is not None and pipeline_progress_end is not None:
             span = max(1, pipeline_progress_end - pipeline_progress_start)
-            pct = pipeline_progress_start + int((enqueued / total) * span)
-            if len(item) == 1:  # noqa: F821
-                sym_label = str(item[0])  # noqa: F821
-            else:
-                sym_label = "/".join(str(x) for x in item)  # noqa: F821
-            msg = f"Stage 3/7: Computing indicators... {enqueued}/{total} ({sym_label})"
-            if len(msg) > 80:
-                msg = msg[:77] + "..."
+            pct_pipeline = pipeline_progress_start + int((enqueued / total) * span)
             if update_job_status_fn is not None:
-                update_job_status_fn(pipeline_job_key, "running", progress=pct, message=msg)
+                update_job_status_fn(pipeline_job_key, "running", progress=pct_pipeline, message=job_msg)
 
     for i, item in enumerate(items, start=1):
         if shutdown_event.is_set():
@@ -249,7 +250,8 @@ def parallel_indicator_sync(
         enqueued = i
 
         if enqueued % progress_every == 0 or enqueued == total:
-            _emit_progress()
+            item_label = str(item[0]) if len(item) == 1 else "/".join(str(x) for x in item)
+            _emit_progress(item_label)
 
         now = time.monotonic()
         if now - last_heartbeat > heartbeat_every_s:

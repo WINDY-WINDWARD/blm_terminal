@@ -37,7 +37,8 @@ def ticker_scores_worker() -> None:
 
     from app.backgroundtasks._runtime import (_is_job_enabled,
         _pipeline_idle, _pipeline_lock, _report_job_waiting,
-        _shutdown_event, _sleep_interruptible)
+        _shutdown_event, _sleep_interruptible, _startup_pipeline_done,
+        _wait_for_startup_event)
     from app.jobs.runner import update_job_status_sync
     from app.services.data_sync.scores import _ticker_scores_sync
 
@@ -54,6 +55,9 @@ def ticker_scores_worker() -> None:
         return
 
     update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
+
+    if _wait_for_startup_event(_startup_pipeline_done, "startup pipeline", "job.ticker_scores"):
+        return
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_scores", "0 0 * * *")
@@ -83,7 +87,8 @@ def ticker_indicators_worker() -> None:
 
     from app.backgroundtasks._runtime import (_is_job_enabled,
         _pipeline_idle, _pipeline_lock, _report_job_waiting,
-        _shutdown_event, _sleep_interruptible)
+        _shutdown_event, _sleep_interruptible, _startup_pipeline_done,
+        _wait_for_startup_event)
     from app.jobs.runner import update_job_status_sync
     from app.services.data_sync.indicators import _ticker_indicators_sync
 
@@ -100,6 +105,9 @@ def ticker_indicators_worker() -> None:
         return
 
     update_job_status_sync("job.ticker_indicators", "waiting", progress=0, message="Waiting for orchestrator / cron schedule")
+
+    if _wait_for_startup_event(_startup_pipeline_done, "startup pipeline", "job.ticker_indicators"):
+        return
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_indicators", "0 11 * * 1-5")

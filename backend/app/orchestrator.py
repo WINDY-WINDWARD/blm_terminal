@@ -303,9 +303,9 @@ class Orchestrator:
         # functions from ``app.services.data_sync.<domain>``, scan /
         # notification cycles from ``app.workers.<domain>``.
         from app.backgroundtasks._runtime import (_shutdown_event,
-            _startup_market_data_done, _startup_stock_universe_done,
-            _startup_ticker_backfill_done, _startup_ticker_indicators_done,
-            _startup_ticker_scores_done)
+            _startup_market_data_done, _startup_pipeline_done,
+            _startup_stock_universe_done, _startup_ticker_backfill_done,
+            _startup_ticker_indicators_done, _startup_ticker_scores_done)
         from app.jobs.runner import update_job_status
         from app.services.data_sync.backfill import _ticker_backfill_sync
         from app.services.data_sync.daily import _ticker_daily_update_sync
@@ -351,7 +351,8 @@ class Orchestrator:
                 sub_jobs=[(
                     "job.ticker_weekly_monthly_update",
                     lambda: _ticker_intraday_update_sync(
-                        ["W", "M"], scope="universe", smart=True
+                        ["W", "M"], scope="universe", smart=True,
+                        job_key="job.ticker_weekly_monthly_update",
                     ),
                     True,
                 )],
@@ -435,6 +436,7 @@ class Orchestrator:
                         lambda: _ticker_intraday_update_sync(
                             ["W", "M"], scope="universe",
                             from_ts_overrides=wm_from_ts_overrides,
+                            job_key="job.ticker_weekly_monthly_update",
                         ),
                         True,
                     )],
@@ -488,6 +490,10 @@ class Orchestrator:
             if mode == PipelineMode.NIGHTLY:
                 wait = _seconds_until_next_cron_ist(f"{_NIGHTLY_MINUTE_IST} {_NIGHTLY_HOUR_IST} * * *")
                 next_trig = now + timedelta(seconds=wait)
+
+            # Release the startup pipeline gate so pipeline-managed daemon
+            # workers (daily_update, scores, indicators) can enter their cron loops.
+            _startup_pipeline_done.set()
 
             await update_job_status(pipeline_job_key, "idle", progress=100,
                                     message=f"{mode.value.capitalize()} pipeline complete",

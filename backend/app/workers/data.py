@@ -73,6 +73,8 @@ def ticker_daily_update_worker() -> None:
         _report_job_waiting,
         _shutdown_event,
         _sleep_interruptible,
+        _startup_pipeline_done,
+        _wait_for_startup_event,
     )
     from app.jobs.runner import update_job_status_sync
     from app.services.data_sync.daily import _ticker_daily_update_sync
@@ -89,6 +91,9 @@ def ticker_daily_update_worker() -> None:
         return
 
     update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Waiting for cron schedule")
+
+    if _wait_for_startup_event(_startup_pipeline_done, "startup pipeline", "job.ticker_daily_update"):
+        return
 
     while not _shutdown_event.is_set():
         wait_secs = _report_job_waiting("job.ticker_daily_update", "*/30 15,16,17,18,19,20 * * 1-5")

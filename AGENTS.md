@@ -152,6 +152,29 @@ Never commit `.env.local` or `.env` — both in `.gitignore`.
 
 ---
 
+---
+
+## Background Worker Architecture
+
+### Daemon Workers vs. Orchestrator Pipeline
+
+Daemon workers (cron-based, managed by `_runtime.py`) and the orchestrator startup pipeline share `_pipeline_lock`. A startup race is possible:
+
+- **Workers that depend on pipeline data**: `ticker_daily_update_worker`, `ticker_scores_worker`, `ticker_indicators_worker`
+- **Safety mechanism**: `_startup_pipeline_done` (threading.Event) — workers call `_wait_for_startup_event()` before entering their cron loop. The orchestrator sets the event after `_execute_pipeline` completes (Stage 7 done).
+- **Lifecycle**: `backend/app/workers/lifecycle.py` re-exports `_startup_pipeline_done`. Import via `from app.workers.lifecycle import _startup_pipeline_done`.
+- **Test**: `tests/test_pipeline_sync.py` verifies the startup pipeline-safe integration.
+
+### Job Progress Tracking in UI
+
+The `/api/py/jobs` endpoint exposes background job status. For `parallel_sync`-based jobs (e.g., W/M weekly/monthly sync):
+
+- `parallel_sync._emit_progress` updates both pipeline progress AND the individual `job_key` status (percentage + message).
+- Data sync functions (`_ticker_intraday_update_sync`, etc.) accept an optional `job_key` parameter and call `update_job_status_sync` after each batch.
+- The orchestrator passes `job_key="job.ticker_weekly_monthly_update"` to relevant stage lambdas.
+
+---
+
 ## No Cursor or Copilot Rules
 
 No `.cursorrules`, `.cursor/rules/`, or `.github/copilot-instructions.md` files exist in this repo.

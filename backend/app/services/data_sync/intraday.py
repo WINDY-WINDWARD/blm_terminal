@@ -34,6 +34,7 @@ def _ticker_intraday_update_sync(
     scope: str = "watchlist",
     smart: bool = False,
     from_ts_overrides: Optional[dict[str, int]] = None,
+    job_key: Optional[str] = None,
 ) -> None:
     """Synchronous core: backfill intraday candles for watchlist or all universe symbols.
 
@@ -54,6 +55,7 @@ def _ticker_intraday_update_sync(
     for each, logs counts. 1 s delay between symbols to avoid NSE charting API rate limits.
     """
     from app.backgroundtasks._runtime import _shutdown_event
+    from app.jobs.runner import update_job_status_sync
     from app.services.ticker_warehouse import (
         backfill_intraday_symbol,
         get_all_universe_symbols,
@@ -105,9 +107,17 @@ def _ticker_intraday_update_sync(
     errors = 0
     _BATCH_SIZE = 10
 
-    for batch_start in range(0, len(symbols_to_process), _BATCH_SIZE):
+    total_symbols = len(symbols_to_process)
+    for batch_start in range(0, total_symbols, _BATCH_SIZE):
         if _shutdown_event.is_set():
             break
+
+        if job_key:
+            pct = int(batch_start / total_symbols * 100) if total_symbols > 0 else 0
+            update_job_status_sync(
+                job_key, "running", progress=pct,
+                message=f"Backfilling {batch_start}/{total_symbols} symbols ({scope}, {intervals})",
+            )
 
         batch = symbols_to_process[batch_start : batch_start + _BATCH_SIZE]
 

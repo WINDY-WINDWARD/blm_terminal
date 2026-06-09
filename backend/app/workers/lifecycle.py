@@ -33,6 +33,7 @@ from app.backgroundtasks._runtime import (  # noqa: F401
     _startup_ticker_scores_done,
     _startup_ticker_hourly_done,
     _startup_market_data_done,
+    _startup_pipeline_done,
     reset_async_shutdown_event,
     set_async_shutdown_event,
     _sleep_interruptible,
