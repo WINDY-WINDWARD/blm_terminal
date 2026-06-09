@@ -170,15 +170,17 @@ This is the **same** lock already used by the workers for their own cron cycles.
 
 An asyncio-level `asyncio.Lock` inside the Orchestrator prevents two pipeline runs from overlapping (e.g. if a manual API trigger arrives while the nightly pipeline is still running).
 
+A **separate** `threading.Event` (`_startup_pipeline_done`) protects pipeline-managed daemon workers from racing with the startup pipeline. Workers that depend on pipeline data call `_wait_for_startup_event()` before entering their cron loops; the orchestrator sets the event after `_execute_pipeline` completes (Stage 7 done). See `backend/app/workers/lifecycle.py`.
+
 ### Worker Taxonomy
 
 | Worker | Managed By | Scheduling |
 |--------|-----------|------------|
 | `stock_universe_worker` | Self (cron + first-run) | Daily midnight + startup first-run |
 | `ticker_backfill_worker` | Self | Startup only, then idle |
-| `ticker_indicators_worker` | Self | Weekdays 11:00 + startup first-run |
-| `ticker_scores_worker` | Self | Daily midnight + startup first-run |
-| `ticker_daily_update_worker` | Self | Every 30 min 15:30–20:00 IST |
+| `ticker_indicators_worker` | Pipeline-managed + startup-gated | Weekdays 11:00 + startup first-run; waits `_startup_pipeline_done` before cron loop |
+| `ticker_scores_worker` | Pipeline-managed + startup-gated | Daily midnight + startup first-run; waits `_startup_pipeline_done` before cron loop |
+| `ticker_daily_update_worker` | Pipeline-managed + startup-gated | Every 30 min 15:30–20:00 IST; waits `_startup_pipeline_done` before cron loop |
 | `ticker_intraday_hourly_update_worker` | Self | At :15 past each trading hour 09:15–15:15 IST weekdays |
 | `ticker_intraday_hourly_indicators_worker` | Self | At :30 past each trading hour 09:30–15:30 IST weekdays; waits `_startup_ticker_hourly_done` |
 | `ticker_intraday_hourly_stale_check` | Orchestrator stage | Startup + 23:00 IST nightly |
@@ -294,7 +296,7 @@ The Orchestrator registers two synthetic jobs after `start_all_workers()` has al
 
 ### With Existing Startup Gates
 
-The Orchestrator sets the four daily-pipeline `threading.Event` objects (`_startup_stock_universe_done`, `_startup_ticker_backfill_done`, `_startup_ticker_indicators_done`, `_startup_ticker_scores_done`) after completing each stage. A **fifth** event, `_startup_ticker_hourly_done`, is set by `ticker_intraday_hourly_update_worker` after its first-run candle backfill completes; `ticker_intraday_hourly_indicators_worker` polls this gate before computing 1h indicators. This means:
+The Orchestrator sets the four daily-pipeline `threading.Event` objects (`_startup_stock_universe_done`, `_startup_ticker_backfill_done`, `_startup_ticker_indicators_done`, `_startup_ticker_scores_done`) after completing each stage. A **fifth** event, `_startup_ticker_hourly_done`, is set by `ticker_intraday_hourly_update_worker` after its first-run candle backfill completes; `ticker_intraday_hourly_indicators_worker` polls this gate before computing 1h indicators. A **sixth** event, `_startup_pipeline_done`, is set by the Orchestrator after the full startup pipeline completes (Stage 7); pipeline-managed daemon workers (`ticker_daily_update_worker`, `ticker_scores_worker`, `ticker_indicators_worker`) wait on this gate before entering their cron loops to prevent racing with the pipeline. This means:
 
 - If the Orchestrator finishes a stage before the worker's own cron loop reaches it, the worker sees the gate already open and proceeds immediately.
 - If the worker finishes first (e.g. on a warm restart where backfill is a no-op), the Orchestrator sees the gate already open and proceeds immediately.
@@ -324,7 +326,11 @@ No new endpoints were added. The existing `POST /api/jobs/{job_key}/trigger` end
 
 8. **W/M indicator observability is symmetric with the daily indicator rewrite.** `_ticker_intraday_indicators_sync` (called by Stages 1c, 5b, and the hourly indicator worker) emits an entry log on stale/null pair scan, logs progress every 10 pairs, emits a 10-second heartbeat to prevent log silence on slow pairs, warns per-pair when compute exceeds 5 s, and honors the configurable inter-batch sleep (`settings.indicator_inter_batch_sleep_s`, env `INDICATOR_INTER_BATCH_SLEEP_S`, default 0). The old in-place `print()` that was invisible to log files has been removed.
 
-9. **Indicator sync is multithreaded (3 compute + 1 writer).** Both `_ticker_indicators_sync` (Stage 3) and `_ticker_intraday_indicators_sync` (Stages 1c, 2c, 5b) now run their work on a shared topology: 3 compute workers pull `(symbol[, interval])` items from a `queue.Queue(maxsize=100)`, run the O(n) indicator compute (which is pure-Python, no DB writes), and push the resulting `list[dict]` of update params to a second `queue.Queue(maxsize=100)`. A single dedicated writer thread is the only thread that performs UPDATEs — it pulls from the second queue, buffers 50 items, and runs a single bulk `executemany` UPDATE in one transaction. The split is `prepare_*_indicator_updates` (read candles, compute, return update dicts) + `flush_*_indicator_updates` (bulk UPDATE+commit) in `app.services.indicators`. The orchestrator wires them into `parallel_indicator_sync` in `app.services.parallel_sync`. See [indicators.md](indicators.md) for the full architecture, tuning knobs, and performance expectations.
+9. **W/M job progress is visible in the UI.** `parallel_sync._emit_progress` updates both pipeline progress and the individual `job_key` status (percentage + message). `_ticker_intraday_update_sync` accepts an optional `job_key` parameter and calls `update_job_status_sync` after each batch. The orchestrator passes `job_key="job.ticker_weekly_monthly_update"` to relevant stage lambdas, so the Jobs dashboard shows real progress instead of stuck at 0%.
+
+10. **Pipeline-managed daemon workers wait for startup pipeline.** `ticker_daily_update_worker`, `ticker_scores_worker`, and `ticker_indicators_worker` call `_wait_for_startup_event(_startup_pipeline_done, ...)` before entering their cron loops. This prevents a race where a worker's first cron cycle fires while the startup pipeline is still running (e.g., `ticker_daily_update_worker` at 15:30 during Stage 1). The orchestrator sets `_startup_pipeline_done` after `_execute_pipeline` completes (Stage 7 done). Import via `from app.workers.lifecycle import _startup_pipeline_done`.
+
+11. **Indicator sync is multithreaded (3 compute + 1 writer).** Both `_ticker_indicators_sync` (Stage 3) and `_ticker_intraday_indicators_sync` (Stages 1c, 2c, 5b) now run their work on a shared topology: 3 compute workers pull `(symbol[, interval])` items from a `queue.Queue(maxsize=100)`, run the O(n) indicator compute (which is pure-Python, no DB writes), and push the resulting `list[dict]` of update params to a second `queue.Queue(maxsize=100)`. A single dedicated writer thread is the only thread that performs UPDATEs — it pulls from the second queue, buffers 50 items, and runs a single bulk `executemany` UPDATE in one transaction. The split is `prepare_*_indicator_updates` (read candles, compute, return update dicts) + `flush_*_indicator_updates` (bulk UPDATE+commit) in `app.services.indicators`. The orchestrator wires them into `parallel_indicator_sync` in `app.services.parallel_sync`. See [indicators.md](indicators.md) for the full architecture, tuning knobs, and performance expectations.
 
 ---
 
@@ -335,9 +341,16 @@ No new endpoints were added. The existing `POST /api/jobs/{job_key}/trigger` end
 | `backend/app/orchestrator.py` | **Modified** | Added Stage 1c (W/M indicator compute for startup), updated docstring/imports/stage labels; added Stages 2c and 5a/5b in the previous intraday-worker-refactor |
 | `backend/main.py` | **Unchanged** | Lifespan already calls `orchestrator.start()` / `orchestrator.stop()` |
 | `backend/app/backgroundtasks.py` | **Modified** | Added `TickerDaily` to the local import in `_ticker_indicator_notification_cycle` (fixes MTF alignment `NameError`); refactored `_ticker_intraday_indicators_sync` with full observability (entry log, per-10 progress, 10s heartbeat, per-pair timing warn at >5s, configurable inter-batch sleep from `settings.indicator_inter_batch_sleep_s`, summary log with total duration) — replaced the old in-place `print()` that was invisible to log files; previously: refactored `_ticker_intraday_update_sync()` and `_ticker_intraday_indicators_sync()` to accept `intervals` param; replaced old intraday workers with `ticker_intraday_hourly_update_worker` and `ticker_intraday_hourly_indicators_worker`; renamed gate to `_startup_ticker_hourly_done`; updated `register_all_jobs()` and `start_all_workers()`; **now delegates the per-item compute to `parallel_indicator_sync` (3 compute + 1 writer topology, see `app/services/parallel_sync.py`)** |
-| `backend/app/services/parallel_sync.py` | **Created** | New `parallel_indicator_sync` helper implementing the 3 compute + 1 writer topology. Extracted from `backgroundtasks` into a small dependency-free module so it can be unit-tested without pulling in the NSE / news transitive imports. |
+| `backend/app/services/parallel_sync.py` | **Created** | New `parallel_indicator_sync` helper implementing the 3 compute + 1 writer topology. Extracted from `backgroundtasks` into a small dependency-free module so it can be unit-tested without pulling in the NSE / news transitive imports. **Modified later:** `_emit_progress` now updates individual `job_key` progress (not just pipeline progress) so W/M sync jobs show real progress in the UI. |
 | `backend/app/services/indicators.py` | **Modified** | Added `prepare_daily_indicator_updates`, `flush_daily_indicator_updates`, `prepare_intraday_indicator_updates`, `flush_intraday_indicator_updates` so the indicator compute is split into a pure read-only half and a write half. The `compute_*_for_all_rows` wrappers still exist for serial cron callers (e.g. `_ticker_intraday_hourly_stale_check_sync`). |
 | `backend/tests/test_indicator_sync_parallel.py` | **Created** | Unit tests for the 3+1 threaded topology. 7 tests covering empty items, typical run, intraday args, compute worker failure, writer failure, shutdown drain, and thread count. |
+| `backend/app/backgroundtasks/_runtime.py` | **Modified** | Added `_startup_pipeline_done` threading.Event; added `_wait_for_startup_event()` helper for pipeline-managed workers. |
+| `backend/app/orchestrator.py` | **Modified** | Sets `_startup_pipeline_done` after startup pipeline completes; passes `job_key` to W/M stage lambdas for progress tracking. |
+| `backend/app/workers/ticker_compute.py` | **Modified** | `ticker_scores_worker`, `ticker_indicators_worker`: wait for `_startup_pipeline_done` before cron loop. |
+| `backend/app/workers/data.py` | **Modified** | `ticker_daily_update_worker`: wait for `_startup_pipeline_done` before cron loop. |
+| `backend/app/workers/lifecycle.py` | **Modified** | Re-exports `_startup_pipeline_done` for downstream imports. |
+| `backend/app/services/data_sync/intraday.py` | **Modified** | Added `job_key` param to `_ticker_intraday_update_sync`; calls `update_job_status_sync` after each batch with progress percentage. |
+| `backend/tests/test_pipeline_sync.py` | **Created** | Tests verifying startup pipeline-safe integration for pipeline-managed workers. |
 | `docs/reference/backend/indicators.md` | **Created** | Full architecture, tuning knobs, performance expectations, and logging guide for the indicator sync. |
 | `backend/alembic/versions/d8e1ed7addfa_cleanup_old_intraday_jobs.py` | **Created** | Deletes orphaned `job.ticker_intraday_update` / `job.ticker_intraday_indicators` rows and their `first_run.*` SystemConfig flags |
 | `backend/app/jobs/registry.py` | **Unchanged** | Already supports arbitrary job registration; no modifications needed |

@@ -10,8 +10,12 @@ from app.config import settings
 DATABASE_URL = f"sqlite+aiosqlite:///{settings.db_path}"
 
 
-def _set_sqlite_pragma(dbapi_conn, connection_record):
+def _apply_sqlite_pragmas(cursor) -> None:
     """Enable WAL mode and tune SQLite for concurrent multi-writer workloads.
+
+    Shared by BOTH the async engine and the sync engine via the
+    ``connect`` event listener.  Single source of truth for pragma
+    tuning.
 
     Key choices:
     - busy_timeout=30000: 30 s retry window — set FIRST so the journal_mode=WAL
@@ -24,7 +28,6 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
     - temp_store=MEMORY: temp tables and indices live in RAM, not temp files.
     - mmap_size=268435456: 256 MB memory-mapped I/O for faster sequential reads.
     """
-    cursor = dbapi_conn.cursor()
     # busy_timeout must be set first so that the journal_mode=WAL exclusive
     # lock acquisition retries rather than immediately raising "database is locked".
     cursor.execute("PRAGMA busy_timeout=30000")
@@ -33,6 +36,12 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
     cursor.execute("PRAGMA cache_size=-65536")
     cursor.execute("PRAGMA temp_store=MEMORY")
     cursor.execute("PRAGMA mmap_size=268435456")
+
+
+def _set_sqlite_pragma(dbapi_conn, connection_record):
+    """Async-engine connect listener.  Delegates to ``_apply_sqlite_pragmas``."""
+    cursor = dbapi_conn.cursor()
+    _apply_sqlite_pragmas(cursor)
     cursor.close()
 
 
@@ -80,14 +89,9 @@ _sync_engine = create_engine(
 
 @_sa_event.listens_for(_sync_engine, "connect")
 def _set_sync_sqlite_pragmas(dbapi_conn, connection_record):
+    """Sync-engine connect listener.  Delegates to ``_apply_sqlite_pragmas``."""
     cursor = dbapi_conn.cursor()
-    # busy_timeout first — same reasoning as _set_sqlite_pragma above.
-    cursor.execute("PRAGMA busy_timeout=30000")
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.execute("PRAGMA cache_size=-65536")
-    cursor.execute("PRAGMA temp_store=MEMORY")
-    cursor.execute("PRAGMA mmap_size=268435456")
+    _apply_sqlite_pragmas(cursor)
     cursor.close()
 
 
@@ -95,26 +99,4 @@ _SyncSessionLocal = _sync_sessionmaker(
     bind=_sync_engine,
     autocommit=False,
     autoflush=False,
-)
-
-# ---------------------------------------------------------------------------
-# Thread-safe async engine — used by _run_async() callsites in worker threads.
-#
-# The main `engine` above uses NullPool so each request gets its own connection.
-# _run_async() creates a *new* event loop per worker thread — this engine also
-# uses NullPool so it is safe to call from any worker thread.
-# ---------------------------------------------------------------------------
-
-_thread_async_engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    connect_args={"check_same_thread": False},
-    poolclass=_AsyncNullPool,
-)
-event.listen(_thread_async_engine.sync_engine, "connect", _set_sqlite_pragma)
-
-_ThreadAsyncSessionLocal = async_sessionmaker(
-    bind=_thread_async_engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
 )

@@ -57,6 +57,8 @@ venv/
 env/
 
 data.db*
+data_test.db
+ticker.db
 
 # cookies (browser session data - platform specific)
 cookies/*.pkl

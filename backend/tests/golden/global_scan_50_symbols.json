@@ -1,0 +1,1226 @@
+[
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM00 Bollinger Band squeeze detected (bb_width=0.04)",
+    "symbol": "SYM00",
+    "trigger_type": "bb_squeeze_alert",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM00 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM00",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM00 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM00",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM00 up 10 consecutive days",
+    "symbol": "SYM00",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM01 52W HIGH @ \u20b9250.0",
+    "symbol": "SYM01",
+    "trigger_type": "52w_high_breakout",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM01 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM01",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM01 up 10 consecutive days",
+    "symbol": "SYM01",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM02 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM02",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM02 up 10 consecutive days",
+    "symbol": "SYM02",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM02 vol +3x",
+    "symbol": "SYM02",
+    "trigger_type": "volume_breakout",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM03 ATR% 4.5% > 4.0%",
+    "symbol": "SYM03",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM03 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM03",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM03 up 10 consecutive days",
+    "symbol": "SYM03",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM04 ATR% 5.0% > 4.0%",
+    "symbol": "SYM04",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM04 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM04",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM04 up 10 consecutive days",
+    "symbol": "SYM04",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM05 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM05",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM05 [1h] MACD bullish crossover",
+    "symbol": "SYM05",
+    "trigger_type": "macd_bullish_cross_1h",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM05 [M] MACD bullish crossover",
+    "symbol": "SYM05",
+    "trigger_type": "macd_bullish_cross_M",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM05 [W] MACD bullish crossover",
+    "symbol": "SYM05",
+    "trigger_type": "macd_bullish_cross_W",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM05 up 10 consecutive days",
+    "symbol": "SYM05",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM06 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM06",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM06 [1h] MACD bullish crossover",
+    "symbol": "SYM06",
+    "trigger_type": "macd_bullish_cross_1h",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM06 [M] MACD bullish crossover",
+    "symbol": "SYM06",
+    "trigger_type": "macd_bullish_cross_M",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM06 [W] MACD bullish crossover",
+    "symbol": "SYM06",
+    "trigger_type": "macd_bullish_cross_W",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM06 up 10 consecutive days",
+    "symbol": "SYM06",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM07",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 [1h] MACD bullish crossover",
+    "symbol": "SYM07",
+    "trigger_type": "macd_bullish_cross_1h",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 [M] MACD bullish crossover",
+    "symbol": "SYM07",
+    "trigger_type": "macd_bullish_cross_M",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 [W] MACD bullish crossover",
+    "symbol": "SYM07",
+    "trigger_type": "macd_bullish_cross_W",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM07",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM07 up 10 consecutive days",
+    "symbol": "SYM07",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 ATR% 4.5% > 4.0%",
+    "symbol": "SYM08",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM08",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 [1h] MACD bullish crossover",
+    "symbol": "SYM08",
+    "trigger_type": "macd_bullish_cross_1h",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 [M] MACD bullish crossover",
+    "symbol": "SYM08",
+    "trigger_type": "macd_bullish_cross_M",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 [W] MACD bullish crossover",
+    "symbol": "SYM08",
+    "trigger_type": "macd_bullish_cross_W",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM08 up 10 consecutive days",
+    "symbol": "SYM08",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM09 ATR% 5.0% > 4.0%",
+    "symbol": "SYM09",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM09 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM09",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM09 [1h] MACD bullish crossover",
+    "symbol": "SYM09",
+    "trigger_type": "macd_bullish_cross_1h",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM09 [M] MACD bullish crossover",
+    "symbol": "SYM09",
+    "trigger_type": "macd_bullish_cross_M",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM09 [W] MACD bullish crossover",
+    "symbol": "SYM09",
+    "trigger_type": "macd_bullish_cross_W",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM09 up 10 consecutive days",
+    "symbol": "SYM09",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM10 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM10",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM10 up 10 consecutive days",
+    "symbol": "SYM10",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM11 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM11",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM11 RSI overbought: 80.0 > 70.0",
+    "symbol": "SYM11",
+    "trigger_type": "rsi_overbought",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM11 up 10 consecutive days",
+    "symbol": "SYM11",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM12 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM12",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM12 up 10 consecutive days",
+    "symbol": "SYM12",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM13 ATR% 4.5% > 4.0%",
+    "symbol": "SYM13",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM13 Bollinger Band squeeze detected (bb_width=0.04)",
+    "symbol": "SYM13",
+    "trigger_type": "bb_squeeze_alert",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM13 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM13",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM13 up 10 consecutive days",
+    "symbol": "SYM13",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM14 ATR% 5.0% > 4.0%",
+    "symbol": "SYM14",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM14 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM14",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM14 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM14",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM14 up 10 consecutive days",
+    "symbol": "SYM14",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM15 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM15",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM15 up 10 consecutive days",
+    "symbol": "SYM15",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM16 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM16",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM16 up 10 consecutive days",
+    "symbol": "SYM16",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM17 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM17",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM17 up 10 consecutive days",
+    "symbol": "SYM17",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM18 ATR% 4.5% > 4.0%",
+    "symbol": "SYM18",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM18 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM18",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM18 up 10 consecutive days",
+    "symbol": "SYM18",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM19 ATR% 5.0% > 4.0%",
+    "symbol": "SYM19",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM19 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM19",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM19 up 10 consecutive days",
+    "symbol": "SYM19",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM20 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM20",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM20 up 10 consecutive days",
+    "symbol": "SYM20",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM21 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM21",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM21 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM21",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM21 up 10 consecutive days",
+    "symbol": "SYM21",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM22 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM22",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM22 RSI overbought: 80.0 > 70.0",
+    "symbol": "SYM22",
+    "trigger_type": "rsi_overbought",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM22 up 10 consecutive days",
+    "symbol": "SYM22",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM23 ATR% 4.5% > 4.0%",
+    "symbol": "SYM23",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM23 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM23",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM23 up 10 consecutive days",
+    "symbol": "SYM23",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM24 ATR% 5.0% > 4.0%",
+    "symbol": "SYM24",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM24 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM24",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM24 up 10 consecutive days",
+    "symbol": "SYM24",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM25 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM25",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM25 up 10 consecutive days",
+    "symbol": "SYM25",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM26 Bollinger Band squeeze detected (bb_width=0.04)",
+    "symbol": "SYM26",
+    "trigger_type": "bb_squeeze_alert",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM26 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM26",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM26 up 10 consecutive days",
+    "symbol": "SYM26",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM27 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM27",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM27 up 10 consecutive days",
+    "symbol": "SYM27",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM28 ATR% 4.5% > 4.0%",
+    "symbol": "SYM28",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM28 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM28",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM28 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM28",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM28 up 10 consecutive days",
+    "symbol": "SYM28",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM29 ATR% 5.0% > 4.0%",
+    "symbol": "SYM29",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM29 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM29",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM29 up 10 consecutive days",
+    "symbol": "SYM29",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM30 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM30",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM30 up 10 consecutive days",
+    "symbol": "SYM30",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM31 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM31",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM31 up 10 consecutive days",
+    "symbol": "SYM31",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM32 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM32",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM32 up 10 consecutive days",
+    "symbol": "SYM32",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM33 ATR% 4.5% > 4.0%",
+    "symbol": "SYM33",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM33 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM33",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM33 RSI overbought: 80.0 > 70.0",
+    "symbol": "SYM33",
+    "trigger_type": "rsi_overbought",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM33 up 10 consecutive days",
+    "symbol": "SYM33",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM34 ATR% 5.0% > 4.0%",
+    "symbol": "SYM34",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM34 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM34",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM34 up 10 consecutive days",
+    "symbol": "SYM34",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM35 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM35",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM35 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM35",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM35 up 10 consecutive days",
+    "symbol": "SYM35",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM36 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM36",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM36 up 10 consecutive days",
+    "symbol": "SYM36",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM37 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM37",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM37 up 10 consecutive days",
+    "symbol": "SYM37",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM38 ATR% 4.5% > 4.0%",
+    "symbol": "SYM38",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM38 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM38",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM38 up 10 consecutive days",
+    "symbol": "SYM38",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM39 ATR% 5.0% > 4.0%",
+    "symbol": "SYM39",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM39 Bollinger Band squeeze detected (bb_width=0.04)",
+    "symbol": "SYM39",
+    "trigger_type": "bb_squeeze_alert",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM39 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM39",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM39 up 10 consecutive days",
+    "symbol": "SYM39",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM40 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM40",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM40 up 10 consecutive days",
+    "symbol": "SYM40",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM41 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM41",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM41 up 10 consecutive days",
+    "symbol": "SYM41",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM42 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM42",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM42 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM42",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM42 up 10 consecutive days",
+    "symbol": "SYM42",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM43 ATR% 4.5% > 4.0%",
+    "symbol": "SYM43",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM43 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM43",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM43 up 10 consecutive days",
+    "symbol": "SYM43",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM44 ATR% 5.0% > 4.0%",
+    "symbol": "SYM44",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM44 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM44",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM44 RSI overbought: 80.0 > 70.0",
+    "symbol": "SYM44",
+    "trigger_type": "rsi_overbought",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM44 up 10 consecutive days",
+    "symbol": "SYM44",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM45 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM45",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM45 up 10 consecutive days",
+    "symbol": "SYM45",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM46 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM46",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM46 up 10 consecutive days",
+    "symbol": "SYM46",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM47 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM47",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM47 up 10 consecutive days",
+    "symbol": "SYM47",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM48 ATR% 4.5% > 4.0%",
+    "symbol": "SYM48",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM48 MACD bullish crossover (-0.1000 \u2192 0.1000)",
+    "symbol": "SYM48",
+    "trigger_type": "macd_bullish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM48 up 10 consecutive days",
+    "symbol": "SYM48",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM49 ATR% 5.0% > 4.0%",
+    "symbol": "SYM49",
+    "trigger_type": "atr_expansion",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM49 MACD bearish crossover (0.1000 \u2192 -0.1000)",
+    "symbol": "SYM49",
+    "trigger_type": "macd_bearish_cross",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM49 RSI oversold: 25.0 < 30.0",
+    "symbol": "SYM49",
+    "trigger_type": "rsi_oversold",
+    "triggered_date": "2026-06-08"
+  },
+  {
+    "exchange": "NSE",
+    "is_read": false,
+    "message": "SYM49 up 10 consecutive days",
+    "symbol": "SYM49",
+    "trigger_type": "streak_up_5d",
+    "triggered_date": "2026-06-08"
+  }
+]

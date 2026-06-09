@@ -1,8 +1,10 @@
 """
 ScreenerClient — authenticated HTTP client for screener.in.
 
-Uses rookiepy to extract the sessionid cookie from the local browser profile.
-Tries Chrome first, then Firefox as fallback.
+Cookies (sessionid, csrftoken) are loaded via
+:func:`app.services.cookie_loader.load_browser_cookies` which tries a
+pre-extracted pickle file first and falls back to reading Chrome /
+Firefox's encrypted cookie DB via rookiepy.
 All requests are made with httpx, sharing a single async client.
 """
 
@@ -10,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Union
 
 import httpx
-import rookiepy
 from bs4 import BeautifulSoup, Tag
+
+from app.services.nse_rate_limiter import throttled_nse_call
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +29,14 @@ COMPANY_URL = f"{BASE_URL}/company/{{symbol}}/{{mode}}/"
 QUICK_RATIOS_URL = f"{BASE_URL}/api/company/{{warehouse_id}}/quick_ratios/"
 TRADES_URL = f"{BASE_URL}/trades/company-{{warehouse_id}}/"
 
-_COURTESY_DELAY = 1.0
-_screener_semaphore = asyncio.Semaphore(2)
+# Trades button URL pattern — see _parse_trades_company_id below.
+# Compiled once at import time so the regex cache lives for the process.
+_TRADES_RE = re.compile(r"/trades/company-(\d+)/")
+
+# Concurrency, courtesy delay, and circuit breaker for screener.in
+# requests are now delegated to ``nse_rate_limiter.throttled_nse_call``
+# (audit B.7) so all three external services (NSE, screener.in,
+# morningstar.in) share one global concurrency budget.
 
 # Stable mapping of symbol → trades company ID.
 # These IDs don't change, so no TTL is needed — the dict lives for the
@@ -54,7 +64,11 @@ def _html_cache_set(key: str, html: str) -> None:
 
 
 def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
-    """Extract sessionid and csrftoken from rookiepy cookie list."""
+    """Extract sessionid and csrftoken from rookiepy cookie list.
+
+    Retained for any external callers; new code should use
+    ``cookie_loader.load_browser_cookies(..., allowed_names=[...])``.
+    """
     result: dict[str, str] = {}
     for cookie in cookies:
         name = cookie.get("name", "")
@@ -64,50 +78,21 @@ def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def _get_browser_cookies() -> dict[str, str]:
+    """Try to extract sessionid and csrftoken for screener.in.
+
+    Delegates to :func:`app.services.cookie_loader.load_browser_cookies`
+    which implements the pickle-first / rookiepy-fallback strategy.
     """
-    Try to extract sessionid and csrftoken for screener.in from browser profiles.
-    First tries pickle files (pre-extracted on Windows), then falls back to
-    reading directly from the browser via rookiepy.
-    Attempts Chrome first, then Firefox as fallback.
-    Returns empty dict if no cookies found.
-    """
-    from app.services.cookie_loader import load_cookies_from_pickle
+    from app.services.cookie_loader import load_browser_cookies
 
-    # Try pickle first
-    pickle_cookies = load_cookies_from_pickle("screener")
-    if pickle_cookies:
-        extracted = _extract_cookies(pickle_cookies)
-        if extracted.get("sessionid"):
-            logger.info("Using screener.in cookies from pickle file")
-            return extracted
-        logger.debug("Pickle has no sessionid, trying browsers")
-
-    # Fall back to browser extraction
-    browsers = ["chrome", "firefox"]
-
-    for browser_name in browsers:
-        try:
-            func = getattr(rookiepy, browser_name, None)
-            if func is None:
-                continue
-            raw: list[dict[str, Any]] = func(["screener.in"])
-            if raw:
-                cookies = _extract_cookies(raw)
-                if cookies.get("sessionid"):
-                    logger.info("Found screener.in cookies in %s", browser_name)
-                    return cookies
-                logger.debug(
-                    "No sessionid in %s cookies, trying next browser", browser_name
-                )
-        except Exception as exc:
-            logger.debug("Failed to read cookies from %s: %s", browser_name, exc)
-            continue
-
-    logger.warning(
-        "No screener.in session found in Chrome or Firefox. "
-        "Company fundamentals endpoints will return 503 until you log in."
+    cookies = load_browser_cookies(
+        service="screener",
+        domain="screener.in",
+        allowed_names=["sessionid", "csrftoken"],
     )
-    return {}
+    if not cookies.get("sessionid"):
+        logger.warning("No screener.in session found in any source")
+    return cookies
 
 
 def _clean_value(value: str | None) -> str | None:
@@ -156,10 +141,6 @@ def _parse_trades_company_id(soup: BeautifulSoup) -> str | None:
     Falls back to a regex search over the full page HTML if the button
     selector does not match (e.g. future markup changes).
     """
-    import re as _re
-
-    _TRADES_RE = _re.compile(r"/trades/company-(\d+)/")
-
     # Primary: look for the button with a matching data-url attribute
     tag = soup.find(attrs={"data-url": _TRADES_RE})
     if tag:
@@ -601,15 +582,18 @@ class ScreenerClient:
                 "ScreenerClient not initialised. Call await client.init() first."
             )
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
-            t0 = time.perf_counter()
-            resp = await self._http.get(
+        async def _do_search():
+            return await self._http.get(
                 SEARCH_URL,
                 params={"q": query, "v": "3", "fts": "1"},
             )
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+
+        logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.search", _do_search, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info(
             "Screener GET %s → %s (%.0fms)", SEARCH_URL, resp.status_code, elapsed_ms
@@ -628,12 +612,15 @@ class ScreenerClient:
         url = QUICK_RATIOS_URL.format(warehouse_id=warehouse_id)
 
         try:
-            async with _screener_semaphore:
-                logger.debug("Screener GET %s", url)
-                t0 = time.perf_counter()
-                resp = await self._http.get(url)
-                elapsed_ms = (time.perf_counter() - t0) * 1000
-                await asyncio.sleep(_COURTESY_DELAY)
+            async def _do_get():
+                return await self._http.get(url)
+
+            logger.debug("Screener GET %s", url)
+            t0 = time.perf_counter()
+            resp = await throttled_nse_call(
+                "screener.quick_ratios", _do_get, is_async_fn=True,
+            )
+            elapsed_ms = (time.perf_counter() - t0) * 1000
 
             logger.info(
                 "Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms
@@ -694,12 +681,15 @@ class ScreenerClient:
 
         url = COMPANY_URL.format(symbol=symbol_upper, mode=mode)
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+        async def _do_get():
+            return await self._http.get(url)
+
+        logger.debug("Screener GET %s", url)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.company_html", _do_get, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
 
@@ -782,12 +772,15 @@ class ScreenerClient:
 
         url = TRADES_URL.format(warehouse_id=warehouse_id)
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+        async def _do_get():
+            return await self._http.get(url)
+
+        logger.debug("Screener GET %s", url)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.trades", _do_get, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:
@@ -829,12 +822,15 @@ class ScreenerClient:
         mode = "consolidated" if consolidated else "standalone"
         url = COMPANY_URL.format(symbol=symbol.upper(), mode=mode)
 
-        async with _screener_semaphore:
-            logger.debug("Screener GET %s", url)
-            t0 = time.perf_counter()
-            resp = await self._http.get(url)  # type: ignore[union-attr]
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            await asyncio.sleep(_COURTESY_DELAY)
+        async def _do_get():
+            return await self._http.get(url)
+
+        logger.debug("Screener GET %s", url)
+        t0 = time.perf_counter()
+        resp = await throttled_nse_call(
+            "screener.company", _do_get, is_async_fn=True,
+        )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
 
         logger.info("Screener GET %s → %s (%.0fms)", url, resp.status_code, elapsed_ms)
         if resp.status_code == 404:

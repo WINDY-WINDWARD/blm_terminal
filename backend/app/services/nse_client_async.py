@@ -75,14 +75,35 @@ class NSEClientAsync:
 
     def __init__(self) -> None:
         self._http: httpx.AsyncClient | None = None
+        self._http_loop_id: int | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazily create the persistent httpx client with NSE cookie warmup."""
+        """Lazily create the persistent httpx client.
+
+        Detects event loop changes and recreates the client to avoid using a
+        stale client bound to a different (possibly closed) event loop. This
+        is expected when the sync :class:`NSEClient` facade calls async
+        methods via ``asyncio.run()``, which creates a fresh event loop
+        per invocation.
+        """
+        current_loop = asyncio.get_running_loop()
+        if self._http is not None and self._http_loop_id is not None and self._http_loop_id != id(current_loop):
+            logger.debug(
+                "NSEClientAsync: event loop changed (was %d, now %d), recreating httpx client",
+                self._http_loop_id, id(current_loop),
+            )
+            try:
+                await self._http.aclose()
+            except (RuntimeError, Exception):
+                pass
+            self._http = None
+            self._http_loop_id = None
+
         if self._http is None:
             self._http = httpx.AsyncClient(
                 base_url=NSE_BASE_URL,
                 headers=NSE_HEADERS,
-                timeout=httpx.Timeout(20.0, connect=10.0),
+                timeout=httpx.Timeout(30.0, connect=15.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=10,
@@ -90,12 +111,7 @@ class NSEClientAsync:
                     keepalive_expiry=30.0,
                 ),
             )
-            logger.info("NSEClientAsync: creating httpx client — warming cookie session")
-            try:
-                await self._http.get("/option-chain")
-                logger.info("NSEClientAsync: cookie session warmed successfully")
-            except Exception as exc:
-                logger.warning("NSEClientAsync: cookie warmup failed: %s", exc)
+            self._http_loop_id = id(current_loop)
 
         return self._http
 
@@ -147,6 +163,24 @@ class NSEClientAsync:
         missing = [k for k in expected_keys if k not in payload]
         if missing:
             logger.warning("Largedeal snapshot missing keys: %s", ", ".join(missing))
+        return payload
+
+    async def get_market_variations(self, index: str) -> dict[str, Any]:
+        """Fetch the full live-analysis-variations payload for gainers or loosers.
+
+        Args:
+            index: 'gainers' or 'loosers' (NSE's misspelling).
+
+        Returns the full parsed JSON: { legends, NIFTY: {data, timestamp},
+        BANKNIFTY: {...}, ..., allSec: {data, timestamp} }.
+        """
+        url = f"https://www.nseindia.com/api/live-analysis-variations?index={index}&type=allSec"
+        payload: dict[str, Any] = await self._nse_get(url)
+        if not isinstance(payload, dict) or "allSec" not in payload:
+            raise ValueError(
+                f"Unexpected response from live-analysis-variations?index={index}: "
+                f"keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}"
+            )
         return payload
 
     async def _get_market_turnover(self) -> list[dict[str, Any]]:
@@ -383,3 +417,106 @@ class NSEClientAsync:
 
 
 nse_client_async = NSEClientAsync()
+
+
+# ─── Sync facade (audit B.10) ────────────────────────────────────────────────
+#
+# The legacy ``app.services.nse_client`` module held a 545-LOC sync ``NSEClient``
+# class that duplicated the HTTP / parsing logic in this file.  Drift between
+# the two was a top audit finding.
+#
+# The single source of truth for NSE behaviour is now ``NSEClientAsync`` above.
+# This ``NSEClient`` class is a thin sync-compatible facade that delegates
+# every method to the async client via ``asyncio.run()``.  It exists so the
+# 8 call sites in routers / orchestrator / backgroundtasks / mcp_server that
+# historically imported the sync class keep working without a behaviour
+# change in the call site itself.
+#
+# Behavioural note: a few methods had divergent implementations between the
+# old sync class and the async class (e.g. ``get_top_gainers`` previously
+# copied ``perChange`` into ``pChange``; the async path filters to ``EQ``
+# series only and falls back to ``nsepython``).  The facade always uses
+# the async implementation, so any caller that depended on the OLD sync
+# behaviour will see the (more correct) async behaviour.  This is the
+# intentional outcome of the "drift-proof" audit goal.
+
+
+class NSEClient:
+    """Sync-compatible facade over :class:`NSEClientAsync` (audit B.10).
+
+    Every method that requires an event loop runs the corresponding async
+    method via :func:`asyncio.run` (a fresh event loop is created per
+    call).  The overhead is ~1-10ms, which is negligible against the
+    100ms-2s NSE HTTP latency.
+
+    Sync-only methods (``get_stock_list``, ``get_corporate_filing_comparison``)
+    delegate without ``asyncio.run`` because they don't use the async
+    httpx client.
+    """
+
+    def __init__(self) -> None:
+        self._async = NSEClientAsync()
+
+    def get_stock_list(self) -> list[str]:
+        """Sync — delegates to ``NSEClientAsync.get_stock_list``.
+
+        Returns the NSE equity symbol list.  The async client raises
+        ``NotImplementedError`` here (it expects an upstream source);
+        this facade falls back to ``nsepython.nse_eq_symbols()`` to
+        preserve the pre-refactor behaviour.
+        """
+        try:
+            return self._async.get_stock_list()
+        except NotImplementedError:
+            import nsepython
+            return nsepython.nse_eq_symbols()
+
+    def get_stock_metadata(self, symbol: str) -> Any:
+        return asyncio.run(self._async.get_stock_metadata(symbol))
+
+    def get_corporate_filing_comparison(self, symbol: str) -> str:
+        """Sync — delegates to ``NSEClientAsync.get_corporate_filing_comparison``."""
+        return self._async.get_corporate_filing_comparison(symbol)
+
+    def get_top_gainers(self) -> "pd.DataFrame":
+        return asyncio.run(self._async.get_top_gainers())
+
+    def get_top_losers(self) -> "pd.DataFrame":
+        return asyncio.run(self._async.get_top_losers())
+
+    def check_bulk_deals(self, symbol: str) -> "pd.DataFrame":
+        return asyncio.run(self._async.check_bulk_deals(symbol))
+
+    def check_block_deals(self, symbol: str) -> "pd.DataFrame":
+        return asyncio.run(self._async.check_block_deals(symbol))
+
+    def get_high_short_interest(self) -> "pd.DataFrame":
+        return asyncio.run(self._async.get_high_short_interest())
+
+    def get_52week_low_stocks(self) -> dict:
+        return asyncio.run(self._async.get_52week_low_stocks())
+
+    def get_52week_high_stocks(self) -> dict:
+        return asyncio.run(self._async.get_52week_high_stocks())
+
+    def get_volume_gainers(self) -> dict:
+        return asyncio.run(self._async.get_volume_gainers())
+
+    def get_largedeal_snapshot(self) -> dict:
+        return asyncio.run(self._async.get_largedeal_snapshot())
+
+    def get_market_variations(self, index: str) -> dict[str, Any]:
+        return asyncio.run(self._async.get_market_variations(index))
+
+    def get_change_ranges(self, symbol: str) -> dict[str, float]:
+        return asyncio.run(self._async.get_change_ranges(symbol))
+
+    def get_symbol_data(self, symbol: str) -> dict[str, Any]:
+        return asyncio.run(self._async.get_symbol_data(symbol))
+
+    async def close(self) -> None:
+        """Async close (mirrors the legacy ``NSEClient.close`` signature)."""
+        await self._async.close()
+
+
+nse_client = NSEClient()

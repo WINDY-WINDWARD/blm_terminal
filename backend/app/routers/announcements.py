@@ -1,13 +1,17 @@
 """Router for NSE announcements RSS feed and event calendar."""
 
+import asyncio
+import json
 import logging
 import time
+from datetime import date, datetime, timedelta
 from typing import Any
 
-import requests
+import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+
+from app.schemas.announcements import EventCalendarItem
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +40,75 @@ _NSE_HEADERS = {
     "Referer": "https://www.nseindia.com/market-data/event-calendar",
 }
 
+_RSS_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+}
 
-class EventCalendarItem(BaseModel):
-    """Normalised event calendar entry from NSE (main board or SME)."""
 
-    symbol: str
-    company: str
-    purpose: str
-    description: str
-    date: str          # "20-Apr-2026"
-    source: str        # "main" | "sme"
-    attachment: str | None = None
+# ---------------------------------------------------------------------------
+# Shared httpx.AsyncClient pool (audit B.2)
+# ---------------------------------------------------------------------------
+#
+# A single ``httpx.AsyncClient`` is created on first use and reused across
+# requests.  httpx reuses a single connection pool, so the per-call TCP +
+# TLS handshake cost (and the NSE anti-bot cookie warm-up) is paid only
+# once.  The client is closed via ``_close_shared_client`` (called from
+# tests via the ``reset_announcements_client`` fixture, and available for
+# the FastAPI lifespan if we add one later).
+
+_shared_client: httpx.AsyncClient | None = None
+_shared_client_lock = asyncio.Lock()
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    """Return the module-level ``httpx.AsyncClient`` singleton.
+
+    Lazily creates one on first call.  The client is configured with NSE
+    headers and conservative connection limits.
+    """
+    global _shared_client
+    if _shared_client is None:
+        limits = httpx.Limits(
+            max_connections=4,
+            max_keepalive_connections=2,
+            keepalive_expiry=30.0,
+        )
+        _shared_client = httpx.AsyncClient(
+            headers=_NSE_HEADERS,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            limits=limits,
+            follow_redirects=True,
+        )
+    return _shared_client
+
+
+def _close_shared_client() -> None:
+    """Tear down the shared client.  Idempotent.
+
+    The next ``_get_shared_client`` call will lazily create a fresh one.
+    Safe to call when ``_shared_client`` is None.
+    """
+    global _shared_client
+    if _shared_client is not None:
+        try:
+            # httpx.AsyncClient.aclose is async; if we are already inside
+            # an event loop we cannot call it synchronously.  In that case
+            # we just drop the reference and let GC handle the aclose().
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — safe to aclose synchronously via run.
+            try:
+                asyncio.run(_shared_client.aclose())
+            except Exception:
+                logger.debug("Failed to close shared httpx client cleanly")
+        _shared_client = None
 
 
 def _normalize_main(raw: list[dict]) -> list[EventCalendarItem]:
@@ -97,64 +159,67 @@ def _normalize_sme(raw: list[dict]) -> list[EventCalendarItem]:
     return items
 
 
-def _fetch_event_calendar_raw() -> list[EventCalendarItem]:
-    """Fetch both NSE event calendar endpoints and return merged, deduped list.
-
-    Uses a synchronous requests session with a shared NSE cookie (required by
-    NSE anti-bot — fetching the homepage first sets the session cookie).
-    """
-    session = requests.Session()
-    session.headers.update(_NSE_HEADERS)
-
-    # Prime the NSE session cookie (required to bypass anti-bot 401)
+def _parse_event_date(d: str) -> datetime:
+    """Parse the NSE date format ``20-Apr-2026`` → ``datetime`` (or max on error)."""
     try:
-        session.get("https://www.nseindia.com", timeout=10)
+        return datetime.strptime(d, "%d-%b-%Y")
+    except ValueError:
+        return datetime.max
+
+
+async def _fetch_one(
+    client: httpx.AsyncClient,
+    url: str,
+    normalizer,
+) -> list[EventCalendarItem]:
+    """Fetch a single URL, normalise, return items.  Logs but never raises.
+
+    Used by ``_fetch_event_calendar_raw`` which calls this twice via
+    ``asyncio.gather`` so that one URL's failure does not poison the
+    other.
+    """
+    try:
+        resp = await client.get(url, timeout=30.0)
+        resp.raise_for_status()
+        raw: list[dict] = resp.json()
+        return normalizer(raw)
     except Exception:
-        logger.debug("NSE homepage pre-fetch failed; proceeding anyway")
+        logger.exception("Failed to fetch event calendar from %s", url)
+        return []
+
+
+async def _fetch_event_calendar_raw() -> list[EventCalendarItem]:
+    """Fetch both NSE event calendar endpoints concurrently and return a
+    merged, deduped, date-sorted list.
+
+    B.3: the main-board and SME fetches run in parallel via
+    ``asyncio.gather`` (not sequentially) — a cache miss now costs the
+    time of one HTTP round-trip, not two.
+
+    B.2: uses the module-shared ``httpx.AsyncClient`` so the connection
+    pool, NSE cookies, and TLS handshake are amortised across calls.
+    """
+    client = _get_shared_client()
+    main_items, sme_items = await asyncio.gather(
+        _fetch_one(client, _CALENDAR_URL_MAIN, _normalize_main),
+        _fetch_one(client, _CALENDAR_URL_SME, _normalize_sme),
+    )
 
     items: list[EventCalendarItem] = []
     seen: set[tuple[str, str, str]] = set()
+    for item in main_items + sme_items:
+        key = (item.symbol, item.date, item.purpose)
+        if item.symbol and key not in seen:
+            seen.add(key)
+            items.append(item)
 
-    for url, normalizer in [
-        (_CALENDAR_URL_MAIN, _normalize_main),
-        (_CALENDAR_URL_SME, _normalize_sme),
-    ]:
-        try:
-            resp = session.get(url, timeout=30)
-            resp.raise_for_status()
-            raw: list[dict] = resp.json()
-            for item in normalizer(raw):
-                key = (item.symbol, item.date, item.purpose)
-                if item.symbol and key not in seen:
-                    seen.add(key)
-                    items.append(item)
-        except Exception:
-            logger.exception("Failed to fetch event calendar from %s", url)
-
-    # Sort by date ascending (parse "20-Apr-2026" → sortable)
-    from datetime import datetime
-
-    def _sort_key(item: EventCalendarItem) -> tuple:
-        try:
-            return (datetime.strptime(item.date, "%d-%b-%Y"),)
-        except ValueError:
-            return (datetime.max,)
-
-    items.sort(key=_sort_key)
+    items.sort(key=lambda i: _parse_event_date(i.date))
     return items
 
 
-def _fetch_past_results_raw() -> list[EventCalendarItem]:
-    """Fetch results published in the last 3 months."""
-    session = requests.Session()
-    session.headers.update(_NSE_HEADERS)
-
-    try:
-        session.get("https://www.nseindia.com", timeout=10)
-    except Exception:
-        logger.debug("NSE homepage pre-fetch failed; proceeding anyway")
-
-    from datetime import date, timedelta, datetime
+async def _fetch_past_results_raw() -> list[EventCalendarItem]:
+    """Fetch results published in the last 3 months, via the shared client."""
+    client = _get_shared_client()
 
     to_date = date.today()
     from_date = to_date - timedelta(days=90)
@@ -167,33 +232,38 @@ def _fetch_past_results_raw() -> list[EventCalendarItem]:
     items: list[EventCalendarItem] = []
     seen: set[tuple[str, str, str]] = set()
     try:
-        resp = session.get(url, timeout=30)
+        resp = await client.get(url, timeout=30.0)
         resp.raise_for_status()
         raw: list[dict] = resp.json()
         for item in _normalize_main(raw):
             if "financial results" not in item.purpose.lower():
                 continue
+            # Dedup: NSE's past-results endpoint may return the same
+            # (symbol, date, purpose) entry more than once when the
+            # window straddles a corporate action.  The pre-refactor
+            # code had this dedup; restore it.
             key = (item.symbol, item.date, item.purpose)
-            if item.symbol and key not in seen:
-                seen.add(key)
-                items.append(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
     except Exception:
         logger.exception("Failed to fetch past results from %s", url)
 
-    def _sort_key(item: EventCalendarItem) -> tuple:
-        try:
-            return (datetime.strptime(item.date, "%d-%b-%Y"),)
-        except ValueError:
-            return (datetime.min,)
-
-    items.sort(key=_sort_key, reverse=True)
+    items.sort(
+        key=lambda i: _parse_event_date(i.date) or datetime.min,
+        reverse=True,
+    )
     return items
 
 
 def get_event_calendar_cached() -> list[EventCalendarItem]:
     """Return event calendar items, using in-memory cache with 15-min TTL.
 
-    Exported so background tasks can call this without going through HTTP.
+    Synchronous wrapper around the async fetch — used by background tasks
+    (e.g. ``results_calendar_sync`` in ``backgroundtasks.py``) that run
+    outside an event loop.  Uses ``asyncio.run`` to drive the async
+    fetch.
     """
     now = time.monotonic()
     if _CALENDAR_CACHE.get("expires_at", 0) > now:
@@ -202,14 +272,17 @@ def get_event_calendar_cached() -> list[EventCalendarItem]:
             return cached
 
     logger.info("event_calendar: cache miss — fetching from NSE")
-    data = _fetch_event_calendar_raw()
+    data = asyncio.run(_fetch_event_calendar_raw())
     _CALENDAR_CACHE["data"] = data
     _CALENDAR_CACHE["expires_at"] = now + _CALENDAR_TTL_SECONDS
     return data
 
 
 def get_past_results_cached() -> list[EventCalendarItem]:
-    """Return past results items, using in-memory cache with 15-min TTL."""
+    """Return past results items, using in-memory cache with 15-min TTL.
+
+    Sync wrapper — see ``get_event_calendar_cached`` for rationale.
+    """
     now = time.monotonic()
     if _PAST_RESULTS_CACHE.get("expires_at", 0) > now:
         cached = _PAST_RESULTS_CACHE.get("data")
@@ -217,7 +290,40 @@ def get_past_results_cached() -> list[EventCalendarItem]:
             return cached
 
     logger.info("event_calendar_past: cache miss — fetching from NSE")
-    data = _fetch_past_results_raw()
+    data = asyncio.run(_fetch_past_results_raw())
+    _PAST_RESULTS_CACHE["data"] = data
+    _PAST_RESULTS_CACHE["expires_at"] = now + _CALENDAR_TTL_SECONDS
+    return data
+
+
+async def aget_event_calendar_cached() -> list[EventCalendarItem]:
+    """Async variant of ``get_event_calendar_cached`` — used by endpoints
+    that run inside FastAPI's event loop, where ``asyncio.run`` would
+    fail with "asyncio.run() cannot be called from a running event loop".
+    """
+    now = time.monotonic()
+    if _CALENDAR_CACHE.get("expires_at", 0) > now:
+        cached = _CALENDAR_CACHE.get("data")
+        if cached is not None:
+            return cached
+
+    logger.info("event_calendar: cache miss — fetching from NSE")
+    data = await _fetch_event_calendar_raw()
+    _CALENDAR_CACHE["data"] = data
+    _CALENDAR_CACHE["expires_at"] = now + _CALENDAR_TTL_SECONDS
+    return data
+
+
+async def aget_past_results_cached() -> list[EventCalendarItem]:
+    """Async variant of ``get_past_results_cached`` (see rationale above)."""
+    now = time.monotonic()
+    if _PAST_RESULTS_CACHE.get("expires_at", 0) > now:
+        cached = _PAST_RESULTS_CACHE.get("data")
+        if cached is not None:
+            return cached
+
+    logger.info("event_calendar_past: cache miss — fetching from NSE")
+    data = await _fetch_past_results_raw()
     _PAST_RESULTS_CACHE["data"] = data
     _PAST_RESULTS_CACHE["expires_at"] = now + _CALENDAR_TTL_SECONDS
     return data
@@ -235,19 +341,14 @@ def get_past_results_cached() -> list[EventCalendarItem]:
     },
 )
 async def get_announcements() -> StreamingResponse:
-    """Fetch and proxy the NSE announcements RSS feed."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/rss+xml, application/xml, text/xml, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
-    }
+    """Fetch and proxy the NSE announcements RSS feed via the shared client."""
+    client = _get_shared_client()
     try:
-        res = requests.get(RSS_URL, headers=headers, timeout=30)
-        res.raise_for_status()
+        resp = await client.get(RSS_URL, headers=_RSS_HEADERS, timeout=30.0)
+        resp.raise_for_status()
 
         return StreamingResponse(
-            content=iter([res.content]),
+            content=iter([resp.content]),
             media_type="application/rss+xml",
             headers={
                 "Cache-Control": "s-maxage=300, stale-while-revalidate=60",
@@ -273,7 +374,7 @@ async def get_announcements() -> StreamingResponse:
 async def get_event_calendar() -> list[EventCalendarItem]:
     """Return upcoming board meeting events from NSE (main board + SME), cached 15 min."""
     try:
-        return get_event_calendar_cached()
+        return await aget_event_calendar_cached()
     except Exception as exc:
         logger.exception("Failed to fetch event calendar")
         raise HTTPException(
@@ -294,7 +395,7 @@ async def get_event_calendar() -> list[EventCalendarItem]:
 async def get_past_event_calendar() -> list[EventCalendarItem]:
     """Return published financial results from the last 3 months."""
     try:
-        return get_past_results_cached()
+        return await aget_past_results_cached()
     except Exception as exc:
         logger.exception("Failed to fetch past results calendar")
         raise HTTPException(

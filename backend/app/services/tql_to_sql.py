@@ -27,7 +27,8 @@ inserts the right lateral join when an interval other than ``1d`` is needed.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import functools
+from typing import Any, Callable, Optional
 
 from app.services.tql_parser import (
     AndNode,
@@ -200,42 +201,66 @@ def _literal_sql(value: Any) -> tuple[str, list[Any]]:
 
 
 def _node_to_where(node: Any, default_interval: str, intervals: set[str], binds: list[Any]) -> str:
-    """Recursively render an AST node as a SQL WHERE fragment with ``?`` binds.
+    """Legacy AST → SQL renderer (reads from td / ts / su).  Thin wrapper
+    around :func:`_render_node_to_where` that injects the legacy field
+    resolver.  See audit B.9 — the snapshot path (``_snapshot_node_to_where``)
+    is also a thin wrapper around the same helper.
+    """
+    return _render_node_to_where(
+        node, default_interval, intervals, binds, _field_sql_expression
+    )
 
-    Mutates ``intervals`` (adds lateral-join intervals) and ``binds`` (adds values).
+
+def _render_node_to_where(
+    node: Any,
+    default_interval: str,
+    intervals: set[str],
+    binds: list[Any],
+    field_resolver: Callable[[str, str], tuple[str, set[str]]],
+) -> str:
+    """Unified recursive AST → SQL renderer (audit B.9).
+
+    ``field_resolver(field_name, default_interval)`` returns ``(sql_expr, intervals)``
+    — the SQL column expression for the field and the set of lateral-join
+    intervals it requires.  Passing the resolver as a parameter lets the
+    same body serve both the legacy (``_field_sql_expression``) and the
+    snapshot (``_snapshot_field_sql_expression``) paths so that the two
+    cannot drift apart.
+
+    Mutates ``intervals`` and ``binds``.
     """
     if isinstance(node, AndNode):
-        l = _node_to_where(node.left, default_interval, intervals, binds)
-        r = _node_to_where(node.right, default_interval, intervals, binds)
+        l = _render_node_to_where(node.left, default_interval, intervals, binds, field_resolver)
+        r = _render_node_to_where(node.right, default_interval, intervals, binds, field_resolver)
         return f"({l} AND {r})"
 
     if isinstance(node, OrNode):
-        l = _node_to_where(node.left, default_interval, intervals, binds)
-        r = _node_to_where(node.right, default_interval, intervals, binds)
+        l = _render_node_to_where(node.left, default_interval, intervals, binds, field_resolver)
+        r = _render_node_to_where(node.right, default_interval, intervals, binds, field_resolver)
         return f"({l} OR {r})"
 
     if isinstance(node, NotNode):
-        return f"(NOT {_node_to_where(node.expr, default_interval, intervals, binds)})"
+        return f"(NOT {_render_node_to_where(node.expr, default_interval, intervals, binds, field_resolver)})"
 
     if isinstance(node, CompareNode):
         # Bare-boolean shorthand: BBSqueeze alone is treated as ``BBSqueeze = 1``.
         # We expand it to (bbsqueeze IS NOT NULL AND bbsqueeze = 'Y') so that
         # NOT BBSqueeze correctly matches both NULL and explicit 'N'.
         if node.field.lower() == "bbsqueeze" and node.op == "=":
-            sql, ints = _field_sql_expression(node.field, default_interval)
+            sql, ints = field_resolver(node.field, default_interval)
             intervals.update(ints)
             if node.value is True:
                 return f"({sql} IS NOT NULL AND {sql} = 'Y')"
             if node.value is False:
                 return f"({sql} IS NULL OR {sql} != 'Y')"
-        sql, ints = _field_sql_expression(node.field, default_interval)
+        sql, ints = field_resolver(node.field, default_interval)
         intervals.update(ints)
         lit, vals = _literal_sql(node.value)
         binds.extend(vals)
         return f"({sql} {node.op} {lit})"
 
     if isinstance(node, InNode):
-        sql, ints = _field_sql_expression(node.field, default_interval)
+        sql, ints = field_resolver(node.field, default_interval)
         intervals.update(ints)
         parts: list[str] = []
         for v in node.values:
@@ -269,9 +294,31 @@ _SORT_FIELD_SQL: dict[str, str] = {
 
 
 def _sort_sql(sort_by: str, order: str) -> str:
-    expr = _SORT_FIELD_SQL.get(sort_by, "td.symbol")
+    """Legacy ORDER BY (reads from td / ts / snap).  Thin wrapper around
+    :func:`_render_sort_sql` that injects the legacy field map and tie-breaker
+    column alias.  See audit B.9.
+    """
+    return _render_sort_sql(sort_by, order, _SORT_FIELD_SQL, "td.symbol", "td.symbol")
+
+
+def _render_sort_sql(
+    sort_by: str,
+    order: str,
+    sort_map: dict[str, str],
+    default_col: str,
+    tiebreaker_col: str,
+) -> str:
+    """Unified ORDER BY renderer (audit B.9).
+
+    ``sort_map`` maps each user-facing sort key to a SQL column expression
+    (the table alias in the expression varies between the legacy and
+    snapshot schemas).  ``default_col`` is the column used when ``sort_by``
+    is not in the whitelist; ``tiebreaker_col`` is the deterministic
+    secondary sort (also the primary key) appended after NULLS LAST.
+    """
+    expr = sort_map.get(sort_by, default_col)
     direction = "DESC" if order.lower() == "desc" else "ASC"
-    return f"{expr} {direction} NULLS LAST, td.symbol ASC"
+    return f"{expr} {direction} NULLS LAST, {tiebreaker_col} ASC"
 
 
 # ─── Top-level builders ───────────────────────────────────────────────────────
@@ -329,6 +376,15 @@ LEFT JOIN LATERAL (
     return "\n".join(parts)
 
 
+def _hashable_filters(filters: dict) -> tuple[tuple[str, Any], ...]:
+    """Convert a legacy-filter dict to a hashable key for lru_cache.
+
+    Items are sorted by key so that ``{"a": 1, "b": 2}`` and
+    ``{"b": 2, "a": 1}`` produce the same cache key.
+    """
+    return tuple(sorted(filters.items()))
+
+
 def build_tql_query(
     tql: str,
     default_interval: str = "1d",
@@ -341,7 +397,23 @@ def build_tql_query(
     The SQL is a single CTE-based statement that runs in O(1) queries
     against ticker_daily, ticker_intraday (lateral), ticker_scores,
     stock_universe, and ticker_screener_snapshot (Phase B).
+
+    Cached via ``functools.lru_cache(maxsize=256)`` (on the private
+    ``_build_tql_query_cached`` helper) — the (sql, binds) tuple is a
+    deterministic function of these args, and the typical screener request
+    flow issues the same TQL with the same sort/limit repeatedly.
     """
+    return _build_tql_query_cached(tql, default_interval, sort_by, order, limit)
+
+
+@functools.lru_cache(maxsize=256)
+def _build_tql_query_cached(
+    tql: str,
+    default_interval: str,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
     ast = parse_tql(tql)
     intervals: set[str] = set()
     binds: list[Any] = []
@@ -503,68 +575,41 @@ def _snapshot_field_sql_expression(field: str, default_interval: str) -> tuple[s
 def _snapshot_node_to_where(
     node: Any, default_interval: str, intervals: set[str], binds: list[Any]
 ) -> str:
-    """Recursive AST → SQL for snapshot-based queries.  Mirrors _node_to_where."""
-    if isinstance(node, AndNode):
-        l = _snapshot_node_to_where(node.left, default_interval, intervals, binds)
-        r = _snapshot_node_to_where(node.right, default_interval, intervals, binds)
-        return f"({l} AND {r})"
+    """Snapshot AST → SQL renderer (reads from snap / ts).  Thin wrapper
+    around :func:`_render_node_to_where` that injects the snapshot field
+    resolver.  See audit B.9.
+    """
+    return _render_node_to_where(
+        node, default_interval, intervals, binds, _snapshot_field_sql_expression
+    )
 
-    if isinstance(node, OrNode):
-        l = _snapshot_node_to_where(node.left, default_interval, intervals, binds)
-        r = _snapshot_node_to_where(node.right, default_interval, intervals, binds)
-        return f"({l} OR {r})"
 
-    if isinstance(node, NotNode):
-        return f"(NOT {_snapshot_node_to_where(node.expr, default_interval, intervals, binds)})"
-
-    if isinstance(node, CompareNode):
-        if node.field.lower() == "bbsqueeze" and node.op == "=":
-            sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
-            intervals.update(ints)
-            if node.value is True:
-                return f"({sql} IS NOT NULL AND {sql} = 'Y')"
-            if node.value is False:
-                return f"({sql} IS NULL OR {sql} != 'Y')"
-        sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
-        intervals.update(ints)
-        lit, vals = _literal_sql(node.value)
-        binds.extend(vals)
-        return f"({sql} {node.op} {lit})"
-
-    if isinstance(node, InNode):
-        sql, ints = _snapshot_field_sql_expression(node.field, default_interval)
-        intervals.update(ints)
-        parts: list[str] = []
-        for v in node.values:
-            lit, vals = _literal_sql(v)
-            binds.extend(vals)
-            parts.append(lit)
-        return f"({sql} IN ({', '.join(parts)}))"
-
-    raise ValueError(f"Unknown AST node: {type(node).__name__}")
+# Whitelist of sortable fields for the snapshot-backed schema.
+_SNAPSHOT_SORT_FIELD_SQL: dict[str, str] = {
+    "symbol":            "snap.symbol",
+    "close":             "snap.last_close",
+    "change_today":      "change_today",  # alias in SELECT
+    "pct_change_1w":     "ts.return_1w",
+    "pct_change_1m":     "ts.return_1m",
+    "pct_change_3m":     "ts.return_3m",
+    "pct_change_6m":     "ts.return_6m",
+    "pct_change_1y":     "ts.return_1y",
+    "volume_ratio":      "ts.volume_ratio_20d",
+    "pct_from_52w_high": "snap.pct_from_52w_high",
+    "pct_from_52w_low":  "snap.pct_from_52w_low",
+    "atr_percent":       "snap.atr_percent_1d",
+    "rsi":               "snap.rsi_1d",
+    "momentum_score":    "ts.momentum_score",
+}
 
 
 def _snapshot_sort_sql(sort_by: str, order: str) -> str:
-    """Snapshot-aware sort: same field whitelist but read from snap instead of td."""
-    snap_sort: dict[str, str] = {
-        "symbol":            "snap.symbol",
-        "close":             "snap.last_close",
-        "change_today":      "change_today",  # alias in SELECT
-        "pct_change_1w":     "ts.return_1w",
-        "pct_change_1m":     "ts.return_1m",
-        "pct_change_3m":     "ts.return_3m",
-        "pct_change_6m":     "ts.return_6m",
-        "pct_change_1y":     "ts.return_1y",
-        "volume_ratio":      "ts.volume_ratio_20d",
-        "pct_from_52w_high": "snap.pct_from_52w_high",
-        "pct_from_52w_low":  "snap.pct_from_52w_low",
-        "atr_percent":       "snap.atr_percent_1d",
-        "rsi":               "snap.rsi_1d",
-        "momentum_score":    "ts.momentum_score",
-    }
-    expr = snap_sort.get(sort_by, "snap.symbol")
-    direction = "DESC" if order.lower() == "desc" else "ASC"
-    return f"{expr} {direction} NULLS LAST, snap.symbol ASC"
+    """Snapshot-aware sort: same field whitelist but read from snap instead
+    of td.  Thin wrapper around :func:`_render_sort_sql` (audit B.9).
+    """
+    return _render_sort_sql(
+        sort_by, order, _SNAPSHOT_SORT_FIELD_SQL, "snap.symbol", "snap.symbol"
+    )
 
 
 def build_snapshot_tql_query(
@@ -573,6 +618,22 @@ def build_snapshot_tql_query(
     sort_by: str = "symbol",
     order: str = "asc",
     limit: int = 50,
+) -> tuple[str, list[Any]]:
+    """Phase B: read directly from ticker_screener_snapshot.
+
+    Cached via ``functools.lru_cache(maxsize=256)`` on
+    ``_build_snapshot_tql_query_cached``.
+    """
+    return _build_snapshot_tql_query_cached(tql, default_interval, sort_by, order, limit)
+
+
+@functools.lru_cache(maxsize=256)
+def _build_snapshot_tql_query_cached(
+    tql: str,
+    default_interval: str,
+    sort_by: str,
+    order: str,
+    limit: int,
 ) -> tuple[str, list[Any]]:
     """Phase B: read directly from ticker_screener_snapshot.
 
@@ -605,7 +666,27 @@ def build_snapshot_legacy_query(
     order: str = "asc",
     limit: int = 50,
 ) -> tuple[str, list[Any]]:
-    """Phase B: legacy-filter variant of build_snapshot_tql_query."""
+    """Phase B: legacy-filter variant of build_snapshot_tql_query.
+
+    Cached via ``functools.lru_cache(maxsize=256)`` on
+    ``_build_snapshot_legacy_query_cached`` — the dict is hashed via
+    ``_hashable_filters`` so the same filter dict (regardless of insertion
+    order) produces the same cache key.
+    """
+    return _build_snapshot_legacy_query_cached(
+        _hashable_filters(filters), sort_by, order, limit
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _build_snapshot_legacy_query_cached(
+    filters_hashable: tuple,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    """Phase B: legacy-filter variant of build_snapshot_tql_query (cached)."""
+    filters = dict(filters_hashable)
     where, binds = _legacy_where_snapshot(filters)
     sort_expr = _snapshot_sort_sql(sort_by, order)
     select = _snapshot_select_clause()
@@ -826,7 +907,27 @@ def build_legacy_query(
     order: str = "asc",
     limit: int = 50,
 ) -> tuple[str, list[Any]]:
-    """Translate legacy filter dict to a parameterised SQL statement."""
+    """Translate legacy filter dict to a parameterised SQL statement.
+
+    Cached via ``functools.lru_cache(maxsize=256)`` on
+    ``_build_legacy_query_cached`` — the dict is hashed via
+    ``_hashable_filters`` so the same filter dict (regardless of insertion
+    order) produces the same cache key.
+    """
+    return _build_legacy_query_cached(
+        _hashable_filters(filters), sort_by, order, limit
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _build_legacy_query_cached(
+    filters_hashable: tuple,
+    sort_by: str,
+    order: str,
+    limit: int,
+) -> tuple[str, list[Any]]:
+    """Translate legacy filter dict to a parameterised SQL statement (cached)."""
+    filters = dict(filters_hashable)
     where, binds = _legacy_where(filters)
     sort_expr = _sort_sql(sort_by, order)
     sql = f"""

@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-import rookiepy
 from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +34,11 @@ AUTOCOMPLETE_URL = "https://morningstar.in/handlers/autocompletehandler.ashx"
 TOKEN_CACHE_TTL = 60 * 60
 ID_CACHE_TTL = 24 * 60 * 60
 
-MAX_CONCURRENT_REQUESTS = 2
+# Concurrency, courtesy delay, and circuit breaker for morningstar.in
+# requests are now delegated to ``nse_rate_limiter.throttled_nse_call``
+# (audit B.7) so all three external services (NSE, screener.in,
+# morningstar.in) share one global concurrency budget.
+from app.services.nse_rate_limiter import throttled_nse_call  # noqa: E402
 REQUEST_DELAY = 1.0
 DB_BATCH_SIZE = 50
 
@@ -124,7 +127,10 @@ class MorningstarClient:
     """Client for Morningstar India API."""
 
     def __init__(self):
-        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        # Concurrency is now governed by ``throttled_nse_call`` (audit B.7)
+        # so all three external services (NSE, screener.in, morningstar.in)
+        # share one global concurrency budget.
+        pass
 
     async def _ensure_tokens(self) -> dict[str, str]:
         """Ensure valid auth tokens, refreshing if needed."""
@@ -200,42 +206,20 @@ class MorningstarClient:
         return tokens
 
     async def _load_browser_cookies(self) -> dict[str, str]:
-        """Use pickle files (pre-extracted on Windows) or fallback to rookiepy."""
-        from app.services.cookie_loader import load_cookies_from_pickle
+        """Use pickle files (pre-extracted on Windows) or fallback to rookiepy.
 
-        pickle_cookies = await asyncio.to_thread(load_cookies_from_pickle, "morningstar")
-        if pickle_cookies:
-            cookies = {}
-            for c in pickle_cookies:
-                name = c.get("name")
-                if name:
-                    cookies[name] = c.get("value", "")
-            if cookies:
-                logger.info("Using morningstar.in cookies from pickle file")
-                return cookies
+        Delegates to :func:`app.services.cookie_loader.load_browser_cookies`.
+        The CPU/IO work happens in a thread (rookiepy reads from a
+        browser DB which can block) so the event loop is not stalled.
+        """
+        from app.services.cookie_loader import load_browser_cookies
 
-        # Fall back to browser extraction
-        browsers = ["chrome", "firefox"]
-        for browser_name in browsers:
-            try:
-                func = getattr(rookiepy, browser_name, None)
-                if func is None:
-                    continue
-                raw = await asyncio.to_thread(func, ["morningstar.in"])
-                if raw:
-                    cookies = {}
-                    for c in raw:
-                        name = c.get("name")
-                        if name:
-                            cookies[name] = c.get("value", "")
-                    logger.info("Found morningstar.in cookies in %s", browser_name)
-                    return cookies
-            except Exception as exc:
-                logger.debug("Failed to read cookies from %s: %s", browser_name, exc)
-                continue
-
-        logger.warning("No morningstar.in session found in Chrome or Firefox")
-        return {}
+        return await asyncio.to_thread(
+            load_browser_cookies,
+            "morningstar",
+            "morningstar.in",
+            None,  # allowed_names: morningstar wants every cookie
+        )
 
     async def resolve_symbol_to_id(
         self, symbol: str, db: AsyncSession | None = None
@@ -301,64 +285,77 @@ class MorningstarClient:
             logger.error(f"Autocomplete search failed for {symbol}: {e}")
             return None
 
-    async def get_fair_value(self, security_id: str) -> float | None:
-        """Fetch fair value for a given Morningstar security ID."""
+    async def _get_fair_value_impl(self, security_id: str) -> float | None:
+        """Internal: actual fair-value fetch logic, wrapped by ``get_fair_value``
+        via ``throttled_nse_call`` (audit B.7)."""
+        tokens = await self._ensure_tokens()
+
+        if not tokens:
+            logger.warning(f"No tokens available for fair value fetch, skipping {security_id}")
+            return None
+
+        client = await _get_client()
+
+        access_token = tokens.get("access_token", "")
+        realtime_token = tokens.get("X-Api-Realtime-E", "")
+
+        url = f"{MORNINGSTAR_BASE_URL}/sal-service/v1/stock/priceFairValue/v3/{security_id}/data"
+        params = {**API_PARAMS, "access_token": access_token}
+        headers = {
+            "X-Api-Realtime-E": realtime_token,
+            "X-Sal-Contenttype": SAL_CONTENT_TYPE,
+            "Accept": "application/json",
+        }
+
+        logger.debug(f"Fetching fair value for {security_id}")
+
+        response = await client.get(url, params=params, headers=headers)
+
+        logger.debug(f"Fair value response status: {response.status_code}, body: {response.text[:500]}")
+
+        if response.status_code == 401:
+            logger.warning(f"401 response body: {response.text[:500]}")
+            logger.info("Token expired, refreshing...")
+            await self._refresh_tokens()
+            tokens = await self._ensure_tokens()
+            access_token = tokens.get("access_token", "")
+            realtime_token = tokens.get("X-Api-Realtime-E", "")
+            params["access_token"] = access_token
+            headers["X-Api-Realtime-E"] = realtime_token
+            response = await client.get(url, params=params, headers=headers)
+            logger.debug(f"Retry fair value response status: {response.status_code}")
+
+        if response.status_code == 206:
+            logger.debug(f"Got 206 Partial Content for {security_id}, attempting to parse")
+        elif response.status_code >= 400:
+            response.raise_for_status()
+
         try:
-            async with self._semaphore:
-                tokens = await self._ensure_tokens()
-                
-                if not tokens:
-                    logger.warning(f"No tokens available for fair value fetch, skipping {security_id}")
-                    return None
-                
-                client = await _get_client()
+            data = response.json()
+        except Exception as e:
+            logger.warning(f"Failed to parse fair value response for {security_id}: {e}, response: {response.text[:200]}")
+            return None
 
-                access_token = tokens.get("access_token", "")
-                realtime_token = tokens.get("X-Api-Realtime-E", "")
+        try:
+            return data["chart"]["chartDatums"]["recent"]["latestFairValue"]
+        except (KeyError, TypeError) as e:
+            logger.warning(f"Unexpected fair value response structure for {security_id}: {e}, data: {data}")
+            return None
 
-                url = f"{MORNINGSTAR_BASE_URL}/sal-service/v1/stock/priceFairValue/v3/{security_id}/data"
-                params = {**API_PARAMS, "access_token": access_token}
-                headers = {
-                    "X-Api-Realtime-E": realtime_token,
-                    "X-Sal-Contenttype": SAL_CONTENT_TYPE,
-                    "Accept": "application/json",
-                }
+    async def get_fair_value(self, security_id: str) -> float | None:
+        """Fetch fair value for a given Morningstar security ID.
 
-                logger.debug(f"Fetching fair value for {security_id}")
-
-                response = await client.get(url, params=params, headers=headers)
-
-                logger.debug(f"Fair value response status: {response.status_code}, body: {response.text[:500]}")
-
-                if response.status_code == 401:
-                    logger.warning(f"401 response body: {response.text[:500]}")
-                    logger.info("Token expired, refreshing...")
-                    await self._refresh_tokens()
-                    tokens = await self._ensure_tokens()
-                    access_token = tokens.get("access_token", "")
-                    realtime_token = tokens.get("X-Api-Realtime-E", "")
-                    params["access_token"] = access_token
-                    headers["X-Api-Realtime-E"] = realtime_token
-                    response = await client.get(url, params=params, headers=headers)
-                    logger.debug(f"Retry fair value response status: {response.status_code}")
-
-                if response.status_code == 206:
-                    logger.debug(f"Got 206 Partial Content for {security_id}, attempting to parse")
-                elif response.status_code >= 400:
-                    response.raise_for_status()
-
-                try:
-                    data = response.json()
-                except Exception as e:
-                    logger.warning(f"Failed to parse fair value response for {security_id}: {e}, response: {response.text[:200]}")
-                    return None
-
-                try:
-                    return data["chart"]["chartDatums"]["recent"]["latestFairValue"]
-                except (KeyError, TypeError) as e:
-                    logger.warning(f"Unexpected fair value response structure for {security_id}: {e}, data: {data}")
-                    return None
-
+        Routed through ``throttled_nse_call`` so morningstar.in requests
+        share the global NSE-rate-limit semaphore and circuit breaker
+        (audit B.7).
+        """
+        try:
+            return await throttled_nse_call(
+                "morningstar.fair_value",
+                self._get_fair_value_impl,
+                security_id,
+                is_async_fn=True,
+            )
         except httpx.TimeoutException:
             logger.warning(f"Timeout fetching fair value for {security_id}")
             return None

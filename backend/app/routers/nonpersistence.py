@@ -115,7 +115,7 @@ async def _get_market_variations_shared(index: str) -> dict:
 
     payload = await throttled_nse_call(
         f"market-variations-{index}",
-        partial(_active_client._get_market_variations, index),
+        partial(_active_client.get_market_variations, index),
         is_async_fn=USE_ASYNC_NSE,
     )
     nse_cache[cache_key] = payload

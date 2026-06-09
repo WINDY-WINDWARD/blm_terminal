@@ -13,36 +13,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import time
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.services.cache import nse_cache
 from app.services.screener_client import screener_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/valuation", tags=["valuation"])
-
-# ---------------------------------------------------------------------------
-# 30-minute in-memory cache (same pattern as screener.py)
-# ---------------------------------------------------------------------------
-
-_cache: dict[str, tuple[float, Any]] = {}
-_CACHE_TTL = 1800  # 30 minutes
-
-
-def _cache_get(key: str) -> Any | None:
-    entry = _cache.get(key)
-    if entry and (time.time() - entry[0]) < _CACHE_TTL:
-        return entry[1]
-    return None
-
-
-def _cache_set(key: str, value: Any) -> None:
-    _cache[key] = (time.time(), value)
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +339,7 @@ async def get_valuation(
     symbol = symbol.upper()
     cache_key = f"{symbol}:{wacc}:{terminal_growth}:{stage1_growth}"
 
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached:
         return cached
 
@@ -458,5 +440,5 @@ async def get_valuation(
         fetched_at=datetime.now(timezone.utc).isoformat(),
     )
 
-    _cache_set(cache_key, result)
+    nse_cache[cache_key] = result
     return result

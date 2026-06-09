@@ -370,9 +370,11 @@ class NewsFetcher:
                 # Build FRESH headers for each attempt (rotates browser preset)
                 referer = "https://www.moneycontrol.com/" if attempt == 0 else None
                 headers = _build_headers(url, referer)
-                client.headers.update(headers)  # Override ALL headers
 
-                response = await client.get(url)
+                # Per-request headers — do NOT mutate the shared client.
+                # Passing headers=... keeps each request isolated even when
+                # _get_page is awaited concurrently from multiple coroutines.
+                response = await client.get(url, headers=headers)
 
                 # Handle HTTP errors with retry
                 if response.status_code == 404:
@@ -543,7 +545,16 @@ class NewsFetcher:
     async def _fetch_and_parse_article(
         self, url: str, source: str = SOURCE_NAME
     ) -> dict[str, Any] | None:
-        """Fetch and parse a single article using httpx with multiple selector fallbacks."""
+        """Fetch and parse a single article using httpx with multiple selector fallbacks.
+
+        The semaphore is held only for the duration of the HTTP fetch and
+        the synchronous parse work.  The politeness sleep is intentionally
+        outside the ``async with`` block so other tasks can acquire the
+        semaphore (and start their own HTTP fetches) while we're sleeping.
+        Error paths still return early without sleeping, preserving the
+        existing behaviour for 404s and parse failures.
+        """
+        result: dict[str, Any] | None = None
         async with self._get_semaphore():
             try:
                 logger.debug("Parsing article: %s", url)
@@ -652,8 +663,6 @@ class NewsFetcher:
                     if raw_author:
                         authors = [str(raw_author)]
 
-                await asyncio.sleep(REQUEST_DELAY)
-
                 result = {
                     "url": url,
                     "source": source,
@@ -666,13 +675,19 @@ class NewsFetcher:
                 logger.debug(
                     f"Parsed article: {title[:30] if title else 'No title'}..."
                 )
-                return result
             except _ArticleNotFound:
                 logger.debug("Article not found (404), skipping: %s", url)
                 return None
             except Exception:
                 logger.exception("Failed to parse article: %s", url)
                 return None
+        # Semaphore released here.  Politeness sleep throttles call rate
+        # independently of in-flight concurrency, and only fires on success
+        # (mirroring the previous behaviour where 404s / parse errors
+        # returned early before reaching the sleep).
+        if result is not None:
+            await asyncio.sleep(REQUEST_DELAY)
+        return result
 
     async def crawl_and_store(self, pages: int, db: AsyncSession) -> int:
         """Crawl the specified number of listing pages and store new articles.

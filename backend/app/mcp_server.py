@@ -149,7 +149,7 @@ async def get_top_gainers(category: str = "allSec") -> list[dict[str, Any]]:
 
     payload = await throttled_nse_call(
         "mcp:market-variations-gainers",
-        partial(_active_client._get_market_variations, "gainers"),
+        partial(_active_client.get_market_variations, "gainers"),
         is_async_fn=USE_ASYNC_NSE,
     )
     rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
@@ -183,7 +183,7 @@ async def get_top_losers(category: str = "allSec") -> list[dict[str, Any]]:
 
     payload = await throttled_nse_call(
         "mcp:market-variations-loosers",
-        partial(_active_client._get_market_variations, "loosers"),
+        partial(_active_client.get_market_variations, "loosers"),
         is_async_fn=USE_ASYNC_NSE,
     )
     rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])

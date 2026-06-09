@@ -15,12 +15,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.models.ticker import TickerDaily
-from app.schemas.stockuniverse import StockUniverse as StockUniverseSchema
+from app.schemas.stockuniverse import (
+    ChangeSymbolRequest,
+    ConfirmMatchRequest,
+    ErrorCategory,
+    MatchResultResponse,
+    StockUniverse as StockUniverseSchema,
+    StockUniverseErrorSymbol,
+    StockUniverseErrorsResponse,
+)
 from app.services.mc_stock_linker import MCStockLinker
 from app.services.nse_client import NSEClient
 
 
 router = APIRouter()
+
+ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
+REVIEW_STATUS_REMOVED = "removed"
 
 
 def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
@@ -48,30 +59,20 @@ def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
     "/stockuniverse", response_model=List[StockUniverseSchema], tags=["stockuniverse"]
 )
 async def list_stock_universe(
+    limit: int = 200,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ) -> List[StockUniverseSchema]:
-    """Return all stock universe records from the database."""
-    q = select(StockUniverseModel).order_by(StockUniverseModel.symbol)
+    """Return stock universe records with pagination."""
+    q = (
+        select(StockUniverseModel)
+        .order_by(StockUniverseModel.symbol)
+        .limit(limit)
+        .offset(offset)
+    )
     res = await db.execute(q)
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
-
-
-@router.get(
-    "/stockuniverse/{symbol}",
-    response_model=StockUniverseSchema,
-    tags=["stockuniverse"],
-)
-async def get_stock_universe(
-    symbol: str, db: AsyncSession = Depends(get_db)
-) -> StockUniverseSchema:
-    """Return a single stock universe record by `symbol` from the database."""
-    rec = await db.get(StockUniverseModel, symbol)
-    if rec is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found"
-        )
-    return _orm_to_schema(rec)
 
 
 @router.get(
@@ -80,9 +81,12 @@ async def get_stock_universe(
     tags=["stockuniverse"],
 )
 async def search_stock_universe(
-    prefix: str, db: AsyncSession = Depends(get_db)
+    prefix: str,
+    limit: int = 200,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
 ) -> List[StockUniverseSchema]:
-    """Return stock universe records that match the prefix in symbol or company name."""
+    """Return stock universe records matching prefix with pagination."""
     q = (
         select(StockUniverseModel)
         .where(
@@ -90,18 +94,12 @@ async def search_stock_universe(
             | StockUniverseModel.company_name.ilike(f"{prefix}%")
         )
         .order_by(StockUniverseModel.symbol)
+        .limit(limit)
+        .offset(offset)
     )
     res = await db.execute(q)
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
-
-
-class MatchResultResponse(BaseModel):
-    total_matched: int
-    exact_matches: int
-    url_extract_matches: int
-    fuzzy_matches: int
-    ambiguous_matches: int
 
 
 @router.post(
@@ -130,11 +128,6 @@ async def get_pending_review(
     return [_orm_to_schema(r) for r in records]
 
 
-class ConfirmMatchRequest(BaseModel):
-    confirmed: bool
-    mc_url: Optional[str] = None
-
-
 @router.put(
     "/stockuniverse/{symbol}/confirm-match",
     response_model=StockUniverseSchema,
@@ -156,34 +149,24 @@ async def confirm_match(
     return _orm_to_schema(rec)
 
 
-ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
-REVIEW_STATUS_REMOVED = "removed"
-
-
-class StockUniverseErrorSymbol(BaseModel):
-    symbol: str
-    companyName: str | None
-    reviewStatus: str
-    series: str | None
-    lastUpdateTime: datetime | None
-
-
-class ErrorCategory(BaseModel):
-    count: int
-    symbols: list[StockUniverseErrorSymbol]
-
-
-class StockUniverseErrorsResponse(BaseModel):
-    delisted: ErrorCategory
-    illiquid: ErrorCategory
-    suspended: ErrorCategory
-    not_tradable: ErrorCategory
-    unknown: ErrorCategory
-    ticker_error: ErrorCategory
-
-
-class ChangeSymbolRequest(BaseModel):
-    newSymbol: str
+# NOTE: {symbol} path-param routes must come AFTER all specific sub-paths
+# (pending-review, search/{prefix}, {symbol}/confirm-match) to prevent
+# FastAPI from matching "pending-review" as a symbol name.
+@router.get(
+    "/stockuniverse/{symbol}",
+    response_model=StockUniverseSchema,
+    tags=["stockuniverse"],
+)
+async def get_stock_universe(
+    symbol: str, db: AsyncSession = Depends(get_db)
+) -> StockUniverseSchema:
+    """Return a single stock universe record by `symbol` from the database."""
+    rec = await db.get(StockUniverseModel, symbol)
+    if rec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="symbol not found"
+        )
+    return _orm_to_schema(rec)
 
 
 errors_router = APIRouter()

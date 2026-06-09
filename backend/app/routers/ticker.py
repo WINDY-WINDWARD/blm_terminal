@@ -1,25 +1,38 @@
 """Router for ticker warehouse endpoints."""
 
-from datetime import date, datetime, timezone
+import asyncio
+import json
+import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
-import pytz
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
 
 from app.schemas.ticker import (
+    IntradayCandleRow,
+    IntradayOHLCVResponse,
+    MomentumLeaderboardResponse,
+    MomentumScoreResponse,
+    Position52wResponse,
+    ReturnsResponse,
+    ScreenerResponse,
+    SectorReturnsResponse,
+    StreakResponse,
     TickerDailyRow,
     TickerLatestResponse,
     TickerOHLCVResponse,
     TickerStatusResponse,
     TriggerResponse,
+    UniverseReturnsResponse,
 )
 from app.services import ticker_warehouse
 from app.services import returns as returns_service
 from app.services import momentum as momentum_service
 from app.services import indicators as indicators_service
 from app.services import screener as screener_service
+from app.services.nse_charting_client import fetch_candles_async
 from app.jobs.runner import trigger_job
 
 router = APIRouter(prefix="/ticker", tags=["ticker"])
@@ -69,7 +82,9 @@ async def get_ohlcv(
                 detail="Invalid to_date format. Use DD-MM-YYYY",
             )
 
-    candles = ticker_warehouse.get_ohlcv(symbol, from_date_obj, to_date_obj)
+    candles = await asyncio.to_thread(
+        ticker_warehouse.get_ohlcv, symbol, from_date_obj, to_date_obj
+    )
     candle_rows = [_row_to_schema(c) for c in candles]
 
     return TickerOHLCVResponse(
@@ -84,7 +99,7 @@ async def get_ohlcv(
 @router.get("/ohlcv/{symbol}/latest", response_model=TickerLatestResponse)
 async def get_latest(symbol: str) -> TickerLatestResponse:
     """Get the most recent OHLCV candle for a symbol."""
-    candle = ticker_warehouse.get_latest_candle(symbol)
+    candle = await asyncio.to_thread(ticker_warehouse.get_latest_candle, symbol)
 
     if not candle:
         return TickerLatestResponse(
@@ -113,7 +128,7 @@ async def get_latest(symbol: str) -> TickerLatestResponse:
 @router.get("/status", response_model=TickerStatusResponse)
 async def get_status() -> TickerStatusResponse:
     """Get warehouse status and statistics."""
-    status_data = ticker_warehouse.get_warehouse_status()
+    status_data = await asyncio.to_thread(ticker_warehouse.get_warehouse_status)
 
     return TickerStatusResponse(
         total_rows=status_data["total_rows"],
@@ -168,31 +183,6 @@ async def trigger_daily_update() -> TriggerResponse:
         status="triggered",
         message="Daily update job triggered successfully",
     )
-
-
-class ReturnsResponse(BaseModel):
-    """Multi-period returns response."""
-    symbol: str
-    d1: float | None
-    d1w: float | None
-    d1m: float | None
-    d3m: float | None
-    d6m: float | None
-    d1y: float | None
-    latest_date: date | None
-
-
-class UniverseReturnsResponse(BaseModel):
-    """Universe returns heatmap response."""
-    period: str
-    count: int
-    results: list[dict]
-
-
-class SectorReturnsResponse(BaseModel):
-    """Sector returns response."""
-    period: str
-    results: list[dict]
 
 
 @router.get("/returns/{symbol}", response_model=ReturnsResponse)
@@ -261,20 +251,6 @@ async def get_sector_returns(
     )
 
 
-class Position52wResponse(BaseModel):
-    """52-week position response."""
-    symbol: str
-    high_52w: float | None
-    low_52w: float | None
-    high_52w_date: date | None
-    low_52w_date: date | None
-    current_close: float | None
-    pct_from_52w_high: float | None
-    pct_from_52w_low: float | None
-    is_52w_high: bool
-    is_52w_low: bool
-
-
 @router.get("/position/52w/{symbol}", response_model=Position52wResponse)
 async def get_52w_position(symbol: str) -> Position52wResponse:
     """Get 52-week high/low position for a symbol."""
@@ -291,22 +267,6 @@ async def get_52w_position(symbol: str) -> Position52wResponse:
         is_52w_high=data.get("is_52w_high", False),
         is_52w_low=data.get("is_52w_low", False),
     )
-
-
-class MomentumScoreResponse(BaseModel):
-    """Momentum score response."""
-    symbol: str
-    score: float | None
-    rank: int | None
-    universe_size: int
-    reason: str | None = None
-    components: dict | None = None
-
-
-class MomentumLeaderboardResponse(BaseModel):
-    """Momentum leaderboard response."""
-    count: int
-    results: list[dict]
 
 
 @router.get("/momentum-score/{symbol}", response_model=MomentumScoreResponse)
@@ -336,6 +296,7 @@ async def get_momentum_leaderboard(
 
 
 @router.get("/indicators/{symbol}")
+
 async def get_indicators(
     symbol: str,
     interval: str = Query("1d", description="Interval: 1d (default), 1h, W, M"),
@@ -358,15 +319,6 @@ async def get_indicators(
     )
 
 
-class StreakResponse(BaseModel):
-    """Streak tracking response."""
-    symbol: str
-    consecutive_up_days: int
-    consecutive_down_days: int
-    consecutive_volume_up_days: int
-    days_since_52w_high: int | None
-
-
 @router.get("/streaks/{symbol}", response_model=StreakResponse)
 async def get_streaks(symbol: str) -> StreakResponse:
     """Get streak metrics for a symbol (consecutive up/down days, volume streaks, etc.)."""
@@ -378,14 +330,6 @@ async def get_streaks(symbol: str) -> StreakResponse:
         consecutive_volume_up_days=data.get("consecutive_volume_up_days", 0),
         days_since_52w_high=data.get("days_since_52w_high"),
     )
-
-
-class ScreenerResponse(BaseModel):
-    """Screener response."""
-    count: int
-    returned: int
-    filters_applied: list[str]
-    results: list[dict]
 
 
 @router.get("/screener/sectors")
@@ -463,7 +407,6 @@ async def get_screener(
 
     filters = {}
     if filters_json:
-        import json
         try:
             extra = json.loads(filters_json)
             if isinstance(extra, dict):
@@ -548,7 +491,7 @@ async def get_screener(
 # Intraday / Weekly / Monthly OHLCV endpoint
 # ---------------------------------------------------------------------------
 
-_IST = pytz.timezone("Asia/Kolkata")
+_IST = ZoneInfo("Asia/Kolkata")
 _VALID_INTRADAY_INTERVALS = {"1h", "W", "M"}
 
 
@@ -560,22 +503,6 @@ def _is_market_hours() -> bool:
     market_open  = now_ist.replace(hour=9,  minute=15, second=0, microsecond=0)
     market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
     return market_open <= now_ist <= market_close
-
-
-class IntradayCandleRow(BaseModel):
-    timestamp: int   # Unix milliseconds
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-
-
-class IntradayOHLCVResponse(BaseModel):
-    symbol: str
-    interval: str
-    candles: list[IntradayCandleRow]
-    count: int
 
 
 @router.get("/intraday/{symbol}", response_model=IntradayOHLCVResponse)
@@ -601,26 +528,24 @@ async def get_intraday_ohlcv(
 
     # During market hours: fetch fresh data from NSE and upsert
     if _is_market_hours():
-        from app.services.nse_charting_client import fetch_candles_async
-
         now_ts = int(datetime.now(timezone.utc).timestamp())
         if interval == "1h":
-            from datetime import timedelta
             fetch_from = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
         else:
             fetch_from = 0  # all history
 
         try:
             rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=now_ts)
-            ticker_warehouse.upsert_intraday(symbol, interval, rows)
+            await asyncio.to_thread(ticker_warehouse.upsert_intraday, symbol, interval, rows)
         except ValueError as exc:
             # Log but don't fail — fall through to cached data
-            import logging
             logging.getLogger(__name__).warning(
                 "[intraday] live fetch failed for %s/%s: %s — serving from cache", symbol, interval, exc
             )
 
-    candles = ticker_warehouse.get_intraday(symbol, interval, from_ts=from_ts, to_ts=to_ts)
+    candles = await asyncio.to_thread(
+        ticker_warehouse.get_intraday, symbol, interval, from_ts=from_ts, to_ts=to_ts
+    )
     candle_rows = [
         IntradayCandleRow(
             timestamp=c["timestamp"],

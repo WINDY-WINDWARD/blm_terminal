@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
@@ -18,28 +17,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.services import ticker_warehouse
+from app.services.cache import nse_cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
-
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
-
-_cache: dict[str, tuple[float, object]] = {}
-_CACHE_TTL = 900  # 15 minutes
-
-
-def _cache_get(key: str):
-    entry = _cache.get(key)
-    if entry and (time.time() - entry[0]) < _CACHE_TTL:
-        return entry[1]
-    return None
-
-
-def _cache_set(key: str, value) -> None:
-    _cache[key] = (time.time(), value)
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +46,11 @@ def _expected_trading_days(period: str) -> int:
 
 def _fetch_prices_from_db(symbols: list[str], from_date: date, to_date: date) -> pd.DataFrame:
     """Build a close-price DataFrame from ticker_daily. Returns DataFrame indexed by date."""
+    bulk = ticker_warehouse.get_ohlcv_bulk(symbols, from_date, to_date)
     all_data: dict[str, pd.Series] = {}
 
     for sym in symbols:
-        candles = ticker_warehouse.get_ohlcv(sym, from_date, to_date)
+        candles = bulk.get(sym, [])
         if not candles:
             continue
         df_sym = pd.DataFrame(candles)
@@ -290,7 +273,7 @@ async def optimize_portfolio(request: PortfolioOptimizeRequest) -> PortfolioOpti
     symbols_key = ",".join(sorted(s.upper() for s in request.symbols))
     cache_key = f"{symbols_key}:{request.period}:{request.objective}:{request.risk_free_rate}"
 
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached:
         return cached  # type: ignore
 
@@ -302,7 +285,7 @@ async def optimize_portfolio(request: PortfolioOptimizeRequest) -> PortfolioOpti
         logger.exception("Portfolio optimization failed")
         raise HTTPException(status_code=502, detail=f"Optimization failed: {exc}")
 
-    _cache_set(cache_key, result)
+    nse_cache[cache_key] = result
     return result
 
 
@@ -317,7 +300,7 @@ async def watchlist_preview(symbols: str) -> list[WatchlistPreviewItem]:
         raise HTTPException(status_code=422, detail="No symbols provided")
 
     cache_key = "preview:" + ",".join(sorted(symbol_list))
-    cached = _cache_get(cache_key)
+    cached = nse_cache.get(cache_key)
     if cached:
         return cached  # type: ignore
 
@@ -364,5 +347,5 @@ async def watchlist_preview(symbols: str) -> list[WatchlistPreviewItem]:
         logger.exception("Portfolio preview failed")
         raise HTTPException(status_code=502, detail=str(exc))
 
-    _cache_set(cache_key, result)
+    nse_cache[cache_key] = result
     return result

@@ -13,8 +13,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Generator, Optional
-
-import pytz
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -40,7 +39,7 @@ DEFAULT_BACKFILL_DAYS = 365
 MIN_EXPECTED_ROWS = 200  # ~1 year of trading days
 REQUEST_DELAY_SECONDS = 3.0
 
-_IST = pytz.timezone("Asia/Kolkata")
+_IST = ZoneInfo("Asia/Kolkata")
 _MARKET_CLOSE_HOUR = 15
 _MARKET_CLOSE_MINUTE = 30
 
@@ -613,6 +612,53 @@ def get_ohlcv(
         ]
 
 
+def get_ohlcv_bulk(
+    symbols: list[str],
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+) -> dict[str, list[dict]]:
+    """Bulk-fetch OHLCV data for multiple symbols in one query.
+
+    Returns a dict keyed by symbol, each value a list of OHLCV dicts
+    sorted by date ascending.  Default date range is 365 days.
+    """
+    if from_date is None:
+        from_date = date.today() - timedelta(days=DEFAULT_BACKFILL_DAYS)
+    if to_date is None:
+        to_date = date.today()
+
+    with _get_session() as db:
+        stmt = (
+            select(TickerDaily)
+            .where(
+                and_(
+                    TickerDaily.symbol.in_(symbols),
+                    TickerDaily.date >= from_date,
+                    TickerDaily.date <= to_date,
+                )
+            )
+            .order_by(TickerDaily.symbol, TickerDaily.date)
+        )
+        result = db.execute(stmt)
+        rows = result.scalars().all()
+
+    result: dict[str, list[dict]] = {s: [] for s in symbols}
+    for r in rows:
+        result[r.symbol].append({
+            "symbol": r.symbol,
+            "date": r.date,
+            "series": r.series,
+            "open": r.open,
+            "high": r.high,
+            "low": r.low,
+            "close": r.close,
+            "volume": r.volume,
+            "value": r.value,
+            "source": r.source,
+        })
+    return result
+
+
 def get_latest_candle(symbol: str) -> Optional[dict]:
     """Get the most recent OHLCV candle for a symbol."""
     with _get_session() as db:
@@ -638,6 +684,125 @@ def get_latest_candle(symbol: str) -> Optional[dict]:
             "volume": row.volume,
             "value": row.value,
         }
+
+
+def get_latest_indicator_rows(
+    symbols: list[str], n: int = 10
+) -> dict[str, list[TickerDaily]]:
+    """Bulk-fetch the last ``n`` TickerDaily rows per symbol, ASC by date.
+
+    Replaces per-symbol ``select(TickerDaily)…order_by(date.desc()).limit(n)``
+    calls in cycle functions. Returns ``{symbol: [row, ...]}`` with at most
+    ``n`` rows per symbol, oldest→newest. Symbols with no rows are absent.
+
+    One round-trip for all symbols.
+    """
+    if not symbols:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(TickerDaily)
+            .where(TickerDaily.symbol.in_(symbols))
+            .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+        ).scalars().all()
+    by_sym: dict[str, list[TickerDaily]] = {}
+    for r in rows:
+        bucket = by_sym.setdefault(r.symbol, [])
+        if len(bucket) < n:
+            bucket.append(r)
+    for sym in by_sym:
+        by_sym[sym].reverse()
+    return by_sym
+
+
+def get_52w_levels(symbols: list[str]) -> dict[str, tuple[float, float]]:
+    """Bulk-fetch ``(high_52w, low_52w)`` from StockUniverse for many symbols.
+
+    Returns ``{symbol: (high_52w, low_52w)}`` for symbols that have non-null
+    52w values. Symbols missing or with nulls are absent from the dict.
+    One round-trip for all symbols.
+    """
+    if not symbols:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(
+                StockUniverse.symbol,
+                StockUniverse.high_52w,
+                StockUniverse.low_52w,
+            ).where(StockUniverse.symbol.in_(symbols))
+        ).all()
+    out: dict[str, tuple[float, float]] = {}
+    for sym, hi, lo in rows:
+        if hi is not None and lo is not None:
+            out[sym] = (float(hi), float(lo))
+    return out
+
+
+def get_intraday_latest(
+    symbols: list[str], intervals: list[str], n: int = 2
+) -> dict[tuple[str, str], list[TickerIntraday]]:
+    """Bulk-fetch the last ``n`` TickerIntraday rows per (symbol, interval), ASC by ts.
+
+    Returns ``{(symbol, interval): [row, ...]}`` with at most ``n`` rows per
+    (symbol, interval) pair, oldest→newest. Missing pairs are absent.
+
+    Replaces per-symbol ``select(TickerIntraday)…limit(2)`` calls that the
+    notification and global-scan cycles issued 3 times per symbol. One
+    round-trip for all (symbol, interval) pairs.
+    """
+    if not symbols or not intervals:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(TickerIntraday)
+            .where(
+                TickerIntraday.symbol.in_(symbols),
+                TickerIntraday.interval.in_(intervals),
+            )
+            .order_by(
+                TickerIntraday.symbol,
+                TickerIntraday.interval,
+                TickerIntraday.timestamp.desc(),
+            )
+        ).scalars().all()
+    out: dict[tuple[str, str], list[TickerIntraday]] = {}
+    for r in rows:
+        key = (r.symbol, r.interval)
+        bucket = out.setdefault(key, [])
+        if len(bucket) < n:
+            bucket.append(r)
+    for key in out:
+        out[key].reverse()
+    return out
+
+
+def get_latest_daily_rsi(symbols: list[str]) -> dict[str, float]:
+    """Bulk-fetch the most-recent ``rsi_14`` per symbol from TickerDaily.
+
+    Returns ``{symbol: rsi_14}`` for symbols with at least one row. Used by
+    the intraday cycle's MTF-alignment check, which previously opened a
+    second ``_SyncSessionLocal()`` per symbol.
+    """
+    if not symbols:
+        return {}
+    with _get_session() as db:
+        rows = db.execute(
+            select(TickerDaily.symbol, TickerDaily.rsi_14)
+            .where(
+                TickerDaily.symbol.in_(symbols),
+                TickerDaily.rsi_14.isnot(None),
+            )
+            .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+        ).all()
+    seen: set[str] = set()
+    out: dict[str, float] = {}
+    for sym, rsi in rows:
+        if sym in seen:
+            continue
+        seen.add(sym)
+        out[sym] = float(rsi)
+    return out
 
 
 def get_warehouse_status() -> dict:
@@ -882,7 +1047,8 @@ def get_symbols_needing_backfill() -> list[str]:
 
         universe_symbols = db.execute(
             select(StockUniverse.symbol).where(
-                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+                StockUniverse.review_status.is_(None)
+                | StockUniverse.review_status.notin_(["removed", "ticker_error"])
             )
         ).scalars().all()
 
@@ -956,11 +1122,16 @@ def get_watchlist_symbols() -> list[str]:
 
 
 def get_all_universe_symbols() -> list[str]:
-    """Get all symbols from stock_universe, excluding removed and ticker-disabled."""
+    """Get all symbols from stock_universe, excluding removed and ticker-disabled.
+
+    NULL review_status is treated as 'not yet reviewed' and is included.
+    SQL: WHERE review_status IS NULL OR review_status NOT IN ('removed', 'ticker_error')
+    """
     with _get_session() as db:
         symbols = db.execute(
             select(StockUniverse.symbol).where(
-                StockUniverse.review_status.notin_(["removed", "ticker_error"])
+                StockUniverse.review_status.is_(None)
+                | StockUniverse.review_status.notin_(["removed", "ticker_error"])
             )
         ).scalars().all()
         return list(symbols)
@@ -1093,7 +1264,7 @@ def upsert_intraday(
     def _do_upsert(session: Session) -> int:
         records = []
         for r in rows:
-            ts_utc = datetime.fromtimestamp(r["time_ms"] / 1000, tz=pytz.utc).replace(tzinfo=None)
+            ts_utc = datetime.fromtimestamp(r["time_ms"] / 1000, tz=timezone.utc).replace(tzinfo=None)
             records.append({
                 "symbol":    symbol,
                 "timestamp": ts_utc,
@@ -1161,16 +1332,16 @@ def get_intraday(
         )
 
         if from_ts is not None:
-            from_dt = datetime.fromtimestamp(from_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            from_dt = datetime.fromtimestamp(from_ts / 1000, tz=timezone.utc).replace(tzinfo=None)
             stmt = stmt.where(TickerIntraday.timestamp >= from_dt)
         if to_ts is not None:
-            to_dt = datetime.fromtimestamp(to_ts / 1000, tz=pytz.utc).replace(tzinfo=None)
+            to_dt = datetime.fromtimestamp(to_ts / 1000, tz=timezone.utc).replace(tzinfo=None)
             stmt = stmt.where(TickerIntraday.timestamp <= to_dt)
 
         rows = session.execute(stmt).scalars().all()
         return [
             {
-                "timestamp": int(r.timestamp.replace(tzinfo=pytz.utc).timestamp() * 1000),
+                "timestamp": int(r.timestamp.replace(tzinfo=timezone.utc).timestamp() * 1000),
                 "open":   r.open,
                 "high":   r.high,
                 "low":    r.low,

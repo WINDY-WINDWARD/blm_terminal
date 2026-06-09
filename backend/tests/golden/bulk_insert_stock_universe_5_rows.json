@@ -1,0 +1,27 @@
+[
+  {
+    "company_name": "New Test Co 0",
+    "series": "EQ",
+    "symbol": "NEW00"
+  },
+  {
+    "company_name": "New Test Co 1",
+    "series": "EQ",
+    "symbol": "NEW01"
+  },
+  {
+    "company_name": "New Test Co 2",
+    "series": "EQ",
+    "symbol": "NEW02"
+  },
+  {
+    "company_name": "New Test Co 3",
+    "series": "EQ",
+    "symbol": "NEW03"
+  },
+  {
+    "company_name": "New Test Co 4",
+    "series": "EQ",
+    "symbol": "NEW04"
+  }
+]

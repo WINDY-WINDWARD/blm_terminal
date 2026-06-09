@@ -9,7 +9,7 @@ import logging
 from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import nullslast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
@@ -36,20 +36,22 @@ class NewsConnectionManager:
         logger.info(f"News WS: client disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict) -> None:
-        """Broadcast a message to all connected clients."""
+        """Broadcast a message to all connected clients in parallel."""
         if not self.active_connections:
             return
 
         message_str = json.dumps(message)
-        disconnected = set()
+        connections = list(self.active_connections)
 
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message_str)
-            except Exception:
-                disconnected.add(connection)
+        results = await asyncio.gather(
+            *[conn.send_text(message_str) for conn in connections],
+            return_exceptions=True,
+        )
 
-        # Clean up disconnected clients
+        disconnected = {
+            conn for conn, exc in zip(connections, results)
+            if isinstance(exc, Exception)
+        }
         self.active_connections -= disconnected
 
     async def send_personal(self, websocket: WebSocket, message: dict) -> None:
@@ -145,7 +147,6 @@ async def _heartbeat(websocket: WebSocket) -> None:
 async def _get_recent_articles(limit: int = 20) -> list[dict]:
     """Fetch recent articles from database."""
     async with AsyncSessionLocal() as session:
-        from sqlalchemy import nullslast
         stmt = (
             select(NewsArticle)
             .order_by(nullslast(NewsArticle.publish_date.desc()))

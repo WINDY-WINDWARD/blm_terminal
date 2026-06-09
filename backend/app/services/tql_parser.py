@@ -59,6 +59,7 @@ Examples
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -294,7 +295,19 @@ def parse_tql(query: str) -> Any:
     Also validates that every field reference (including interval prefix) is
     well-formed — raises TQLSyntaxError at parse time for unknown fields or
     interval prefixes. This catches user errors before any DB work.
+
+    Results are memoised via ``functools.lru_cache(maxsize=256)`` — typical
+    screener usage repeats a small set of queries many times.  Callers
+    must treat the returned AST as immutable: do not mutate the node or its
+    children, or the cache will return the mutated tree on future calls.
+    This is a documented contract — no defensive copy is made.
     """
+    return _parse_tql_cached(query)
+
+
+@functools.lru_cache(maxsize=256)
+def _parse_tql_cached(query: str) -> Any:
+    """Internal cacheable worker.  Returns a freshly-built AST (no deepcopy)."""
     tokens = tokenize(query.strip())
     ast = Parser(tokens).parse()
     _validate_ast(ast)

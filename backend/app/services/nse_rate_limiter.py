@@ -215,6 +215,9 @@ async def throttled_nse_call(
                 except Exception as exc:
                     _record_failure(endpoint_name)
                     inflight_future.set_exception(exc)
+                    # Mark exception as retrieved to avoid "Future exception
+                    # was never retrieved" when no coalescing listener awaits.
+                    inflight_future.exception()
                     raise
                 finally:
                     _last_request_at[endpoint_name] = time.monotonic()

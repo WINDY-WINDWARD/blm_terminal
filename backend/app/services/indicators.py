@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import math
 import time
-from collections import deque
 from datetime import datetime
 from typing import Optional
 

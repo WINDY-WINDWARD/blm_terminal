@@ -58,3 +58,60 @@ class StockUniverse(BaseModel):
         if isinstance(v, dict):
             return v
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Router-defined request/response models (moved from routers/stockuniverse.py
+# under audit B.5; field shapes are preserved).
+# ---------------------------------------------------------------------------
+
+
+class MatchResultResponse(BaseModel):
+    """Response for /stockuniverse/run-mc-linker."""
+
+    total_matched: int
+    exact_matches: int
+    url_extract_matches: int
+    fuzzy_matches: int
+    ambiguous_matches: int
+
+
+class ConfirmMatchRequest(BaseModel):
+    """Request body for PUT /stockuniverse/{symbol}/confirm-match."""
+
+    confirmed: bool
+    mc_url: str | None = None
+
+
+class StockUniverseErrorSymbol(BaseModel):
+    """One error category row in the /stockuniverse/errors response."""
+
+    symbol: str
+    companyName: str | None
+    reviewStatus: str
+    series: str | None
+    lastUpdateTime: datetime | None
+
+
+class ErrorCategory(BaseModel):
+    """Aggregate count + sample symbols for one error category."""
+
+    count: int
+    symbols: list[StockUniverseErrorSymbol]
+
+
+class StockUniverseErrorsResponse(BaseModel):
+    """Response for /stockuniverse/errors (one category per reviewStatus)."""
+
+    delisted: ErrorCategory
+    illiquid: ErrorCategory
+    suspended: ErrorCategory
+    not_tradable: ErrorCategory
+    unknown: ErrorCategory
+    ticker_error: ErrorCategory
+
+
+class ChangeSymbolRequest(BaseModel):
+    """Request body for POST /stockuniverse/{symbol}/change-symbol."""
+
+    newSymbol: str

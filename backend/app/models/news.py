@@ -96,6 +96,4 @@ class NewsArticle(Base):
 
     __table_args__ = (
         Index("ix_news_articles_source_publish", "source", "publish_date"),
-        Index("ix_news_articles_sentiment", "sentiment"),
-        Index("ix_news_articles_threat_level", "threat_level"),
     )
