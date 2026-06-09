@@ -11,8 +11,9 @@ order for startup and nightly sync runs:
   Stage 5a → ticker_weekly_monthly_update  (nightly only; W/M candle backfill)
   Stage 5b → ticker_weekly_monthly_indicators  (nightly only; W/M indicator recompute)
   Stage 6  → global_scan + watchlist_notif  (concurrent, one immediate cycle)
+  Stage 7  → market_data                    (always; last stage — sets startup gate)
 
-Independent workers (news, market data, results calendar, fair value,
+Independent workers (news, results calendar, fair value,
 ticker_intraday_hourly_update, ticker_intraday_hourly_indicators, vacuum) are
 started immediately and self-manage their own cron schedules — the orchestrator
 does not sequence them.  vacuum_worker runs Sunday 04:00 to reclaim space from
@@ -116,6 +117,11 @@ class Orchestrator:
 
         self._asyncio_tasks.append(
             asyncio.create_task(self._run_full_fair_value_scheduler(), name="full-fv-scheduler")
+        )
+
+        # Market data scheduler — starts after pipeline Stage 7 sets the gate
+        self._asyncio_tasks.append(
+            asyncio.create_task(self._run_market_data_scheduler(), name="market-data-scheduler")
         )
 
         # Kick off the startup pipeline in a background asyncio task so lifespan
@@ -297,8 +303,9 @@ class Orchestrator:
         # functions from ``app.services.data_sync.<domain>``, scan /
         # notification cycles from ``app.workers.<domain>``.
         from app.backgroundtasks._runtime import (_shutdown_event,
-            _startup_stock_universe_done, _startup_ticker_backfill_done,
-            _startup_ticker_indicators_done, _startup_ticker_scores_done)
+            _startup_market_data_done, _startup_stock_universe_done,
+            _startup_ticker_backfill_done, _startup_ticker_indicators_done,
+            _startup_ticker_scores_done)
         from app.jobs.runner import update_job_status
         from app.services.data_sync.backfill import _ticker_backfill_sync
         from app.services.data_sync.daily import _ticker_daily_update_sync
@@ -306,6 +313,7 @@ class Orchestrator:
             _ticker_intraday_indicators_sync)
         from app.services.data_sync.intraday import (
             _ticker_intraday_hourly_stale_check_sync, _ticker_intraday_update_sync)
+        from app.services.data_sync.market import _market_data_sync
         from app.services.data_sync.scores import _ticker_scores_sync
         from app.services.data_sync.universe import _stock_universe_sync
         from app.workers.global_scan_cycle import _global_scan_cycle
@@ -332,7 +340,7 @@ class Orchestrator:
             if not await _run_or_bail(dict(
                 stage_name="stock_universe",
                 sub_jobs=[("job.stock_universe", _stock_universe_sync, False)],
-                progress_start=5, progress_end=15, stage_label="1/7",
+                progress_start=5, progress_end=15, stage_label="1/8",
                 on_complete=_startup_stock_universe_done.set,
             )):
                 return
@@ -347,7 +355,7 @@ class Orchestrator:
                     ),
                     True,
                 )],
-                progress_start=16, progress_end=17, stage_label="1b/7",
+                progress_start=16, progress_end=17, stage_label="1b/8",
                 requires_mode={PipelineMode.STARTUP},
             )):
                 return
@@ -360,7 +368,7 @@ class Orchestrator:
                     lambda: _ticker_intraday_indicators_sync(["W", "M"]),
                     True,
                 )],
-                progress_start=17, progress_end=18, stage_label="1c/7",
+                progress_start=17, progress_end=18, stage_label="1c/8",
                 requires_mode={PipelineMode.STARTUP},
             )):
                 return
@@ -369,7 +377,7 @@ class Orchestrator:
             if not await _run_or_bail(dict(
                 stage_name="ticker_daily_update",
                 sub_jobs=[("job.ticker_daily_update", _ticker_daily_update_sync, True)],
-                progress_start=18, progress_end=28, stage_label="2a/7",
+                progress_start=18, progress_end=28, stage_label="2a/8",
                 requires_mode={PipelineMode.NIGHTLY},
             )):
                 return
@@ -378,7 +386,7 @@ class Orchestrator:
             if not await _run_or_bail(dict(
                 stage_name="ticker_backfill",
                 sub_jobs=[("job.ticker_backfill", _ticker_backfill_sync, False)],
-                progress_start=30, progress_end=40, stage_label="2b/7",
+                progress_start=30, progress_end=40, stage_label="2b/8",
                 on_complete=_startup_ticker_backfill_done.set,
             )):
                 return
@@ -391,7 +399,7 @@ class Orchestrator:
                     _ticker_intraday_hourly_stale_check_sync,
                     True,
                 )],
-                progress_start=42, progress_end=48, stage_label="2c/7",
+                progress_start=42, progress_end=48, stage_label="2c/8",
             )):
                 return
 
@@ -399,7 +407,7 @@ class Orchestrator:
             if not await _run_or_bail(dict(
                 stage_name="ticker_indicators",
                 sub_jobs=[("job.ticker_indicators", _ticker_indicators_sync, True)],
-                progress_start=50, progress_end=62, stage_label="3/7",
+                progress_start=50, progress_end=62, stage_label="3/8",
                 on_complete=_startup_ticker_indicators_done.set,
             )):
                 return
@@ -408,7 +416,7 @@ class Orchestrator:
             if not await _run_or_bail(dict(
                 stage_name="ticker_scores",
                 sub_jobs=[("job.ticker_scores", _ticker_scores_sync, True)],
-                progress_start=64, progress_end=74, stage_label="4/7",
+                progress_start=64, progress_end=74, stage_label="4/8",
                 on_complete=_startup_ticker_scores_done.set,
             )):
                 return
@@ -430,7 +438,7 @@ class Orchestrator:
                         ),
                         True,
                     )],
-                    progress_start=76, progress_end=82, stage_label="5a/7",
+                    progress_start=76, progress_end=82, stage_label="5a/8",
                     requires_mode={PipelineMode.NIGHTLY},
                 )):
                     return
@@ -443,7 +451,7 @@ class Orchestrator:
                         lambda: _ticker_intraday_indicators_sync(["W", "M"]),
                         True,
                     )],
-                    progress_start=84, progress_end=88, stage_label="5b/7",
+                    progress_start=84, progress_end=88, stage_label="5b/8",
                     requires_mode={PipelineMode.NIGHTLY},
                 )):
                     return
@@ -452,8 +460,8 @@ class Orchestrator:
             if _shutdown_event.is_set():
                 return
             logger.info("Orchestrator [%s] Stage 6: scan + notif", mode.value)
-            await update_job_status(pipeline_job_key, "running", progress=90,
-                                    message="Stage 6/7: Running scan and notifications...")
+            await update_job_status(pipeline_job_key, "running", progress=88,
+                                    message="Stage 6/8: Running scan and notifications...")
             from app.backgroundtasks._runtime import _is_job_enabled
             stage6_tasks = []
             if _is_job_enabled("job.global_scan"):
@@ -465,6 +473,15 @@ class Orchestrator:
             if stage6_tasks:
                 await asyncio.gather(*stage6_tasks)
             logger.info("Orchestrator [%s] Stage 6 complete", mode.value)
+
+            # ── Stage 7: market_data (always) — last stage ──────────────
+            if not await _run_or_bail(dict(
+                stage_name="market_data",
+                sub_jobs=[("job.market_data", _market_data_sync, False)],
+                progress_start=92, progress_end=98, stage_label="7/8",
+                on_complete=_startup_market_data_done.set,
+            )):
+                return
 
             now = datetime.now(timezone.utc)
             next_trig: datetime | None = None
@@ -502,7 +519,7 @@ class Orchestrator:
             JobDefinition(
                 job_key="job.pipeline.startup",
                 name="pipeline_startup",
-                description="Full ordered pipeline: universe → backfill → indicators → scores → scan/notif",
+                description="Full ordered pipeline: universe → backfill → indicators → scores → scan/notif → market_data",
                 category="pipeline",
                 cron_expression="@startup",
                 callable=_run_startup,
@@ -511,7 +528,7 @@ class Orchestrator:
             JobDefinition(
                 job_key="job.pipeline.nightly",
                 name="pipeline_nightly",
-                description="Nightly ordered pipeline: universe → daily_update → backfill → indicators → scores → scan/notif",
+                description="Nightly ordered pipeline: universe → daily_update → backfill → indicators → scores → scan/notif → market_data",
                 category="pipeline",
                 cron_expression=f"{_NIGHTLY_MINUTE_IST} {_NIGHTLY_HOUR_IST} * * *",
                 callable=_run_nightly,
@@ -529,6 +546,91 @@ class Orchestrator:
             await self.run_pipeline(PipelineMode.STARTUP)
         except Exception:
             logger.exception("Orchestrator: startup pipeline task raised an unhandled exception")
+
+    async def _run_market_data_scheduler(self) -> None:
+        """Run market data sync every 5 min during market hours; sleep when closed.
+
+        Waits for the startup pipeline Stage 7 (which sets
+        ``_startup_market_data_done``) before entering the scheduling loop,
+        so the first market data sync always runs as part of the startup
+        pipeline rather than independently.
+        """
+        from app.backgroundtasks._runtime import (
+            _is_job_enabled,
+            _seconds_until_next_cron,
+            _startup_market_data_done,
+            get_async_shutdown_event,
+        )
+        from app.jobs.runner import update_job_status
+        from app.services.data_sync.market import (
+            _is_market_open,
+            _market_data_sync,
+            _seconds_until_market_open,
+        )
+
+        shutdown_event = get_async_shutdown_event()
+
+        # Wait for startup pipeline Stage 7 to complete before entering loop
+        logger.info("market_data_scheduler: waiting for startup pipeline Stage 7")
+        while not _startup_market_data_done.is_set():
+            try:
+                await asyncio.wait_for(
+                    _wait_for_shutdown(shutdown_event), timeout=1.0
+                )
+                return  # shutdown requested while waiting
+            except asyncio.TimeoutError:
+                pass
+
+        if not _is_job_enabled("job.market_data"):
+            logger.info("market_data_scheduler: disabled")
+            return
+
+        logger.info("market_data_scheduler: entering main loop")
+
+        while not shutdown_event.is_set():
+            now_utc = datetime.now(timezone.utc)
+
+            if _is_market_open():
+                # During market hours: use */5 cron schedule
+                wait_secs = _seconds_until_next_cron("*/5 * * * *")
+                next_trigger = now_utc + timedelta(seconds=wait_secs)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, _update_fv_job_waiting, "job.market_data",
+                    next_trigger, wait_secs,
+                )
+                try:
+                    await asyncio.wait_for(
+                        _wait_for_shutdown(shutdown_event), timeout=wait_secs,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                if shutdown_event.is_set():
+                    break
+
+                # Re-check market is still open before fetching
+                if _is_market_open():
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, _market_data_sync)
+            else:
+                # Market closed: sleep until next market open
+                wait_secs = _seconds_until_market_open()
+                next_trigger = now_utc + timedelta(seconds=wait_secs)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, _update_fv_job_waiting, "job.market_data",
+                    next_trigger, wait_secs,
+                )
+                try:
+                    await asyncio.wait_for(
+                        _wait_for_shutdown(shutdown_event), timeout=wait_secs,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
+
+        logger.info("market_data_scheduler: stopped")
 
     async def _run_nightly_pipeline_scheduler(self) -> None:
         """Asyncio loop: sleep until 23:00 IST each day then run the nightly pipeline."""

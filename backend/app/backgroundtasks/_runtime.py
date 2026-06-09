@@ -62,6 +62,7 @@ _startup_ticker_backfill_done = threading.Event()
 _startup_ticker_indicators_done = threading.Event()
 _startup_ticker_scores_done = threading.Event()
 _startup_ticker_hourly_done = threading.Event()
+_startup_market_data_done = threading.Event()
 
 
 # ---------------------------------------------------------------------------

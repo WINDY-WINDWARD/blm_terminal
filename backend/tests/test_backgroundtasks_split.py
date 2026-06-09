@@ -198,7 +198,6 @@ MOVED_SYMBOLS = [
     ("news_worker", "app.workers.news"),
     ("news_rss_worker", "app.workers.news"),
     ("watchlist_news_worker", "app.workers.news"),
-    ("market_data_worker", "app.workers.market_calendar"),
     ("results_calendar_worker", "app.workers.market_calendar"),
     # A.11 part 1 — split remaining sync cores (parallel + snapshot)
     ("_parallel_indicator_sync", "app.services.data_sync.parallel"),

@@ -32,6 +32,7 @@ from app.backgroundtasks._runtime import (  # noqa: F401
     _startup_ticker_indicators_done,
     _startup_ticker_scores_done,
     _startup_ticker_hourly_done,
+    _startup_market_data_done,
     reset_async_shutdown_event,
     set_async_shutdown_event,
     _sleep_interruptible,
@@ -56,15 +57,14 @@ async def start_all_workers() -> list[threading.Thread]:
       3. ticker_indicators_worker            — waits ticker_backfill_done; sets _startup_ticker_indicators_done
       4. ticker_scores_worker                — waits ticker_indicators_done; sets _startup_ticker_scores_done
       5. ticker_daily_update_worker          — waits ticker_backfill_done (runs its own inline pipeline)
-      6. ticker_intraday_hourly_update_worker    — runs independently; sets _startup_ticker_hourly_done
-      6b. ticker_intraday_hourly_indicators_worker — waits _startup_ticker_hourly_done
-      7. global_scan_worker                  — waits ticker_scores_done; polls _pipeline_idle on every cycle
-      8. watchlist_notification_worker       — waits ticker_scores_done; polls _pipeline_idle on every cycle
-      9. news_worker                         — waits stock_universe_done; then runs independently
-      10. watchlist_news_worker              — waits stock_universe_done; then runs independently
-      11. market_data_worker                 — waits stock_universe_done; then runs independently
-      12. results_calendar_worker            — waits stock_universe_done; then runs independently
-      13. vacuum_worker                      — waits ticker_scores_done; weekly Sunday 04:00 cron
+       6. ticker_intraday_hourly_update_worker    — runs independently; sets _startup_ticker_hourly_done
+       6b. ticker_intraday_hourly_indicators_worker — waits _startup_ticker_hourly_done
+       7. global_scan_worker                  — waits ticker_scores_done; polls _pipeline_idle on every cycle
+       8. watchlist_notification_worker       — waits ticker_scores_done; polls _pipeline_idle on every cycle
+       9. news_worker                         — waits stock_universe_done; then runs independently
+       10. watchlist_news_worker              — waits stock_universe_done; then runs independently
+       11. results_calendar_worker            — waits stock_universe_done; then runs independently
+       12. vacuum_worker                      — waits ticker_scores_done; weekly Sunday 04:00 cron
 
     Cron-cycle ordering is enforced via _pipeline_lock + _pipeline_idle:
       ticker_daily_update / ticker_indicators / ticker_scores each acquire
@@ -100,7 +100,7 @@ async def start_all_workers() -> list[threading.Thread]:
         news_worker,
         watchlist_news_worker,
     )
-    from app.workers.market_calendar import market_data_worker, results_calendar_worker
+    from app.workers.market_calendar import results_calendar_worker
     from app.workers.maintenance import vacuum_worker
 
     reset_async_shutdown_event()
@@ -115,14 +115,13 @@ async def start_all_workers() -> list[threading.Thread]:
         ticker_daily_update_worker,                  # 5 — daily bhavcopy + refresh
         ticker_intraday_hourly_update_worker,       # 6 — 1h candles during market hours
         ticker_intraday_hourly_indicators_worker,   # 6b — 1h indicators during market hours
-        market_data_worker,                          # 7 — live market data
-        global_scan_worker,                          # 8 — full-universe scan
-        watchlist_notification_worker,               # 9 — watchlist alerts
-        news_worker,                                 # 10 — global news (MoneyControl)
-        news_rss_worker,                             # 11 — RSS news aggregation
-        watchlist_news_worker,                       # 12 — per-symbol news
-        results_calendar_worker,                     # 13 — upcoming results alerts
-        vacuum_worker,                               # 14 — weekly VACUUM (Sunday 04:00)
+        global_scan_worker,                          # 7 — full-universe scan
+        watchlist_notification_worker,               # 8 — watchlist alerts
+        news_worker,                                 # 9 — global news (MoneyControl)
+        news_rss_worker,                             # 10 — RSS news aggregation
+        watchlist_news_worker,                       # 11 — per-symbol news
+        results_calendar_worker,                     # 12 — upcoming results alerts
+        vacuum_worker,                               # 13 — weekly VACUUM (Sunday 04:00)
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)

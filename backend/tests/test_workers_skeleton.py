@@ -70,7 +70,6 @@ EXPECTED_WORKER_SYMBOLS = [
     "news_worker",
     "news_rss_worker",
     "watchlist_news_worker",
-    "market_data_worker",
     # Notification workers
     "watchlist_notification_worker",
     "global_scan_worker",

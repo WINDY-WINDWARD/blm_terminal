@@ -1,8 +1,12 @@
 """Market data sync cores (audit C.1, A.11 part 2, A.13).
 
 Extracted from ``app/backgroundtasks/_impl.py``.  Holds the
-market-data sync cores (work bodies) called by the
-``market_data_worker`` daemon in ``app.workers.market_calendar``.
+market-data sync cores (work bodies).
+
+``market_data`` is now managed by the orchestrator — it runs as
+Stage 7 of the startup/nightly pipeline and on a ``*/5 * * * *``
+cron scheduler during market hours (see
+``Orchestrator._run_market_data_scheduler``).
 
 Public functions (4):
 - ``_is_market_open()`` — bool: is the NSE market currently open
@@ -11,7 +15,8 @@ Public functions (4):
   next market open
 - ``_refresh_market_data_async()`` — async helper: refresh
   industry + sector data from MoneyControl
-- ``_market_data_sync()`` — sync wrapper called by the worker
+- ``_market_data_sync()`` — sync wrapper called by the pipeline
+  and scheduler
 
 A.13: migrated ``_bg_impl`` references to canonical imports.
 """

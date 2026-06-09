@@ -100,7 +100,6 @@ from app.workers.news import (  # noqa: E402,F401
     watchlist_news_worker,
 )
 from app.workers.market_calendar import (  # noqa: E402,F401
-    market_data_worker,
     results_calendar_worker,
 )
 

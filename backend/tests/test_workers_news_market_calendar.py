@@ -1,9 +1,13 @@
-"""Pin the move of 5 news + market/calendar worker daemons to 2 new modules.
+"""Pin the move of 4 news + results calendar worker daemons to 2 new modules.
 
-Audit C.1, A.9 step 4.  The 5 workers moved from
+Audit C.1, A.9 step 4.  The workers moved from
 ``app/backgroundtasks/_impl.py`` to 2 new modules:
 - ``app.workers.news`` — news_worker, news_rss_worker, watchlist_news_worker
-- ``app.workers.market_calendar`` — market_data_worker, results_calendar_worker
+- ``app.workers.market_calendar`` — results_calendar_worker
+
+Note: ``market_data_worker`` was removed in a later refactor — market data
+is now managed by ``Orchestrator`` as pipeline Stage 7 + a dedicated
+``*/5 * * * *`` cron scheduler (``_run_market_data_scheduler``).
 
 A.13: ``_impl.py`` is gone — the package shim
 ``app.backgroundtasks`` re-exports the workers from their final
@@ -29,7 +33,6 @@ WORKER_HOMES = {
     "news_worker": "app.workers.news",
     "news_rss_worker": "app.workers.news",
     "watchlist_news_worker": "app.workers.news",
-    "market_data_worker": "app.workers.market_calendar",
     "results_calendar_worker": "app.workers.market_calendar",
 }
 

@@ -110,7 +110,7 @@ async def _fetch_change_ranges_for_symbol(symbol: str) -> tuple[str, object]:
         nse_cache[cache_key] = cleaned
         return sym, cleaned
     except Exception as e:
-        logger.warning("Market WS: change-ranges fetch failed for %s: %s", sym, e)
+        logger.warning("Market WS: change-ranges fetch failed for %s: %s (%s)", sym, e or "(empty)", type(e).__name__)
         return sym, None
 
 
@@ -132,7 +132,7 @@ async def _fetch_symbol_data_for_symbol(symbol: str) -> tuple[str, object]:
         nse_cache[cache_key] = cleaned
         return sym, cleaned
     except Exception as e:
-        logger.warning("Market WS: symbol-data fetch failed for %s: %s", sym, e)
+        logger.warning("Market WS: symbol-data fetch failed for %s: %s (%s)", sym, e or "(empty)", type(e).__name__)
         return sym, None
 
 

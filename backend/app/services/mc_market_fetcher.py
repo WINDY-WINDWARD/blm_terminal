@@ -496,92 +496,172 @@ class MarketDataFetcher:
             logger.exception(f"Failed to fetch sector detail: {slug}")
             return []
 
-    async def store_category(
-        self, db: AsyncSession, category_type: str, data: dict[str, Any]
+    async def _bulk_upsert_categories(
+        self, db: AsyncSession, category_rows: list[tuple[str, dict[str, Any]]]
     ) -> None:
-        """Store or update a market category."""
+        """Batch upsert all market categories in a single round-trip.
+
+        Each row is (category_type, data_dict).
+        """
+        if not category_rows:
+            return
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        values_list = []
+        for category_type, data in category_rows:
+            values_list.append({
+                "category_type": category_type,
+                "slug": data["slug"],
+                "name": data["name"],
+                "url": data.get("url"),
+                "market_cap": data.get("market_cap"),
+                "pe": data.get("pe"),
+                "advance": data.get("advance"),
+                "decline": data.get("decline"),
+                "sentiment": data.get("sentiment"),
+                "earnings_yoy": data.get("earnings_yoy"),
+                "last_updated": now,
+            })
 
         stmt = (
             sqlite_insert(MarketCategory)
-            .values(
-                category_type=category_type,
-                slug=data["slug"],
-                name=data["name"],
-                url=data.get("url"),
-                market_cap=data.get("market_cap"),
-                pe=data.get("pe"),
-                advance=data.get("advance"),
-                decline=data.get("decline"),
-                sentiment=data.get("sentiment"),
-                earnings_yoy=data.get("earnings_yoy"),
-                last_updated=now,
-            )
+            .values(values_list)
             .on_conflict_do_update(
                 index_elements=["category_type", "slug"],
                 set_={
-                    "name": data["name"],
-                    "url": data.get("url"),
-                    "market_cap": data.get("market_cap"),
-                    "pe": data.get("pe"),
-                    "advance": data.get("advance"),
-                    "decline": data.get("decline"),
-                    "sentiment": data.get("sentiment"),
-                    "earnings_yoy": data.get("earnings_yoy"),
-                    "last_updated": now,
+                    "name": stmt.excluded.name,
+                    "url": stmt.excluded.url,
+                    "market_cap": stmt.excluded.market_cap,
+                    "pe": stmt.excluded.pe,
+                    "advance": stmt.excluded.advance,
+                    "decline": stmt.excluded.decline,
+                    "sentiment": stmt.excluded.sentiment,
+                    "earnings_yoy": stmt.excluded.earnings_yoy,
+                    "last_updated": stmt.excluded.last_updated,
                 },
             )
         )
         await db.execute(stmt)
 
-    async def store_stock(
-        self, db: AsyncSession, stock_data: dict[str, Any], category: dict[str, str]
+    async def _bulk_upsert_stocks(
+        self, db: AsyncSession, stock_rows: list[dict[str, Any]]
     ) -> None:
-        """Store or update a stock, merging categories if it already exists.
+        """Batch upsert all stocks in batches of 500 for efficiency.
 
-        The stock_data should have a 'categories' key with the new category to add.
+        Each row must contain all MarketCategoryStock fields plus ``categories``.
         """
+        if not stock_rows:
+            return
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-        symbol = stock_data["symbol"]
+        BATCH_SIZE = 500
 
-        # Check if stock already exists to get existing categories
-        stmt = select(MarketCategoryStock).where(MarketCategoryStock.symbol == symbol)
-        result = await db.execute(stmt)
-        existing = result.scalar_one_or_none()
+        for chunk_start in range(0, len(stock_rows), BATCH_SIZE):
+            chunk = stock_rows[chunk_start:chunk_start + BATCH_SIZE]
+            values_list = []
+            for row in chunk:
+                values_list.append({
+                    "symbol": row["symbol"],
+                    "company_name": row["company_name"],
+                    "exchange": row.get("exchange"),
+                    "curr_price": row.get("curr_price"),
+                    "per_change": row.get("per_change"),
+                    "market_cap": row.get("market_cap"),
+                    "ttm_pe": row.get("ttm_pe"),
+                    "net_profit": row.get("net_profit"),
+                    "net_profit_yoy": row.get("net_profit_yoy"),
+                    "tech_trend": row.get("tech_trend"),
+                    "mc_url": row.get("mc_url"),
+                    "categories": row.get("categories", []),
+                    "last_updated": now,
+                })
 
-        if existing:
-            # Merge categories
-            existing_categories = existing.categories or []
-            # Check if this category is already present
-            new_cat = {"type": category["type"], "slug": category["slug"]}
-            if new_cat not in existing_categories:
-                existing_categories.append(new_cat)
-                categories = existing_categories
-            else:
-                categories = existing_categories
-        else:
-            categories = [{"type": category["type"], "slug": category["slug"]}]
-
-        stmt = (
-            sqlite_insert(MarketCategoryStock)
-            .values(
-                symbol=stock_data["symbol"],
-                company_name=stock_data["company_name"],
-                exchange=stock_data.get("exchange"),
-                curr_price=stock_data.get("curr_price"),
-                per_change=stock_data.get("per_change"),
-                market_cap=stock_data.get("market_cap"),
-                ttm_pe=stock_data.get("ttm_pe"),
-                net_profit=stock_data.get("net_profit"),
-                net_profit_yoy=stock_data.get("net_profit_yoy"),
-                tech_trend=stock_data.get("tech_trend"),
-                mc_url=stock_data.get("mc_url"),
-                categories=categories,
-                last_updated=now,
+            stmt = (
+                sqlite_insert(MarketCategoryStock)
+                .values(values_list)
+                .on_conflict_do_update(
+                    index_elements=["symbol"],
+                    set_={
+                        "company_name": stmt.excluded.company_name,
+                        "exchange": stmt.excluded.exchange,
+                        "curr_price": stmt.excluded.curr_price,
+                        "per_change": stmt.excluded.per_change,
+                        "market_cap": stmt.excluded.market_cap,
+                        "ttm_pe": stmt.excluded.ttm_pe,
+                        "net_profit": stmt.excluded.net_profit,
+                        "net_profit_yoy": stmt.excluded.net_profit_yoy,
+                        "tech_trend": stmt.excluded.tech_trend,
+                        "mc_url": stmt.excluded.mc_url,
+                        "categories": stmt.excluded.categories,
+                        "last_updated": stmt.excluded.last_updated,
+                    },
+                )
             )
-            .on_conflict_do_update(
-                index_elements=["symbol"],
-                set_={
+            await db.execute(stmt)
+
+            # Brief pause between batches to let other DB operations through
+            if len(stock_rows) > BATCH_SIZE:
+                await asyncio.sleep(0.1)
+
+    async def refresh_all(self, db: AsyncSession) -> tuple[int, int]:
+        """Fetch and store all industry and sector data.
+
+        Collects all data in-memory first, then performs batch DB writes
+        to minimise round-trips and avoid overwhelming SQLite.
+
+        Returns (categories_count, stocks_count).
+        """
+        logger.info("Starting market data refresh")
+        total_categories = 0
+        total_stocks = 0
+
+        # ── Phase 1: Fetch all data (sequential with delay for rate-limiting) ──
+        industries = await self.fetch_industry_list()
+
+        industry_stock_pairs: list[tuple[dict, list[dict]]] = []
+        for ind in industries:
+            stocks = await self.fetch_industry_detail(ind["slug"])
+            industry_stock_pairs.append((ind, stocks))
+            total_categories += 1
+            total_stocks += len(stocks)
+            await asyncio.sleep(REQUEST_DELAY)
+
+        sectors = await self.fetch_sector_list()
+
+        sector_stock_pairs: list[tuple[dict, list[dict]]] = []
+        for sec in sectors:
+            stocks = await self.fetch_sector_detail(sec["slug"])
+            sector_stock_pairs.append((sec, stocks))
+            total_categories += 1
+            total_stocks += len(stocks)
+            await asyncio.sleep(REQUEST_DELAY)
+
+        # ── Phase 2: Build in-memory maps ──
+
+        # 2a: Category rows (flat list of (type, data) tuples)
+        category_rows: list[tuple[str, dict[str, Any]]] = []
+        for ind in industries:
+            category_rows.append(("industry", ind))
+        for sec in sectors:
+            category_rows.append(("sector", sec))
+
+        # 2b: Stock rows grouped by symbol, with merged categories
+        # Load existing categories from DB for merge
+        existing_categories_map: dict[str, list[dict]] = {}
+        try:
+            existing_stmt = select(MarketCategoryStock.symbol, MarketCategoryStock.categories)
+            existing_result = await db.execute(existing_stmt)
+            for row in existing_result:
+                existing_categories_map[row[0]] = list(row[1] or [])
+        except Exception:
+            logger.warning("Failed to load existing stock categories, starting fresh")
+
+        stock_map: dict[str, dict[str, Any]] = {}
+
+        def _ensure_stock(sym: str, stock_data: dict) -> dict:
+            """Get or create stock entry in stock_map, copying fields from stock_data."""
+            if sym not in stock_map:
+                entry = {
+                    "symbol": sym,
                     "company_name": stock_data["company_name"],
                     "exchange": stock_data.get("exchange"),
                     "curr_price": stock_data.get("curr_price"),
@@ -592,55 +672,71 @@ class MarketDataFetcher:
                     "net_profit_yoy": stock_data.get("net_profit_yoy"),
                     "tech_trend": stock_data.get("tech_trend"),
                     "mc_url": stock_data.get("mc_url"),
-                    "categories": categories,
-                    "last_updated": now,
-                },
-            )
-        )
-        await db.execute(stmt)
+                    "categories": existing_categories_map.get(sym, []),
+                }
+                stock_map[sym] = entry
+            return stock_map[sym]
 
-    async def refresh_all(self, db: AsyncSession) -> tuple[int, int]:
-        """Fetch and store all industry and sector data.
+        for ind, stocks in industry_stock_pairs:
+            for s in stocks:
+                entry = _ensure_stock(s["symbol"], s)
+                cat_entry = {"type": "industry", "slug": ind["slug"]}
+                if cat_entry not in entry["categories"]:
+                    entry["categories"].append(cat_entry)
 
-        Returns (categories_count, stocks_count).
-        """
-        logger.info("Starting market data refresh")
-        total_categories = 0
-        total_stocks = 0
+        for sec, stocks in sector_stock_pairs:
+            for s in stocks:
+                entry = _ensure_stock(s["symbol"], s)
+                cat_entry = {"type": "sector", "slug": sec["slug"]}
+                if cat_entry not in entry["categories"]:
+                    entry["categories"].append(cat_entry)
 
-        # Fetch industries
-        industries = await self.fetch_industry_list()
-        for ind in industries:
-            await self.store_category(db, "industry", ind)
-            total_categories += 1
-
-            # Fetch stocks for this industry
-            stocks = await self.fetch_industry_detail(ind["slug"])
-            for stock in stocks:
-                await self.store_stock(db, stock, stock["_category"])
-                total_stocks += 1
-
-            await asyncio.sleep(REQUEST_DELAY)
-
-        # Fetch sectors
-        sectors = await self.fetch_sector_list()
-        for sec in sectors:
-            await self.store_category(db, "sector", sec)
-            total_categories += 1
-
-            # Fetch stocks for this sector
-            stocks = await self.fetch_sector_detail(sec["slug"])
-            for stock in stocks:
-                await self.store_stock(db, stock, stock["_category"])
-                total_stocks += 1
-
-            await asyncio.sleep(REQUEST_DELAY)
+        # ── Phase 3: Batch DB writes ──
+        await self._bulk_upsert_categories(db, category_rows)
+        await self._bulk_upsert_stocks(db, list(stock_map.values()))
 
         await db.commit()
         logger.info(
-            f"Market data refresh complete: {total_categories} categories, {total_stocks} stock-category mappings"
+            f"Market data refresh complete: {len(category_rows)} categories, "
+            f"{len(stock_map)} unique stocks (merging all category associations)"
         )
-        return total_categories, total_stocks
+        return len(category_rows), len(stock_map)
+
+    # ── Legacy individual helpers (kept for backward compat) ──────────────
+
+    async def store_category(
+        self, db: AsyncSession, category_type: str, data: dict[str, Any]
+    ) -> None:
+        """Store or update a single market category.
+
+        Prefer ``_bulk_upsert_categories`` for bulk operations.
+        """
+        await self._bulk_upsert_categories(db, [(category_type, data)])
+
+    async def store_stock(
+        self, db: AsyncSession, stock_data: dict[str, Any], category: dict[str, str]
+    ) -> None:
+        """Store or update a single stock, merging categories.
+
+        Prefer ``_bulk_upsert_stocks`` for bulk operations.
+        """
+        # Load existing categories if not already in stock_data
+        if "categories" not in stock_data:
+            try:
+                stmt = select(MarketCategoryStock).where(
+                    MarketCategoryStock.symbol == stock_data["symbol"]
+                )
+                result = await db.execute(stmt)
+                existing = result.scalar_one_or_none()
+                existing_cats = list(existing.categories or []) if existing else []
+            except Exception:
+                existing_cats = []
+            cat_entry = {"type": category["type"], "slug": category["slug"]}
+            if cat_entry not in existing_cats:
+                existing_cats.append(cat_entry)
+            stock_data["categories"] = existing_cats
+
+        await self._bulk_upsert_stocks(db, [stock_data])
 
 
 market_data_fetcher = MarketDataFetcher()

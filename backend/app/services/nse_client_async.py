@@ -75,14 +75,35 @@ class NSEClientAsync:
 
     def __init__(self) -> None:
         self._http: httpx.AsyncClient | None = None
+        self._http_loop_id: int | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazily create the persistent httpx client with NSE cookie warmup."""
+        """Lazily create the persistent httpx client.
+
+        Detects event loop changes and recreates the client to avoid using a
+        stale client bound to a different (possibly closed) event loop. This
+        is expected when the sync :class:`NSEClient` facade calls async
+        methods via ``asyncio.run()``, which creates a fresh event loop
+        per invocation.
+        """
+        current_loop = asyncio.get_running_loop()
+        if self._http is not None and self._http_loop_id is not None and self._http_loop_id != id(current_loop):
+            logger.debug(
+                "NSEClientAsync: event loop changed (was %d, now %d), recreating httpx client",
+                self._http_loop_id, id(current_loop),
+            )
+            try:
+                await self._http.aclose()
+            except (RuntimeError, Exception):
+                pass
+            self._http = None
+            self._http_loop_id = None
+
         if self._http is None:
             self._http = httpx.AsyncClient(
                 base_url=NSE_BASE_URL,
                 headers=NSE_HEADERS,
-                timeout=httpx.Timeout(20.0, connect=10.0),
+                timeout=httpx.Timeout(30.0, connect=15.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=10,
@@ -90,12 +111,7 @@ class NSEClientAsync:
                     keepalive_expiry=30.0,
                 ),
             )
-            logger.info("NSEClientAsync: creating httpx client — warming cookie session")
-            try:
-                await self._http.get("/option-chain")
-                logger.info("NSEClientAsync: cookie session warmed successfully")
-            except Exception as exc:
-                logger.warning("NSEClientAsync: cookie warmup failed: %s", exc)
+            self._http_loop_id = id(current_loop)
 
         return self._http
 
@@ -147,6 +163,24 @@ class NSEClientAsync:
         missing = [k for k in expected_keys if k not in payload]
         if missing:
             logger.warning("Largedeal snapshot missing keys: %s", ", ".join(missing))
+        return payload
+
+    async def get_market_variations(self, index: str) -> dict[str, Any]:
+        """Fetch the full live-analysis-variations payload for gainers or loosers.
+
+        Args:
+            index: 'gainers' or 'loosers' (NSE's misspelling).
+
+        Returns the full parsed JSON: { legends, NIFTY: {data, timestamp},
+        BANKNIFTY: {...}, ..., allSec: {data, timestamp} }.
+        """
+        url = f"https://www.nseindia.com/api/live-analysis-variations?index={index}&type=allSec"
+        payload: dict[str, Any] = await self._nse_get(url)
+        if not isinstance(payload, dict) or "allSec" not in payload:
+            raise ValueError(
+                f"Unexpected response from live-analysis-variations?index={index}: "
+                f"keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}"
+            )
         return payload
 
     async def _get_market_turnover(self) -> list[dict[str, Any]]:
@@ -470,6 +504,9 @@ class NSEClient:
 
     def get_largedeal_snapshot(self) -> dict:
         return asyncio.run(self._async.get_largedeal_snapshot())
+
+    def get_market_variations(self, index: str) -> dict[str, Any]:
+        return asyncio.run(self._async.get_market_variations(index))
 
     def get_change_ranges(self, symbol: str) -> dict[str, float]:
         return asyncio.run(self._async.get_change_ranges(symbol))
