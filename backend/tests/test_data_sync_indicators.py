@@ -150,3 +150,51 @@ class TestFunctionSignaturesPreserved:
         params = list(sig.parameters.keys())
         # (intervals: list[str] = None)
         assert "intervals" in params
+
+
+class TestIntradayIntervalNormalization:
+    """Verify that interval parameters are mapped correctly:
+    'w' -> 'W', 'm' -> 'M', '1h' -> '1h' (and their uppercase/lowercase variants).
+    """
+
+    def test_interval_normalization(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from app.services.indicators import prepare_intraday_indicator_updates
+
+        captured_params = []
+
+        class MockSession:
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+            def execute(self, stmt):
+                params = stmt.compile().params
+                captured_params.append(params)
+                mock_result = MagicMock()
+                mock_result.scalars.return_value.all.return_value = []
+                mock_result.scalars.return_value = mock_result.scalars.return_value.all()
+                return mock_result
+
+        monkeypatch.setattr("app.services.indicators._SyncSessionLocal", MockSession)
+
+        # Call with lowercase 'w'
+        prepare_intraday_indicator_updates("FAKE", "w")
+        # Call with uppercase 'W'
+        prepare_intraday_indicator_updates("FAKE", "W")
+        # Call with lowercase 'm'
+        prepare_intraday_indicator_updates("FAKE", "m")
+        # Call with uppercase 'M'
+        prepare_intraday_indicator_updates("FAKE", "M")
+        # Call with lowercase '1h'
+        prepare_intraday_indicator_updates("FAKE", "1h")
+        # Call with uppercase '1H'
+        prepare_intraday_indicator_updates("FAKE", "1H")
+
+        assert len(captured_params) == 6
+        assert "W" in captured_params[0].values()
+        assert "W" in captured_params[1].values()
+        assert "M" in captured_params[2].values()
+        assert "M" in captured_params[3].values()
+        assert "1h" in captured_params[4].values()
+        assert "1h" in captured_params[5].values()

@@ -985,7 +985,11 @@ def compute_intraday_indicators_for_all_rows(symbol: str, interval: str) -> int:
     for callers that need a single-symbol serial path (e.g. cron workers).
     """
     symbol = symbol.upper()
-    interval = interval.lower()
+    iv_upper = interval.upper()
+    if iv_upper in ("W", "M"):
+        interval = iv_upper
+    else:
+        interval = interval.lower()
     t0 = time.perf_counter()
     updates = prepare_intraday_indicator_updates(symbol, interval)
     if not updates:
@@ -1015,7 +1019,11 @@ def prepare_intraday_indicator_updates(symbol: str, interval: str) -> list[dict]
     Returns an empty list when the pair has no rows in `ticker_intraday`.
     """
     symbol = symbol.upper()
-    interval = interval.lower()
+    iv_upper = interval.upper()
+    if iv_upper in ("W", "M"):
+        interval = iv_upper
+    else:
+        interval = interval.lower()
     with _SyncSessionLocal() as db:
         rows = list(
             db.execute(
@@ -1063,7 +1071,11 @@ def compute_intraday_indicators_for_latest_candle(symbol: str, interval: str) ->
     insert.  Returns True if successful.
     """
     symbol = symbol.upper()
-    interval = interval.lower()
+    iv_upper = interval.upper()
+    if iv_upper in ("W", "M"):
+        interval = iv_upper
+    else:
+        interval = interval.lower()
     with _SyncSessionLocal() as db:
         rows = list(
             db.execute(
@@ -1103,7 +1115,11 @@ def get_intraday_indicators(symbol: str, interval: str) -> dict:
     Falls back to on-the-fly computation if indicators have not been backfilled.
     """
     symbol = symbol.upper()
-    interval = interval.lower()
+    iv_upper = interval.upper()
+    if iv_upper in ("W", "M"):
+        interval = iv_upper
+    else:
+        interval = interval.lower()
 
     with _SyncSessionLocal() as db:
         rows = list(
