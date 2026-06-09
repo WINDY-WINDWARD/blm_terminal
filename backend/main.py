@@ -39,6 +39,8 @@ from app.routers import (
     portfolio_router,
     watchlist_router,
     jobs_router,
+    auth_router,
+    users_router,
 )
 from app.workers.lifecycle import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
@@ -491,6 +493,8 @@ app.include_router(notifications_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 from app.routers.ticker import router as ticker_router
 app.include_router(ticker_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
 
 import os as _os
 if _os.environ.get("ENV") != "production":

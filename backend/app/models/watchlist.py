@@ -14,6 +14,7 @@ class Watchlist(Base):
     __tablename__ = "watchlists"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, default=1)
     name: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
@@ -24,6 +25,7 @@ class Watchlist(Base):
     items: Mapped[list["WatchlistItem"]] = relationship(
         "WatchlistItem", back_populates="watchlist", cascade="all, delete-orphan"
     )
+    user = relationship("User", backref="watchlists")
 
 
 class WatchlistItem(Base):

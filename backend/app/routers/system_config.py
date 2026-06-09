@@ -8,10 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_admin_user, get_current_user
 from app.database import get_db
 from app.models.system_config import SystemConfig
+from app.models.user import User
 
-router = APIRouter(tags=["system-config"])
+router = APIRouter(tags=["system-config"], dependencies=[Depends(get_current_user)])
 
 DEFAULT_NOTIF_CONFIG: dict[str, float] = {
     "notif.rsi_oversold_threshold": 30.0,
@@ -62,7 +64,7 @@ async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, Any
     return values
 
 
-@router.put("/system-config/{key}")
+@router.put("/system-config/{key}", dependencies=[Depends(get_admin_user)])
 async def update_system_config(
     key: str,
     payload: SystemConfigUpdate,

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_admin_user
 from app.database import get_db
 from app.models.job import Job
 from app.schemas.job import (
@@ -18,7 +19,7 @@ from app.schemas.job import (
 from app.jobs.runner import trigger_job, sync_all_jobs_to_db
 from app.jobs.registry import JobRegistry, JobDefinition
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_admin_user)])
 
 
 @router.get("/jobs", response_model=JobListResponse, tags=["jobs"])

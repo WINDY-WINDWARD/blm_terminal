@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models.notification import Notification, GlobalNotification
 from app.schemas.notification import NotificationOut, GlobalNotificationOut
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/notifications", response_model=list[NotificationOut], tags=["notifications"])

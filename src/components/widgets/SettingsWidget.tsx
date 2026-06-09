@@ -15,6 +15,7 @@ import {
   panelSizesAtom,
   selectedPanelsAtom,
   mergedGroupsAtom,
+  authAtom,
   type Watchlist,
   type PanelCount,
 } from '@/store/terminalStore';
@@ -169,6 +170,7 @@ export function SettingsWidget() {
   const [, setPanelSizes] = useAtom(panelSizesAtom);
   const [, setSelectedPanels] = useAtom(selectedPanelsAtom);
   const [, setMergedGroups] = useAtom(mergedGroupsAtom);
+  const [auth] = useAtom(authAtom);
   const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
   const [appVersion, setAppVersion] = useState<string>('');
 
@@ -380,21 +382,23 @@ export function SettingsWidget() {
         />
       </div>
 
-      {/* Notification Thresholds */}
-      <div className="flex flex-col gap-1">
-        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
-          Notification Thresholds
+      {/* Notification Thresholds (Admin Only) */}
+      {auth?.user?.is_admin && (
+        <div className="flex flex-col gap-1">
+          <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+            Global Scan Settings (Admin)
+          </div>
+          {configLoading ? (
+            <div className="text-white">Loading...</div>
+          ) : (
+            <ThresholdInputs
+              values={notifConfig}
+              onChange={handleNotifConfigChange}
+              disabled={configLoading}
+            />
+          )}
         </div>
-        {configLoading ? (
-          <div className="text-white">Loading...</div>
-        ) : (
-          <ThresholdInputs
-            values={notifConfig}
-            onChange={handleNotifConfigChange}
-            disabled={configLoading}
-          />
-        )}
-      </div>
+      )}
 
       {/* Watchlists Management */}
       <div className="flex flex-col gap-1">
@@ -427,18 +431,20 @@ export function SettingsWidget() {
         </div>
       </div>
 
-      {/* Links */}
-      <div className="flex flex-col gap-1">
-        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
-          Links
+      {/* Links (Admin Only) */}
+      {auth?.user?.is_admin && (
+        <div className="flex flex-col gap-1">
+          <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+            Links
+          </div>
+          <Link
+            href="/jobs"
+            className="text-white hover:text-terminal-amber text-[10px] transition-colors"
+          >
+            → Jobs (background tasks)
+          </Link>
         </div>
-        <Link
-          href="/jobs"
-          className="text-white hover:text-terminal-amber text-[10px] transition-colors"
-        >
-          → Jobs (background tasks)
-        </Link>
-      </div>
+      )}
 
       {/* Tips */}
       <div className="flex flex-col gap-0.5 mt-auto">

@@ -892,15 +892,35 @@ async def search_stock_universe(prefix: str) -> dict[str, Any]:
 # Watchlist Endpoints
 # ---------------------------------------------------------------------------
 
+from app.auth import current_user_id
+
+async def _get_user_id_or_default() -> int:
+    uid = current_user_id.get()
+    return uid if uid is not None else 1
+
+async def _get_default_watchlist_id(db) -> int:
+    from sqlalchemy import select
+    user_id = await _get_user_id_or_default()
+    q = select(WatchlistModel).where(WatchlistModel.user_id == user_id, WatchlistModel.name == "Default")
+    wl = (await db.execute(q)).scalar_one_or_none()
+    if wl:
+        return wl.id
+    wl = WatchlistModel(name="Default", user_id=user_id)
+    db.add(wl)
+    await db.commit()
+    await db.refresh(wl)
+    return wl.id
+
 
 @mcp.tool()
 async def list_watchlist() -> dict[str, Any]:
-    """List all items in the default watchlist (ID 1), ordered by time added.
+    """List all items in the user's default watchlist, ordered by time added.
 
     Each item contains: id, symbol, exchange, createdAt.
     """
     async with AsyncSessionLocal() as db:
-        q = select(WatchlistItemModel).order_by(WatchlistItemModel.created_at)
+        wl_id = await _get_default_watchlist_id(db)
+        q = select(WatchlistItemModel).where(WatchlistItemModel.watchlist_id == wl_id).order_by(WatchlistItemModel.created_at)
         res = await db.execute(q)
         rows = res.scalars().all()
         return {
@@ -918,9 +938,10 @@ async def list_watchlist() -> dict[str, Any]:
 
 @mcp.tool()
 async def get_watchlist_symbols() -> dict[str, Any]:
-    """Fetch distinct symbols from the default watchlist as a flat list."""
+    """Fetch distinct symbols from the user's default watchlist as a flat list."""
     async with AsyncSessionLocal() as db:
-        q = select(WatchlistItemModel.symbol).distinct().order_by(WatchlistItemModel.symbol)
+        wl_id = await _get_default_watchlist_id(db)
+        q = select(WatchlistItemModel.symbol).where(WatchlistItemModel.watchlist_id == wl_id).distinct().order_by(WatchlistItemModel.symbol)
         res = await db.execute(q)
         rows = res.scalars().all()
         return {"data": [r for r in rows]}
@@ -940,6 +961,10 @@ async def remove_watchlist_item(item_id: int) -> dict[str, Any]:
         item = await db.get(WatchlistItemModel, item_id)
         if item is None:
             raise ValueError(f"watchlist item {item_id} not found")
+        watchlist = await db.get(WatchlistModel, item.watchlist_id)
+        user_id = await _get_user_id_or_default()
+        if watchlist is None or watchlist.user_id != user_id:
+            raise ValueError(f"watchlist item {item_id} not found")
         await db.delete(item)
         await db.commit()
     return {"ok": True, "id": item_id}
@@ -954,6 +979,7 @@ async def list_watchlists() -> dict[str, Any]:
     from sqlalchemy import func
 
     async with AsyncSessionLocal() as db:
+        user_id = await _get_user_id_or_default()
         stmt = (
             select(
                 WatchlistModel.id,
@@ -962,6 +988,7 @@ async def list_watchlists() -> dict[str, Any]:
                 func.count(WatchlistItemModel.id).label("item_count"),
             )
             .outerjoin(WatchlistItemModel, WatchlistItemModel.watchlist_id == WatchlistModel.id)
+            .where(WatchlistModel.user_id == user_id)
             .group_by(WatchlistModel.id)
             .order_by(WatchlistModel.id)
         )
@@ -991,8 +1018,9 @@ async def get_watchlist_items(watchlist_id: int) -> dict[str, Any]:
     Raises ValueError if the watchlist does not exist.
     """
     async with AsyncSessionLocal() as db:
+        user_id = await _get_user_id_or_default()
         watchlist = await db.get(WatchlistModel, watchlist_id)
-        if watchlist is None:
+        if watchlist is None or watchlist.user_id != user_id:
             raise ValueError(f"Watchlist {watchlist_id} not found")
 
         stmt = (
@@ -1069,7 +1097,8 @@ async def create_watchlist(name: str) -> dict[str, Any]:
     Returns the created watchlist with its id and creation timestamp.
     """
     async with AsyncSessionLocal() as db:
-        watchlist = WatchlistModel(name=name)
+        user_id = await _get_user_id_or_default()
+        watchlist = WatchlistModel(name=name, user_id=user_id)
         db.add(watchlist)
         await db.commit()
         await db.refresh(watchlist)
@@ -1097,8 +1126,9 @@ async def add_watchlist_item(
     Raises ValueError if the watchlist does not exist.
     """
     async with AsyncSessionLocal() as db:
+        user_id = await _get_user_id_or_default()
         watchlist = await db.get(WatchlistModel, watchlist_id)
-        if watchlist is None:
+        if watchlist is None or watchlist.user_id != user_id:
             raise ValueError(f"Watchlist {watchlist_id} not found")
 
         sym = symbol.upper().strip()
@@ -1153,8 +1183,9 @@ async def bulk_replace_watchlist(
     Raises ValueError if the watchlist does not exist.
     """
     async with AsyncSessionLocal() as db:
+        user_id = await _get_user_id_or_default()
         watchlist = await db.get(WatchlistModel, watchlist_id)
-        if watchlist is None:
+        if watchlist is None or watchlist.user_id != user_id:
             raise ValueError(f"Watchlist {watchlist_id} not found")
 
         await db.execute(
@@ -1203,6 +1234,12 @@ async def get_notifications(
     message, triggeredAt, triggeredDate.
     """
     async with AsyncSessionLocal() as db:
+        user_id = await _get_user_id_or_default()
+        from app.models.watchlist import Watchlist as WatchlistModel
+        wl = await db.get(WatchlistModel, watchlist_id)
+        if wl is None or wl.user_id != user_id:
+            raise ValueError("Watchlist not found")
+
         stmt = (
             select(Notification)
             .where(Notification.watchlist_id == watchlist_id)

@@ -8,6 +8,7 @@ from app.models import (  # noqa: F401
     notification,
     stockuniverse,
     ticker,
+    user,
     watchlist,
 )
 from app.models.job import Job  # noqa: F401

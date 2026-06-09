@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useAtom } from 'jotai';
+import { authAtom } from '@/store/terminalStore';
 
 interface Job {
   job_key: string;
@@ -165,6 +167,10 @@ export default function JobsPage() {
   const [errorsLoading, setErrorsLoading] = useState(false);
   const [changeSymbolInput, setChangeSymbolInput] = useState<string>('');
   const [changingSymbol, setChangingSymbol] = useState<string | null>(null);
+
+  const [auth] = useAtom(authAtom);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -340,6 +346,21 @@ export default function JobsPage() {
       setChangingSymbol(null);
     }
   };
+
+  if (!mounted) return <div className="h-screen bg-terminal-bg" />;
+  if (!auth || !auth.user.is_admin) {
+    return (
+      <div className="h-screen bg-terminal-bg flex flex-col items-center justify-center text-center p-4 font-mono">
+        <div className="border border-terminal-red p-8 max-w-lg bg-terminal-panel shadow-xl shadow-red-900/20">
+          <h2 className="text-3xl text-terminal-red font-bold mb-4 tracking-widest">ACCESS DENIED</h2>
+          <p className="text-terminal-amber text-sm mb-6">You must be an administrator to view this page.</p>
+          <Link href="/" className="inline-block border border-terminal-gray px-4 py-2 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg transition-colors font-bold">
+            ← RETURN TO TERMINAL
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen overflow-y-auto bg-terminal-bg text-white font-mono p-4">

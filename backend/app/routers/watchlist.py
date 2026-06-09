@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user
 from app.database import get_db
+from app.models.user import User
 from app.models.watchlist import Watchlist as WatchlistModel
 from app.models.watchlist import WatchlistItem as WatchlistItemModel
 from app.schemas.watchlist import (
@@ -21,8 +23,21 @@ from app.schemas.watchlist import (
 router = APIRouter()
 
 
+async def get_default_watchlist_id(db: AsyncSession, current_user: User) -> int:
+    q = select(WatchlistModel).where(WatchlistModel.user_id == current_user.id, WatchlistModel.name == "Default")
+    wl = (await db.execute(q)).scalar_one_or_none()
+    if wl:
+        return wl.id
+    wl = WatchlistModel(name="Default", user_id=current_user.id)
+    db.add(wl)
+    await db.commit()
+    await db.refresh(wl)
+    return wl.id
+
+
 @router.get("/watchlists", response_model=List[WatchlistWithCountOut], tags=["watchlist"])
 async def list_watchlists(
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> List[WatchlistWithCountOut]:
     """Return all watchlists with item counts ordered by creation time."""
@@ -34,6 +49,7 @@ async def list_watchlists(
             func.count(WatchlistItemModel.id).label("item_count"),
         )
         .outerjoin(WatchlistItemModel, WatchlistModel.id == WatchlistItemModel.watchlist_id)
+        .where(WatchlistModel.user_id == current_user.id)
         .group_by(WatchlistModel.id)
         .order_by(WatchlistModel.id)
     )
@@ -53,10 +69,11 @@ async def list_watchlists(
 @router.post("/watchlists", response_model=WatchlistOut, status_code=status.HTTP_201_CREATED, tags=["watchlist"])
 async def create_watchlist(
     body: WatchlistCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> WatchlistOut:
     """Create a new watchlist with the given name."""
-    watchlist = WatchlistModel(name=body.name)
+    watchlist = WatchlistModel(name=body.name, user_id=current_user.id)
     db.add(watchlist)
     await db.commit()
     await db.refresh(watchlist)
@@ -66,19 +83,20 @@ async def create_watchlist(
 @router.delete("/watchlists/{watchlist_id}", tags=["watchlist"])
 async def delete_watchlist(
     watchlist_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Delete a watchlist and all its items (cascade). Cannot delete Default (id=1)."""
-    if watchlist_id == 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete the Default watchlist",
-        )
+    """Delete a watchlist and all its items (cascade). Cannot delete Default."""
     watchlist = await db.get(WatchlistModel, watchlist_id)
-    if watchlist is None:
+    if watchlist is None or watchlist.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Watchlist {watchlist_id} not found",
+        )
+    if watchlist.name == "Default":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete the Default watchlist",
         )
     await db.delete(watchlist)
     await db.commit()
@@ -88,11 +106,12 @@ async def delete_watchlist(
 @router.get("/watchlists/{watchlist_id}/items", response_model=List[WatchlistItemOut], tags=["watchlist"])
 async def list_watchlist_items(
     watchlist_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> List[WatchlistItemOut]:
     """Return all items in a specific watchlist."""
     watchlist = await db.get(WatchlistModel, watchlist_id)
-    if watchlist is None:
+    if watchlist is None or watchlist.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Watchlist {watchlist_id} not found",
@@ -115,6 +134,7 @@ async def list_watchlist_items(
 async def add_watchlist_item(
     watchlist_id: int,
     body: WatchlistItemCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> WatchlistItemOut:
     """Add a symbol/exchange pair to a specific watchlist (idempotent upsert).
@@ -122,7 +142,7 @@ async def add_watchlist_item(
     If the pair already exists in that watchlist, return the existing row.
     """
     watchlist = await db.get(WatchlistModel, watchlist_id)
-    if watchlist is None:
+    if watchlist is None or watchlist.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Watchlist {watchlist_id} not found",
@@ -154,11 +174,18 @@ async def add_watchlist_item(
 async def remove_watchlist_item(
     watchlist_id: int,
     item_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Remove a watchlist item by its numeric id."""
     item = await db.get(WatchlistItemModel, item_id)
     if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Watchlist item {item_id} not found",
+        )
+    watchlist = await db.get(WatchlistModel, item.watchlist_id)
+    if watchlist is None or watchlist.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Watchlist item {item_id} not found",
@@ -180,6 +207,7 @@ async def remove_watchlist_item(
 async def bulk_replace_watchlist_items(
     watchlist_id: int,
     body: WatchlistBulkReplace,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Atomically replace all items in a watchlist with a new set of symbols.
@@ -188,7 +216,7 @@ async def bulk_replace_watchlist_items(
     each symbol in the payload.  Operates in a single transaction.
     """
     watchlist = await db.get(WatchlistModel, watchlist_id)
-    if watchlist is None:
+    if watchlist is None or watchlist.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Watchlist {watchlist_id} not found",
@@ -224,12 +252,14 @@ async def bulk_replace_watchlist_items(
 
 @router.get("/watchlist", response_model=List[WatchlistItemOut], tags=["watchlist-legacy"])
 async def list_default_watchlist(
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> List[WatchlistItemOut]:
     """Return all watchlist items in the Default watchlist (legacy endpoint)."""
+    default_id = await get_default_watchlist_id(db, current_user)
     q = (
         select(WatchlistItemModel)
-        .where(WatchlistItemModel.watchlist_id == 1)
+        .where(WatchlistItemModel.watchlist_id == default_id)
         .order_by(WatchlistItemModel.created_at)
     )
     res = await db.execute(q)
@@ -244,15 +274,17 @@ async def list_default_watchlist(
 )
 async def add_default_watchlist_item(
     body: WatchlistItemCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> WatchlistItemOut:
     """Add a symbol/exchange pair to the Default watchlist (legacy endpoint).
 
     If the pair already exists in the Default watchlist, return the existing row.
     """
+    default_id = await get_default_watchlist_id(db, current_user)
     existing = await db.execute(
         select(WatchlistItemModel).where(
-            WatchlistItemModel.watchlist_id == 1,
+            WatchlistItemModel.watchlist_id == default_id,
             WatchlistItemModel.symbol == body.symbol,
             WatchlistItemModel.exchange == body.exchange,
         )
@@ -262,7 +294,7 @@ async def add_default_watchlist_item(
         return row  # type: ignore[return-value]
 
     item = WatchlistItemModel(
-        watchlist_id=1,
+        watchlist_id=default_id,
         symbol=body.symbol,
         exchange=body.exchange,
     )
@@ -275,16 +307,18 @@ async def add_default_watchlist_item(
 @router.delete("/watchlist/{item_id}", tags=["watchlist-legacy"])
 async def remove_default_watchlist_item(
     item_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Remove a watchlist item from the Default watchlist (legacy endpoint)."""
+    default_id = await get_default_watchlist_id(db, current_user)
     item = await db.get(WatchlistItemModel, item_id)
     if item is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"watchlist item {item_id} not found",
         )
-    if item.watchlist_id != 1:
+    if item.watchlist_id != default_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Item {item_id} does not belong to the Default watchlist",

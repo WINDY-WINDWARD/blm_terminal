@@ -61,6 +61,7 @@ export const OLD_LOCAL_STORAGE_KEYS = [
   'notif.streakMinDays',
   'scan.subFilters',
   'scan.streakMinDays',
+  'terminal.auth',
 ];
 
 /** Remove stale localStorage keys that have migrated to sessionStorage. */
@@ -70,6 +71,24 @@ export function cleanupOldLocalStorage(): void {
     window.localStorage.removeItem(key);
   });
 }
+
+// ─── Auth State ───────────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  is_admin: boolean;
+}
+
+export interface AuthState {
+  token: string;
+  user: AuthUser;
+}
+
+/** Global auth state persisted in localStorage (not sessionStorage, so login persists across tabs) */
+export const authAtom = atomWithStorage<AuthState | null>('terminal.auth', null);
+
+export const isAuthenticatedAtom = atom((get) => get(authAtom) !== null);
 
 // ─── Existing Atoms ───────────────────────────────────────────────────────────
 

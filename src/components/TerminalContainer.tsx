@@ -46,6 +46,7 @@ const VALID_WIDGETS = [
   'DOCS',
   'AI',
   'PORTFOLIO',
+  'ADMIN',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
@@ -156,6 +157,12 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   // Command processor: apply widget command to focused panel
   useEffect(() => {
     if (!activeCommand) return;
+
+    if (activeCommand === 'LOGOUT') {
+      window.dispatchEvent(new Event('auth-expired'));
+      setActiveCommand('');
+      return;
+    }
 
     let targetCommand = activeCommand;
     if (activeCommand === 'BREAKOUT') {

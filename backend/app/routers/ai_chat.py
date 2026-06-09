@@ -17,8 +17,10 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth import get_current_user, current_user_id
 from app.database import AsyncSessionLocal, get_db
 from app.models.ai_chat import ChatMessageRecord, ChatSession
+from app.models.user import User
 from app.services.ai_chat_service import AVAILABLE_MODELS, run_chat_agent
 
 logger = logging.getLogger(__name__)
@@ -103,7 +105,10 @@ async def get_chat_models() -> list[dict]:
 
 
 @router.get("/chat/sessions", response_model=list[SessionSummary])
-async def list_sessions(db: AsyncSession = Depends(get_db)) -> list[SessionSummary]:
+async def list_sessions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> list[SessionSummary]:
     """List all chat sessions ordered by most recently updated."""
     result = await db.execute(
         select(
@@ -111,6 +116,7 @@ async def list_sessions(db: AsyncSession = Depends(get_db)) -> list[SessionSumma
             func.count(ChatMessageRecord.id).label("message_count"),
         )
         .outerjoin(ChatMessageRecord, ChatMessageRecord.session_id == ChatSession.id)
+        .where(ChatSession.user_id == current_user.id)
         .group_by(ChatSession.id)
         .order_by(ChatSession.updated_at.desc())
     )
@@ -133,12 +139,16 @@ async def list_sessions(db: AsyncSession = Depends(get_db)) -> list[SessionSumma
 
 
 @router.get("/chat/sessions/{session_id}", response_model=SessionDetail)
-async def get_session(session_id: int, db: AsyncSession = Depends(get_db)) -> SessionDetail:
+async def get_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> SessionDetail:
     """Return a full chat session with all messages."""
     result = await db.execute(
         select(ChatSession)
         .options(selectinload(ChatSession.messages))
-        .where(ChatSession.id == session_id)
+        .where(ChatSession.id == session_id, ChatSession.user_id == current_user.id)
     )
     session = result.scalar_one_or_none()
     if session is None:
@@ -167,9 +177,13 @@ async def get_session(session_id: int, db: AsyncSession = Depends(get_db)) -> Se
 
 
 @router.delete("/chat/sessions/{session_id}")
-async def delete_session(session_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+async def delete_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> dict:
     """Delete a chat session and all its messages."""
-    result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
+    result = await db.execute(select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == current_user.id))
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -179,7 +193,11 @@ async def delete_session(session_id: int, db: AsyncSession = Depends(get_db)) ->
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> StreamingResponse:
+async def chat(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> StreamingResponse:
     """Stream an AI chat response via Server-Sent Events and persist the exchange.
 
     Event types (each a JSON object on a `data:` line):
@@ -193,6 +211,8 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> Stre
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     symbol = request.symbol.upper()
     exchange = request.exchange.upper()
+    
+    current_user_id.set(current_user.id)
 
     # Find the last user message (for title generation)
     last_user_content = next(
@@ -208,7 +228,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> Stre
     try:
         if request.session_id is not None:
             result = await db.execute(
-                select(ChatSession).where(ChatSession.id == request.session_id)
+                select(ChatSession).where(ChatSession.id == request.session_id, ChatSession.user_id == current_user.id)
             )
             session = result.scalar_one_or_none()
             if session is None:
@@ -219,6 +239,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)) -> Stre
                 model=request.model,
                 symbol=symbol,
                 exchange=exchange,
+                user_id=current_user.id,
             )
             db.add(session)
             await db.flush()  # get the id

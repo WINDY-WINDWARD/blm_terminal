@@ -42,6 +42,8 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'DOCS', desc: 'Panel documentation' },
   { cmd: 'AI', desc: 'Live market AI chat' },
   { cmd: 'PORTFOLIO', desc: 'Portfolio optimizer (MPT)' },
+  { cmd: 'ADMIN', desc: 'Admin Dashboard' },
+  { cmd: 'LOGOUT', desc: 'End session and log out' },
 ];
 
 export function CommandBar() {
