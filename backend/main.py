@@ -190,6 +190,24 @@ def _run_migrations_sync() -> None:
             logger.error("migrations: unhandled migration error: %s", exc)
             raise
 
+    # Safety net: ensure all ORM-defined tables exist.  If a previous
+    # handler run stamped at the squash base without actually running the
+    # squash migration, tables like 'users' may be missing even though
+    # alembic reports no errors.  create_all() is idempotent.
+    from app.models import __init__ as _models_init  # noqa: F401
+    from app.database import Base as _Base
+    _safety_url = f"sqlite:///{settings.db_path}"
+    _safety_engine = create_engine(_safety_url, connect_args={"check_same_thread": False})
+    try:
+        before = set(sa_inspect(_safety_engine).get_table_names())
+        _Base.metadata.create_all(_safety_engine)
+        after = set(sa_inspect(_safety_engine).get_table_names())
+        created = after - before
+        if created:
+            logger.warning("migrations: safety net created missing tables: %s", ', '.join(sorted(created)))
+    finally:
+        _safety_engine.dispose()
+
 
 def _ensure_watchlist_data() -> None:
     """Ensure watchlist data consistency after migrations.
