@@ -159,12 +159,23 @@ def _run_migrations_sync() -> None:
 
         elif "can't locate revision" in err or "no such revision" in err:
             # The DB is stamped at a revision that was archived (moved out of
-            # the active versions/ directory).  Since all prior schema is
-            # captured by the squash migration, stamp to that base and retry.
+            # the active versions/ directory).  Alembic's own stamp/upgrade
+            # commands also fail because they read the stale version first.
+            # Bypass alembic entirely: directly overwrite the alembic_version
+            # table in SQLite, then retry upgrade from the squash base.
             logger.warning(
-                "migrations: stale/archived revision detected — stamping to squash base and retrying"
+                "migrations: stale/archived revision detected — "
+                "directly overwriting alembic_version to squash base"
             )
-            alembic_command.stamp(alembic_cfg, "x999999999999")
+            sync_url2 = f"sqlite:///{settings.db_path}"
+            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False})
+            try:
+                with sync_engine2.connect() as conn:
+                    conn.execute(sa_text("DELETE FROM alembic_version"))
+                    conn.execute(sa_text("INSERT INTO alembic_version (version_num) VALUES ('x999999999999')"))
+                    conn.commit()
+            finally:
+                sync_engine2.dispose()
             alembic_command.upgrade(alembic_cfg, "head")
 
         else:
