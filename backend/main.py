@@ -157,6 +157,16 @@ def _run_migrations_sync() -> None:
                 logger.info("migrations: upgrading to %s", head)
                 alembic_command.upgrade(alembic_cfg, head)
 
+        elif "can't locate revision" in err or "no such revision" in err:
+            # The DB is stamped at a revision that was archived (moved out of
+            # the active versions/ directory).  Since all prior schema is
+            # captured by the squash migration, stamp to that base and retry.
+            logger.warning(
+                "migrations: stale/archived revision detected — stamping to squash base and retrying"
+            )
+            alembic_command.stamp(alembic_cfg, "x999999999999")
+            alembic_command.upgrade(alembic_cfg, "head")
+
         else:
             logger.error("migrations: unhandled migration error: %s", exc)
             raise
