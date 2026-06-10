@@ -3,6 +3,7 @@
 from app.routers.ai_chat import router as ai_chat_router
 from app.routers.ai_summarizer import router as ai_summarizer_router
 from app.routers.announcements import router as announcements_router
+from app.routers.breakouts import router as breakouts_router
 from app.routers.corporatefilings import router as filings_router
 from app.routers.jobs import router as jobs_router
 from app.routers.markets import router as markets_router
@@ -26,6 +27,7 @@ __all__ = [
     "ai_chat_router",
     "ai_summarizer_router",
     "announcements_router",
+    "breakouts_router",
     "filings_router",
     "jobs_router",
     "markets_router",

@@ -5,7 +5,27 @@ import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 
-type BreakoutTab = 'high' | 'low' | 'volume';
+type BreakoutTab = 'high' | 'low' | 'volume' | 'repeated';
+
+interface RepeatedItem {
+  symbol: string;
+  breakout_type: string;
+  appearances: number;
+  window_days: number;
+  last_seen: string;
+}
+
+const REPEATED_TYPE_LABELS: Record<string, string> = {
+  '52W_HIGH': '52W HIGH',
+  '52W_LOW': '52W LOW',
+  VOLUME_GAINER: 'VOLUME',
+};
+
+const REPEATED_TYPE_COLORS: Record<string, string> = {
+  '52W_HIGH': 'bg-terminal-amber text-black',
+  '52W_LOW': 'bg-terminal-red text-white',
+  VOLUME_GAINER: 'bg-cyan-600 text-white',
+};
 
 interface RawBreakoutItem {
   symbol: string;
@@ -409,10 +429,134 @@ function VolumeTable({ rows, onRowClick }: VolumeTableProps) {
   );
 }
 
+type RepeatedSortColumn = 'symbol' | 'breakout_type' | 'appearances' | 'window_days' | 'last_seen';
+
+type RepeatedColumnConfig = {
+  key: RepeatedSortColumn;
+  label: string;
+  textAlign: 'left' | 'right';
+  defaultSort: SortDirection;
+};
+
+const REPEATED_COLUMNS: RepeatedColumnConfig[] = [
+  { key: 'symbol', label: 'Symbol', textAlign: 'left', defaultSort: 'asc' },
+  { key: 'breakout_type', label: 'Type', textAlign: 'left', defaultSort: 'asc' },
+  { key: 'appearances', label: 'Appearances', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'window_days', label: 'Window', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'last_seen', label: 'Last Seen', textAlign: 'left', defaultSort: 'desc' },
+];
+
+interface RepeatedTableProps {
+  rows: RepeatedItem[];
+  onRowClick: (row: RepeatedItem) => void;
+}
+
+function RepeatedTable({ rows, onRowClick }: RepeatedTableProps) {
+  const [sortColumn, setSortColumn] = useState<RepeatedSortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const handleHeaderClick = (column: RepeatedSortColumn) => {
+    const columnConfig = REPEATED_COLUMNS.find((c) => c.key === column);
+    if (!columnConfig) return;
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection(columnConfig.defaultSort);
+    }
+  };
+
+  const sortedRows = (() => {
+    if (!sortColumn) return rows;
+    return [...rows].sort((a, b) => {
+      const aVal = a[sortColumn];
+      const bVal = b[sortColumn];
+      return compareValues(aVal, bVal, sortDirection);
+    });
+  })();
+
+  if (!rows.length) {
+    return (
+      <div className="text-white/40 text-[10px] py-2 px-1">
+        No repeated breakout symbols found in the last 10 calendar days.
+      </div>
+    );
+  }
+
+  const getSortIndicator = (column: RepeatedSortColumn) => {
+    if (sortColumn !== column) return '';
+    return sortDirection === 'asc' ? ' ▲' : ' ▼';
+  };
+
+  const maxAppearances = sortedRows.length > 0 ? Math.max(...sortedRows.map((r) => r.appearances)) : 0;
+
+  return (
+    <div className="overflow-auto">
+      <table className="w-full border-collapse text-[10px] min-w-[500px]">
+        <thead className="sticky top-0 bg-terminal-bg z-10">
+          <tr className="text-[9px] text-white/60 uppercase border-b border-terminal-gray/60">
+            {REPEATED_COLUMNS.map((col) => (
+              <th
+                key={col.key}
+                onClick={() => handleHeaderClick(col.key)}
+                className={`pb-1 font-normal pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
+                  col.textAlign === 'left' ? 'text-left' : 'text-right'
+                }`}
+              >
+                {col.label}
+                {getSortIndicator(col.key)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedRows.map((row) => {
+            const barWidth = maxAppearances > 0 ? (row.appearances / maxAppearances) * 100 : 0;
+            return (
+              <tr
+                key={`${row.symbol}-${row.breakout_type}`}
+                onClick={() => onRowClick(row)}
+                className="border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-pointer"
+              >
+                <td className="py-[3px] pr-2 font-bold text-terminal-amber whitespace-nowrap">
+                  {row.symbol}
+                </td>
+                <td className="py-[3px] pr-2 whitespace-nowrap">
+                  <span className={`inline-block px-1 py-[1px] rounded text-[9px] font-bold ${REPEATED_TYPE_COLORS[row.breakout_type] ?? 'bg-terminal-gray text-white'}`}>
+                    {REPEATED_TYPE_LABELS[row.breakout_type] ?? row.breakout_type}
+                  </span>
+                </td>
+                <td className="py-[3px] pr-2 text-right whitespace-nowrap">
+                  <div className="flex items-center justify-end gap-1">
+                    <span className="text-white font-bold">{row.appearances}</span>
+                    <div className="w-12 h-1.5 bg-terminal-gray/40 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-purple-500 rounded-full"
+                        style={{ width: `${barWidth}%` }}
+                      />
+                    </div>
+                  </div>
+                </td>
+                <td className="py-[3px] pr-2 text-right text-white/70 whitespace-nowrap">
+                  {row.window_days}d
+                </td>
+                <td className="py-[3px] pr-2 text-white/70 whitespace-nowrap">
+                  {row.last_seen}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function BreakoutsWidget() {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const [activeTab, setActiveTab] = useState<BreakoutTab>('high');
+  const [search, setSearch] = useState('');
 
   const {
     data: highData,
@@ -498,6 +642,34 @@ export function BreakoutsWidget() {
     retry: false,
   });
 
+  const {
+    data: repeatedData,
+    isLoading: repeatedLoading,
+    isError: repeatedError,
+    error: repeatedErr,
+  } = useQuery<RepeatedItem[]>({
+    queryKey: ['breakouts/repeated'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/breakouts/repeated?window_days=10&min_days=2');
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const json = (await res.json()) as { detail?: string };
+          if (json.detail) detail = json.detail;
+        } catch {
+          // ignore
+        }
+        const err = new Error(detail);
+        (err as Error & { status: number }).status = res.status;
+        throw err;
+      }
+      return res.json() as Promise<RepeatedItem[]>;
+    },
+    staleTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
   const isLoading = highLoading || lowLoading;
 
   if (isLoading) {
@@ -554,6 +726,7 @@ export function BreakoutsWidget() {
     { id: 'high', label: '52W HIGH', count: highRows.length },
     { id: 'low', label: '52W LOW', count: lowRows.length },
     { id: 'volume', label: 'VOLUME', count: volumeRows.length },
+    { id: 'repeated', label: 'REPEATED', count: (repeatedData ?? []).length },
   ];
 
   return (
@@ -563,7 +736,7 @@ export function BreakoutsWidget() {
           Breakouts
         </span>
         <span className="text-white/60 text-[10px]">
-          {activeTab === 'volume' ? 'Volume Gainers' : 'NSE 52-week High / Low'}
+          {activeTab === 'volume' ? 'Volume Gainers' : activeTab === 'repeated' ? 'Repeated Breakout Symbols' : 'NSE 52-week High / Low'}
         </span>
         {timestamp && (
           <span className="text-white/40 text-[10px] ml-auto">
@@ -573,33 +746,69 @@ export function BreakoutsWidget() {
       </div>
 
       <div className="flex-shrink-0 flex border-b border-terminal-gray/60">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide border-r border-terminal-gray/40 transition-colors border-b-2 ${
-              activeTab === tab.id
-                ? 'bg-terminal-amber text-black font-bold -mb-px'
-                : 'text-white/50 hover:text-white hover:bg-zinc-900 border-transparent'
-            }`}
-            style={activeTab === tab.id ? { borderBottomColor: '#ffb900' } : undefined}
-          >
-            <span className="inline-flex items-center gap-1">
-              <span>{tab.label}</span>
-              <span className={`inline-flex items-center justify-center min-w-[18px] h-[14px] rounded-full text-[9px] px-1 ${
-                activeTab === tab.id
-                  ? 'bg-black/30 text-black'
-                  : 'bg-terminal-gray text-white'
-              }`}>
-                {tab.count}
+        {tabs.map((tab) => {
+          const isRepeated = tab.id === 'repeated';
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide border-r border-terminal-gray/40 transition-colors border-b-2 ${
+                isActive
+                  ? isRepeated
+                    ? 'bg-purple-600 text-white font-bold -mb-px'
+                    : 'bg-terminal-amber text-black font-bold -mb-px'
+                  : 'text-white/50 hover:text-white hover:bg-zinc-900 border-transparent'
+              }`}
+              style={isActive ? { borderBottomColor: isRepeated ? '#9333ea' : '#ffb900' } : undefined}
+            >
+              <span className="inline-flex items-center gap-1">
+                <span>{tab.label}</span>
+                <span className={`inline-flex items-center justify-center min-w-[18px] h-[14px] rounded-full text-[9px] px-1 ${
+                  isActive
+                    ? isRepeated ? 'bg-white/30 text-white' : 'bg-black/30 text-black'
+                    : 'bg-terminal-gray text-white'
+                }`}>
+                  {tab.count}
+                </span>
               </span>
-            </span>
-          </button>
-        ))}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex-shrink-0 px-2 py-1 border-b border-terminal-gray/40">
+        <input
+          type="text"
+          placeholder="Search symbols..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full bg-zinc-900 border border-terminal-gray/60 rounded px-2 py-0.5 text-[10px] text-white placeholder-white/40 focus:outline-none focus:border-terminal-amber/60"
+        />
       </div>
 
       <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
-        {activeTab === 'volume' ? (
+        {activeTab === 'repeated' ? (
+          repeatedLoading ? (
+            <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs">
+              <span className="text-purple-400/60 animate-pulse">
+                LOADING REPEATED BREAKOUTS...
+              </span>
+            </div>
+          ) : repeatedError || !repeatedData ? (
+            <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1 px-4 text-center">
+              <span className="text-terminal-red font-bold uppercase">Fetch Failed</span>
+              <span className="text-white text-[10px] max-w-xs">
+                {repeatedErr instanceof Error ? repeatedErr.message : 'Unknown error'}
+              </span>
+            </div>
+          ) : (
+            <RepeatedTable
+              rows={repeatedData.filter((r) => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))}
+              onRowClick={(row) => { setActiveSymbol(row.symbol); setActiveExchange('NSE'); }}
+            />
+          )
+        ) : activeTab === 'volume' ? (
           volumeLoading ? (
             <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs">
               <span className="text-terminal-amber/60 animate-pulse">
@@ -625,10 +834,16 @@ export function BreakoutsWidget() {
               )}
             </div>
           ) : (
-            <VolumeTable rows={volumeRows} onRowClick={handleVolumeRowClick} />
+            <VolumeTable
+              rows={volumeRows.filter((r) => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))}
+              onRowClick={handleVolumeRowClick}
+            />
           )
         ) : (
-          <BreakoutTable rows={activeTab === 'high' ? highRows : lowRows} onRowClick={handleRowClick} />
+          <BreakoutTable
+            rows={(activeTab === 'high' ? highRows : lowRows).filter((r) => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))}
+            onRowClick={handleRowClick}
+          />
         )}
       </div>
     </div>

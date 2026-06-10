@@ -45,6 +45,19 @@ export const TRIGGER_TYPE_DOCS: DocField[] = [
     name: 'volume_breakout',
     desc: 'Today\'s volume is significantly above the weekly average. Validates price moves — high volume on a rally is bullish; on a decline is bearish.',
   },
+  // Repeated Breakouts
+  {
+    name: 'repeated_52w_high',
+    desc: 'Stock appeared in the 52W HIGH list multiple times in the last 10 calendar days. Persistent bullish momentum — consistent buying interest across sessions.',
+  },
+  {
+    name: 'repeated_52w_low',
+    desc: 'Stock appeared in the 52W LOW list multiple times in the last 10 calendar days. Persistent bearish pressure — sustained selling across sessions.',
+  },
+  {
+    name: 'repeated_volume_breakout',
+    desc: 'Stock appeared in the volume gainers list multiple times in the last 10 calendar days. Sustained unusual trading activity — may indicate accumulation or distribution.',
+  },
   // Movers
   {
     name: 'top_gainer',

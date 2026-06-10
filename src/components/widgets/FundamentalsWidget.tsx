@@ -4,7 +4,6 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { activeSymbolAtom } from '@/store/terminalStore';
-import { cn } from '@/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,13 +81,11 @@ const CORE_RATIO_KEYS: { key: keyof ScreenerRatios; label: string }[] = [
 
 const CORE_KEYS_SET = new Set([
   ...CORE_RATIO_KEYS.map((r) => r.key),
-  // Shown in Calculated Ratios section — exclude from "More"
   'piotroski_score',
 ]);
 
 // ─── Peter Lynch Fair Value ───────────────────────────────────────────────────
 
-/** Parse a numeric value from a screener string, stripping %, ₹, Cr, commas etc. */
 function parseNum(val: string | null | undefined): number | null {
   if (!val) return null;
   const cleaned = val.replace(/[%₹,\s]/g, '').replace(/Cr\.?$/i, '').trim();
@@ -96,10 +93,6 @@ function parseNum(val: string | null | undefined): number | null {
   return isNaN(n) ? null : n;
 }
 
-/**
- * Try several possible key names screener.in uses for 5-year EPS CAGR in
- * quick_ratios. The exact key depends on the company page version.
- */
 const EPS_GROWTH_KEYS = [
   'eps_growth_5years',
   '5yr_eps_growth',
@@ -109,11 +102,6 @@ const EPS_GROWTH_KEYS = [
   'profit_growth_5years',
 ];
 
-/**
- * Try several possible key names screener.in uses for TTM/annual EPS
- * in quick_ratios (the "More" section). These are the annualised EPS figures,
- * not the per-quarter EPS from the quarterly table.
- */
 const EPS_KEYS = [
   'eps',
   'earning_per_share',
@@ -139,14 +127,12 @@ function calcPeterLynch(ratios: ScreenerRatios): PeterLynchResult {
   const pe       = parseNum(ratios.pe);
   const divYield = parseNum(ratios.dividend_yield);
 
-  // Find whichever EPS growth key exists in the ratios object
   let epsGrowth: number | null = null;
   for (const key of EPS_GROWTH_KEYS) {
     const val = parseNum(ratios[key]);
     if (val !== null) { epsGrowth = val; break; }
   }
 
-  // Find the TTM/annual EPS from quick_ratios ("More" section)
   let latestEps: number | null = null;
   let epsKey: string | null = null;
   for (const key of EPS_KEYS) {
@@ -199,11 +185,18 @@ function RatioRow({ label, value }: { label: string; value: string | null | unde
   );
 }
 
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1 border-b border-terminal-gray/30 pb-1 sticky top-0 bg-terminal-bg z-10">
+      {label}
+    </div>
+  );
+}
+
 // ─── Main Widget ──────────────────────────────────────────────────────────────
 
 export function FundamentalsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
-  const [activeTab, setActiveTab] = useState<'ratios' | 'quarterly' | 'valuation'>('ratios');
   const [wacc, setWacc] = useState(0.12);
   const [terminalGrowth, setTerminalGrowth] = useState(0.05);
 
@@ -234,9 +227,9 @@ export function FundamentalsWidget() {
 
       return res.json() as Promise<CompanyFundamentals>;
     },
-    staleTime: 15 * 60 * 1000,   // 15 min — matches backend TTL
+    staleTime: 15 * 60 * 1000,
     refetchOnWindowFocus: false,
-    retry: false,                 // screener.in auth errors shouldn't be retried
+    retry: false,
     enabled: !!symbol,
   });
 
@@ -264,7 +257,7 @@ export function FundamentalsWidget() {
       if (!res.ok) throw new Error('Valuation fetch failed');
       return res.json();
     },
-    enabled: !!symbol && activeTab === 'valuation',
+    enabled: !!symbol,
     staleTime: 1000 * 60 * 30,
   });
 
@@ -320,7 +313,6 @@ export function FundamentalsWidget() {
 
   const { name, ratios, quarters } = data;
 
-  // Extra quick_ratios: all keys not in the core set
   const extraRatios = Object.entries(ratios).filter(
     ([k]) => !CORE_KEYS_SET.has(k as keyof ScreenerRatios),
   );
@@ -341,41 +333,21 @@ export function FundamentalsWidget() {
             Consolidated
           </span>
         </div>
-        {/* Tab switcher */}
-        <div className="flex gap-0 border-t border-terminal-gray/30">
-          {(['ratios', 'quarterly', 'valuation'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'px-3 py-1 text-[10px] uppercase tracking-wider font-medium capitalize transition-colors',
-                activeTab === tab
-                  ? 'border-b-2 border-blue-400 text-blue-300'
-                  : 'text-white/30 hover:text-white/60'
-              )}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
       </div>
 
-      {/* ── Body ─────────────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-hidden min-h-0">
-        {/* ── Ratios Tab ─────────────────────────────────────────────────── */}
-        {activeTab === 'ratios' && (
-          <div className="h-full flex overflow-hidden">
-            <div className="flex-1 overflow-y-auto border-r border-terminal-gray px-2 py-1 min-w-0">
-              <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
-                Key Ratios
-              </div>
+      {/* ── Scrollable body: all sections ─────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+
+        {/* ── Ratios ──────────────────────────────────────────────────────── */}
+        <div className="px-2 py-1">
+          <SectionHeader label="Key Ratios" />
+          <div className="flex gap-2">
+            <div className="flex-1 min-w-0">
               <table className="w-full border-collapse">
                 <tbody>
                   {CORE_RATIO_KEYS.map(({ key, label }) => (
                     <RatioRow key={key} label={label} value={ratios[key]} />
                   ))}
-
-                  {/* Extra quick_ratios */}
                   {extraRatios.length > 0 && (
                     <>
                       <tr>
@@ -395,13 +367,13 @@ export function FundamentalsWidget() {
               </table>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-2 py-1 min-w-0">
+            <div className="flex-1 min-w-0">
               <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
                 Calculated Ratios
               </div>
               <table className="w-full border-collapse">
                 <tbody>
-                  {/* Row 0: Piotroski Score */}
+                  {/* Piotroski Score */}
                   {(() => {
                     const raw = ratios.piotroski_score;
                     const score = parseNum(raw);
@@ -426,7 +398,7 @@ export function FundamentalsWidget() {
                     );
                   })()}
 
-                  {/* Row 1: Peter Lynch FV Ratio */}
+                  {/* Peter Lynch FV Ratio */}
                   <tr className="border-b border-terminal-gray/40">
                     <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
                       Peter Lynch FV Ratio
@@ -455,7 +427,7 @@ export function FundamentalsWidget() {
                     </td>
                   </tr>
 
-                  {/* Row 2: Peter Lynch FV Price */}
+                  {/* Peter Lynch FV Price */}
                   <tr className="border-b border-terminal-gray/40">
                     <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
                       Peter Lynch FV
@@ -484,7 +456,7 @@ export function FundamentalsWidget() {
                     </td>
                   </tr>
 
-                  {/* Row 3: Morningstar Fair Value */}
+                  {/* Morningstar Fair Value */}
                   <tr className="border-b border-terminal-gray/40">
                     <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
                       MS Fair Value
@@ -501,170 +473,163 @@ export function FundamentalsWidget() {
               </table>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* ── Quarterly Tab ──────────────────────────────────────────────── */}
-        {activeTab === 'quarterly' && (
-          <div className="h-full overflow-y-auto px-2 py-1">
-            <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
-              Quarterly Results
-            </div>
+        {/* ── Quarterly Results ────────────────────────────────────────────── */}
+        <div className="px-2 py-1 border-t border-terminal-gray/30">
+          <SectionHeader label="Quarterly Results" />
+          {quarters.length === 0 ? (
+            <span className="text-white text-[10px]">No quarterly data</span>
+          ) : (
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="text-[9px] text-white/60 uppercase">
+                  <th className="text-left pb-1 font-normal">Period</th>
+                  <th className="text-right pb-1 font-normal">Sales</th>
+                  <th className="text-right pb-1 font-normal">Net Profit</th>
+                  <th className="text-right pb-1 font-normal">EPS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quarters.map((q) => (
+                  <tr
+                    key={q.period}
+                    className="border-b border-terminal-gray/40"
+                  >
+                    <td className="py-[3px] pr-2 text-white text-[10px] whitespace-nowrap">
+                      {q.period}
+                    </td>
+                    <td className="py-[3px] text-right text-terminal-amber text-[10px] font-bold whitespace-nowrap">
+                      {q.sales ?? <span className="text-white/60 font-normal">—</span>}
+                    </td>
+                    <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
+                      {q.net_profit != null ? (
+                        <span
+                          className={
+                            parseFloat(q.net_profit.replace(/,/g, '')) >= 0
+                              ? 'text-terminal-green'
+                              : 'text-terminal-red'
+                          }
+                        >
+                          {q.net_profit}
+                        </span>
+                      ) : (
+                        <span className="text-white/60 font-normal">—</span>
+                      )}
+                    </td>
+                    <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
+                      {q.eps != null ? (
+                        <span
+                          className={
+                            parseFloat(q.eps.replace(/,/g, '')) >= 0
+                              ? 'text-terminal-amber'
+                              : 'text-terminal-red'
+                          }
+                        >
+                          {q.eps}
+                        </span>
+                      ) : (
+                        <span className="text-white/60 font-normal">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-            {quarters.length === 0 ? (
-              <span className="text-white text-[10px]">No quarterly data</span>
-            ) : (
-              <table className="w-full border-collapse">
+        {/* ── Valuation ────────────────────────────────────────────────────── */}
+        <div className="px-2 py-1 border-t border-terminal-gray/30">
+          <SectionHeader label="Valuation Models" />
+          {/* Controls */}
+          <div className="flex items-center gap-2 text-[10px] text-white/40 mb-1">
+            <span>WACC</span>
+            <select
+              value={wacc}
+              onChange={(e) => setWacc(parseFloat(e.target.value))}
+              className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
+            >
+              {[0.10, 0.11, 0.12, 0.13, 0.14, 0.15].map((v) => (
+                <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
+              ))}
+            </select>
+            <span>Terminal g</span>
+            <select
+              value={terminalGrowth}
+              onChange={(e) => setTerminalGrowth(parseFloat(e.target.value))}
+              className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
+            >
+              {[0.03, 0.04, 0.05, 0.06, 0.07].map((v) => (
+                <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
+              ))}
+            </select>
+            <button
+              onClick={() => refetchValuation()}
+              className="ml-auto text-[9px] px-1.5 py-0.5 border border-white/10 rounded hover:bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {valuationLoading ? (
+            <div className="text-white/30 text-[11px]">Loading valuation models...</div>
+          ) : valuationData ? (
+            <>
+              <div className="text-[10px] text-white/30">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
+              <table className="w-full text-[11px]">
                 <thead>
-                  <tr className="text-[9px] text-white/60 uppercase">
-                    <th className="text-left pb-1 font-normal">Period</th>
-                    <th className="text-right pb-1 font-normal">Sales</th>
-                    <th className="text-right pb-1 font-normal">Net Profit</th>
-                    <th className="text-right pb-1 font-normal">EPS</th>
+                  <tr className="text-white/30 text-left">
+                    <th className="pb-1">Model</th>
+                    <th className="pb-1 text-right">Fair Value</th>
+                    <th className="pb-1 text-right">vs CMP</th>
+                    <th className="pb-1 text-right">Signal</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {quarters.map((q) => (
-                    <tr
-                      key={q.period}
-                      className="border-b border-terminal-gray/40"
-                    >
-                      <td className="py-[3px] pr-2 text-white text-[10px] whitespace-nowrap">
-                        {q.period}
-                      </td>
-                      <td className="py-[3px] text-right text-terminal-amber text-[10px] font-bold whitespace-nowrap">
-                        {q.sales ?? <span className="text-white/60 font-normal">—</span>}
-                      </td>
-                      <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
-                        {q.net_profit != null ? (
-                          <span
-                            className={
-                              parseFloat(q.net_profit.replace(/,/g, '')) >= 0
-                                ? 'text-terminal-green'
-                                : 'text-terminal-red'
-                            }
-                          >
-                            {q.net_profit}
-                          </span>
-                        ) : (
-                          <span className="text-white/60 font-normal">—</span>
-                        )}
-                      </td>
-                      <td className="py-[3px] text-right text-[10px] font-bold whitespace-nowrap">
-                        {q.eps != null ? (
-                          <span
-                            className={
-                              parseFloat(q.eps.replace(/,/g, '')) >= 0
-                                ? 'text-terminal-amber'
-                                : 'text-terminal-red'
-                            }
-                          >
-                            {q.eps}
-                          </span>
-                        ) : (
-                          <span className="text-white/60 font-normal">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {[
+                    { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
+                    { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
+                    { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
+                    { label: 'EV/EBITDA (12x)', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
+                    { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
+                  ].map((row) => {
+                    const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
+                    const signalColor = signal === 'UNDERVALUED' ? 'text-green-400' : signal === 'OVERVALUED' ? 'text-red-400' : 'text-yellow-400';
+                    return (
+                      <tr key={row.label} className="border-t border-white/5">
+                        <td className="py-1 text-white/60">{row.label}</td>
+                        <td className="py-1 text-right text-white/80">
+                          {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
+                        </td>
+                        <td className={'py-1 text-right ' + (row.upside !== null ? (row.upside > 0 ? 'text-green-400' : 'text-red-400') : 'text-white/30')}>
+                          {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
+                        </td>
+                        <td className={'py-1 text-right font-medium ' + signalColor}>
+                          {signal ?? '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
-            )}
-          </div>
-        )}
 
-        {/* ── Valuation Tab ────────────────────────────────────────────── */}
-        {activeTab === 'valuation' && (
-          <div className="h-full overflow-y-auto px-2 py-2 flex flex-col gap-2">
-            {/* Controls */}
-            <div className="flex items-center gap-2 text-[10px] text-white/40">
-              <span>WACC</span>
-              <select
-                value={wacc}
-                onChange={(e) => setWacc(parseFloat(e.target.value))}
-                className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
-              >
-                {[0.10, 0.11, 0.12, 0.13, 0.14, 0.15].map((v) => (
-                  <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
-                ))}
-              </select>
-              <span>Terminal g</span>
-              <select
-                value={terminalGrowth}
-                onChange={(e) => setTerminalGrowth(parseFloat(e.target.value))}
-                className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
-              >
-                {[0.03, 0.04, 0.05, 0.06, 0.07].map((v) => (
-                  <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
-                ))}
-              </select>
-              <button
-                onClick={() => refetchValuation()}
-                className="ml-auto text-[9px] px-1.5 py-0.5 border border-white/10 rounded hover:bg-white/5 text-white/50 hover:text-white/80 transition-colors"
-              >
-                Refresh
-              </button>
-            </div>
+              {valuationData.dcf_assumptions && (
+                <div className="text-[9px] text-white/25 mt-1 border-t border-white/5 pt-1">
+                  DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
+                  Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
+                  Terminal {valuationData.dcf_assumptions.terminal_growth_pct}% |
+                  WACC {valuationData.dcf_assumptions.wacc_pct}%
+                  {valuationData.dcf_assumptions.base_fcf_cr !== null &&
+                    ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-white/30 text-[11px]">No valuation data available</div>
+          )}
+        </div>
 
-            {/* Models table */}
-            {valuationLoading ? (
-              <div className="text-white/30 text-[11px]">Loading valuation models...</div>
-            ) : valuationData ? (
-              <>
-                <div className="text-[10px] text-white/30">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
-                <table className="w-full text-[11px]">
-                  <thead>
-                    <tr className="text-white/30 text-left">
-                      <th className="pb-1">Model</th>
-                      <th className="pb-1 text-right">Fair Value</th>
-                      <th className="pb-1 text-right">vs CMP</th>
-                      <th className="pb-1 text-right">Signal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
-                      { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
-                      { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
-                      { label: 'EV/EBITDA (12x)', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
-                      { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
-                    ].map((row) => {
-                      const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
-                      const signalColor = signal === 'UNDERVALUED' ? 'text-green-400' : signal === 'OVERVALUED' ? 'text-red-400' : 'text-yellow-400';
-                      return (
-                        <tr key={row.label} className="border-t border-white/5">
-                          <td className="py-1 text-white/60">{row.label}</td>
-                          <td className="py-1 text-right text-white/80">
-                            {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
-                          </td>
-                          <td className={cn('py-1 text-right', row.upside !== null ? (row.upside > 0 ? 'text-green-400' : 'text-red-400') : 'text-white/30')}>
-                            {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
-                          </td>
-                          <td className={cn('py-1 text-right font-medium', signalColor)}>
-                            {signal ?? '—'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-
-                {/* DCF assumptions footnote */}
-                {valuationData.dcf_assumptions && (
-                  <div className="text-[9px] text-white/25 mt-1 border-t border-white/5 pt-1">
-                    DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
-                    Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
-                    Terminal {valuationData.dcf_assumptions.terminal_growth_pct}% |
-                    WACC {valuationData.dcf_assumptions.wacc_pct}%
-                    {valuationData.dcf_assumptions.base_fcf_cr !== null &&
-                      ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="text-white/30 text-[11px]">No valuation data available</div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

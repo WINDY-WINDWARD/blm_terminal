@@ -139,6 +139,9 @@ def get_notif_config() -> dict:
         # Deal significance thresholds
         "notif.deal_significance_pct":          0.05,
         "notif.deal_absolute_threshold_cr":     2.0,
+        # Repeat breakout thresholds
+        "notif.repeat_breakout_min_days":       2.0,
+        "notif.repeat_breakout_window_days":   10.0,
     }
     try:
         with _SyncSessionLocal() as db:

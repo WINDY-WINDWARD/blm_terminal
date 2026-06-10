@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Each import is its own line (not a wildcard) so linters can track usage.
 from app.database import Base  # noqa: E402
 from app.models import ai_chat  # noqa: F401, E402
+from app.models import breakout_snapshot  # noqa: F401, E402
 from app.models import corporatefilings  # noqa: F401, E402
 from app.models import job  # noqa: F401, E402
 from app.models import marketcategory  # noqa: F401, E402

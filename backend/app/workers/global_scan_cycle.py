@@ -24,6 +24,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from app.services.data_sync import (
+    breakout_snapshot as _breakout_snapshot_mod,
     deal_significance as _deal_sig_mod,
     nse_parsing as _nse_parsing_mod,
     notifications as _notifications_mod,
@@ -107,6 +108,12 @@ def _global_scan_cycle() -> None:
         low52_data = _nse_parsing_mod._parse_52week_data(low52_raw)
         vol_data = _nse_parsing_mod._parse_volume_gainers(vol_raw)
         deals = _deal_sig_mod._parse_largedeal_snapshot(deals_raw)
+
+        # Capture daily breakout snapshots for repeat-breakout detection
+        try:
+            _breakout_snapshot_mod._capture_breakout_snapshot()
+        except Exception:
+            logger.exception("global_scan_cycle: breakout snapshot capture failed (non-fatal)")
 
         # Pre-fetch deal significance data once for the whole scan
         deal_symbols      = set(deals.keys())
@@ -287,6 +294,20 @@ def _global_scan_cycle() -> None:
                 )
                 if _sleep_interruptible(GLOBAL_SCAN_DELAY):
                     break
+
+        # Generate repeat-breakout alerts from accumulated snapshots
+        try:
+            cfg_repeat = _notifications_mod.get_notif_config()
+            repeat_window = int(float(cfg_repeat.get("notif.repeat_breakout_window_days", 10.0)))
+            repeat_min = int(float(cfg_repeat.get("notif.repeat_breakout_min_days", 2.0)))
+            repeat_alerts = _breakout_snapshot_mod._generate_repeat_breakout_alerts(
+                window_days=repeat_window,
+                min_days=repeat_min,
+            )
+            pending.extend(repeat_alerts)
+            alerts_generated += len(repeat_alerts)
+        except Exception:
+            logger.exception("global_scan_cycle: repeat breakout alert generation failed (non-fatal)")
 
         if pending:
             _notifications_mod._bulk_upsert_global_notifications(pending)

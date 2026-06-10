@@ -163,4 +163,27 @@ def _run_cleanup_if_due() -> None:
     except Exception:
         logger.exception("intraday_W_cleanup: failed (non-fatal)")
 
+    # 5) breakout_snapshots — retain ~14 calendar days (~10 trading days)
+    try:
+        cutoff_bs = now - timedelta(days=14)
+        with _SyncSessionLocal() as session:
+            deleted = session.execute(
+                text(
+                    "DELETE FROM breakout_snapshots WHERE rowid IN ("
+                    "  SELECT rowid FROM breakout_snapshots "
+                    "  WHERE snapshot_date < :cutoff "
+                    "  LIMIT 50000"
+                    ")"
+                ),
+                {"cutoff": cutoff_bs.date()},
+            )
+            session.commit()
+            if deleted.rowcount > 0:
+                logger.info(
+                    "breakout_snapshot_cleanup: deleted %d snapshots older than %s",
+                    deleted.rowcount, cutoff_bs.date(),
+                )
+    except Exception:
+        logger.exception("breakout_snapshot_cleanup: failed (non-fatal)")
+
     _cleanup_last_run = now

@@ -49,7 +49,7 @@ type ReadFilter = 'unread' | 'read' | 'all';
 
 const TAB_TRIGGERS: Record<NotifTab, string[]> = {
   all: [],
-  breakout: ['52w_high_breakout', '52w_low_breakout', 'near_52w_high', 'near_52w_low'],
+  breakout: ['52w_high_breakout', '52w_low_breakout', 'near_52w_high', 'near_52w_low', 'repeated_52w_high', 'repeated_52w_low', 'repeated_volume_breakout'],
   volume: ['volume_breakout'],
   movers: ['top_gainer', 'top_loser'],
   deals: ['bulk_deal', 'block_deal', 'short_deal'],
@@ -149,6 +149,9 @@ const TRIGGER_LABELS: Record<string, string> = {
   // multi-timeframe
   mtf_bullish_alignment: 'MTF BULLISH ALIGNMENT',
   mtf_bearish_alignment: 'MTF BEARISH ALIGNMENT',
+  repeated_52w_high: 'REPEATED 52W HIGH',
+  repeated_52w_low: 'REPEATED 52W LOW',
+  repeated_volume_breakout: 'REPEATED VOL BREAKOUT',
 };
 
 const STREAK_TRIGGER_TYPES = new Set(['streak_up_5d', 'streak_down_5d']);
@@ -187,6 +190,7 @@ function getBadgeColor(triggerType: string): string {
   if (triggerType.endsWith('_W')) return 'bg-violet-600 text-white';
   if (triggerType.endsWith('_M')) return 'bg-fuchsia-700 text-white';
   if (triggerType.startsWith('mtf_')) return 'bg-cyan-600 text-white';
+  if (triggerType.startsWith('repeated_')) return 'bg-purple-600 text-white';
   return 'bg-terminal-gray text-white';
 }
 
@@ -237,6 +241,9 @@ function getBadgeLabel(triggerType: string): string {
   if (triggerType === 'macd_bearish_cross_M') return 'MACD-[M]';
   if (triggerType === 'mtf_bullish_alignment') return 'MTF BULL';
   if (triggerType === 'mtf_bearish_alignment') return 'MTF BEAR';
+  if (triggerType === 'repeated_52w_high') return 'RPT 52H';
+  if (triggerType === 'repeated_52w_low') return 'RPT 52L';
+  if (triggerType === 'repeated_volume_breakout') return 'RPT VOL';
   return triggerType.toUpperCase();
 }
 
@@ -336,6 +343,10 @@ function getTooltipDescription(triggerType: string): string {
       return 'Daily + Weekly + Monthly RSI all above 50 — strong multi-timeframe bullish consensus';
     case 'mtf_bearish_alignment':
       return 'Daily + Weekly + Monthly RSI all below 50 — strong multi-timeframe bearish consensus';
+    case 'repeated_52w_high':
+      return 'Stock appeared in 52W HIGH list multiple times in the last 10 calendar days — persistent bullish momentum';
+      return 'Stock appeared in 52W LOW list multiple times in the last 10 calendar days — persistent bearish pressure';
+      return 'Stock appeared in volume gainers list multiple times in the last 10 calendar days — sustained unusual activity';
     default:
       return triggerType;
   }
