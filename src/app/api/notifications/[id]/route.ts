@@ -8,13 +8,22 @@ export async function DELETE(
 ) {
   const { id } = await params;
   const watchlistId = req.nextUrl.searchParams.get('watchlist_id') ?? '1';
+  const headers: Record<string, string> = { accept: 'application/json' };
+  const auth = req.headers.get('authorization');
+  if (auth) headers['authorization'] = auth;
+  const cookie = req.headers.get('cookie');
+  if (cookie) headers['cookie'] = cookie;
+
   try {
-    const res = await fetch(
+    const upstream = await fetch(
       `${BACKEND_URL}/api/notifications/${id}?watchlist_id=${watchlistId}`,
-      { method: 'DELETE' },
+      { method: 'DELETE', headers },
     );
-    const data: unknown = await res.json();
-    return NextResponse.json(data, { status: res.status });
+    const data: unknown = await upstream.json();
+    const res = NextResponse.json(data, { status: upstream.status });
+    const setCookie = upstream.headers.get('set-cookie');
+    if (setCookie) res.headers.set('set-cookie', setCookie);
+    return res;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 502 });

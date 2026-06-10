@@ -79,7 +79,7 @@ export async function GET() {
     if (!res.ok) {
       return NextResponse.json(
         { error: `Failed to fetch RSS: ${res.status}` },
-        { status: 502 }
+        { status: res.status }
       );
     }
 

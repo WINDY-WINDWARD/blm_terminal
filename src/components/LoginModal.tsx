@@ -2,28 +2,58 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAtom } from 'jotai';
+import { useQueryClient } from '@tanstack/react-query';
 import { authAtom, isAuthenticatedAtom } from '@/store/terminalStore';
 
 export function LoginModal() {
   const [auth, setAuth] = useAtom(authAtom);
   const [isAuthenticated] = useAtom(isAuthenticatedAtom);
+  const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [sessionChecking, setSessionChecking] = useState(true);
 
   useEffect(() => {
     setMounted(true);
-    
-    const handleAuthExpired = () => {
+
+    const handleAuthExpired = async () => {
+      await fetch('/api/py/auth/logout', { method: 'POST' }).catch(() => {});
       setAuth(null);
     };
     window.addEventListener('auth-expired', handleAuthExpired);
     return () => window.removeEventListener('auth-expired', handleAuthExpired);
   }, [setAuth]);
 
-  if (!mounted || isAuthenticated) return null;
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/py/auth/me');
+        if (res.ok) {
+          const userData = await res.json();
+          setAuth({ user: userData });
+        } else {
+          setAuth(null);
+        }
+      } catch {
+        setAuth(null);
+      } finally {
+        setSessionChecking(false);
+      }
+    })();
+  }, [setAuth]);
+
+  if (!mounted || sessionChecking) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-terminal-bg">
+        <span className="text-terminal-amber font-mono text-sm">AUTHENTICATING...</span>
+      </div>
+    );
+  }
+
+  if (isAuthenticated) return null;
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,7 +61,6 @@ export function LoginModal() {
     setLoading(true);
 
     try {
-      // Create x-www-form-urlencoded data for OAuth2PasswordBearer
       const formData = new URLSearchParams();
       formData.append('username', username);
       formData.append('password', password);
@@ -48,23 +77,12 @@ export function LoginModal() {
         throw new Error('Invalid username or password');
       }
 
-      const data = await response.json();
-      
-      // Fetch user profile
-      const userRes = await fetch('/api/py/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${data.access_token}`
-        }
-      });
+      const userRes = await fetch('/api/py/auth/me');
       const userData = await userRes.json();
 
-      setAuth({
-        token: data.access_token,
-        user: userData
-      });
-      
-      // Trigger a page reload to reset query caches
-      window.location.reload();
+      setAuth({ user: userData });
+
+      queryClient.invalidateQueries();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

@@ -90,6 +90,12 @@ function emptySessionState(defaultModel = ''): SessionState {
   };
 }
 
+// ─── Module-level persistence (survives unmount/remount) ───────────────────────
+
+const _persistedMap = new Map<number | null, SessionState>();
+let _persistedActiveKey: number | null = null;
+let _persistedHasSent = false;
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 interface ToolCallBadgeProps {
@@ -365,9 +371,24 @@ export function AiWidget() {
   // Switching activeKey is a pure view operation — no other key is ever touched.
 
   const [sessionMap, setSessionMap] = useState<Map<number | null, SessionState>>(
-    () => new Map([[NEW_CHAT_KEY, emptySessionState()]]),
+    () => {
+      if (_persistedMap.size > 0) {
+        // Restore from module-level store but mark as not streaming
+        // (the underlying connection is dead after unmount)
+        const restored = new Map<number | null, SessionState>();
+        for (const [k, v] of _persistedMap) {
+          restored.set(k, { ...v, isStreaming: false, abortController: null });
+        }
+        return restored;
+      }
+      return new Map([[NEW_CHAT_KEY, emptySessionState()]]);
+    },
   );
-  const [activeKey, setActiveKey] = useState<number | null>(NEW_CHAT_KEY);
+  const [activeKey, setActiveKey] = useState<number | null>(() => {
+    if (_persistedMap.size > 0) return _persistedActiveKey;
+    return NEW_CHAT_KEY;
+  });
+  const hasSentRef = useRef(_persistedHasSent);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activePersona, setActivePersona] = useState<PersonaId | null>(null);
 
@@ -390,6 +411,34 @@ export function AiWidget() {
       return changed ? next : prev;
     });
   }, [defaultModel]);
+
+  // ── Sync to module-level store — survives unmount/remount ──────────────────
+
+  useEffect(() => {
+    _persistedMap.clear();
+    for (const [k, v] of sessionMap) {
+      const { abortController: _, ...rest } = v;
+      _persistedMap.set(k, rest as SessionState);
+    }
+  }, [sessionMap]);
+
+  useEffect(() => {
+    _persistedActiveKey = activeKey;
+  }, [activeKey]);
+
+  useEffect(() => {
+    _persistedHasSent = hasSentRef.current;
+  });
+
+  // Abort all in-flight streams on unmount by tracking them in a ref
+  const ongoingAbortsRef = useRef<Set<AbortController>>(new Set());
+  useEffect(() => {
+    return () => {
+      for (const ctrl of ongoingAbortsRef.current) {
+        ctrl.abort();
+      }
+    };
+  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -530,10 +579,15 @@ export function AiWidget() {
     const historyWithUser = [...priorMessages, userMessage];
 
     const abort = new AbortController();
+    ongoingAbortsRef.current.add(abort);
 
-    // Optimistic UI update for the current session
+    hasSentRef.current = true;
+
+    // Build the optimistic state for the session — will be committed via patchSession
+    // and also kept as a closure fallback for the session_id migration below.
+    const optimisticMessages = [...historyWithUser, { role: 'assistant' as const, content: '' }];
     patchSession(sessionKey, {
-      messages: [...historyWithUser, { role: 'assistant', content: '' }],
+      messages: optimisticMessages,
       input: '',
       isStreaming: true,
       toolsDone: false,
@@ -544,6 +598,16 @@ export function AiWidget() {
     // map entry from null → realId. This ref tracks the live key for writes
     // that happen after the migration.
     let liveKey: number | null = sessionKey;
+    // Closure-level fallback for the migration — set synchronously so that even
+    // if React hasn't committed patchSession yet, the migration can find its state.
+    const migrationFallback: SessionState = {
+      messages: optimisticMessages,
+      input: '',
+      isStreaming: true,
+      toolsDone: false,
+      model: sessionState.model || defaultModel,
+      abortController: abort,
+    };
 
     // Accumulated content for the current streaming turn
     let assistantContent = '';
@@ -627,7 +691,10 @@ export function AiWidget() {
               unstable_batchedUpdates(() => {
                 setSessionMap((prev) => {
                   const next = new Map(prev);
-                  const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
+                  const fromNext = next.get(liveKey);
+                  const existing = (fromNext && fromNext.messages.length > 0)
+                    ? fromNext
+                    : migrationFallback;
                   next.delete(liveKey);
                   next.set(assignedId, existing);
                   return next;
@@ -699,6 +766,7 @@ export function AiWidget() {
         abortController: null,
       });
     } finally {
+      ongoingAbortsRef.current.delete(abort);
       // Ensure isStreaming is always cleared even on unexpected throws
       setSessionMap((prev) => {
         const next = new Map(prev);
@@ -803,7 +871,7 @@ export function AiWidget() {
 
         {/* Message list */}
         <div className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-3 min-h-0">
-          {messages.length === 0 && (
+          {!hasSentRef.current && messages.length === 0 && (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 text-terminal-amber/25 text-[11px]">
               <span className="text-2xl opacity-20">◈</span>
               <span>BLM AI — ask anything about NSE markets</span>

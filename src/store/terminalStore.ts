@@ -81,11 +81,10 @@ export interface AuthUser {
 }
 
 export interface AuthState {
-  token: string;
   user: AuthUser;
 }
 
-/** Global auth state persisted in localStorage (not sessionStorage, so login persists across tabs) */
+/** User info persisted in localStorage (token lives in HTTP-only cookie) */
 export const authAtom = atomWithStorage<AuthState | null>('terminal.auth', null);
 
 export const isAuthenticatedAtom = atom((get) => get(authAtom) !== null);
@@ -263,6 +262,9 @@ export const tickDataAtom = atom<Record<string, TickData>>({});
 
 /** WebSocket connection status */
 export const wsConnectedAtom = atom<boolean>(false);
+
+/** Whether OpenAlgo broker is configured and reachable */
+export const openAlgoAvailableAtom = atom<boolean>(true);
 
 /** Account funds data — updated periodically */
 export const fundsAtom = atom<FundsData | null>(null);

@@ -31,14 +31,17 @@ async function proxyRequest(
 ): Promise<Response> {
   const upstreamUrl = buildUpstreamUrl(params, request)
 
-  // Forward only safe, non-host headers
+  // Forward headers needed by the backend.
+  // Authorization is required for authenticated endpoints (/auth/me, etc.).
   const forwardHeaders = new Headers()
   request.headers.forEach((value, key) => {
     const lower = key.toLowerCase()
     if (
       lower === 'content-type' ||
       lower === 'accept' ||
-      lower === 'accept-language'
+      lower === 'accept-language' ||
+      lower === 'authorization' ||
+      lower === 'cookie'
     ) {
       forwardHeaders.set(key, value)
     }
@@ -83,29 +86,41 @@ async function proxyRequest(
       })
     }
 
+    // Extract Set-Cookie from upstream response so the browser actually
+    // receives it (critical for login cookie to work through the proxy).
+    const upstreamSetCookie = upstream.headers.get('set-cookie')
+
     const rawBody = await upstream.text()
 
     if (!upstream.ok) {
       // Gracefully handle non-JSON error responses (e.g. HTML 500 pages)
       try {
         const data = JSON.parse(rawBody)
-        return NextResponse.json(data, { status: upstream.status })
+        const res = NextResponse.json(data, { status: upstream.status })
+        if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+        return res
       } catch {
         // Not valid JSON — wrap raw body in an error object so callers always
         // receive a predictable shape { error: string }.
-        return NextResponse.json(
+        const res = NextResponse.json(
           { error: rawBody.slice(0, 500) },
           { status: upstream.status },
         )
+        if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+        return res
       }
     }
 
     try {
       const data = JSON.parse(rawBody)
-      return NextResponse.json(data, { status: upstream.status })
+      const res = NextResponse.json(data, { status: upstream.status })
+      if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+      return res
     } catch {
       // Fallback for 200 OK responses that are not JSON — forward as plain text
-      return new Response(rawBody, { status: upstream.status })
+      const res = new Response(rawBody, { status: upstream.status })
+      if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+      return res
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'

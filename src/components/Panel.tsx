@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import {
   focusedPanelAtom,
   notifPanelHighlightAtom,
+  openAlgoAvailableAtom,
   selectedPanelsAtom,
 } from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
@@ -67,7 +68,19 @@ export function Panel({ id, title }: PanelProps) {
     setFocusedPanel(id);
   };
 
+  const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
+
   const renderWidget = () => {
+    if (!openAlgoAvailable && (title === 'ORDER' || title === 'POS')) {
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-center text-terminal-amber/50 font-mono text-xs gap-2">
+          <span className="text-terminal-amber/30 text-lg font-bold">--</span>
+          <span>OpenAlgo not available</span>
+          <span className="text-terminal-amber/30">Set OPENALGO_URL and OPENALGO_API_KEY</span>
+        </div>
+      );
+    }
+
     switch (title) {
       case 'TOP':      return <MoversWidget />;
       case 'POS':      return <PosWidget />;

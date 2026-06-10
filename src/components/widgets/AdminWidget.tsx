@@ -10,6 +10,8 @@ interface User {
   is_admin: boolean;
 }
 
+type PasswordState = Record<number, string>;
+
 export function AdminWidget() {
   const [auth] = useAtom(authAtom);
   const [users, setUsers] = useState<User[]>([]);
@@ -20,6 +22,8 @@ export function AdminWidget() {
   const [newPassword, setNewPassword] = useState('');
   const [newIsAdmin, setNewIsAdmin] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [passwordChanges, setPasswordChanges] = useState<PasswordState>({});
+  const [changingPassword, setChangingPassword] = useState<number | null>(null);
 
   useEffect(() => {
     fetchUsers();
@@ -28,7 +32,7 @@ export function AdminWidget() {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/py/users/');
+      const res = await fetch('/api/py/users');
       if (!res.ok) throw new Error('Failed to fetch users');
       const data = await res.json();
       setUsers(data);
@@ -45,7 +49,7 @@ export function AdminWidget() {
     setCreating(true);
 
     try {
-      const res = await fetch('/api/py/users/', {
+      const res = await fetch('/api/py/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -57,7 +61,12 @@ export function AdminWidget() {
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.detail || 'Failed to create user');
+        const message = typeof data.detail === 'string'
+          ? data.detail
+          : Array.isArray(data.detail)
+            ? data.detail.map((e: { msg: string }) => e.msg).join('; ')
+            : 'Failed to create user';
+        throw new Error(message);
       }
 
       setNewUsername('');
@@ -88,6 +97,34 @@ export function AdminWidget() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error deleting user');
       alert(err instanceof Error ? err.message : 'Error deleting user');
+    }
+  };
+
+  const handleChangePassword = async (userId: number) => {
+    const newPw = passwordChanges[userId];
+    if (!newPw || newPw.length < 8) {
+      alert('Password must be at least 8 characters');
+      return;
+    }
+    setChangingPassword(userId);
+    try {
+      const res = await fetch(`/api/py/users/${userId}/password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPw }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        const message = typeof data.detail === 'string'
+          ? data.detail
+          : 'Failed to change password';
+        throw new Error(message);
+      }
+      setPasswordChanges(prev => ({ ...prev, [userId]: '' }));
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Error changing password');
+    } finally {
+      setChangingPassword(null);
     }
   };
 
@@ -191,14 +228,30 @@ export function AdminWidget() {
                         )}
                       </td>
                       <td className="p-2 text-right">
-                        {u.id !== auth?.user?.id && (
+                        <div className="flex items-center gap-1 justify-end">
+                          <input
+                            type="password"
+                            placeholder="New pw"
+                            value={passwordChanges[u.id] ?? ''}
+                            onChange={e => setPasswordChanges(prev => ({ ...prev, [u.id]: e.target.value }))}
+                            className="w-20 bg-black border border-terminal-gray px-1 py-0.5 text-[10px] text-white outline-none focus:border-terminal-amber placeholder:text-terminal-muted/40"
+                          />
                           <button
-                            onClick={() => handleDeleteUser(u.id)}
-                            className="text-terminal-red hover:bg-terminal-red/10 px-2 py-1 transition-colors"
+                            onClick={() => handleChangePassword(u.id)}
+                            disabled={changingPassword === u.id || !passwordChanges[u.id]}
+                            className="text-[10px] text-terminal-amber hover:bg-terminal-amber/10 px-1.5 py-0.5 border border-terminal-gray/40 hover:border-terminal-amber transition-colors disabled:opacity-30"
                           >
-                            DELETE
+                            {changingPassword === u.id ? '...' : 'PW'}
                           </button>
-                        )}
+                          {u.id !== auth?.user?.id && (
+                            <button
+                              onClick={() => handleDeleteUser(u.id)}
+                              className="text-terminal-red hover:bg-terminal-red/10 px-1.5 py-0.5 transition-colors"
+                            >
+                              DEL
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAtom, useAtomValue } from 'jotai';
 import Link from 'next/link';
 import {
   wsConnectedAtom,
   fundsAtom,
+  openAlgoAvailableAtom,
   watchlistColumnsAtom,
   moversColumnsAtom,
   watchlistsAtom,
@@ -162,6 +163,7 @@ export function SettingsWidget() {
   const qc = useQueryClient();
   const [wsConnected] = useAtom(wsConnectedAtom);
   const [funds] = useAtom(fundsAtom);
+  const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
   const [watchlistCols, setWatchlistCols] = useAtom(watchlistColumnsAtom);
   const [moversCols, setMoversCols] = useAtom(moversColumnsAtom);
   const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
@@ -211,15 +213,18 @@ export function SettingsWidget() {
       .finally(() => setConfigLoading(false));
   }, []);
 
-  // Fetch watchlists on mount
-  useEffect(() => {
-    fetch('/api/watchlists')
-      .then((res) => res.json())
-      .then((data: Watchlist[]) => {
-        setWatchlists(data);
-      })
-      .catch(console.error);
-  }, [setWatchlists]);
+  // Fetch watchlists via React Query (shared cache with WatchWidget)
+  useQuery({
+    queryKey: ['watchlists'],
+    queryFn: async () => {
+      const res = await fetch('/api/watchlists');
+      if (!res.ok) throw new Error('Failed to fetch watchlists');
+      const data = (await res.json()) as Watchlist[];
+      setWatchlists(data);
+      return data;
+    },
+    staleTime: 300_000,
+  });
 
   useEffect(() => {
     const timers = configSaveTimerRef.current;
@@ -330,13 +335,15 @@ export function SettingsWidget() {
             Market WS: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
           </span>
         </div>
-        <div className="text-white text-[10px]">
-          OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
-        </div>
+        {openAlgoAvailable && (
+          <div className="text-white text-[10px]">
+            OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
+          </div>
+        )}
       </div>
 
       {/* Funds */}
-      {funds && (
+      {openAlgoAvailable && funds && (
         <div className="flex flex-col gap-1">
           <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
             Account Funds

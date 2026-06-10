@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { useAtom, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   activeCommandAtom,
   activePanelsAtom,
   focusedPanelAtom,
+  openAlgoAvailableAtom,
   panelCountAtom,
   wsConnectedAtom,
   selectedPanelsAtom,
@@ -57,6 +58,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const setWsConnected = useSetAtom(wsConnectedAtom);
   const [selectedPanels, setSelectedPanels] = useAtom(selectedPanelsAtom);
   const [mergedGroups, setMergedGroups] = useAtom(mergedGroupsAtom);
+  const setOpenAlgoAvailable = useSetAtom(openAlgoAvailableAtom);
 
   // Clean up legacy localStorage keys once on mount
   useEffect(() => {
@@ -70,6 +72,14 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       unsub();
     };
   }, [setWsConnected]);
+
+  // Check OpenAlgo health on mount
+  useEffect(() => {
+    fetch('/api/openalgo/health')
+      .then((r) => r.json())
+      .then((data: { available: boolean }) => setOpenAlgoAvailable(data.available))
+      .catch(() => setOpenAlgoAvailable(false));
+  }, [setOpenAlgoAvailable]);
 
   // Focus command bar on Escape or '/'.
   // For '/', if the input is not already focused, focus it and seed the '/'
@@ -154,11 +164,14 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     }
   }, [focusedPanel, panelCount, setFocusedPanel]);
 
+  const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
+
   // Command processor: apply widget command to focused panel
   useEffect(() => {
     if (!activeCommand) return;
 
     if (activeCommand === 'LOGOUT') {
+      fetch('/api/py/auth/logout', { method: 'POST' }).catch(() => {});
       window.dispatchEvent(new Event('auth-expired'));
       setActiveCommand('');
       return;
@@ -169,12 +182,17 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       targetCommand = 'BREAKOUTS';
     }
 
-    const isValid = VALID_WIDGETS.includes(targetCommand);
+    const openAlgoWidgets = new Set(['ORDER', 'POS']);
+    const validWidgets = openAlgoAvailable
+      ? VALID_WIDGETS
+      : VALID_WIDGETS.filter((w) => !openAlgoWidgets.has(w));
+
+    const isValid = validWidgets.includes(targetCommand);
     if (isValid) {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: targetCommand }));
     }
     setActiveCommand('');
-  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand]);
+  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable]);
 
   return (
     <main className="flex flex-col h-screen w-screen bg-terminal-bg text-terminal-amber overflow-hidden">

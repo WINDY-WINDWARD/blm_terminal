@@ -1,14 +1,16 @@
 """Router for authentication and user management endpoints."""
 
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import create_access_token, get_current_user, verify_password
+from app.auth import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_current_user, verify_password
 from app.database import get_db
 from app.models.user import User
 
@@ -37,16 +39,32 @@ async def login_for_access_token(
     stmt = select(User).where(User.username == form_data.username)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
-    
+
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
+
     access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    response = JSONResponse({"access_token": access_token, "token_type": "bearer"})
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@router.post("/logout")
+async def logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(key="access_token", path="/")
+    return response
 
 
 @router.get("/me", response_model=UserResponse)

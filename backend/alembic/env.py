@@ -13,10 +13,19 @@ from alembic import context
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Import models so their tables are registered on Base.metadata.
+# Import ALL model modules so their tables are registered on Base.metadata.
+# Each import is its own line (not a wildcard) so linters can track usage.
 from app.database import Base  # noqa: E402
+from app.models import ai_chat  # noqa: F401, E402
 from app.models import corporatefilings  # noqa: F401, E402
+from app.models import job  # noqa: F401, E402
+from app.models import marketcategory  # noqa: F401, E402
+from app.models import news  # noqa: F401, E402
+from app.models import notification  # noqa: F401, E402
 from app.models import stockuniverse  # noqa: F401, E402
+from app.models import system_config  # noqa: F401, E402
+from app.models import ticker  # noqa: F401, E402
+from app.models import user  # noqa: F401, E402
 from app.models import watchlist  # noqa: F401, E402
 from app.config import settings  # noqa: E402
 

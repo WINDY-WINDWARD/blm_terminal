@@ -21,7 +21,7 @@ export async function GET() {
       } catch {
         // ignore parse error
       }
-      return NextResponse.json({ error: detail }, { status: 502 });
+      return NextResponse.json({ error: detail }, { status: res.status });
     }
 
     const data = (await res.json()) as EventCalendarItem[];

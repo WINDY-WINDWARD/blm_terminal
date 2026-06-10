@@ -7,6 +7,7 @@ Provides:
 - Per-endpoint courtesy delay to avoid flooding NSE
 - Request coalescing: in-flight requests are shared, not duplicated
 - A circuit breaker with OPEN → HALF_OPEN → CLOSED recovery
+- Automatic retry of transient network errors (httpx transport errors)
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import logging
 import os
 import time
 from collections import defaultdict
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,22 @@ NSE_CONCURRENCY_LIMIT: int = int(os.getenv("NSE_CONCURRENCY", "2"))
 NSE_COURTESY_DELAY_SECONDS: float = float(os.getenv("NSE_COURTESY_DELAY", "1.5"))
 CIRCUIT_FAIL_MAX: int = int(os.getenv("NSE_CIRCUIT_FAIL_MAX", "5"))
 CIRCUIT_RESET_TIMEOUT: float = float(os.getenv("NSE_CIRCUIT_RESET_TIMEOUT", "60.0"))
+NSE_MAX_RETRIES: int = int(os.getenv("NSE_MAX_RETRIES", "2"))
+NSE_RETRY_BACKOFF: float = float(os.getenv("NSE_RETRY_BACKOFF", "1.0"))
+
+# ---------------------------------------------------------------------------
+# Retry helper — transient network errors only
+# ---------------------------------------------------------------------------
+
+def _is_retriable(exc: Exception) -> bool:
+    """Return True for transient network errors that should be retried.
+
+    Retriable: httpx.RequestError (transport-level: ReadError, ConnectError,
+    TimeoutException, RemoteProtocolError).
+    Non-retriable: httpx.HTTPStatusError (bad 4xx/5xx), ValueError, etc.
+    """
+    return isinstance(exc, httpx.RequestError)
+
 
 # ---------------------------------------------------------------------------
 # Global semaphore — limits concurrent NSE requests across ALL endpoints
@@ -204,23 +223,38 @@ async def throttled_nse_call(
                     )
                     await asyncio.sleep(wait)
 
-                try:
-                    if is_async_fn:
-                        result = await fn(*args)
-                    else:
-                        result = await asyncio.to_thread(fn, *args)
-                    _record_success(endpoint_name)
-                    inflight_future.set_result(result)
-                    return result
-                except Exception as exc:
-                    _record_failure(endpoint_name)
-                    inflight_future.set_exception(exc)
-                    # Mark exception as retrieved to avoid "Future exception
-                    # was never retrieved" when no coalescing listener awaits.
-                    inflight_future.exception()
-                    raise
-                finally:
-                    _last_request_at[endpoint_name] = time.monotonic()
+                last_exc: Exception | None = None
+                for attempt in range(NSE_MAX_RETRIES + 1):
+                    try:
+                        if is_async_fn:
+                            result = await fn(*args)
+                        else:
+                            result = await asyncio.to_thread(fn, *args)
+                        _record_success(endpoint_name)
+                        inflight_future.set_result(result)
+                        return result
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < NSE_MAX_RETRIES and _is_retriable(exc):
+                            backoff = NSE_RETRY_BACKOFF * (2**attempt)
+                            logger.warning(
+                                "Transient NSE error on '%s' (attempt %d/%d): %s. Retrying in %.1fs",
+                                endpoint_name,
+                                attempt + 1,
+                                NSE_MAX_RETRIES,
+                                exc,
+                                backoff,
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+                        break
+                    finally:
+                        _last_request_at[endpoint_name] = time.monotonic()
+
+                _record_failure(endpoint_name)
+                inflight_future.set_exception(last_exc)
+                inflight_future.exception()
+                raise last_exc  # type: ignore[misc]
 
     finally:
         if endpoint_name in _inflight and _inflight[endpoint_name] is inflight_future:

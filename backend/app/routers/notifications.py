@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user
 from app.database import get_db
 from app.models.notification import Notification, GlobalNotification
+from app.models.user import User
+from app.models.watchlist import Watchlist as WatchlistModel
 from app.schemas.notification import NotificationOut, GlobalNotificationOut
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -21,6 +23,7 @@ async def list_notifications(
     watchlist_id: Annotated[int, Query()],
     days: Annotated[int, Query()] = 2,
     read_filter: Annotated[str, Query()] = "unread",
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationOut]:
     """Return notifications for a watchlist, newest first.
@@ -28,6 +31,9 @@ async def list_notifications(
     - days: number of past days to include (default 2)
     - read_filter: 'unread' (default), 'read', or 'all'
     """
+    watchlist = await db.get(WatchlistModel, watchlist_id)
+    if watchlist is None or watchlist.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
     cutoff_date = date.today() - timedelta(days=days - 1)
     stmt = select(Notification).where(
         Notification.watchlist_id == watchlist_id,
@@ -46,12 +52,16 @@ async def list_notifications(
 async def dismiss_notification(
     notif_id: int,
     watchlist_id: Annotated[int, Query()],
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Soft-delete a single notification (set is_read=True).
 
     Returns 403 if the notification does not belong to the specified watchlist_id.
     """
+    watchlist = await db.get(WatchlistModel, watchlist_id)
+    if watchlist is None or watchlist.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
     notif = await db.get(Notification, notif_id)
     if notif is None:
         raise HTTPException(status_code=404, detail=f"Notification {notif_id} not found")
@@ -69,6 +79,7 @@ async def dismiss_notification(
 async def dismiss_all_notifications(
     all: Annotated[bool, Query(alias="all")],
     watchlist_id: Annotated[int, Query()],
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Soft-delete all unread notifications for a watchlist.
@@ -80,6 +91,9 @@ async def dismiss_all_notifications(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing ?all=true query param",
         )
+    watchlist = await db.get(WatchlistModel, watchlist_id)
+    if watchlist is None or watchlist.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
     stmt = (
         update(Notification)
         .where(Notification.watchlist_id == watchlist_id, Notification.is_read == False)

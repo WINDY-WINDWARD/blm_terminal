@@ -5,8 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 import jwt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, Request, status
 import bcrypt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,8 +19,6 @@ current_user_id = contextvars.ContextVar("current_user_id", default=None)
 SECRET_KEY = "supersecretkey_for_blm_terminal"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/py/auth/login")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -45,14 +42,21 @@ def create_access_token(data: dict[str, Any], expires_delta: timedelta | None = 
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 
+def _extract_token(request: Request) -> str | None:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return request.cookies.get("access_token")
+
+
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     credentials_exception = HTTPException(
@@ -60,6 +64,9 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = _extract_token(request)
+    if not token:
+        raise credentials_exception
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str | None = payload.get("sub")
@@ -67,7 +74,7 @@ async def get_current_user(
             raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception
-    
+
     stmt = select(User).where(User.username == username)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
