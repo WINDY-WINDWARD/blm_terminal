@@ -355,3 +355,37 @@ export const newsFiltersAtom = atomWithStorage<NewsFilters>('news.filters', {
   sentiment: null,
   threatLevel: null,
 });
+
+// ─── Saved Layouts ────────────────────────────────────────────────────────────
+
+export interface SavedLayout {
+  name: string;
+  activePanels: Record<string, string>;
+  panelCount: PanelCount;
+  mergedGroups: Record<string, MergedGroup>;
+  savedAt: number;
+}
+
+/** All saved layouts, keyed by lowercase name. Persisted in localStorage (cross-tab). */
+export const savedLayoutsAtom = atomWithStorage<Record<string, SavedLayout>>(
+  'terminal.savedLayouts',
+  {},
+);
+
+// ─── Layout Toast & Confirm ──────────────────────────────────────────────────
+
+export const layoutToastAtom = atom<{ visible: boolean; message: string; type: 'success' | 'error' }>({
+  visible: false,
+  message: '',
+  type: 'success',
+});
+
+export const layoutConfirmAtom = atom<{
+  visible: boolean;
+  layoutName: string;
+  pendingLayout: SavedLayout | null;
+}>({
+  visible: false,
+  layoutName: '',
+  pendingLayout: null,
+});

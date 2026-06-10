@@ -17,8 +17,10 @@ import {
   selectedPanelsAtom,
   mergedGroupsAtom,
   authAtom,
+  savedLayoutsAtom,
   type Watchlist,
   type PanelCount,
+  type SavedLayout,
 } from '@/store/terminalStore';
 
 const NOTIF_CONFIG_KEYS = [
@@ -173,8 +175,11 @@ export function SettingsWidget() {
   const [, setSelectedPanels] = useAtom(selectedPanelsAtom);
   const [, setMergedGroups] = useAtom(mergedGroupsAtom);
   const [auth] = useAtom(authAtom);
+  const [savedLayouts, setSavedLayouts] = useAtom(savedLayoutsAtom);
   const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
   const [appVersion, setAppVersion] = useState<string>('');
+  const [renamingLayout, setRenamingLayout] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const [configLoading, setConfigLoading] = useState(true);
 
@@ -256,6 +261,38 @@ export function SettingsWidget() {
     setMergedGroups({});
   };
 
+  const handleDeleteLayout = (name: string) => {
+    if (!confirm(`Delete layout "${name}"?`)) return;
+    setSavedLayouts((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  };
+
+  const handleStartRename = (layout: SavedLayout) => {
+    setRenamingLayout(layout.name);
+    setRenameValue(layout.name);
+  };
+
+  const handleFinishRename = (oldName: string) => {
+    const newName = renameValue.trim().toLowerCase();
+    setRenamingLayout(null);
+    if (!newName || newName === oldName || newName === 'save') return;
+    if (savedLayouts[newName]) {
+      alert(`Layout "${newName}" already exists.`);
+      return;
+    }
+    setSavedLayouts((prev) => {
+      const next = { ...prev };
+      const layout = next[oldName];
+      if (!layout) return prev;
+      delete next[oldName];
+      next[newName] = { ...layout, name: newName };
+      return next;
+    });
+  };
+
   const handleNotifConfigChange = (key: NotifConfigKey, value: string) => {
     setNotifConfig((current) => ({ ...current, [key]: value }));
     if (!configLoading) {
@@ -319,6 +356,73 @@ export function SettingsWidget() {
           Layout changes reset panel sizes and merges.
         </div>
       </div>
+
+      {/* Saved Layouts */}
+      {Object.keys(savedLayouts).length > 0 && (
+        <div className="flex flex-col gap-1">
+          <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+            Saved Layouts
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {Object.values(savedLayouts)
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((layout) => {
+                const widgetList = Object.values(layout.activePanels)
+                  .slice(0, layout.panelCount)
+                  .join(', ');
+                return (
+                  <div key={layout.name} className="flex items-center justify-between gap-2 group">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      {renamingLayout === layout.name ? (
+                        <input
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onBlur={() => handleFinishRename(layout.name)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleFinishRename(layout.name);
+                            if (e.key === 'Escape') setRenamingLayout(null);
+                          }}
+                          autoFocus
+                          className="bg-black border border-terminal-amber text-terminal-amber text-xs px-1 py-0.5 outline-none font-mono w-24"
+                        />
+                      ) : (
+                        <span className="text-terminal-amber font-bold text-xs font-mono">
+                          :{layout.name}
+                        </span>
+                      )}
+                      <span className="text-white/40 text-[9px] shrink-0">
+                        {layout.panelCount}P
+                      </span>
+                      <span className="text-white/30 text-[9px] truncate">
+                        {widgetList}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => handleStartRename(layout)}
+                        className="text-white/30 hover:text-terminal-amber text-xs transition-colors px-0.5"
+                        title="Rename layout"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        onClick={() => handleDeleteLayout(layout.name)}
+                        className="text-terminal-red/50 hover:text-terminal-red text-xs font-bold transition-colors px-0.5"
+                        title="Delete layout"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+          <div className="text-white/30 text-[9px] mt-0.5">
+            Load: type :<span className="text-terminal-amber/50">name</span> in command bar
+          </div>
+        </div>
+      )}
 
       {/* Connection Status */}
       <div className="flex flex-col gap-1">
@@ -457,6 +561,9 @@ export function SettingsWidget() {
       <div className="flex flex-col gap-0.5 mt-auto">
         <div className="text-white text-[10px] border-t border-terminal-gray pt-2">
           Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS · PORTFOLIO
+        </div>
+        <div className="text-white text-[10px]">
+          Layouts: :save &lt;name&gt; · :&lt;name&gt; to load
         </div>
         <div className="text-white text-[10px]">
           Press / or Escape to focus command bar

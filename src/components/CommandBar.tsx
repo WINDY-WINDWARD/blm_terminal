@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import { useQuery } from '@tanstack/react-query';
 import {
   activeCommandAtom,
@@ -9,6 +9,7 @@ import {
   fundsAtom,
   activeSymbolAtom,
   activeExchangeAtom,
+  savedLayoutsAtom,
 } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 
@@ -53,6 +54,7 @@ export function CommandBar() {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [activeSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
+  const savedLayouts = useAtomValue(savedLayoutsAtom);
 
   const [inputVal, setInputVal] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(-1);
@@ -77,8 +79,9 @@ export function CommandBar() {
 
   const [funds] = useAtom(fundsAtom);
 
-  // Detect symbol-search mode
+  // Detect modes
   const isSymbolMode = inputVal.startsWith('/');
+  const isMetaMode = inputVal.startsWith(':');
   const symbolQuery = isSymbolMode ? inputVal.slice(1).toUpperCase() : '';
 
   // Debounced symbol search
@@ -111,19 +114,44 @@ export function CommandBar() {
     };
   }, [symbolQuery, isSymbolMode]);
 
-  // Derive widget command suggestions (only in non-symbol mode)
+  // Derive widget command suggestions (only in non-symbol, non-meta mode)
   const widgetSuggestions = useMemo(() => {
-    if (isSymbolMode || !inputVal.trim()) return [];
+    if (isSymbolMode || isMetaMode || !inputVal.trim()) return [];
     const upper = inputVal.toUpperCase();
     const prefix = WIDGET_COMMANDS.filter((w) => w.cmd.startsWith(upper));
     const includes = WIDGET_COMMANDS.filter(
       (w) => !w.cmd.startsWith(upper) && w.cmd.includes(upper)
     );
     return [...prefix, ...includes].slice(0, 10);
-  }, [inputVal, isSymbolMode]);
+  }, [inputVal, isSymbolMode, isMetaMode]);
+
+  // Derive meta-command suggestions (layout save/load) when input starts with ':'
+  const metaSuggestions = useMemo(() => {
+    if (!isMetaMode) return [];
+    const query = inputVal.slice(1).trim().toLowerCase();
+    const entries: WidgetCommand[] = [
+      { cmd: ':save <name>', desc: 'Save current layout' },
+    ];
+    // Add existing saved layouts as load commands
+    for (const layout of Object.values(savedLayouts)) {
+      entries.push({ cmd: `:${layout.name}`, desc: `Load layout (${layout.panelCount} panels)` });
+    }
+    if (!query) return entries.slice(0, 12);
+    // Filter: match against the part after ':'
+    return entries
+      .filter((e) => {
+        const cmdPart = e.cmd.slice(1).toLowerCase();
+        return cmdPart.includes(query);
+      })
+      .slice(0, 12);
+  }, [isMetaMode, inputVal, savedLayouts]);
 
   // Unified suggestions count for keyboard nav
-  const totalSuggestions = isSymbolMode ? symbolSuggestions.length : widgetSuggestions.length;
+  const totalSuggestions = isMetaMode
+    ? metaSuggestions.length
+    : isSymbolMode
+      ? symbolSuggestions.length
+      : widgetSuggestions.length;
   const showSuggestions = totalSuggestions > 0;
 
   const showStatus = useCallback((msg: string) => {
@@ -161,6 +189,48 @@ export function CommandBar() {
       return;
     }
 
+    // Meta-command mode: :save <name> or :<name>
+    if (isMetaMode) {
+      // If a suggestion is highlighted, use it
+      if (selectedIdx >= 0 && metaSuggestions[selectedIdx]) {
+        const selected = metaSuggestions[selectedIdx].cmd;
+        if (selected === ':save <name>') {
+          // Just autocomplete the prefix, user still needs to type a name
+          setInputVal(':save ');
+          setSelectedIdx(-1);
+          return;
+        }
+        // It's a load command like ":trading"
+        const name = selected.slice(1).toLowerCase();
+        setActiveCommand(`__LOAD_LAYOUT:${name}`);
+        setInputVal('');
+        setSelectedIdx(-1);
+        return;
+      }
+
+      const meta = inputVal.slice(1).trim();
+      // :save <name>
+      const saveMatch = meta.match(/^save\s+(.+)$/i);
+      if (saveMatch) {
+        const name = saveMatch[1].trim().toLowerCase();
+        if (name && name !== 'save') {
+          setActiveCommand(`__SAVE_LAYOUT:${name}`);
+        }
+        setInputVal('');
+        setSelectedIdx(-1);
+        return;
+      }
+
+      // :<name> (load)
+      const name = meta.toLowerCase();
+      if (name && name !== 'save') {
+        setActiveCommand(`__LOAD_LAYOUT:${name}`);
+      }
+      setInputVal('');
+      setSelectedIdx(-1);
+      return;
+    }
+
     // Widget command mode
     if (selectedIdx >= 0 && widgetSuggestions[selectedIdx]) {
       handleSelectWidget(widgetSuggestions[selectedIdx].cmd);
@@ -194,7 +264,10 @@ export function CommandBar() {
     } else if (e.key === 'Tab') {
       e.preventDefault();
       const idx = selectedIdx >= 0 ? selectedIdx : 0;
-      if (isSymbolMode) {
+      if (isMetaMode) {
+        const cmd = metaSuggestions[idx]?.cmd ?? '';
+        setInputVal(cmd === ':save <name>' ? ':save ' : cmd);
+      } else if (isSymbolMode) {
         setInputVal('/' + (symbolSuggestions[idx]?.symbol ?? ''));
       } else {
         setInputVal(widgetSuggestions[idx].cmd);
@@ -211,42 +284,69 @@ export function CommandBar() {
         ref={dropdownRef}
         className="absolute top-8 left-0 right-0 bg-zinc-900 border border-terminal-gray rounded shadow-lg z-50 max-h-48 overflow-y-auto"
       >
-        {isSymbolMode
-          ? symbolSuggestions.map((s, idx) => (
-              <div
-                key={s.symbol}
-                onClick={() => handleSelectSymbol(s.symbol)}
-                className={`flex justify-between items-center px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${
-                  idx === selectedIdx
-                    ? 'bg-blue-800/60 text-white'
-                    : 'bg-zinc-900 text-blue-200 hover:bg-zinc-800'
-                }`}
-              >
-                <span className="text-terminal-amber font-bold">{s.symbol}</span>
-                <span className="text-blue-300/70 ml-2 truncate">{s.companyName}</span>
-              </div>
-            ))
-          : widgetSuggestions.map((suggestion, idx) => (
+        {isMetaMode
+          ? metaSuggestions.map((suggestion, idx) => (
               <div
                 key={suggestion.cmd}
-                onClick={() => handleSelectWidget(suggestion.cmd)}
+                onClick={() => {
+                  if (suggestion.cmd === ':save <name>') {
+                    setInputVal(':save ');
+                    setSelectedIdx(-1);
+                  } else {
+                    const name = suggestion.cmd.slice(1).toLowerCase();
+                    setActiveCommand(`__LOAD_LAYOUT:${name}`);
+                    setInputVal('');
+                    setSelectedIdx(-1);
+                  }
+                }}
                 className={`flex justify-between items-center px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${
                   idx === selectedIdx
                     ? 'bg-blue-800/60 text-white'
                     : 'bg-zinc-900 text-blue-200 hover:bg-zinc-800'
                 }`}
               >
-                <span className="text-terminal-amber font-bold">{suggestion.cmd}</span>
+                <span className="text-terminal-green font-bold">{suggestion.cmd}</span>
                 <span className="text-blue-300/70 ml-2">{suggestion.desc}</span>
               </div>
-            ))}
+            ))
+          : isSymbolMode
+            ? symbolSuggestions.map((s, idx) => (
+                <div
+                  key={s.symbol}
+                  onClick={() => handleSelectSymbol(s.symbol)}
+                  className={`flex justify-between items-center px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${
+                    idx === selectedIdx
+                      ? 'bg-blue-800/60 text-white'
+                      : 'bg-zinc-900 text-blue-200 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span className="text-terminal-amber font-bold">{s.symbol}</span>
+                  <span className="text-blue-300/70 ml-2 truncate">{s.companyName}</span>
+                </div>
+              ))
+            : widgetSuggestions.map((suggestion, idx) => (
+                <div
+                  key={suggestion.cmd}
+                  onClick={() => handleSelectWidget(suggestion.cmd)}
+                  className={`flex justify-between items-center px-3 py-1.5 text-xs font-mono cursor-pointer transition-colors ${
+                    idx === selectedIdx
+                      ? 'bg-blue-800/60 text-white'
+                      : 'bg-zinc-900 text-blue-200 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span className="text-terminal-amber font-bold">{suggestion.cmd}</span>
+                  <span className="text-blue-300/70 ml-2">{suggestion.desc}</span>
+                </div>
+              ))}
       </div>
     );
   };
 
-  const placeholder = isSymbolMode
-    ? 'Type symbol or company name…'
-    : WIDGET_COMMANDS.map((w) => w.cmd).join(' · ');
+  const placeholder = isMetaMode
+    ? ':save <name> · :<name> to load'
+    : isSymbolMode
+      ? 'Type symbol or company name…'
+      : WIDGET_COMMANDS.map((w) => w.cmd).join(' · ');
 
   return (
     <div className="flex items-center bg-blue-900 text-white h-8 px-2 border-b border-terminal-gray font-sans font-bold text-sm shrink-0 gap-3 relative">
@@ -266,7 +366,7 @@ export function CommandBar() {
       </div>
 
       {/* Command prompt — changes colour in symbol mode */}
-      <span className={isSymbolMode ? 'text-terminal-amber' : 'text-blue-300'}>&gt;</span>
+      <span className={isMetaMode ? 'text-terminal-green' : isSymbolMode ? 'text-terminal-amber' : 'text-blue-300'}>&gt;</span>
 
       <form onSubmit={handleSubmit} className="flex-1 flex relative">
         <input
@@ -283,7 +383,7 @@ export function CommandBar() {
           }}
           placeholder={placeholder}
           className={`bg-transparent placeholder-blue-300/60 w-full outline-none font-mono text-xs tracking-wider ${
-            isSymbolMode ? 'text-terminal-amber uppercase' : 'text-white uppercase'
+            isMetaMode ? 'text-terminal-green' : isSymbolMode ? 'text-terminal-amber uppercase' : 'text-white uppercase'
           }`}
           autoComplete="off"
         />

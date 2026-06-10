@@ -8,13 +8,18 @@ import {
   focusedPanelAtom,
   openAlgoAvailableAtom,
   panelCountAtom,
+  panelSizesAtom,
   wsConnectedAtom,
   selectedPanelsAtom,
   mergedGroupsAtom,
   getMergedGroupForPanel,
   validateMergeSelection,
   cleanupOldLocalStorage,
+  savedLayoutsAtom,
+  layoutToastAtom,
+  layoutConfirmAtom,
 } from '@/store/terminalStore';
+import type { SavedLayout } from '@/store/terminalStore';
 import { marketWsService } from '@/lib/marketWs';
 
 function isTextInputFocused(): boolean {
@@ -54,11 +59,16 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);
   const setActivePanels = useSetAtom(activePanelsAtom);
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
-  const [panelCount] = useAtom(panelCountAtom);
+  const [panelCount, setPanelCount] = useAtom(panelCountAtom);
+  const setPanelSizes = useSetAtom(panelSizesAtom);
   const setWsConnected = useSetAtom(wsConnectedAtom);
   const [selectedPanels, setSelectedPanels] = useAtom(selectedPanelsAtom);
   const [mergedGroups, setMergedGroups] = useAtom(mergedGroupsAtom);
   const setOpenAlgoAvailable = useSetAtom(openAlgoAvailableAtom);
+  const [savedLayouts, setSavedLayouts] = useAtom(savedLayoutsAtom);
+  const setLayoutToast = useSetAtom(layoutToastAtom);
+  const setLayoutConfirm = useSetAtom(layoutConfirmAtom);
+  const activePanels = useAtomValue(activePanelsAtom);
 
   // Clean up legacy localStorage keys once on mount
   useEffect(() => {
@@ -177,6 +187,48 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // ── Layout save ──────────────────────────────────────────────────────
+    if (activeCommand.startsWith('__SAVE_LAYOUT:')) {
+      const name = activeCommand.slice('__SAVE_LAYOUT:'.length);
+      const layout: SavedLayout = {
+        name,
+        activePanels: { ...activePanels },
+        panelCount,
+        mergedGroups: { ...mergedGroups },
+        savedAt: Date.now(),
+      };
+      if (savedLayouts[name]) {
+        // Existing layout — show overwrite confirmation
+        setLayoutConfirm({ visible: true, layoutName: name, pendingLayout: layout });
+      } else {
+        setSavedLayouts((prev) => ({ ...prev, [name]: layout }));
+        setLayoutToast({ visible: true, message: `Layout "${name}" saved`, type: 'success' });
+      }
+      setActiveCommand('');
+      return;
+    }
+
+    // ── Layout load ──────────────────────────────────────────────────────
+    if (activeCommand.startsWith('__LOAD_LAYOUT:')) {
+      const name = activeCommand.slice('__LOAD_LAYOUT:'.length);
+      const layout = savedLayouts[name];
+      if (!layout) {
+        setLayoutToast({ visible: true, message: `Layout "${name}" not found`, type: 'error' });
+        setActiveCommand('');
+        return;
+      }
+      // Apply in order: panelCount → mergedGroups → activePanels
+      setPanelCount(layout.panelCount);
+      setMergedGroups(layout.mergedGroups);
+      setActivePanels(layout.activePanels);
+      setPanelSizes(null);
+      setFocusedPanel('panel-1');
+      setSelectedPanels([]);
+      setLayoutToast({ visible: true, message: `Layout "${name}" loaded`, type: 'success' });
+      setActiveCommand('');
+      return;
+    }
+
     let targetCommand = activeCommand;
     if (activeCommand === 'BREAKOUT') {
       targetCommand = 'BREAKOUTS';
@@ -192,7 +244,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: targetCommand }));
     }
     setActiveCommand('');
-  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable]);
+  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels]);
 
   return (
     <main className="flex flex-col h-screen w-screen bg-terminal-bg text-terminal-amber overflow-hidden">
