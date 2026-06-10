@@ -161,41 +161,30 @@ def _run_migrations_sync() -> None:
             # The DB is stamped at a revision that was archived (moved out of
             # the active versions/ directory).  We can't use alembic's own
             # stamp/upgrade commands because they also read the stale version.
-            # Directly overwrite alembic_version via raw SQL, choosing the
-            # correct base depending on whether core tables already exist.
+            # Strategy: clear stale version, use Base.metadata.create_all()
+            # to ensure all ORM-defined tables exist (idempotent — creates
+            # missing tables, skips existing), then stamp at HEAD.
             logger.warning(
                 "migrations: stale/archived revision detected — "
-                "directly overwriting alembic_version"
+                "recreating missing tables and stamping at HEAD"
             )
+            from app.models import __init__ as _models_init  # noqa: F401 — ensure models loaded
+            from app.database import Base
             sync_url2 = f"sqlite:///{settings.db_path}"
             sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False})
             try:
-                with sync_engine2.connect() as conn:
-                    core_tables_raw = conn.execute(sa_text(
-                        "SELECT name FROM sqlite_master WHERE type='table' "
-                        "AND name IN ('stock_universe', 'watchlists', 'users', "
-                        "'ticker_daily', 'notifications')"
-                    )).fetchall()
-                    core_tables = {row[0] for row in core_tables_raw}
+                # 1. Create any missing tables (idempotent).
+                Base.metadata.create_all(sync_engine2)
+                logger.info("migrations: Base.metadata.create_all() completed")
+                # 2. Clear stale version and stamp at HEAD.
+                with sync_engine2.begin() as conn:
                     conn.execute(sa_text("DELETE FROM alembic_version"))
-                    if core_tables:
-                        # Old schema exists — stamp at squash base so only
-                        # post-squash migrations (breakout_snapshots) run.
-                        logger.info(
-                            "migrations: core tables found (%s) — stamping at squash base",
-                            ', '.join(sorted(core_tables)),
-                        )
-                        conn.execute(sa_text(
-                            "INSERT INTO alembic_version (version_num) VALUES ('x999999999999')"
-                        ))
-                    else:
-                        # No tables — leave version empty so alembic runs
-                        # the full squash migration (creates all tables).
-                        logger.info("migrations: no core tables found — running all migrations from scratch")
-                    conn.commit()
+                    conn.execute(sa_text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('x99999999999a')"
+                    ))
+                logger.info("migrations: stamped at HEAD (x99999999999a)")
             finally:
                 sync_engine2.dispose()
-            alembic_command.upgrade(alembic_cfg, "head")
 
         else:
             logger.error("migrations: unhandled migration error: %s", exc)
