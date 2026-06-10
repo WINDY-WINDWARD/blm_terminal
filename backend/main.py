@@ -248,6 +248,38 @@ def _ensure_watchlist_data() -> None:
         sync_engine.dispose()
 
 
+def _ensure_user_columns() -> None:
+    """Add missing user_id columns to watchlists and chat_sessions.
+
+    Older DBs may have been created before the user-scoping migration.
+    SQLite's ALTER TABLE ADD COLUMN is idempotent (errors if column exists).
+    All existing rows are backfilled to user_id=1 (the admin user).
+    """
+    import sqlite3
+
+    db_path = Path(settings.db_path)
+    if not db_path.exists():
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for table in ("watchlists", "chat_sessions"):
+            try:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1"
+                )
+                # Backfill any existing rows that got NULL (shouldn't with DEFAULT but be safe)
+                conn.execute(
+                    f"UPDATE {table} SET user_id = 1 WHERE user_id IS NULL"
+                )
+                conn.commit()
+                logger.info("_ensure_user_columns: added user_id to %s", table)
+            except sqlite3.OperationalError:
+                pass  # column already exists — fine
+    finally:
+        conn.close()
+
+
 def _ensure_admin_user() -> None:
     """Create a default admin user (admin/admin) if the users table is empty.
 
@@ -440,6 +472,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
+    await asyncio.to_thread(_ensure_user_columns)
     await asyncio.to_thread(_ensure_admin_user)
     await asyncio.to_thread(_ensure_watchlist_data)
     await asyncio.to_thread(_backfill_entities_double_encoding)
