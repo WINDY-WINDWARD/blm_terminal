@@ -248,6 +248,38 @@ def _ensure_watchlist_data() -> None:
         sync_engine.dispose()
 
 
+def _ensure_admin_user() -> None:
+    """Create a default admin user (admin/admin) if the users table is empty.
+
+    This guarantees the app is always loginable after a fresh DB or a
+    migration that created an empty users table.
+    """
+    import sqlite3
+    import bcrypt
+
+    db_path = Path(settings.db_path)
+    if not db_path.exists():
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if count > 0:
+            return
+        hashed = bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode("utf-8")
+        conn.execute(
+            "INSERT INTO users (username, hashed_password, is_admin, created_at) "
+            "VALUES (?, ?, 1, datetime('now'))",
+            ("admin", hashed),
+        )
+        conn.commit()
+        logger.info("_ensure_admin_user: created default admin user (admin/admin)")
+    except Exception:
+        logger.exception("_ensure_admin_user: failed")
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -408,6 +440,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
+    await asyncio.to_thread(_ensure_admin_user)
     await asyncio.to_thread(_ensure_watchlist_data)
     await asyncio.to_thread(_backfill_entities_double_encoding)
 
