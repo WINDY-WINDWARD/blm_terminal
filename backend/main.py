@@ -159,20 +159,39 @@ def _run_migrations_sync() -> None:
 
         elif "can't locate revision" in err or "no such revision" in err:
             # The DB is stamped at a revision that was archived (moved out of
-            # the active versions/ directory).  Alembic's own stamp/upgrade
-            # commands also fail because they read the stale version first.
-            # Bypass alembic entirely: directly overwrite the alembic_version
-            # table in SQLite, then retry upgrade from the squash base.
+            # the active versions/ directory).  We can't use alembic's own
+            # stamp/upgrade commands because they also read the stale version.
+            # Directly overwrite alembic_version via raw SQL, choosing the
+            # correct base depending on whether core tables already exist.
             logger.warning(
                 "migrations: stale/archived revision detected — "
-                "directly overwriting alembic_version to squash base"
+                "directly overwriting alembic_version"
             )
             sync_url2 = f"sqlite:///{settings.db_path}"
             sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False})
             try:
                 with sync_engine2.connect() as conn:
+                    core_tables_raw = conn.execute(sa_text(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name IN ('stock_universe', 'watchlists', 'users', "
+                        "'ticker_daily', 'notifications')"
+                    )).fetchall()
+                    core_tables = {row[0] for row in core_tables_raw}
                     conn.execute(sa_text("DELETE FROM alembic_version"))
-                    conn.execute(sa_text("INSERT INTO alembic_version (version_num) VALUES ('x999999999999')"))
+                    if core_tables:
+                        # Old schema exists — stamp at squash base so only
+                        # post-squash migrations (breakout_snapshots) run.
+                        logger.info(
+                            "migrations: core tables found (%s) — stamping at squash base",
+                            ', '.join(sorted(core_tables)),
+                        )
+                        conn.execute(sa_text(
+                            "INSERT INTO alembic_version (version_num) VALUES ('x999999999999')"
+                        ))
+                    else:
+                        # No tables — leave version empty so alembic runs
+                        # the full squash migration (creates all tables).
+                        logger.info("migrations: no core tables found — running all migrations from scratch")
                     conn.commit()
             finally:
                 sync_engine2.dispose()
