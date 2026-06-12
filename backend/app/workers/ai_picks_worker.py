@@ -132,8 +132,12 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
         if message.get("tool_calls"):
             tool_calls = message["tool_calls"]
             logger.info(f"Hunter using tools: {[tc['function']['name'] for tc in tool_calls]}")
-            tool_results = await _run_tools_parallel(tool_calls, set())
-            messages.extend(tool_results)
+            normalised = [
+                {"id": tc["id"], "name": tc["function"]["name"], "args": json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}}
+                for tc in tool_calls
+            ]
+            _, tool_msgs = await _run_tools_parallel(normalised, set())
+            messages.extend(tool_msgs)
         else:
             break
             
@@ -178,21 +182,18 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
         tool_uses = [c for c in data["content"] if c["type"] == "tool_use"]
         if tool_uses:
             logger.info(f"Verifier using tools: {[tu['name'] for tu in tool_uses]}")
-            openai_calls = []
-            for tu in tool_uses:
-                openai_calls.append({
-                    "id": tu["id"],
-                    "function": {"name": tu["name"], "arguments": json.dumps(tu["input"])}
-                })
-                
-            tool_results = await _run_tools_parallel(openai_calls, set())
+            normalised = [
+                {"id": tu["id"], "name": tu["name"], "args": tu["input"]}
+                for tu in tool_uses
+            ]
+            _, tool_msgs = await _run_tools_parallel(normalised, set())
             
             anthropic_results = []
-            for tr in tool_results:
+            for tm in tool_msgs:
                 anthropic_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tr["tool_call_id"],
-                    "content": [{"type": "text", "text": tr["content"]}]
+                    "tool_use_id": tm["tool_call_id"],
+                    "content": [{"type": "text", "text": tm["content"]}]
                 })
             messages.append({"role": "user", "content": anthropic_results})
         else:
@@ -240,21 +241,18 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
         
         tool_uses = [c for c in data["content"] if c["type"] == "tool_use"]
         if tool_uses:
-            openai_calls = []
-            for tu in tool_uses:
-                openai_calls.append({
-                    "id": tu["id"],
-                    "function": {"name": tu["name"], "arguments": json.dumps(tu["input"])}
-                })
-                
-            tool_results = await _run_tools_parallel(openai_calls, set())
+            normalised = [
+                {"id": tu["id"], "name": tu["name"], "args": tu["input"]}
+                for tu in tool_uses
+            ]
+            _, tool_msgs = await _run_tools_parallel(normalised, set())
             
             anthropic_results = []
-            for tr in tool_results:
+            for tm in tool_msgs:
                 anthropic_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tr["tool_call_id"],
-                    "content": [{"type": "text", "text": tr["content"]}]
+                    "tool_use_id": tm["tool_call_id"],
+                    "content": [{"type": "text", "text": tm["content"]}]
                 })
             messages.append({"role": "user", "content": anthropic_results})
         else:
