@@ -131,10 +131,10 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`px-2 py-0.5 text-[10px] font-mono uppercase transition-colors ${
+      className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 ${
         active
-          ? 'bg-terminal-amber text-black font-semibold'
-          : 'text-white/50 hover:text-white hover:bg-zinc-800'
+          ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
+          : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900 border-transparent'
       }`}
     >
       {label}
@@ -462,7 +462,7 @@ export function AnnouncementsWidget() {
   return (
     <div className="h-full flex flex-col bg-terminal-bg font-mono">
       {/* Row 1: Tabs + Refresh */}
-      <div className="flex items-center gap-1 px-2 py-1 border-b border-terminal-gray/30">
+      <div className="flex items-center border-b border-terminal-gray/30 shrink-0">
         {SUBJECT_TABS.map((tab) => (
           <TabButton
             key={tab}
@@ -474,7 +474,7 @@ export function AnnouncementsWidget() {
             label={tab}
           />
         ))}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 pr-2">
           <span className="text-[10px] text-white/40">
             {totalResultsCount} · {lastUpdated}
           </span>

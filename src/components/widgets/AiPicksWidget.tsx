@@ -30,10 +30,10 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1 text-[11px] font-mono uppercase transition-all border-b-2 ${
+      className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 ${
         active
-          ? 'border-terminal-amber text-terminal-amber font-bold bg-terminal-amber/10'
-          : 'border-transparent text-white/50 hover:text-white hover:bg-zinc-800'
+          ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
+          : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900 border-transparent'
       }`}
     >
       {label}
@@ -95,7 +95,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal-bg font-mono text-xs text-white/80">
       {/* Header Tabs */}
-      <div className="flex shrink-0 items-center border-b border-terminal-gray/50 px-2 pt-1 gap-1 bg-blue-950">
+      <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
         <TabButton
           active={activeTab === 'PICKS'}
           onClick={() => {
