@@ -228,6 +228,26 @@ def register_all_jobs() -> None:
             callable=_results_calendar_sync,
             is_async=False,
         ),
+
+        # --- AI Picks ---
+        JobDefinition(
+            job_key="job.ai_picks_morning",
+            name="ai_picks_morning",
+            description="AI Picks Hunter/Verifier loop (Pre-market scan)",
+            category="analytics",
+            cron_expression="0 8 * * *",
+            callable=lambda: None,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.ai_picks_evening",
+            name="ai_picks_evening",
+            description="AI Picks Evaluator loop (Post-market review)",
+            category="analytics",
+            cron_expression="0 17 * * *",
+            callable=lambda: None,
+            is_async=False,
+        ),
     ]
 
     for job in jobs:

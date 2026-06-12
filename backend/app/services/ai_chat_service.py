@@ -785,6 +785,8 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         screener_search,
         screener_trades,
         search_stock_universe,
+        get_upcoming_events,
+        get_recent_announcements,
     )
 
     dispatch: dict[str, Any] = {
@@ -806,6 +808,8 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "screener_search": screener_search,
         "screener_company": screener_company,
         "screener_trades": screener_trades,
+        "get_upcoming_events": get_upcoming_events,
+        "get_recent_announcements": get_recent_announcements,
         "run_tql_screener": run_tql_screener,
         "get_corporate_filings": get_corporate_filings,
         "list_stock_universe": list_stock_universe,

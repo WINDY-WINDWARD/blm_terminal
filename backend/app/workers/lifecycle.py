@@ -103,6 +103,7 @@ async def start_all_workers() -> list[threading.Thread]:
     )
     from app.workers.market_calendar import results_calendar_worker
     from app.workers.maintenance import vacuum_worker
+    from app.workers.ai_picks_worker import ai_picks_morning_worker, ai_picks_evening_worker
 
     reset_async_shutdown_event()
     register_all_jobs()
@@ -123,6 +124,8 @@ async def start_all_workers() -> list[threading.Thread]:
         watchlist_news_worker,                       # 11 — per-symbol news
         results_calendar_worker,                     # 12 — upcoming results alerts
         vacuum_worker,                               # 13 — weekly VACUUM (Sunday 04:00)
+        ai_picks_morning_worker,                     # 14 — AI Picks (8am)
+        ai_picks_evening_worker,                     # 15 — AI Picks (5pm)
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)

@@ -53,6 +53,7 @@ const VALID_WIDGETS = [
   'AI',
   'PORTFOLIO',
   'ADMIN',
+  'PICKS',
 ];
 
 export function TerminalContainer({ children }: { children: React.ReactNode }) {

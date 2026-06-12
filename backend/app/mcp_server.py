@@ -1809,3 +1809,51 @@ async def get_sector_stocks(slug: str) -> list[dict[str, Any]]:
             }
             for s in stocks
         ]
+
+
+@mcp.tool()
+async def get_upcoming_events(symbol: str) -> dict[str, Any]:
+    """Get upcoming board meetings, earnings, and corporate events for a specific ticker symbol.
+
+    Args:
+        symbol: The NSE ticker symbol (e.g., 'RELIANCE', 'TCS').
+    """
+    try:
+        from app.routers.announcements import get_event_calendar_cached
+        events = get_event_calendar_cached()
+        symbol_upper = symbol.upper()
+        now = datetime.now()
+        
+        filtered = []
+        for e in events:
+            if e.symbol != symbol_upper:
+                continue
+            
+            try:
+                # Parse date string like "20-Apr-2026" safely
+                event_date = datetime.strptime(e.date, "%d-%b-%Y")
+                if event_date >= now:
+                    filtered.append(e.model_dump())
+            except ValueError:
+                # Fallback if date parsing fails, include it just in case
+                filtered.append(e.model_dump())
+                
+        return {"events": filtered}
+    except Exception as e:
+        return {"error": str(e)}
+
+@mcp.tool()
+async def get_recent_announcements(symbol: str) -> dict[str, Any]:
+    """Get recent corporate announcements and past financial results for a ticker.
+
+    Args:
+        symbol: The NSE ticker symbol (e.g., 'RELIANCE').
+    """
+    try:
+        from app.routers.announcements import get_past_results_cached
+        past = get_past_results_cached()
+        symbol_upper = symbol.upper()
+        filtered = [e.model_dump() for e in past if e.symbol == symbol_upper]
+        return {"announcements": filtered}
+    except Exception as e:
+        return {"error": str(e)}

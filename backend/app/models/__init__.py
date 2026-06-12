@@ -2,6 +2,7 @@
 
 from app.models import (  # noqa: F401
     ai_chat,
+    ai_picks,
     breakout_snapshot,
     corporatefilings,
     marketcategory,

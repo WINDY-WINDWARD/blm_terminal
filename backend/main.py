@@ -21,6 +21,7 @@ from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text, ev
 from app.config import settings
 from app.routers import (
     ai_chat_router,
+    ai_picks_router,
     ai_summarizer_router,
     announcements_router,
     breakouts_router,
@@ -586,6 +587,7 @@ async def log_requests(request: Request, call_next) -> Response:  # type: ignore
 # ---------------------------------------------------------------------------
 
 app.include_router(ai_chat_router, prefix="/api")
+app.include_router(ai_picks_router, prefix="/api")
 app.include_router(ai_summarizer_router, prefix="/api")
 app.include_router(announcements_router, prefix="/api")
 app.include_router(breakouts_router, prefix="/api")

@@ -66,3 +66,8 @@ from app.workers.news import (  # noqa: E402,F401
 from app.workers.market_calendar import (  # noqa: E402,F401
     results_calendar_worker,
 )
+from app.workers.ai_picks_worker import (  # noqa: E402,F401
+    ai_picks_morning_worker,
+    ai_picks_evening_worker,
+)
+
