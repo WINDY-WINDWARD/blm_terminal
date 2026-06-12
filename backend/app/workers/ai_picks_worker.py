@@ -18,16 +18,16 @@ from app.services.ai_chat_service import BLM_TOOLS, BLM_TOOLS_ANTHROPIC, _run_to
 logger = logging.getLogger(__name__)
 
 # Bullet-proof System Prompts
-HUNTER_PROMPT = """You are 'The Hunter', an elite, aggressive quantitative analyst AI.
-Your objective: Scan the Indian Stock Market (NSE) to identify 2-3 high-probability short-term swing trade setups.
-You have access to tools that provide top gainers, screener data, news, fair value, and announcements.
+HUNTER_PROMPT = """You are 'The Hunter', an elite, quantitative equity research AI specializing in actionable mid-cap swing trades.
+Your objective: Execute a deep search across the NSE to identify 4-6 highly actionable, high-probability mid-cap swing trade setups.
 
 INSTRUCTIONS:
-1. Use `get_top_gainers` and `get_volume_gainers` to find active symbols.
-2. Use `run_tql_screener` with strong momentum conditions if needed.
-3. Once you identify candidates, use `screener_company` and `get_upcoming_events` to check fundamentals and catalysts.
-4. Filter out any stock with poor fundamentals or immediate adverse events.
-5. You MUST output your final picks strictly as a JSON array of objects inside a <picks> XML tag.
+1. DEEP SEARCH START: First, use `get_global_notifications` and `get_volume_gainers` to identify stocks that have recently triggered technical breakouts or abnormal volume.
+2. TECHNICAL SCREENING: Use `run_tql_screener` to find growth stocks with bullish momentum (e.g., RSI > 55, MACDHist > 0, From52wHigh > -15). Focus on mid-cap setups.
+3. CATALYST & FUNDAMENTAL CHECK: For your top candidates, deeply analyze them using `get_company_news` and `get_upcoming_events`.
+4. RIGOROUS FILTERING: Discard any stock with imminent adverse events, poor relative strength, or weak news sentiment. Ensure you return exactly 4 to 6 high-conviction, actionable setups.
+5. DETAILED THESIS: Your thesis for each pick MUST be extremely detailed. Break down the technical setup considered, the specific news catalysts evaluated, and upcoming events.
+6. OUTPUT: You MUST output your final 4-6 picks strictly as a JSON array inside a <picks> XML tag.
 
 OUTPUT FORMAT:
 <picks>
@@ -38,7 +38,7 @@ OUTPUT FORMAT:
     "entry": 100.50,
     "take_profit": 110.00,
     "stop_loss": 95.00,
-    "thesis": "Strong volume breakout aligned with positive sector news and upcoming earnings catalyst."
+    "thesis": "[Details Considered] Technicals: RSI at 60, MACD crossover confirmed. Scan/Notifs: Triggered volume breakout alert today. Catalyst: Positive sentiment from recent contract win news. Events: No major earnings risk in the next 14 days."
   }
 ]
 </picks>
@@ -47,13 +47,13 @@ Do not include markdown outside the tags or conversational filler. Only the <pic
 """
 
 VERIFIER_PROMPT = """You are 'The Verifier', a strict Chief Risk Officer AI.
-Your objective: Evaluate a list of proposed swing trade setups and REJECT weak ones.
+Your objective: Evaluate a list of 4-6 proposed mid-cap swing trade setups and independently verify them.
 You have access to tools to independently verify the setups (technicals, fundamentals, news, fair value).
 
 INSTRUCTIONS:
 1. I will provide a JSON list of proposed setups.
-2. For each setup, use your tools (`get_company_news`, `screener_company`, `get_upcoming_events`) to independently verify the thesis.
-3. Reject any setup that has red flags (bad news, overvalued, poor technical structure).
+2. For each setup, use your tools (`get_company_news`, `screener_company`, `get_upcoming_events`) to independently verify the detailed thesis provided.
+3. Reject ONLY setups that have clear red flags (imminent bad news, extremely overvalued, or poor technical structure). Preserve strong mid-cap growth setups.
 4. Refine the entry, take_profit, and stop_loss levels to be mathematically sound (e.g., RR > 2:1).
 5. Output the surviving, verified picks strictly as a JSON array inside a <verified_picks> XML tag.
 
@@ -112,7 +112,7 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
     messages = [{"role": "system", "content": HUNTER_PROMPT}]
     messages.append({"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."})
     
-    for _ in range(3):
+    for _ in range(6):
         resp = await client.post(
             f"{settings.zen_base_url}/chat/completions",
             headers={"Authorization": f"Bearer {settings.opencode_zen_api_key}"},
@@ -157,7 +157,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
         {"role": "user", "content": f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"}
     ]
     
-    for _ in range(3):
+    for _ in range(6):
         resp = await client.post(
             f"{settings.zen_base_url}/messages",
             headers={
@@ -217,7 +217,7 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
         {"role": "user", "content": f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"}
     ]
     
-    for _ in range(3):
+    for _ in range(6):
         resp = await client.post(
             f"{settings.zen_base_url}/messages",
             headers={
@@ -298,7 +298,7 @@ async def run_loop_1_and_2():
                         status=PickStatus.NEW,
                         notes=[{
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "note": pick.get('thesis', 'Verified by MiniMax 2.5'),
+                            "note": f"WHY THIS STOCK WAS PICKED:\n{pick.get('thesis', 'Verified by MiniMax 2.5')}",
                             "model": "minimax-m2.5"
                         }]
                     )
