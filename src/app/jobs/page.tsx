@@ -167,6 +167,7 @@ export default function JobsPage() {
   const [errorsLoading, setErrorsLoading] = useState(false);
   const [changeSymbolInput, setChangeSymbolInput] = useState<string>('');
   const [changingSymbol, setChangingSymbol] = useState<string | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
 
   const [auth] = useAtom(authAtom);
   const [mounted, setMounted] = useState(false);
@@ -212,6 +213,7 @@ export default function JobsPage() {
   };
 
   const handleToggle = async (jobKey: string, enabled: boolean) => {
+    setToggling(jobKey);
     try {
       const res = await fetch(`/api/jobs/${jobKey}/toggle`, {
         method: 'POST',
@@ -227,6 +229,8 @@ export default function JobsPage() {
     } catch (err) {
       console.error('Failed to toggle job:', err);
       alert('Failed to toggle job');
+    } finally {
+      setToggling(null);
     }
   };
 
@@ -489,19 +493,20 @@ export default function JobsPage() {
                           <button
                             onClick={() => handleTrigger(job.job_key)}
                             disabled={triggering === job.job_key || job.status === 'running'}
-                            className="px-2 py-1 text-[10px] bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            className="px-2 py-1 text-[10px] bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
                           >
-                            {triggering === job.job_key ? '...' : 'RUN'}
+                            {triggering === job.job_key ? 'STARTING...' : 'RUN'}
                           </button>
                           <button
                             onClick={() => handleToggle(job.job_key, !job.is_enabled)}
-                            className={`px-2 py-1 text-[10px] transition-colors ${
+                            disabled={toggling === job.job_key}
+                            className={`px-2 py-1 text-[10px] transition-all active:scale-95 ${
                               job.is_enabled
-                                ? 'bg-terminal-red/10 text-terminal-red hover:bg-terminal-red hover:text-white'
-                                : 'bg-terminal-green/10 text-terminal-green hover:bg-terminal-green hover:text-terminal-bg'
+                                ? 'bg-terminal-red/10 text-terminal-red hover:bg-terminal-red hover:text-white disabled:opacity-30 disabled:cursor-wait'
+                                : 'bg-terminal-green/10 text-terminal-green hover:bg-terminal-green hover:text-terminal-bg disabled:opacity-30 disabled:cursor-wait'
                             }`}
                           >
-                            {job.is_enabled ? 'DISABLE' : 'ENABLE'}
+                            {toggling === job.job_key ? 'UPDATING...' : job.is_enabled ? 'DISABLE' : 'ENABLE'}
                           </button>
                         </div>
                       </td>
