@@ -137,7 +137,8 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
                 for tc in tool_calls
             ]
             _, tool_msgs = await _run_tools_parallel(normalised, set())
-            messages.extend(tool_msgs)
+            for tm in tool_msgs:
+                messages.append({"role": "tool", "tool_call_id": tm["id"], "content": tm["content"]})
         else:
             break
             
@@ -192,7 +193,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
             for tm in tool_msgs:
                 anthropic_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tm["tool_call_id"],
+                    "tool_use_id": tm["id"],
                     "content": [{"type": "text", "text": tm["content"]}]
                 })
             messages.append({"role": "user", "content": anthropic_results})
@@ -251,7 +252,7 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
             for tm in tool_msgs:
                 anthropic_results.append({
                     "type": "tool_result",
-                    "tool_use_id": tm["tool_call_id"],
+                    "tool_use_id": tm["id"],
                     "content": [{"type": "text", "text": tm["content"]}]
                 })
             messages.append({"role": "user", "content": anthropic_results})
