@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 
 def register_all_jobs() -> None:
     """Register all background jobs with the job registry."""
+    from app.workers.ai_picks_worker import run_loop_1_and_2, run_loop_3
+
     jobs = [
         # --- Data warehouse (startup / daily) ---
         # NOTE: callables here are the *sync* (work) functions, not the worker
@@ -236,8 +238,8 @@ def register_all_jobs() -> None:
             description="AI Picks Hunter/Verifier loop (Pre-market scan)",
             category="analytics",
             cron_expression="0 8 * * *",
-            callable=lambda: None,
-            is_async=False,
+            callable=run_loop_1_and_2,
+            is_async=True,
         ),
         JobDefinition(
             job_key="job.ai_picks_evening",
@@ -245,8 +247,8 @@ def register_all_jobs() -> None:
             description="AI Picks Evaluator loop (Post-market review)",
             category="analytics",
             cron_expression="0 17 * * *",
-            callable=lambda: None,
-            is_async=False,
+            callable=run_loop_3,
+            is_async=True,
         ),
     ]
 
