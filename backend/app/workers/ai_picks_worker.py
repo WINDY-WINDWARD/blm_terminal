@@ -112,7 +112,7 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
     messages = [{"role": "system", "content": HUNTER_PROMPT}]
     messages.append({"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."})
     
-    for _ in range(6):
+    for turn_idx in range(60):
         resp = await client.post(
             f"{settings.zen_base_url}/chat/completions",
             headers={"Authorization": f"Bearer {settings.opencode_zen_api_key}"},
@@ -139,6 +139,12 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
             _, tool_msgs = await _run_tools_parallel(normalised, set())
             for tm in tool_msgs:
                 messages.append({"role": "tool", "tool_call_id": tm["id"], "content": tm["content"]})
+            
+            if turn_idx == 45:
+                messages.append({
+                    "role": "user", 
+                    "content": "WARNING: You have used 45 turns. The strict limit is 60. Please finalize your analysis and output your final <picks> block soon."
+                })
         else:
             break
             
@@ -157,7 +163,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
         {"role": "user", "content": f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"}
     ]
     
-    for _ in range(6):
+    for turn_idx in range(60):
         resp = await client.post(
             f"{settings.zen_base_url}/messages",
             headers={
@@ -196,6 +202,13 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
                     "tool_use_id": tm["id"],
                     "content": [{"type": "text", "text": tm["content"]}]
                 })
+                
+            if turn_idx == 45:
+                anthropic_results.append({
+                    "type": "text",
+                    "text": "WARNING: You have used 45 turns. The strict limit is 60. Please finalize your analysis and output your final XML block soon."
+                })
+                
             messages.append({"role": "user", "content": anthropic_results})
         else:
             break
@@ -217,7 +230,7 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
         {"role": "user", "content": f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"}
     ]
     
-    for _ in range(6):
+    for turn_idx in range(60):
         resp = await client.post(
             f"{settings.zen_base_url}/messages",
             headers={
@@ -255,6 +268,13 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
                     "tool_use_id": tm["id"],
                     "content": [{"type": "text", "text": tm["content"]}]
                 })
+                
+            if turn_idx == 45:
+                anthropic_results.append({
+                    "type": "text",
+                    "text": "WARNING: You have used 45 turns. The strict limit is 60. Please finalize your analysis and output your final XML block soon."
+                })
+                
             messages.append({"role": "user", "content": anthropic_results})
         else:
             break
