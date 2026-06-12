@@ -1039,6 +1039,7 @@ def get_symbols_needing_backfill() -> list[str]:
         List of symbols needing backfill.
     """
     from collections import Counter
+    from datetime import timedelta
 
     with _get_session() as db:
         watchlist_symbols = set(
@@ -1073,6 +1074,18 @@ def get_symbols_needing_backfill() -> list[str]:
     # Compute DB consensus: most common max_date across stored symbols
     max_dates = [row[2] for row in rows if row[2] is not None]
     consensus_date = Counter(max_dates).most_common(1)[0][0] if max_dates else None
+    
+    if consensus_date is not None:
+        last_trade_day = get_last_trading_day()
+        stale_threshold = last_trade_day - timedelta(days=3)
+        if consensus_date < stale_threshold:
+            logger.warning(
+                "[daily_stale] Database consensus (%s) is deeply stale compared to last trading day (%s). "
+                "Advancing consensus to %s to force backfill.",
+                consensus_date, last_trade_day, stale_threshold
+            )
+            consensus_date = stale_threshold
+
     if consensus_date is not None:
         logger.info(
             "[daily_stale] consensus max_date = %s (shared by %d/%d stored symbols)",
