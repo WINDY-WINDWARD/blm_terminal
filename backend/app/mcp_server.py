@@ -480,7 +480,8 @@ async def get_volume_gainers() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+# TODO: Clean up this endpoint. It frequently throws "No data found in 'resCmpData' key" for some symbols.
+# Hidden from MCP and AI tools.
 async def get_corporate_filings(
     symbol: str | None = None,
     symbols: list[str] | None = None,

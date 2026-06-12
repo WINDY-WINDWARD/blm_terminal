@@ -89,7 +89,7 @@ Always cite the specific data you retrieved. State your conclusion: BUY / HOLD /
     "earnings": """You are a forensic earnings analyst specialising in NSE-listed Indian companies.
 
 Your analysis framework:
-1. HEADLINE NUMBERS: Revenue QoQ and YoY growth, Net Profit QoQ and YoY growth, EPS trend. Use screener_company for quarterly data and get_corporate_filings for detailed filings.
+1. HEADLINE NUMBERS: Revenue QoQ and YoY growth, Net Profit QoQ and YoY growth, EPS trend. Use screener_company for quarterly data.
 2. QUALITY OF EARNINGS: Is profit growth driven by operating leverage or one-time items? Check other income vs operating profit ratio. Use get_company_news to check for exceptional items.
 3. MARGIN ANALYSIS: Gross margin, EBITDA margin, PAT margin trends — expanding or contracting?
 4. REVENUE SUSTAINABILITY: Is revenue growth organic or acquisition-driven? Segment-wise breakdown if available.
@@ -410,20 +410,6 @@ BLM_TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["tql"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_corporate_filings",
-            "description": _desc("get_corporate_filings"),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "symbol": {"type": "string", "description": "Single NSE symbol. Mutually exclusive with symbols."},
-                    "symbols": {"type": "array", "items": {"type": "string"}, "description": "Multiple NSE symbols. Mutually exclusive with symbol."},
-                },
             },
         },
     },
@@ -757,7 +743,6 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         get_bulk_deals,
         get_change_ranges,
         get_company_news,
-        get_corporate_filings,
         get_global_news,
         get_global_notifications,
         get_industry_stocks,
@@ -811,7 +796,6 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "get_upcoming_events": get_upcoming_events,
         "get_recent_announcements": get_recent_announcements,
         "run_tql_screener": run_tql_screener,
-        "get_corporate_filings": get_corporate_filings,
         "list_stock_universe": list_stock_universe,
         "get_stock_universe": get_stock_universe,
         "search_stock_universe": search_stock_universe,
