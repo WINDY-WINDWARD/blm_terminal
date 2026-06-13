@@ -20,7 +20,7 @@ import {
   layoutConfirmAtom,
 } from '@/store/terminalStore';
 import type { SavedLayout } from '@/store/terminalStore';
-import { marketWsService } from '@/lib/marketWs';
+import { marketDataService } from '@/lib/nseFetch';
 
 function isTextInputFocused(): boolean {
   const el = document.activeElement;
@@ -78,7 +78,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
 
   // Track market WebSocket connection state
   useEffect(() => {
-    const unsub = marketWsService.onConnectionChange((connected) => setWsConnected(connected));
+    const unsub = marketDataService.onConnectionChange((connected) => setWsConnected(connected));
     return () => {
       unsub();
     };

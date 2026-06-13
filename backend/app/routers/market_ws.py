@@ -21,56 +21,18 @@ Protocol:
 import asyncio
 import json
 import logging
-import os
-from functools import partial
 from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.services.cache import nse_cache
-from app.services.nse_rate_limiter import throttled_nse_call
+from app.services.market_data import (
+    fetch_change_ranges_batch,
+    fetch_symbol_data_batch,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-USE_ASYNC_NSE = os.getenv("USE_ASYNC_NSE", "false").lower() == "true"
-if USE_ASYNC_NSE:
-    from app.services.nse_client_async import nse_client_async as _active_client
-else:
-    from app.services.nse_client import nse_client as _active_client
-
-_CHANGE_RANGES_TTL = 300.0
-_SYMBOL_DATA_TTL = 60.0
-
-# Maximum symbols allowed per batch request to avoid overloading the backend
-_MAX_SYMBOLS_PER_REQUEST = 50
-
-# Bounded concurrency for NSE API fetches within a single WS message
-_MAX_CONCURRENT_NSE_FETCHES = 10
-_nse_fetch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_NSE_FETCHES)
-
-
-async def _bounded_change_ranges(symbol: str) -> tuple[str, object]:
-    async with _nse_fetch_semaphore:
-        return await _fetch_change_ranges_for_symbol(symbol)
-
-
-async def _bounded_symbol_data(symbol: str) -> tuple[str, object]:
-    async with _nse_fetch_semaphore:
-        return await _fetch_symbol_data_for_symbol(symbol)
-
-
-def _clean_nan(obj):
-    """Recursively replace NaN/Inf floats with None for JSON safety."""
-    import numpy as np
-    if isinstance(obj, dict):
-        return {k: _clean_nan(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_clean_nan(item) for item in obj]
-    elif isinstance(obj, float) and (np.isnan(obj) or np.isinf(obj)):
-        return None
-    return obj
 
 
 class MarketConnectionManager:
@@ -92,65 +54,13 @@ class MarketConnectionManager:
 market_connection_manager = MarketConnectionManager()
 
 
-async def _fetch_change_ranges_for_symbol(symbol: str) -> tuple[str, object]:
-    """Fetch change-ranges for a single symbol, using cache when available."""
-    sym = symbol.upper()
-    cache_key = f"change-ranges:{sym}"
-    cached = nse_cache.get(cache_key)
-    if cached is not None:
-        return sym, cached
-
-    try:
-        data = await throttled_nse_call(
-            cache_key,
-            partial(_active_client.get_change_ranges, sym),
-            is_async_fn=USE_ASYNC_NSE,
-        )
-        cleaned = _clean_nan(data)
-        nse_cache[cache_key] = cleaned
-        return sym, cleaned
-    except Exception as e:
-        logger.warning("Market WS: change-ranges fetch failed for %s: %s (%s)", sym, e or "(empty)", type(e).__name__)
-        return sym, None
-
-
-async def _fetch_symbol_data_for_symbol(symbol: str) -> tuple[str, object]:
-    """Fetch symbol-data for a single symbol, using cache when available."""
-    sym = symbol.upper()
-    cache_key = f"symbol-data:{sym}"
-    cached = nse_cache.get(cache_key)
-    if cached is not None:
-        return sym, cached
-
-    try:
-        data = await throttled_nse_call(
-            cache_key,
-            partial(_active_client.get_symbol_data, sym),
-            is_async_fn=USE_ASYNC_NSE,
-        )
-        cleaned = _clean_nan(data)
-        nse_cache[cache_key] = cleaned
-        return sym, cleaned
-    except Exception as e:
-        logger.warning("Market WS: symbol-data fetch failed for %s: %s (%s)", sym, e or "(empty)", type(e).__name__)
-        return sym, None
-
-
 async def _handle_get_change_ranges(websocket: WebSocket, symbols: list[str]) -> None:
     """Fetch change-ranges for all requested symbols concurrently and respond."""
     if not symbols or not isinstance(symbols, list):
         await websocket.send_json({"type": "error", "message": "symbols must be a non-empty list"})
         return
 
-    # Clamp to max allowed
-    symbols = symbols[:_MAX_SYMBOLS_PER_REQUEST]
-
-    results = await asyncio.gather(
-        *[_bounded_change_ranges(s) for s in symbols],
-        return_exceptions=False,
-    )
-
-    data = {sym: val for sym, val in results}
+    data = await fetch_change_ranges_batch(symbols)
     await websocket.send_json({"type": "change_ranges", "data": data})
 
 
@@ -160,14 +70,7 @@ async def _handle_get_symbol_data(websocket: WebSocket, symbols: list[str]) -> N
         await websocket.send_json({"type": "error", "message": "symbols must be a non-empty list"})
         return
 
-    symbols = symbols[:_MAX_SYMBOLS_PER_REQUEST]
-
-    results = await asyncio.gather(
-        *[_bounded_symbol_data(s) for s in symbols],
-        return_exceptions=False,
-    )
-
-    data = {sym: val for sym, val in results}
+    data = await fetch_symbol_data_batch(symbols)
     await websocket.send_json({"type": "symbol_data", "data": data})
 
 

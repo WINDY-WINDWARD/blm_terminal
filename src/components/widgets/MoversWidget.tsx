@@ -9,8 +9,8 @@ import {
   moversColumnsAtom,
   moversCategoryAtom,
 } from '@/store/terminalStore';
-import { marketWsService } from '@/lib/marketWs';
-import type { ChangeRanges, SymbolDataExtract } from '@/lib/marketWs';
+import { marketDataService } from '@/lib/nseFetch';
+import type { ChangeRanges, SymbolDataExtract } from '@/lib/nseTypes';
 
 interface MoverQuote {
   yearHigh?: number;
@@ -115,13 +115,13 @@ function useChangeRanges(symbol: string) {
 
     setIsLoading(true);
 
-    const unsub = marketWsService.onChangeRanges((sym, rangesData) => {
+    const unsub = marketDataService.onChangeRanges((sym, rangesData) => {
       if (sym !== symbol) return;
       setData(rangesData);
       setIsLoading(false);
     });
 
-    marketWsService.requestChangeRanges([symbol]);
+    marketDataService.requestChangeRanges([symbol]);
 
     return unsub;
   }, [symbol]);
@@ -145,13 +145,13 @@ function useMoverQuote(symbol: string, enabled: boolean) {
 
     setIsLoading(true);
 
-    const unsub = marketWsService.onSymbolData((sym, symData: SymbolDataExtract | null) => {
+    const unsub = marketDataService.onSymbolData((sym, symData: SymbolDataExtract | null) => {
       if (sym !== symbol) return;
       setData(symData ? { yearHigh: symData.yearHigh, yearLow: symData.yearLow } : null);
       setIsLoading(false);
     });
 
-    marketWsService.requestSymbolData([symbol]);
+    marketDataService.requestSymbolData([symbol]);
 
     return unsub;
   }, [symbol, enabled]);

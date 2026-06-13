@@ -14,8 +14,8 @@ import {
   notifSymbolFilterAtom,
   type Watchlist
 } from '@/store/terminalStore';
-import { marketWsService } from '@/lib/marketWs';
-import type { ChangeRanges, SymbolDataExtract } from '@/lib/marketWs';
+import { marketDataService } from '@/lib/nseFetch';
+import type { ChangeRanges, SymbolDataExtract } from '@/lib/nseTypes';
 import type { EventCalendarItem } from '@/app/api/event-calendar/route';
 
 interface WatchlistItem {
@@ -418,7 +418,7 @@ export function WatchWidget() {
     const symbols = watchlist.map((i) => i.symbol).filter(Boolean);
 
     // Subscribe to change-ranges responses
-    const unsubRanges = marketWsService.onChangeRanges((symbol, data) => {
+    const unsubRanges = marketDataService.onChangeRanges((symbol, data) => {
       if (data) {
         setChangeRangesMap((prev) => {
           const next = new Map(prev);
@@ -435,7 +435,7 @@ export function WatchWidget() {
     });
 
     // Subscribe to symbol-data responses — also populates global tickDataAtom
-    const unsubSymbol = marketWsService.onSymbolData((symbol, data) => {
+    const unsubSymbol = marketDataService.onSymbolData((symbol, data) => {
       if (data) {
         // Feed global tick data atom for OrderWidget / PosWidget consumers
         const exchange = watchlist.find((i) => i.symbol === symbol)?.exchange ?? 'NSE';
@@ -477,15 +477,15 @@ export function WatchWidget() {
     });
 
     // Request data for all symbols in this watchlist
-    marketWsService.requestChangeRanges(symbols);
-    marketWsService.requestSymbolData(symbols);
+    marketDataService.requestChangeRanges(symbols);
+    marketDataService.requestSymbolData(symbols);
 
     // Periodic refresh matching original staleTime intervals
     const symbolDataInterval = setInterval(() => {
-      marketWsService.requestSymbolData(symbols);
+      marketDataService.requestSymbolData(symbols);
     }, 60_000);
     const changeRangesInterval = setInterval(() => {
-      marketWsService.requestChangeRanges(symbols);
+      marketDataService.requestChangeRanges(symbols);
     }, 300_000);
 
     return () => {

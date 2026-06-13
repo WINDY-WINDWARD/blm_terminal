@@ -4,6 +4,8 @@ GET  /markets/industries               - List all industries with metadata
 GET  /markets/sectors                   - List all sectors with metadata
 GET  /markets/industries/{slug}/stocks - Get stocks in a specific industry
 GET  /markets/sectors/{slug}/stocks     - Get stocks in a specific sector
+GET  /markets/change-ranges             - REST fallback for the Next.js proxy
+GET  /markets/symbol-data               - REST fallback for the Next.js proxy
 """
 
 import logging
@@ -17,6 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.marketcategory import MarketCategory, MarketCategoryStock
 from app.schemas.marketcategory import MarketCategoryOut, MarketCategoryStockOut
+from app.services.market_data import (
+    fetch_change_ranges_batch,
+    fetch_symbol_data_batch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +165,35 @@ async def get_sector_stocks(
     # Sort by market cap descending
     stocks.sort(key=lambda x: x.market_cap or 0, reverse=True)
     return stocks
+
+
+@router.get(
+    "/change-ranges",
+    summary="Get yearwise change-percentages for one or more symbols",
+)
+async def get_change_ranges(
+    symbol: list[str] = Query(default_factory=list, description="NSE symbol (repeatable)"),
+) -> dict:
+    """REST fallback for the Next.js /api/nse/change-ranges proxy.
+
+    Accepts one or more `symbol` query parameters. Returns a single
+    `data` envelope that mirrors the proxy's response shape.
+    """
+    data = await fetch_change_ranges_batch([s.upper() for s in symbol])
+    return {"data": data}
+
+
+@router.get(
+    "/symbol-data",
+    summary="Get LTP / 52W range for one or more symbols",
+)
+async def get_symbol_data(
+    symbol: list[str] = Query(default_factory=list, description="NSE symbol (repeatable)"),
+) -> dict:
+    """REST fallback for the Next.js /api/nse/symbol-data proxy.
+
+    Accepts one or more `symbol` query parameters. Returns a single
+    `data` envelope that mirrors the proxy's response shape.
+    """
+    data = await fetch_symbol_data_batch([s.upper() for s in symbol])
+    return {"data": data}
