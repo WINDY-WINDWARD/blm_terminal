@@ -505,6 +505,12 @@ class Orchestrator:
             await update_job_status(pipeline_job_key, "failed",
                                     message=f"{mode.value.capitalize()} pipeline failed",
                                     last_completed=datetime.now(timezone.utc))
+        finally:
+            # Ensure background daemons (including AI Picks) are unblocked 
+            # even if the pipeline aborts early or throws an exception.
+            if not _startup_pipeline_done.is_set():
+                logger.warning("Orchestrator: Forcing _startup_pipeline_done.set() in finally block to prevent worker deadlock")
+                _startup_pipeline_done.set()
 
     # ------------------------------------------------------------------
     # Internal: pipeline runners

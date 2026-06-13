@@ -268,6 +268,9 @@ def _cleanup_run_async_loops() -> None:
 
 def _seconds_until_next_cron(cron_expr: str) -> float:
     """Return seconds from now until the next fire time for the given cron expression.
+    
+    Evaluated strictly in Asia/Kolkata (IST) time to avoid timezone drift 
+    when running on cloud/test servers set to UTC.
 
     Returns a large sentinel (24 hours) for @startup — that expression means
     'run once at startup then idle forever', so callers that mistakenly reach
@@ -275,8 +278,14 @@ def _seconds_until_next_cron(cron_expr: str) -> float:
     """
     if cron_expr == "@startup":
         return 86400.0  # 24 hours — effectively idle
+    
     from croniter import croniter
-    now = datetime.now()
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    except Exception:
+        now = datetime.now()
+        
     return (croniter(cron_expr, now).get_next(datetime) - now).total_seconds()
 
 
