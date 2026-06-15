@@ -471,6 +471,102 @@ export function FundamentalsWidget() {
                   </tr>
                 </tbody>
               </table>
+              {/* ── Valuation ────────────────────────────────────────────────────── */}
+              <div className="mt-4 mb-2">
+                <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1">
+                  Valuation Models
+                </div>
+                {/* Controls */}
+                <div className="flex flex-col gap-1 text-[10px] text-white/40 mb-2">
+                  <div className="flex items-center justify-between">
+                    <span>Weighted Average Cost of Capital</span>
+                    <select
+                      value={wacc}
+                      onChange={(e) => setWacc(parseFloat(e.target.value))}
+                      className="bg-terminal-bg border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px] outline-none"
+                    >
+                      {[0.10, 0.11, 0.12, 0.13, 0.14, 0.15].map((v) => (
+                        <option key={v} value={v} className="bg-terminal-bg text-white">{(v * 100).toFixed(0)}%</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Terminal Growth Rate</span>
+                    <select
+                      value={terminalGrowth}
+                      onChange={(e) => setTerminalGrowth(parseFloat(e.target.value))}
+                      className="bg-terminal-bg border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px] outline-none"
+                    >
+                      {[0.03, 0.04, 0.05, 0.06, 0.07].map((v) => (
+                        <option key={v} value={v} className="bg-terminal-bg text-white">{(v * 100).toFixed(0)}%</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => refetchValuation()}
+                      className="text-[9px] px-1.5 py-0.5 border border-white/10 rounded hover:bg-white/5 text-white/50 hover:text-white/80 transition-colors"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                </div>
+                {valuationLoading ? (
+                  <div className="text-white/30 text-[11px] font-mono">Loading valuation models...</div>
+                ) : valuationData ? (
+                  <>
+                    <div className="text-[10px] text-white/30 font-mono mb-1">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
+                    <table className="w-full text-[10px] border-collapse font-mono">
+                      <thead>
+                        <tr className="text-white/30 text-left border-b border-terminal-gray/40">
+                          <th className="pb-1 font-normal">Model</th>
+                          <th className="pb-1 text-right font-normal">Fair Value</th>
+                          <th className="pb-1 text-right font-normal">vs CMP</th>
+                          <th className="pb-1 text-right font-normal">Signal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
+                          { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
+                          { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
+                          { label: 'EV/EBITDA', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
+                          { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
+                        ].map((row) => {
+                          const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
+                          const signalColor = signal === 'UNDERVALUED' ? 'text-terminal-green' : signal === 'OVERVALUED' ? 'text-terminal-red' : 'text-terminal-amber';
+                          return (
+                            <tr key={row.label} className="border-b border-terminal-gray/40">
+                              <td className="py-[3px] pr-2 text-white/60 whitespace-nowrap">{row.label}</td>
+                              <td className="py-[3px] text-right text-white/80 font-bold whitespace-nowrap">
+                                {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
+                              </td>
+                              <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + (row.upside !== null ? (row.upside > 0 ? 'text-terminal-green' : 'text-terminal-red') : 'text-white/30')}>
+                                {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
+                              </td>
+                              <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + signalColor}>
+                                {signal ?? '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {valuationData.dcf_assumptions && (
+                      <div className="text-[9px] text-white/50 mt-1 pt-1 font-mono">
+                        DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
+                        Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
+                        Term {valuationData.dcf_assumptions.terminal_growth_pct}% |
+                        WACC {valuationData.dcf_assumptions.wacc_pct}%
+                        {valuationData.dcf_assumptions.base_fcf_cr !== null &&
+                          ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -536,97 +632,6 @@ export function FundamentalsWidget() {
                 ))}
               </tbody>
             </table>
-          )}
-        </div>
-
-        {/* ── Valuation ────────────────────────────────────────────────────── */}
-        <div className="px-2 py-1 border-t border-terminal-gray/30">
-          <SectionHeader label="Valuation Models" />
-          {/* Controls */}
-          <div className="flex items-center gap-2 text-[10px] text-white/40 mb-1">
-            <span>WACC</span>
-            <select
-              value={wacc}
-              onChange={(e) => setWacc(parseFloat(e.target.value))}
-              className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
-            >
-              {[0.10, 0.11, 0.12, 0.13, 0.14, 0.15].map((v) => (
-                <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
-              ))}
-            </select>
-            <span>Terminal g</span>
-            <select
-              value={terminalGrowth}
-              onChange={(e) => setTerminalGrowth(parseFloat(e.target.value))}
-              className="bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/70 text-[10px]"
-            >
-              {[0.03, 0.04, 0.05, 0.06, 0.07].map((v) => (
-                <option key={v} value={v}>{(v * 100).toFixed(0)}%</option>
-              ))}
-            </select>
-            <button
-              onClick={() => refetchValuation()}
-              className="ml-auto text-[9px] px-1.5 py-0.5 border border-white/10 rounded hover:bg-white/5 text-white/50 hover:text-white/80 transition-colors"
-            >
-              Refresh
-            </button>
-          </div>
-
-          {valuationLoading ? (
-            <div className="text-white/30 text-[11px]">Loading valuation models...</div>
-          ) : valuationData ? (
-            <>
-              <div className="text-[10px] text-white/30">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
-              <table className="w-full text-[11px]">
-                <thead>
-                  <tr className="text-white/30 text-left">
-                    <th className="pb-1">Model</th>
-                    <th className="pb-1 text-right">Fair Value</th>
-                    <th className="pb-1 text-right">vs CMP</th>
-                    <th className="pb-1 text-right">Signal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
-                    { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
-                    { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
-                    { label: 'EV/EBITDA (12x)', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
-                    { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
-                  ].map((row) => {
-                    const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
-                    const signalColor = signal === 'UNDERVALUED' ? 'text-green-400' : signal === 'OVERVALUED' ? 'text-red-400' : 'text-yellow-400';
-                    return (
-                      <tr key={row.label} className="border-t border-white/5">
-                        <td className="py-1 text-white/60">{row.label}</td>
-                        <td className="py-1 text-right text-white/80">
-                          {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
-                        </td>
-                        <td className={'py-1 text-right ' + (row.upside !== null ? (row.upside > 0 ? 'text-green-400' : 'text-red-400') : 'text-white/30')}>
-                          {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
-                        </td>
-                        <td className={'py-1 text-right font-medium ' + signalColor}>
-                          {signal ?? '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-
-              {valuationData.dcf_assumptions && (
-                <div className="text-[9px] text-white/25 mt-1 border-t border-white/5 pt-1">
-                  DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
-                  Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
-                  Terminal {valuationData.dcf_assumptions.terminal_growth_pct}% |
-                  WACC {valuationData.dcf_assumptions.wacc_pct}%
-                  {valuationData.dcf_assumptions.base_fcf_cr !== null &&
-                    ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="text-white/30 text-[11px]">No valuation data available</div>
           )}
         </div>
 

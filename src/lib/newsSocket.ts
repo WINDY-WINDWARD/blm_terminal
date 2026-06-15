@@ -81,19 +81,11 @@ class NewsWebSocketService {
   }
 
   private async fetchWsUrl(): Promise<string | null> {
-    try {
-      const res = await fetch('/api/py/ws-config');
-      if (!res.ok) return null;
-      const data = (await res.json()) as { newsWsUrl?: string };
-      const url = data.newsWsUrl ?? null;
-      if (url && url.includes('localhost')) {
-        console.warn('[newsSocket] ws-config returned localhost, using window.location instead');
-        return this.localhostFallback();
-      }
-      return url;
-    } catch {
-      return this.localhostFallback();
+    const envUrl = process.env.NEXT_PUBLIC_NEWS_WS_URL;
+    if (envUrl) {
+      return envUrl;
     }
+    return this.localhostFallback();
   }
 
   private localhostFallback(): string {

@@ -53,6 +53,9 @@ async def update_job_status(
         if status in ("idle", "waiting") or last_completed:
             values["last_completed_at"] = last_completed if last_completed else now
         
+        if status in ("running", "idle", "waiting"):
+            if error is None:
+                values["last_error"] = None
         if progress is not None:
             values["progress_percent"] = progress
         if message is not None:
@@ -107,6 +110,9 @@ def update_job_status_sync(
                 if status in ("idle", "waiting") or last_completed:
                     values["last_completed_at"] = last_completed if last_completed else now
 
+                if status in ("running", "idle", "waiting"):
+                    if error is None:
+                        values["last_error"] = None
                 if progress is not None:
                     values["progress_percent"] = progress
                 if message is not None:

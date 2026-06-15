@@ -181,6 +181,9 @@ class Orchestrator:
 
         if not _is_job_enabled(pipeline_job_key):
             logger.info("Orchestrator.run_pipeline(%s): %s disabled, skipping", mode.value, pipeline_job_key)
+            if mode == PipelineMode.STARTUP:
+                from app.backgroundtasks._runtime import _startup_pipeline_done
+                _startup_pipeline_done.set()
             return
 
         if self._pipeline_lock.locked():

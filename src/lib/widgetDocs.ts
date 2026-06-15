@@ -415,7 +415,16 @@ const DOCS_MAP: WidgetDoc[] = [
         ] as DocField[],
       },
       {
-        heading: 'Valuation Tab',
+        heading: 'Valuation Columns',
+        items: [
+          { name: 'Model', desc: 'The valuation methodology being applied.' },
+          { name: 'Fair Value', desc: 'The intrinsic value price per share calculated by the model.' },
+          { name: 'vs CMP', desc: 'The percentage difference between the computed Fair Value and the Current Market Price. Positive indicates potential upside.' },
+          { name: 'Signal', desc: 'Categorization based on upside: UNDERVALUED (>+15% upside), FAIR (±15%), or OVERVALUED (<-15% upside).' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Valuation Models',
         items: [
           { name: 'Graham Number', desc: '√(22.5 × EPS × Book Value). Conservative floor price from screener.in or computed.' },
           { name: 'DCF (10Y)', desc: 'Discounted cash flow with 2-stage growth. Requires FCF; auto-growth from revenue/earnings growth.' },
@@ -426,7 +435,10 @@ const DOCS_MAP: WidgetDoc[] = [
       },
       {
         heading: 'Valuation Controls',
-        body: 'Adjust WACC (10–15%) and terminal growth (3–7%) via dropdowns. Changing them triggers a re-fetch. Signal coloring: UNDERVALUED (>+15%) green, FAIR (±15%) yellow, OVERVALUED (<-15%) red.',
+        items: [
+          { name: 'Weighted Average Cost of Capital', desc: 'The discount rate applied to future cash flows. A higher WACC reflects higher risk and lowers the present fair value.' },
+          { name: 'Terminal Growth Rate', desc: 'The perpetual growth rate of cash flows after the 10-year forecast period. Changing these triggers a live re-calculation.' },
+        ] as DocField[],
       },
       {
         heading: 'How to use',
