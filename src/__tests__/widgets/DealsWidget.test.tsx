@@ -85,20 +85,18 @@ vi.mock('@/lib/iinvest', () => ({
   fetchIinvestKeyShareholders: vi.fn(async () => realKeyShareholders),
   fetchIinvestSast: vi.fn(async () => realSast),
   fetchIinvestInsiderTrading: vi.fn(async () => realIinvestInsider),
-  fetchIinvestBlockDeals: vi.fn(async (symbol: string, dealType: 1 | 2 = 1) => {
-    // Return DIFFERENT rows for type=1 (Bulk) and type=2 (Block) so the
-    // tabs can be tested independently.
-    if (dealType === 1) {
-      return {
-        status: true,
-        response: {
-          data: [
-            { f_32: 'BLOCK_TRADER_X', f_33: 'BUY', f_34: 1000000, f_36: 500, f_35: '15 Jan 26' },
-            { f_32: 'BLOCK_TRADER_Y', f_33: 'SELL', f_34: 800000, f_36: 510, f_35: '14 Jan 26' },
-          ],
-        },
-      };
-    }
+  fetchIinvestBlockDeals: vi.fn(async () => {
+    return {
+      status: true,
+      response: {
+        data: [
+          { f_32: 'BLOCK_TRADER_X', f_33: 'BUY', f_34: 1000000, f_36: 500, f_35: '15 Jan 26' },
+          { f_32: 'BLOCK_TRADER_Y', f_33: 'SELL', f_34: 800000, f_36: 510, f_35: '14 Jan 26' },
+        ],
+      },
+    };
+  }),
+  fetchIinvestBulkDeals: vi.fn(async () => {
     return {
       status: true,
       response: {

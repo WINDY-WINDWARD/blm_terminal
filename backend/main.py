@@ -35,6 +35,7 @@ from app.routers import (
     notifications_router,
     screener_router,
     iinvest_router,
+    tradingview as tradingview_router,
     system_config_router,
     stockuniverse_router,
     stockuniverse_errors_router,
@@ -644,6 +645,7 @@ app.include_router(news_ws_router, prefix="/ws")
 app.include_router(market_ws_router, prefix="/ws")
 app.include_router(screener_router, prefix="/api")
 app.include_router(iinvest_router, prefix="/api")
+app.include_router(tradingview_router.router, prefix="/api")
 app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")

@@ -16,6 +16,8 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic'
+
 const PYTHON_BACKEND_URL =
   process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455'
 
@@ -57,6 +59,7 @@ async function proxyRequest(
       method: request.method,
       headers: forwardHeaders,
       body,
+      cache: 'no-store',
     })
 
     const contentType = upstream.headers.get('content-type') ?? ''

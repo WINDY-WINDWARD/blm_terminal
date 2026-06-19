@@ -656,19 +656,12 @@ class ScreenerClient:
         TTL window.
 
         Raises:
-          - RuntimeError  if not authenticated or client not initialised
+          - RuntimeError  if client not initialised
           - ValueError    if the symbol returns a 404
           - httpx.HTTPStatusError  on other non-2xx responses
         """
-        if not self.is_authenticated:
-            raise RuntimeError(
-                "screener.in session not available. "
-                "Please log in at https://www.screener.in in Chrome and restart the backend."
-            )
-        if self._http is None:
-            raise RuntimeError(
-                "ScreenerClient not initialised. Call await client.init() first."
-            )
+        if not self._http:
+            raise RuntimeError("Client not initialised. Use async with ScreenerClient().")
 
         symbol_upper = symbol.upper()
         mode = "consolidated" if consolidated else "standalone"
@@ -858,7 +851,7 @@ class ScreenerClient:
 
 def _is_login_page(html: str) -> bool:
     """Detect if the response is a login page instead of the company page."""
-    return "/login/" in html or 'action="/login/"' in html.lower()
+    return "<title>Login" in html or 'action="/login/"' in html.lower()
 
 
 def _parse_company_page(symbol: str, html: str) -> dict[str, Any]:

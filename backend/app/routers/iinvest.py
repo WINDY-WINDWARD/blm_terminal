@@ -114,16 +114,29 @@ async def get_auditors(
 
 
 @router.get("/block-deals/{symbol}")
-async def get_block_deals(
+async def get_iinvest_block_deals(
     symbol: str,
-    type: int = Query(1, description="1 = historical, 2 = today (semantics per iinvest)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
+    """Fetch iinvest block deals."""
     symbol = _validate_symbol(symbol)
     _, path = await _resolve_or_404(symbol, db)
-    return await get_iinvest_client().get_block_deals(path, deal_type=type, page=page, size=size)
+    return await get_iinvest_client().get_block_deals(path, page=page, size=size)
+
+
+@router.get("/bulk-deals/{symbol}")
+async def get_iinvest_bulk_deals(
+    symbol: str,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Fetch iinvest bulk deals."""
+    symbol = _validate_symbol(symbol)
+    _, path = await _resolve_or_404(symbol, db)
+    return await get_iinvest_client().get_bulk_deals(path, page=page, size=size)
 
 
 @router.get("/board-meetings/{symbol}")
@@ -325,7 +338,7 @@ async def get_overview(
     The overview page is reachable without a JWT (it's public HTML) so this
     works as a fallback when the data APIs are blocked.
     """
-    from app.services.iinvest_client import IinvestClient, IINVEST_SITE_URL
+    from app.services.iinvest_client import get_iinvest_client, IINVEST_SITE_URL, DEFAULT_HEADERS
     from app.services.iinvest_html_parser import parse_overview_html
     import httpx
 
@@ -348,8 +361,9 @@ async def get_overview(
     # Use a fresh client (no JWT needed for HTML)
     try:
         async with httpx.AsyncClient(
-            headers=dict(IinvestClient.__dict__.get("DEFAULT_HEADERS", {})),
+            headers=DEFAULT_HEADERS,
             timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=True,
         ) as http:
             resp = await http.get(url)
     except Exception as exc:

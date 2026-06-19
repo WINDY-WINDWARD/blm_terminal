@@ -69,15 +69,6 @@ async def screener_company(
     if not _SYMBOL_RE.fullmatch(symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol format")
 
-    if not screener_client.is_authenticated:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "screener.in session not available. "
-                "Log in at https://www.screener.in in Chrome, then restart the backend."
-            ),
-        )
-
     cache_key = f"screener:company:{symbol}:{'c' if consolidated else 's'}"
     cached = nse_cache.get(cache_key)
     if cached is not None:
@@ -216,15 +207,6 @@ async def screener_quarterly(
     symbol = symbol.upper().strip()
     if not _SYMBOL_RE.fullmatch(symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol format")
-
-    if not screener_client.is_authenticated:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "screener.in session not available. "
-                "Log in at https://www.screener.in in Chrome, then restart the backend."
-            ),
-        )
 
     cache_key = f"screener:quarterly:{symbol}:{'c' if consolidated else 's'}"
     cached = nse_cache.get(cache_key)

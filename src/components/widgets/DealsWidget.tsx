@@ -10,6 +10,7 @@ import {
   fetchIinvestSast,
   fetchIinvestInsiderTrading,
   fetchIinvestBlockDeals,
+  fetchIinvestBulkDeals,
   IinvestShareholderRow,
   IinvestResponse,
   IinvestInsiderRow,
@@ -299,21 +300,21 @@ export function DealsWidget() {
   });
 
   // iinvest's /api/v1/blockdeals endpoint serves BOTH bulk and block
-  // deals via the `type` param (verified from the HAR analysis 2026-06-18):
-  //   type=1 → Bulk deals (single trade crossing 0.5% of paid-up capital)
-  //   type=2 → Block deals (negotiated trade window 09:15-09:40 IST, 5%+)
+  // deals via the `type` param:
+  //   type=1 → Block deals (negotiated trade window 09:15-09:40 IST, 5%+)
+  //   type=2 → Bulk deals (single trade crossing 0.5% of paid-up capital)
   // We keep them as SEPARATE queries so the Bulk and Block tabs show
   // genuinely different data (not the same merged list).
   const { data: iinvestBlockData } = useQuery<IinvestResponse<Record<string, unknown>>>({
-    queryKey: ['iinvest', 'block-deals', symbol, 'type=1', 'block'],
-    queryFn: () => fetchIinvestBlockDeals(symbol, 1 as 1 | 2),
+    queryKey: ['iinvest', 'block-deals', symbol, 'block'],
+    queryFn: () => fetchIinvestBlockDeals(symbol),
     enabled: !!symbol,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
   const { data: iinvestBulkData } = useQuery<IinvestResponse<Record<string, unknown>>>({
-    queryKey: ['iinvest', 'block-deals', symbol, 'type=2', 'bulk'],
-    queryFn: () => fetchIinvestBlockDeals(symbol, 2 as 1 | 2),
+    queryKey: ['iinvest', 'bulk-deals', symbol, 'bulk'],
+    queryFn: () => fetchIinvestBulkDeals(symbol),
     enabled: !!symbol,
     staleTime: 5 * 60 * 1000,
     retry: false,

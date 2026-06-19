@@ -14,6 +14,8 @@ import {
   IinvestHealth,
   IinvestAnnouncementRow,
 } from '@/lib/iinvest';
+import { fetchTradingViewFundamentals } from '@/lib/tradingview';
+import { TradingViewPanel } from './TradingViewPanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -534,6 +536,14 @@ export function FundamentalsWidget() {
   // iinvest: 13 collapsible enrichment sections. iinvest is the automatic
   // fallback when screener.in is unavailable (HTTP 503). Each section uses
   // useQuery with `enabled: isOpen` for lazy fetch on first expand.
+  const { data: tradingViewData } = useQuery({
+    queryKey: ['tradingview', symbol],
+    queryFn: () => fetchTradingViewFundamentals(symbol),
+    enabled: !!symbol,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
   const { data: iinvestHealth } = useQuery<IinvestHealth>({
     queryKey: ['iinvest', 'health'],
     queryFn: () => fetchIinvestHealth(),
@@ -643,6 +653,7 @@ export function FundamentalsWidget() {
     if (iinvestAvailable && (is503 || is404)) {
       return (
         <div className="h-full w-full flex flex-col font-mono text-xs overflow-y-auto bg-terminal-bg">
+          {tradingViewData && <TradingViewPanel data={tradingViewData} />}
           <IinvestEnrichmentPanel
             symbol={symbol}
             iinvestAvailable={iinvestAvailable}
@@ -1010,6 +1021,9 @@ export function FundamentalsWidget() {
             </table>
           )}
         </div>
+
+        {/* ── TradingView Fundamentals ────────────────────────────────── */}
+        {tradingViewData && <TradingViewPanel data={tradingViewData} />}
 
         {/* ── iinvest Enrichment (13 collapsible sections) ────────────── */}
         {iinvestAvailable && (

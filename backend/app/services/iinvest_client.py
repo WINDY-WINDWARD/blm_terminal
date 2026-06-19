@@ -367,11 +367,20 @@ class IinvestClient:
             params={"path": path, "detailed": "true"},
         )
 
-    async def get_block_deals(self, path: str, deal_type: int = 1, page: int = 1, size: int = 20) -> dict[str, Any]:
+    async def get_block_deals(self, path: str, page: int = 1, size: int = 20) -> dict[str, Any]:
+        """Fetch iinvest block deals (type=1)."""
         return await self._call(
             "iinvest.block_deals", "GET",
             f"{IINVEST_BASE_URL}/api/v1/blockdeals",
-            params={"type": deal_type, "path": path, "pageNo": page, "pageSize": size, "detailed": "true", "jsonArray": "true"},
+            params={"type": 1, "path": path, "pageNo": page, "pageSize": size, "detailed": "true", "jsonArray": "true"},
+        )
+
+    async def get_bulk_deals(self, path: str, page: int = 1, size: int = 20) -> dict[str, Any]:
+        """Fetch iinvest bulk deals (type=2). Under the hood, iinvest uses the blockdeals endpoint with type=2."""
+        return await self._call(
+            "iinvest.bulk_deals", "GET",
+            f"{IINVEST_BASE_URL}/api/v1/blockdeals",
+            params={"type": 2, "path": path, "pageNo": page, "pageSize": size, "detailed": "true", "jsonArray": "true"},
         )
 
     async def get_board_meetings(self, path: str, page: int = 1, size: int = 20) -> dict[str, Any]:
@@ -497,8 +506,8 @@ class IinvestClient:
         coros = {
             "announcements": self.get_announcements(path),
             "auditors": self.get_auditors(path),
-            "block_deals_today": self.get_block_deals(path, deal_type=2),
-            "block_deals_historical": self.get_block_deals(path, deal_type=1),
+            "block_deals": self.get_block_deals(path),
+            "bulk_deals": self.get_bulk_deals(path),
             "board_meetings": self.get_board_meetings(path),
             "capital_history": self.get_capital_history(path),
             "corporate_actions_dividend": self.get_corporate_actions(path, "Dividend"),

@@ -141,8 +141,12 @@ export async function fetchIinvestPledgedShares(symbol: string): Promise<Iinvest
   return _get(`/iinvest/pledged-shares/${encodeURIComponent(symbol)}`);
 }
 
-export async function fetchIinvestBlockDeals(symbol: string, dealType: 1 | 2 = 1): Promise<IinvestResponse<Record<string, unknown>>> {
-  return _get(`/iinvest/block-deals/${encodeURIComponent(symbol)}?type=${dealType}`);
+export async function fetchIinvestBlockDeals(symbol: string): Promise<IinvestResponse<Record<string, unknown>>> {
+  return _get(`/iinvest/block-deals/${encodeURIComponent(symbol)}`);
+}
+
+export async function fetchIinvestBulkDeals(symbol: string): Promise<IinvestResponse<Record<string, unknown>>> {
+  return _get(`/iinvest/bulk-deals/${encodeURIComponent(symbol)}`);
 }
 
 export async function fetchIinvestLegalCases(symbol: string): Promise<IinvestResponse> {
