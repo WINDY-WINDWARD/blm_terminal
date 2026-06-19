@@ -192,35 +192,153 @@ async def get_company_news(
         default=None,
         description="End date for filtering (default: current date)",
     ),
+    days: int = Query(
+        default=30, ge=1, le=365,
+        description="Used by `source=auto/merged` to decide which source to hit "
+        "(days>7 → MoneyControl fallback for iinvest's 24h rolling index)",
+    ),
     limit: int = Query(default=50, ge=1, le=100, description="Number of articles per page"),
     offset: int = Query(default=0, ge=0, description="Number of articles to skip"),
+    source: str = Query(
+        default="auto",
+        description="One of: auto, iinvest, moneycontrol, merged",
+        pattern="^(auto|iinvest|moneycontrol|merged)$",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> NewsPaginatedOut:
-    """Return paginated cached news articles tagged with *symbol*."""
+    """Return paginated cached news articles tagged with *symbol*.
+
+    Source routing:
+      - "iinvest"      → fetch from iinvest, tag source_used="iinvest"
+      - "moneycontrol" → fetch from MoneyControl, tag source_used="moneycontrol"
+      - "merged"       → fetch from both, dedupe by URL
+      - "auto" (default):
+          - iinvest first; if non-empty → tag source_used="iinvest"
+          - if iinvest empty AND days>7 → fall back to MoneyControl
+          - if iinvest empty AND days<=7 → return empty, source_used="iinvest"
+            (don't silently swap sources for a 24h request)
+    """
+    from app.services.news_fetcher import fetch_iinvest_company_news
+
     symbol_upper = symbol.upper()
 
     if end_date is None:
         end_date = datetime.now()
     if start_date is None:
-        start_date = end_date - timedelta(days=30)
+        start_date = end_date - timedelta(days=days)
 
-    conditions = [NewsArticle.company_symbol == symbol_upper]
+    # ── Step 1: optionally trigger a fresh fetch from iinvest ──────────
+    iinvest_attempted = False
+    if source in ("auto", "iinvest", "merged"):
+        try:
+            await fetch_iinvest_company_news(
+                symbol=symbol_upper, db=db, days=days, limit=limit,
+            )
+            iinvest_attempted = True
+        except Exception as exc:
+            logger.warning(
+                "get_company_news: iinvest fetch failed for %s: %s",
+                symbol_upper, exc,
+            )
+
+    # ── Step 2: optionally trigger a fresh fetch from MoneyControl ──────
+    mc_attempted = False
+    if source == "moneycontrol":
+        try:
+            await news_fetcher.fetch_company_news(symbol=symbol_upper, db=db)
+            mc_attempted = True
+        except Exception as exc:
+            logger.warning(
+                "get_company_news: MoneyControl fetch failed for %s: %s",
+                symbol_upper, exc,
+            )
+    elif source == "merged":
+        try:
+            await news_fetcher.fetch_company_news(symbol=symbol_upper, db=db)
+            mc_attempted = True
+        except Exception as exc:
+            logger.warning(
+                "get_company_news: MoneyControl fetch failed (merged) for %s: %s",
+                symbol_upper, exc,
+            )
+
+    # ── Step 3: query the DB and tag the response ──────────────────────
+    if source == "merged":
+        # Include iinvest articles (source LIKE 'iinvest:%') AND moneycontrol
+        conditions = [
+            NewsArticle.company_symbol == symbol_upper,
+            NewsArticle.source.like("iinvest:%") | NewsArticle.source.like("moneycontrol%"),
+        ]
+    elif source == "iinvest" or (source == "auto" and iinvest_attempted):
+        conditions = [
+            NewsArticle.company_symbol == symbol_upper,
+            NewsArticle.source.like("iinvest:%"),
+        ]
+    elif source == "moneycontrol":
+        conditions = [
+            NewsArticle.company_symbol == symbol_upper,
+            NewsArticle.source.like("moneycontrol%"),
+        ]
+    else:
+        # auto, no iinvest attempt — default to iinvest rows
+        conditions = [
+            NewsArticle.company_symbol == symbol_upper,
+            NewsArticle.source.like("iinvest:%"),
+        ]
+
     if start_date:
         conditions.append(NewsArticle.publish_date >= start_date)
     if end_date:
         conditions.append(NewsArticle.publish_date <= end_date)
 
-    count_stmt = (
-        select(func.count())
-        .select_from(NewsArticle)
-        .where(and_(*conditions))
-    )
+    count_stmt = select(func.count()).select_from(NewsArticle).where(and_(*conditions))
     precomputed_total = (await db.scalar(count_stmt) or 0)
-    if precomputed_total == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No articles found for symbol '{symbol_upper}'. "
-            "Use POST /news/company to fetch them first.",
+
+    # If we have 0 articles for the chosen filter AND the source is auto
+    # AND days>7 → fall back to MoneyControl
+    fallback_used = False
+    fallback_mc_attempted = False
+    if precomputed_total == 0 and source == "auto" and days > 7:
+        fallback_used = True
+        logger.debug(
+            "get_company_news: iinvest empty for %s (days=%d), falling back to MoneyControl",
+            symbol_upper, days,
+        )
+        try:
+            await news_fetcher.fetch_company_news(symbol=symbol_upper, db=db)
+            fallback_mc_attempted = True
+        except Exception as exc:
+            logger.warning(
+                "get_company_news: MoneyControl fallback failed for %s: %s",
+                symbol_upper, exc,
+            )
+        # Re-query for moneycontrol
+        conditions = [
+            NewsArticle.company_symbol == symbol_upper,
+            NewsArticle.source.like("moneycontrol%"),
+        ]
+        if start_date:
+            conditions.append(NewsArticle.publish_date >= start_date)
+        if end_date:
+            conditions.append(NewsArticle.publish_date <= end_date)
+        count_stmt = select(func.count()).select_from(NewsArticle).where(and_(*conditions))
+        precomputed_total = (await db.scalar(count_stmt) or 0)
+        logger.debug(
+            "get_company_news: fallback re-query for %s found %d MC articles",
+            symbol_upper, precomputed_total,
+        )
+        mc_attempted = mc_attempted or fallback_mc_attempted
+
+    if precomputed_total == 0 and not (source == "auto" and days > 7):
+        # Surface as empty 200 (not 404) so the UI can render an empty state.
+        # The auto+days>7 case is handled by the fallback below.
+        return NewsPaginatedOut(
+            articles=[],
+            total=0,
+            limit=limit,
+            offset=offset,
+            has_more=False,
+            source_used=_resolve_source_used(source, iinvest_attempted, mc_attempted, days, precomputed_total),
         )
 
     stmt = (
@@ -236,8 +354,8 @@ async def get_company_news(
     )
 
     logger.debug(
-        "get_company_news: returning %d articles (offset %d, limit %d, total %d) for %s",
-        len(articles), offset, limit, total, symbol_upper
+        "get_company_news: returning %d articles (offset %d, limit %d, total %d) for %s (source=%s)",
+        len(articles), offset, limit, total, symbol_upper, source,
     )
     return NewsPaginatedOut(
         articles=[NewsArticleOut.model_validate(a) for a in articles],
@@ -245,7 +363,39 @@ async def get_company_news(
         limit=limit,
         offset=offset,
         has_more=has_more,
+        source_used=_resolve_source_used(
+            source, iinvest_attempted, mc_attempted, days, total, fallback_used
+        ) or "iinvest",
     )
+
+
+def _resolve_source_used(
+    source: str,
+    iinvest_attempted: bool,
+    mc_attempted: bool,
+    days: int,
+    total: int,
+    fallback_used: bool = False,
+) -> str:
+    """Determine which source actually delivered the articles."""
+    if source == "merged":
+        return "merged"
+    if source == "moneycontrol":
+        return "moneycontrol"
+    if source == "iinvest":
+        return "iinvest"
+    # auto
+    if fallback_used:
+        # The MC fallback re-query produced results; that's where the
+        # articles came from, regardless of whether the live fetch succeeded.
+        return "moneycontrol"
+    if iinvest_attempted and not mc_attempted and days <= 7:
+        return "iinvest"
+    if iinvest_attempted and total > 0:
+        return "iinvest"
+    if mc_attempted:
+        return "moneycontrol"
+    return "iinvest"
 
 
 # ---------------------------------------------------------------------------

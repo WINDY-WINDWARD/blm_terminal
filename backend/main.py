@@ -34,6 +34,7 @@ from app.routers import (
     news_ws_router,
     notifications_router,
     screener_router,
+    iinvest_router,
     system_config_router,
     stockuniverse_router,
     stockuniverse_errors_router,
@@ -184,6 +185,40 @@ def _run_migrations_sync() -> None:
                         "INSERT INTO alembic_version (version_num) VALUES ('x99999999999a')"
                     ))
                 logger.info("migrations: stamped at HEAD (x99999999999a)")
+            finally:
+                sync_engine2.dispose()
+
+        elif "syntax error" in err or "operationalerror" in err:
+            # The squash migration's string-default rendering is incompatible
+            # with the local SQLite build (e.g. `DEFAULT (New Chat)` instead of
+            # `DEFAULT 'New Chat'`). Fall back to Base.metadata.create_all() to
+            # ensure all ORM tables exist, then stamp at HEAD so subsequent
+            # migrations run normally. This is safe because create_all is
+            # idempotent and only adds missing tables.
+            logger.warning(
+                "migrations: alembic SQL error (%s) — falling back to Base.metadata.create_all",
+                exc,
+            )
+            from app.models import __init__ as _models_init  # noqa: F401
+            from app.database import Base
+            sync_url2 = f"sqlite:///{settings.db_path}"
+            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False})
+            try:
+                Base.metadata.create_all(sync_engine2)
+                logger.info("migrations: Base.metadata.create_all() completed")
+                # Run the seed functions inline so the watchlist + admin user
+                # get created (these normally run later in the lifespan, but
+                # only if migrations succeed).
+                _ensure_admin_user()
+                _ensure_watchlist_data()
+                logger.info("migrations: seed functions (admin user, watchlist) applied")
+                with sync_engine2.begin() as conn:
+                    conn.execute(sa_text("DELETE FROM alembic_version"))
+                    # Stamp at the head of the post-squash chain so the
+                    # new iinvest migrations are still applied on next boot.
+                    conn.execute(sa_text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('31a1b2c3d4e6')"
+                    ))
             finally:
                 sync_engine2.dispose()
 
@@ -488,6 +523,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await screener_client.init()
     await news_fetcher.init()
 
+    # iinvest: lazy init — don't block startup if it fails (e.g. Akamai blocks)
+    try:
+        from app.services.iinvest_client import get_iinvest_client
+        await get_iinvest_client().init()
+        logger.info("iinvest: client initialized")
+    except Exception as exc:
+        logger.warning("iinvest: init failed (will retry on first request): %s", exc)
+
     # Start all workers, schedulers, and the startup pipeline via the orchestrator.
     # This replaces the previous scattered calls to start_all_workers(),
     # init_client(), _run_watchlist_scheduler(), _run_nightly_scheduler(), and
@@ -600,6 +643,7 @@ app.include_router(news_router, prefix="/api")
 app.include_router(news_ws_router, prefix="/ws")
 app.include_router(market_ws_router, prefix="/ws")
 app.include_router(screener_router, prefix="/api")
+app.include_router(iinvest_router, prefix="/api")
 app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")

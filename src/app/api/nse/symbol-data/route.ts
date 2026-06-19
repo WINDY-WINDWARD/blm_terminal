@@ -47,6 +47,8 @@ async function fetchSymbolDataFromNse(symbol: string): Promise<SymbolDataExtract
 async function fetchSymbolDataFromPython(
   symbol: string,
 ): Promise<SymbolDataExtract | null> {
+  // Backend route defines `symbol: list[str] = Query(...)` — a single
+  // `?symbol=X` binds as `["X"]`, repeated `?symbol=A&symbol=B` binds both.
   const url = `${PYTHON_BACKEND_URL}/api/markets/symbol-data?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json' },
@@ -65,8 +67,10 @@ async function resolveSymbolData(symbol: string): Promise<SymbolDataExtract | nu
   if (cached) return cached;
 
   try {
-    const value = await throttledNseCall(ENDPOINT_NAME, () =>
-      fetchSymbolDataFromNse(symbol),
+    const value = await throttledNseCall(
+      ENDPOINT_NAME,
+      () => fetchSymbolDataFromNse(symbol),
+      { coalesceKey: `${ENDPOINT_NAME}:${symbol}` },
     );
     if (value) cache.set(cacheKey, value, SYMBOL_DATA_TTL_SECONDS);
     return value;

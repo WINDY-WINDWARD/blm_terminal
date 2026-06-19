@@ -29,6 +29,9 @@ class StockUniverse(BaseModel):
     low_52w: float | None = None
     high_52w_date: datetime | None = None
     low_52w_date: datetime | None = None
+    isin: str | None = None
+    iinvestPath: str | None = None
+    iinvestPathResolvedAt: datetime | None = None
 
     @field_validator("sectorPE", "symbolPE", mode="before")
     @classmethod

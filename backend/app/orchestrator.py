@@ -141,6 +141,7 @@ class Orchestrator:
         from app.services.nse_client import nse_client
         from app.services.screener_client import screener_client
         from app.services.news_fetcher import news_fetcher
+        from app.services.iinvest_client import get_iinvest_client
         from app.workers.lifecycle import stop_all_workers
 
         logger.info("Orchestrator: shutting down...")
@@ -159,6 +160,7 @@ class Orchestrator:
         await nse_client.close()
         await screener_client.close()
         await news_fetcher.close()
+        await get_iinvest_client().close()
         await close_client()
 
         logger.info("Orchestrator: shutdown complete")

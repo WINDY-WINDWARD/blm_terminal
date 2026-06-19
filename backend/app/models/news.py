@@ -94,6 +94,17 @@ class NewsArticle(Base):
         nullable=True,
     )  # STATE_MEDIA, CAUTION, NONE
 
+    # ── iinvest fields ────────────────────────────────────────────────────────
+    iinvest_story_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    iinvest_published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+
     __table_args__ = (
         Index("ix_news_articles_source_publish", "source", "publish_date"),
     )

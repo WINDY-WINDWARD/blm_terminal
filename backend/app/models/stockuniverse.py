@@ -50,6 +50,11 @@ class StockUniverse(Base):
     high_52w_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
+    isin: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    iinvest_path: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    iinvest_path_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
     ticker_failure_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

@@ -1088,3 +1088,150 @@ class NewsFetcher:
 
 
 news_fetcher = NewsFetcher()
+
+
+# ── iinvest news pipeline ────────────────────────────────────────────────────
+
+
+async def fetch_iinvest_company_news(
+    symbol: str,
+    db: AsyncSession,
+    days: int = 30,
+    limit: int = 50,
+) -> int:
+    """Fetch and store iinvest news articles for a company.
+
+    iinvest does NOT pre-tag sentiment/threat — NLP is run locally via
+    ``nlp_service.analyze_article_dict`` on each article after the fetch,
+    same as the MoneyControl and RSS flows.
+
+    Articles are upserted by ``iinvest_story_id`` (unique-indexed). Returns
+    the number of new/updated articles. Returns 0 (does not raise) when
+    the symbol has no ISIN cached or when the iinvest client is unavailable.
+    """
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from app.models.stockuniverse import StockUniverse as _SU
+    from app.services.iinvest_client import get_iinvest_client
+    from app.services.nlp_service import analyze_article_dict
+
+    symbol_upper = symbol.upper()
+    row = (await db.execute(
+        sa_select(_SU.isin).where(_SU.symbol == symbol_upper)
+    )).first()
+    isin = row[0] if row else None
+
+    # If the ISIN isn't cached in stock_universe (which is the common case for
+    # symbols that were never enriched by an iinvest-path-resolving action),
+    # fall back to the iinvest client's path resolver. The client itself
+    # uses NSE's GetQuoteApi as tier 3, so this works for any NSE symbol
+    # even with no prior enrichment.
+    if not isin:
+        try:
+            isin, _path = await get_iinvest_client().resolve_path(
+                symbol_upper, db=db
+            )
+        except Exception as exc:
+            logger.debug(
+                "fetch_iinvest_company_news: %s path resolution failed: %s",
+                symbol_upper, exc,
+            )
+        if not isin:
+            logger.info(
+                "fetch_iinvest_company_news: %s has no ISIN and path "
+                "resolution failed — skipping iinvest",
+                symbol_upper,
+            )
+            return 0
+
+    try:
+        data = await get_iinvest_client().get_news([isin], size=limit)
+    except Exception as exc:
+        logger.warning(
+            "fetch_iinvest_company_news: iinvest unavailable for %s: %s",
+            symbol_upper, exc,
+        )
+        return 0
+
+    stories = (data.get("response", {}) or {}).get("data") or []
+    if not stories:
+        return 0
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    new_count = 0
+    for story in stories:
+        url = story.get("sourceLink") or f"iinvest://{story.get('id', '')}"
+        if not url:
+            continue
+        headline = story.get("headline") or ""
+        synopsis = story.get("synopsis") or ""
+        body = story.get("story") or synopsis
+        source_dt = story.get("sourceDateTime")
+        publish_date = _parse_iso_datetime(source_dt) if source_dt else None
+        source_name = story.get("sourceName") or "cogencis"
+
+        # NLP is run AFTER fetch — iinvest does not pre-tag.
+        nlp = analyze_article_dict(
+            headline=headline,
+            summary=synopsis,
+            source_name=source_name,
+        )
+
+        isins = story.get("isins") or [isin]
+        tickers: list[str] = []
+        # iinvest doesn't expose tickers directly; the ISIN → ticker map is
+        # done at read-time by the frontend from the company_symbol field.
+        entities = {
+            **nlp["entities"],
+            "isins": isins,
+            "tickers": tickers,
+        }
+
+        parsed = {
+            "url": url,
+            "source": f"iinvest:{source_name}",
+            "title": headline,
+            "text": body,
+            "top_image": story.get("thumbNailImage"),
+            "publish_date": publish_date,
+            "fetched_at": now,
+            "company_symbol": symbol_upper,
+            "sentiment": nlp["sentiment"],
+            "sentiment_score": nlp["sentiment_score"],
+            "confidence": nlp["confidence"],
+            "language": nlp["language"],
+            "entities": entities,
+            "threat_level": nlp["threat_level"],
+            "threat_category": nlp["threat_category"],
+            "source_credibility": nlp["source_credibility"],
+            "iinvest_story_id": str(story.get("id", "")),
+            "iinvest_published_at": publish_date,
+        }
+        # Upsert by iinvest_story_id (unique-indexed)
+        stmt = sqlite_insert(NewsArticle).values(**parsed)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["iinvest_story_id"],
+            set_={k: v for k, v in parsed.items() if k not in ("url",)},
+        )
+        await db.execute(stmt)
+        new_count += 1
+
+    await db.commit()
+    logger.info(
+        "fetch_iinvest_company_news: %d articles upserted for %s",
+        new_count, symbol_upper,
+    )
+    return new_count
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    """Parse an ISO 8601 string into a naive datetime (matches news_articles schema)."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        return None

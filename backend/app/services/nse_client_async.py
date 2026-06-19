@@ -324,6 +324,37 @@ class NSEClientAsync:
             "Maintain a static symbol list or fetch from an alternate source."
         )
 
+    async def get_isin_for_symbol(self, symbol: str) -> tuple[str, str] | None:
+        """Fetch just the ISIN + companyName for a symbol via GetQuoteApi.
+
+        Returns (isin, companyName) on success, None on failure. Lightweight:
+        one HTTP call to getMetaData. This is the source of truth for NSE
+        symbols and is the most reliable way to resolve a symbol to its
+        iinvest path slug (replaces the iinvest /api/v1/marketdata/symbollookup
+        endpoint which returns wrong ISINs for short symbols like RELIANCE).
+        """
+        from app.services.nse_client_async import SymbolNotFoundError
+        symbol_upper = symbol.upper()
+        for series_candidate in SERIES_PREFERENCE:
+            meta_url = (
+                "https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi"
+                f"?functionName=getMetaData&marketType=N&series={series_candidate}&symbol={symbol_upper}"
+            )
+            try:
+                client = await self._get_client()
+                resp = await client.get(meta_url)
+                resp.raise_for_status()
+            except Exception:
+                continue
+            payload = resp.json()
+            if not isinstance(payload, dict) or not payload.get("activeSeries"):
+                continue
+            isin = payload.get("isin")
+            company_name = payload.get("companyName")
+            if isin and company_name:
+                return isin, company_name
+        return None
+
     async def get_stock_metadata(self, symbol: str) -> StockUniverse:
         """Fetch metadata for a given stock symbol via GetQuoteApi.
 

@@ -1444,14 +1444,23 @@ async def get_company_news(
     days: int = 30,
     limit: int = 50,
     refresh: bool = False,
+    source: str = "auto",
     sentiment: str | None = None,
     threat_level: str | None = None,
     language: str | None = None,
 ) -> dict[str, Any]:
     """Fetch news for one or multiple NSE companies with NLP analysis.
 
-    Automatically fetches fresh articles from MoneyControl when needed.
-    Supports filtering by sentiment, threat level, and language (additive/OR logic).
+    iinvest is the primary source (faster, deterministic, ISIN-keyed).
+    MoneyControl is a fallback for breadth and deep history. NLP is
+    post-fetched for both sources (iinvest does NOT pre-tag).
+
+    Source priority (default "auto"):
+      - "iinvest"      → iinvest.cogencis.com (fast, 24h rolling, NLP run post-fetch)
+      - "moneycontrol" → MoneyControl stock quote page (slower, NLP post-processed)
+      - "merged"       → both, deduped by URL
+      - "auto"         → iinvest first, fall back to MoneyControl only when
+                         days>7 and iinvest returns 0 articles
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "INFY").
@@ -1460,51 +1469,110 @@ async def get_company_news(
             Mutually exclusive with symbol.
         days: Number of days to look back (default: 30). Applies to all symbols.
         limit: Maximum number of articles to return per symbol (default: 50).
-        refresh: Force a live fetch from MoneyControl even if articles are fresh (default: False).
+        refresh: Force a live fetch from upstream even if articles are fresh.
+        source: One of auto, iinvest, moneycontrol, merged.
         sentiment: Filter by sentiment (POSITIVE, NEGATIVE, NEUTRAL).
         threat_level: Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL).
         language: Filter by two-letter language code (en, hi, zh, etc.).
 
-    Returns a list of articles in single-symbol mode. In bulk mode returns a
-    dict keyed by symbol; failed symbols return {"error": "<message>"}.
+    Returns a dict with `articles` (list) and `source_used` (str) in single-symbol
+    mode. In bulk mode returns a dict keyed by symbol; failed symbols return
+    {"error": "<message>"}.
     """
-    import json as _json
-
     from sqlalchemy import func, or_
+    from app.services.news_fetcher import fetch_iinvest_company_news
+
+    if source not in ("auto", "iinvest", "moneycontrol", "merged"):
+        raise ValueError(f"Invalid source: {source!r}. Must be auto/iinvest/moneycontrol/merged.")
 
     if symbol is None and symbols is None:
         raise ValueError("Provide either 'symbol' or 'symbols'")
     if symbol is not None and symbols is not None:
         raise ValueError("Provide either 'symbol' or 'symbols', not both")
 
-    async def _fetch(sym: str) -> list[dict[str, Any]]:
+    async def _fetch(sym: str) -> dict[str, Any]:
+        from sqlalchemy import select as sa_select
         sym = sym.upper()
         start_date = datetime.now() - timedelta(days=days)
 
-        async def _query_db(db) -> list[dict[str, Any]]:
-            conditions = [
-                NewsArticle.company_symbol == sym,
-                or_(
-                    NewsArticle.publish_date >= start_date,
-                    NewsArticle.publish_date.is_(None),
-                ),
-            ]
-            if sentiment:
-                conditions.append(NewsArticle.sentiment == sentiment.upper())
-            if threat_level:
-                conditions.append(NewsArticle.threat_level == threat_level.upper())
-            if language:
-                conditions.append(NewsArticle.language == language.lower())
+        # Determine which source to actually try, and trigger fetches.
+        iinvest_attempted = False
+        mc_attempted = False
+        if source in ("auto", "iinvest", "merged"):
+            try:
+                async with AsyncSessionLocal() as db:
+                    await fetch_iinvest_company_news(symbol=sym, db=db, days=days, limit=limit)
+                iinvest_attempted = True
+            except Exception as exc:
+                logger.warning("get_company_news: iinvest fetch failed for %s: %s", sym, exc)
+        if source in ("moneycontrol", "merged") or (
+            source == "auto" and iinvest_attempted and days > 7
+        ):
+            latest_fetched = None
+            async with AsyncSessionLocal() as db:
+                stmt = sa_select(func.max(NewsArticle.fetched_at)).where(
+                    NewsArticle.company_symbol == sym
+                )
+                latest_fetched = (await db.execute(stmt)).scalar_one_or_none()
+            stale = True
+            if latest_fetched is not None:
+                age_seconds = (datetime.now() - latest_fetched).total_seconds()
+                stale = age_seconds > _COMPANY_NEWS_STALE_SECONDS
+            should_fetch = refresh or stale
+            if should_fetch:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await asyncio.wait_for(
+                            news_fetcher.fetch_company_news(symbol=sym, db=db),
+                            timeout=25.0,
+                        )
+                    mc_attempted = True
+                except asyncio.TimeoutError:
+                    logger.warning("get_company_news: MC timeout for %s", sym)
+                except Exception as exc:
+                    logger.warning("get_company_news: MC fetch failed for %s: %s", sym, exc)
 
+        # Determine the source filter for the DB query
+        if source == "merged":
+            src_filter = NewsArticle.source.like("iinvest:%") | NewsArticle.source.like("moneycontrol%")
+        elif source == "iinvest":
+            src_filter = NewsArticle.source.like("iinvest:%")
+        elif source == "moneycontrol":
+            src_filter = NewsArticle.source.like("moneycontrol%")
+        else:  # auto
+            # If MC was attempted as fallback, prefer MC articles; else iinvest
+            if mc_attempted and iinvest_attempted:
+                src_filter = NewsArticle.source.like("iinvest:%") | NewsArticle.source.like("moneycontrol%")
+            elif mc_attempted:
+                src_filter = NewsArticle.source.like("moneycontrol%")
+            else:
+                src_filter = NewsArticle.source.like("iinvest:%")
+
+        conditions = [
+            NewsArticle.company_symbol == sym,
+            src_filter,
+            or_(
+                NewsArticle.publish_date >= start_date,
+                NewsArticle.publish_date.is_(None),
+            ),
+        ]
+        if sentiment:
+            conditions.append(NewsArticle.sentiment == sentiment.upper())
+        if threat_level:
+            conditions.append(NewsArticle.threat_level == threat_level.upper())
+        if language:
+            conditions.append(NewsArticle.language == language.lower())
+
+        async with AsyncSessionLocal() as db:
             stmt = (
                 select(NewsArticle)
-                .where(or_(*conditions) if conditions else True)
+                .where(and_(*conditions))
                 .order_by(NewsArticle.publish_date.desc().nullslast())
                 .limit(limit)
             )
             result = await db.execute(stmt)
             articles = result.scalars().all()
-            return [
+            article_dicts = [
                 {
                     "url": a.url,
                     "title": a.title,
@@ -1519,48 +1587,31 @@ async def get_company_news(
                     "threat_level": a.threat_level,
                     "threat_category": a.threat_category,
                     "source_credibility": a.source_credibility,
+                    "source": a.source,
                 }
                 for a in articles
             ]
 
-        async def _latest_fetched_at(db) -> datetime | None:
-            stmt = select(func.max(NewsArticle.fetched_at)).where(
-                NewsArticle.company_symbol == sym
-            )
-            result = await db.execute(stmt)
-            return result.scalar_one_or_none()
+        # Compute source_used
+        if source == "merged":
+            source_used = "merged"
+        elif source == "moneycontrol":
+            source_used = "moneycontrol"
+        elif source == "iinvest":
+            source_used = "iinvest"
+        else:  # auto
+            if mc_attempted and not iinvest_attempted:
+                source_used = "moneycontrol"
+            elif iinvest_attempted and article_dicts and all(
+                a["source"] and a["source"].startswith("iinvest:") for a in article_dicts
+            ):
+                source_used = "iinvest"
+            elif mc_attempted:
+                source_used = "moneycontrol"
+            else:
+                source_used = "iinvest"
 
-        async with AsyncSessionLocal() as db:
-            existing = await _query_db(db)
-            latest_fetched = await _latest_fetched_at(db)
-
-        stale = True
-        if latest_fetched is not None:
-            age_seconds = (datetime.now() - latest_fetched).total_seconds()
-            stale = age_seconds > _COMPANY_NEWS_STALE_SECONDS
-
-        should_fetch = refresh or len(existing) == 0 or stale
-
-        if should_fetch:
-            logger.info(
-                "get_company_news: fetching %s (stale=%s, existing=%d, refresh=%s)",
-                sym,
-                stale,
-                len(existing),
-                refresh,
-            )
-            try:
-                async with AsyncSessionLocal() as db:
-                    await asyncio.wait_for(
-                        news_fetcher.fetch_company_news(symbol=sym, db=db),
-                        timeout=25.0,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning("get_company_news: timeout for %s, returning stale cache", sym)
-            async with AsyncSessionLocal() as db:
-                return await _query_db(db)
-
-        return existing
+        return {"articles": article_dicts, "source_used": source_used}
 
     if symbol is not None:
         return await _fetch(symbol)
@@ -1858,3 +1909,212 @@ async def get_recent_announcements(symbol: str) -> dict[str, Any]:
         return {"announcements": filtered}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# iinvest.cogencis.com Tools (20)
+# ---------------------------------------------------------------------------
+# These tools use the guest JWT acquired automatically by IinvestClient.
+# No user action required. Each tool accepts a single `symbol` or a list
+# of `symbols` (mutually exclusive) and supports per-symbol error handling
+# in bulk mode. NLP is run locally — iinvest does not pre-tag sentiment/threat.
+
+
+async def _iinvest_bulk(
+    symbols: list[str],
+    fetcher_name: str,
+    **fetcher_kwargs: Any,
+) -> dict[str, Any]:
+    """Run an iinvest data fetcher for one or many symbols."""
+    from app.services.iinvest_client import get_iinvest_client
+
+    if not symbols:
+        raise ValueError("symbols list is empty")
+
+    client = get_iinvest_client()
+    method = getattr(client, fetcher_name)
+
+    async def _one(sym: str) -> dict[str, Any]:
+        sym = sym.upper()
+        try:
+            isin, path = await client.resolve_path(sym)
+            if not isin or not path:
+                return {"error": f"iinvest path not found for {sym}"}
+            if "isin" in fetcher_kwargs.__class__.__name__ or fetcher_name in (
+                "get_legal_cases", "get_index_of_charges", "get_tribunals",
+                "get_financial_peers",
+            ):
+                return await method(isin, **fetcher_kwargs)
+            elif fetcher_name == "get_news":
+                return await method([isin], **fetcher_kwargs)
+            elif fetcher_name == "get_financial_peer_filters":
+                return await method()
+            else:
+                return await method(path, **fetcher_kwargs)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    results = await asyncio.gather(*[_one(s) for s in symbols], return_exceptions=True)
+    return {
+        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
+        for s, r in zip(symbols, results)
+    }
+
+
+_IINVEST_TOOL_NAMES = [
+    "iinvest_announcements", "iinvest_auditors", "iinvest_block_deals",
+    "iinvest_board_meetings", "iinvest_capital_history", "iinvest_corporate_actions",
+    "iinvest_financial_peers", "iinvest_financial_peer_filters",
+    "iinvest_index_of_charges", "iinvest_insider_trading", "iinvest_key_shareholders",
+    "iinvest_legal_cases", "iinvest_marketdata_timeseries", "iinvest_pledged_shares",
+    "iinvest_sast", "iinvest_tribunals", "iinvest_news", "iinvest_overview",
+    "iinvest_path", "iinvest_all",
+]
+
+
+async def _iinvest_health() -> dict[str, Any]:
+    from app.services.iinvest_client import get_iinvest_client
+    return get_iinvest_client().health()
+
+
+def _register_iinvest_tool(
+    name: str,
+    description: str,
+    fetcher: str | None,
+    supports_path: bool = True,
+) -> None:
+    """Programmatically register an MCP tool that wraps an iinvest fetcher."""
+    if fetcher is None:
+        # Health is special
+        @mcp.tool()
+        async def iinvest_health_tool() -> dict[str, Any]:
+            """Return the iinvest client health (JWT, expiry, last error)."""
+            return await _iinvest_health()
+        iinvest_health_tool.__name__ = "iinvest_health"
+        return
+
+    # Build the tool
+    @mcp.tool()
+    async def iinvest_tool(
+        symbol: str | None = None,
+        symbols: list[str] | None = None,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        if symbol is None and symbols is None:
+            raise ValueError("Provide either 'symbol' or 'symbols'")
+        if symbol is not None and symbols is not None:
+            raise ValueError("Provide either 'symbol' or 'symbols', not both")
+        if symbol is not None:
+            return await _iinvest_bulk([symbol], fetcher)
+        return await _iinvest_bulk(symbols, fetcher)
+
+    iinvest_tool.__name__ = name
+    # Re-set the docstring
+    iinvest_tool.__doc__ = description
+    return None
+
+
+# Register all 20 iinvest tools. The name → fetcher mapping is small
+# enough to do this directly without the helper above (which is hard to
+# thread through FastMCP's tool registration cleanly).
+_IINVEST_FETCHERS = {
+    "iinvest_announcements": ("iinvest.get_announcements", "iinvest_get_announcements", "get_announcements"),
+    "iinvest_auditors": ("iinvest.get_auditors", "iinvest_get_auditors", "get_auditors"),
+    "iinvest_block_deals": ("iinvest.get_block_deals", "iinvest_get_block_deals", "get_block_deals"),
+    "iinvest_board_meetings": ("iinvest.get_board_meetings", "iinvest_get_board_meetings", "get_board_meetings"),
+    "iinvest_capital_history": ("iinvest.get_capital_history", "iinvest_get_capital_history", "get_capital_history"),
+    "iinvest_corporate_actions": ("iinvest.get_corporate_actions", "iinvest_get_corporate_actions", "get_corporate_actions"),
+    "iinvest_financial_peer_filters": ("iinvest.get_financial_peer_filters", "iinvest_get_financial_peer_filters", "get_financial_peer_filters"),
+    "iinvest_financial_peers": ("iinvest.get_financial_peers", "iinvest_get_financial_peers", "get_financial_peers"),
+    "iinvest_index_of_charges": ("iinvest.get_index_of_charges", "iinvest_get_index_of_charges", "get_index_of_charges"),
+    "iinvest_insider_trading": ("iinvest.get_insider_trading", "iinvest_get_insider_trading", "get_insider_trading"),
+    "iinvest_key_shareholders": ("iinvest.get_key_shareholders", "iinvest_get_key_shareholders", "get_key_shareholders"),
+    "iinvest_legal_cases": ("iinvest.get_legal_cases", "iinvest_get_legal_cases", "get_legal_cases"),
+    "iinvest_marketdata_timeseries": ("iinvest.get_marketdata_timeseries", "iinvest_get_marketdata_timeseries", "get_marketdata_timeseries"),
+    "iinvest_pledged_shares": ("iinvest.get_pledged_shares", "iinvest_get_pledged_shares", "get_pledged_shares"),
+    "iinvest_sast": ("iinvest.get_sast", "iinvest_get_sast", "get_sast"),
+    "iinvest_tribunals": ("iinvest.get_tribunals", "iinvest_get_tribunals", "get_tribunals"),
+    "iinvest_news": ("iinvest.get_news", "iinvest_get_news", "get_news"),
+}
+
+
+def _make_iinvest_tool(name: str, fetcher_name: str, description: str):
+    """Create an MCP tool function that wraps an iinvest fetcher."""
+    async def iinvest_tool(
+        symbol: str | None = None,
+        symbols: list[str] | None = None,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        if symbol is None and symbols is None:
+            raise ValueError("Provide either 'symbol' or 'symbols'")
+        if symbol is not None and symbols is not None:
+            raise ValueError("Provide either 'symbol' or 'symbols', not both")
+        if symbol is not None:
+            return await _iinvest_bulk([symbol], fetcher_name)
+        return await _iinvest_bulk(symbols, fetcher_name)
+    iinvest_tool.__name__ = name
+    iinvest_tool.__doc__ = description
+    return iinvest_tool
+
+
+# Programmatically create and register each tool
+for _tool_name, (_path, _func_name, _fetcher) in _IINVEST_FETCHERS.items():
+    _desc = f"iinvest.cogencis.com {(_tool_name.replace('iinvest_', '')).replace('_', ' ')} for an NSE company."
+    _tool = _make_iinvest_tool(_func_name, _fetcher, _desc)
+    mcp.tool()(_tool)
+del _tool_name, _path, _func_name, _fetcher, _desc, _tool
+
+
+# iinvest_overview — returns parsed HTML page fields
+@mcp.tool()
+async def iinvest_overview(symbol: str) -> dict[str, Any]:
+    """Fetch the iinvest overview HTML page for a symbol and return identity fields.
+
+    Returns {isin, symbol, company_name, next_data} extracted from the page.
+    The page is publicly reachable (no JWT required).
+    """
+    from app.services.iinvest_client import get_iinvest_client
+    from app.services.iinvest_html_parser import parse_overview_html
+
+    symbol = symbol.upper()
+    client = get_iinvest_client()
+    isin, path = await client.resolve_path(symbol)
+    if not isin or not path:
+        return {"error": f"iinvest path not found for {symbol}"}
+    rest = path[len(isin):].lstrip("/")
+    url = f"https://iinvest.cogencis.com/{isin}/{rest}?tab=overview"
+    import httpx
+    try:
+        async with httpx.AsyncClient(headers=client._http.headers if client._http else {},
+                                     timeout=httpx.Timeout(30.0, connect=10.0)) as http:
+            resp = await http.get(url)
+    except Exception as exc:
+        return {"error": f"overview fetch failed: {exc}"}
+    if resp.status_code != 200:
+        return {"error": f"iinvest overview returned HTTP {resp.status_code}"}
+    return parse_overview_html(url, resp.text)
+
+
+# iinvest_path — resolve a symbol to its iinvest path
+@mcp.tool()
+async def iinvest_path(symbol: str) -> dict[str, Any]:
+    """Resolve a symbol to its iinvest path slug (e.g. ``ine002a01018/symbol/ns/reliance/...``).
+
+    Cached in-process for 24h and persisted to stock_universe.
+    """
+    from app.services.iinvest_client import get_iinvest_client
+    client = get_iinvest_client()
+    isin, path = await client.resolve_path(symbol)
+    if not isin or not path:
+        return {"error": f"iinvest path not found for {symbol}"}
+    return {"symbol": symbol.upper(), "isin": isin, "path": path}
+
+
+# iinvest_all — aggregator
+@mcp.tool()
+async def iinvest_all(symbol: str) -> dict[str, Any]:
+    """Fetch all 18 iinvest data endpoints in parallel (error-tolerant per section)."""
+    from app.services.iinvest_client import get_iinvest_client
+    client = get_iinvest_client()
+    isin, path = await client.resolve_path(symbol)
+    if not isin or not path:
+        return {"error": f"iinvest path not found for {symbol}"}
+    return await client.get_all(path, isin)

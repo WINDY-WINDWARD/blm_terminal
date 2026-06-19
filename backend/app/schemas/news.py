@@ -32,6 +32,10 @@ class NewsArticleOut(BaseModel):
     threat_category: str | None = None
     source_credibility: str | None = None
 
+    # iinvest fields (optional, populated for iinvest-sourced articles)
+    iinvest_story_id: str | None = None
+    iinvest_published_at: datetime | None = None
+
     @field_validator("entities", mode="before")
     @classmethod
     def _coerce_entities(cls, v: object) -> dict | None:
@@ -68,6 +72,7 @@ class NewsPaginatedOut(BaseModel):
     limit: int
     offset: int
     has_more: bool
+    source_used: str | None = None  # "iinvest" | "moneycontrol" | "merged" — populated by news router
 
 
 class NewsSourceOut(BaseModel):

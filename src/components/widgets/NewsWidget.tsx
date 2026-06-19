@@ -19,6 +19,7 @@ interface NewsPaginatedResponse {
   limit: number;
   offset: number;
   has_more: boolean;
+  source_used?: 'iinvest' | 'moneycontrol' | 'merged' | null;
 }
 
 type Tab = 'global' | 'company';
@@ -480,6 +481,7 @@ export function NewsWidget() {
   const [activeTab, setActiveTab] = useState<Tab>('global');
   const [globalOffset, setGlobalOffset] = useState(0);
   const [companyOffset, setCompanyOffset] = useState(0);
+  const [companySource, setCompanySource] = useState<'auto' | 'iinvest' | 'moneycontrol' | 'merged'>('auto');
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -553,9 +555,11 @@ export function NewsWidget() {
     isFetching: companyFetching,
     error: companyError,
   } = useQuery<NewsPaginatedResponse>({
-    queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset }],
+    queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset, source: companySource }],
     queryFn: async () => {
-      const res = await fetch(`/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}`);
+      const res = await fetch(
+        `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}&source=${companySource}`,
+      );
       if (res.status === 404) {
         const postRes = await fetch('/api/py/news/company', {
           method: 'POST',
@@ -641,8 +645,22 @@ export function NewsWidget() {
           label="Company"
         />
         {activeTab === 'company' && symbol && (
-          <span className="ml-auto flex items-center gap-1 pr-1 py-1 text-[10px] text-terminal-amber">
+          <span className="ml-auto flex items-center gap-2 pr-1 py-1 text-[10px] text-terminal-amber">
             <span>{symbol}</span>
+            <select
+              value={companySource}
+              onChange={(e) => {
+                setCompanySource(e.target.value as typeof companySource);
+                setCompanyOffset(0);
+              }}
+              className="bg-zinc-800 text-terminal-amber border border-zinc-700 rounded px-1 py-0.5 text-[10px] font-mono"
+              title="News source: auto (iinvest primary, MC fallback for deep history)"
+            >
+              <option value="auto">Source: auto</option>
+              <option value="iinvest">Source: iinvest</option>
+              <option value="moneycontrol">Source: MoneyControl</option>
+              <option value="merged">Source: merged</option>
+            </select>
             <button
               onClick={handleRefresh}
               disabled={isRefreshing}
@@ -742,6 +760,14 @@ export function NewsWidget() {
                 <span className="font-mono">
                   {currentOffset + 1}–{Math.min(currentOffset + dbArticles.length, totalCount)} of {totalCount}
                 </span>
+                {activeTab === 'company' && currentData?.source_used && (
+                  <span
+                    className="ml-2 px-1.5 py-0.5 text-[9px] uppercase font-mono border border-terminal-amber/50 text-terminal-amber rounded"
+                    title="Which backend source delivered these articles"
+                  >
+                    {currentData.source_used}
+                  </span>
+                )}
                 <button
                   onClick={handleNextPage}
                   disabled={!hasMore}

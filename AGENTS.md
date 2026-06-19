@@ -11,6 +11,13 @@ Widgets: Chart, Watch, Movers, Order, Pos, Settings, Deals, Largedeals, Breakout
 Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy; manages its own SQLite DB via Alembic.
 Local persistence: **Prisma + SQLite** (`better-sqlite3`) for `TopMoverSymbol`, `UserSettings`.
 
+### External data providers
+
+- **NSE India** — quotes, OHLC, 52-week highs/lows, volume gainers, corporate filings (primary)
+- **screener.in** — fundamentals (P/E, ROCE, ROE, market cap, quarterly results) — requires Chrome session cookie via rookiepy
+- **morningstar.in** — fair value estimate, uncertainty rating — requires rookiepy cookies
+- **iinvest.cogencis.com** — backup/enrichment for the FDM widget **and primary source for company news**: 18 read-only data endpoints (announcements, board meetings, corporate actions, insider trading, pledged shares, key shareholders, legal cases, block deals, news, peer comparison, OHLC timeseries). Auth is **automatic** — the iinvest frontend's own JS bundle ships a public AES-256 key that yields a view-role guest JWT via `/api/login`. No user action required. The `/api/v1/news/stories` (full) endpoint is faster and deterministic, so it's the default for the NewsWidget's company tab and the `get_company_news` MCP tool. **iinvest does NOT pre-tag sentiment/threat** — NLP is run locally via `app/services/nlp_service.analyze_article_dict` on each article after fetch, same as the MoneyControl and RSS flows. MoneyControl stays as a fallback (and for breadth). See `docs/reference/backend/iinvest.md` for architecture and `docs/guides/iinvest-integration.md` for the integration guide.
+
 ---
 
 ## Commands
@@ -62,12 +69,13 @@ src/
 ├── lib/        # api-config, cache, logger, marketWs, newsSocket, openalgo-server, openalgo, rate-limiter, screenerTql, utils, widgetDocs
 └── store/terminalStore.ts  # all Jotai atoms
 backend/  # FastAPI (Python ≥ 3.11)
-├── app/routers/   # markets, market_ws, news, news_ws, screener, stockuniverse, watchlist,
-│                  # ai_summarizer, ai_chat, notifications, corporatefilings, morningstar,
-│                  # announcements, valuation, portfolio, ticker, jobs, system_config,
-│                  # nonpersistence, mcp_server
+├── app/routers/   # markets, market_ws, news, news_ws, screener, iinvest, stockuniverse,
+│                  # watchlist, ai_summarizer, ai_chat, notifications, corporatefilings,
+│                  # morningstar, announcements, valuation, portfolio, ticker, jobs,
+│                  # system_config, nonpersistence, mcp_server
 ├── app/services/  # nse_client, nse_client_async, nse_rate_limiter, nse_charting_client,
-│                  # screener_client, moneycontrol_client, morningstar_client,
+│                  # screener_client, iinvest_client, iinvest_html_parser,
+│                  # moneycontrol_client, morningstar_client,
 │                  # news_fetcher, news_aggregator, news_sources, rss_parser,
 │                  # ai_summarizer, ai_chat_service, indicators, momentum, returns,
 │                  # ticker_warehouse, tql_parser, nlp_service, cache, cookie_loader
@@ -76,7 +84,7 @@ backend/  # FastAPI (Python ≥ 3.11)
 ├── app/backgroundtasks.py  # fair value sync, notification worker, stock universe sync
 └── tests/
 prisma/schema.prisma
-blm-mcp-bundle/  # Claude Desktop MCP plugin (32 tools)
+blm-mcp-bundle/  # Claude Desktop MCP plugin (52 tools: 32 base + 20 iinvest_*)
 ```
 
 ---

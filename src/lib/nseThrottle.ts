@@ -124,6 +124,18 @@ function recordFailure(endpointName: string): void {
 export interface ThrottleOptions {
   retries?: number;
   backoff?: number;
+  /**
+   * Key used to coalesce concurrent identical in-flight requests.
+   *
+   * MUST uniquely identify the work being performed (e.g. include the
+   * symbol/params). Using only the `endpointName` will cause distinct
+   * requests — such as fetching different symbols against the same
+   * endpoint — to share a single underlying call, which returns the same
+   * data to every caller. The circuit-breaker, courtesy-delay, and
+   * serial-promise queue continue to key off `endpointName` because
+   * those are per-endpoint concerns, not per-request.
+   */
+  coalesceKey: string;
 }
 
 /**
@@ -133,11 +145,11 @@ export interface ThrottleOptions {
 export async function throttledNseCall<T>(
   endpointName: string,
   fn: () => Promise<T>,
-  opts: ThrottleOptions = {},
+  opts: ThrottleOptions,
 ): Promise<T> {
   checkCircuit(endpointName);
 
-  const existing = inflight.get(endpointName);
+  const existing = inflight.get(opts.coalesceKey);
   if (existing) {
     return existing as Promise<T>;
   }
@@ -183,10 +195,21 @@ export async function throttledNseCall<T>(
     }
   })();
 
-  inflight.set(endpointName, promise);
-  promise.finally(() => {
-    if (inflight.get(endpointName) === promise) inflight.delete(endpointName);
-  });
+  inflight.set(opts.coalesceKey, promise);
+  // The inflight-entry cleanup must run on BOTH success and failure.
+  // We can't use `.finally()` here because that returns a NEW promise that
+  // inherits the rejection state — and since nobody awaits that new
+  // promise, Node would log an `unhandledRejection` whenever `fn()` throws.
+  // Instead, attach a noop rejection handler (the original rejection is
+  // already surfaced to the caller via the returned `promise`).
+  promise.then(
+    () => {
+      if (inflight.get(opts.coalesceKey) === promise) inflight.delete(opts.coalesceKey);
+    },
+    () => {
+      if (inflight.get(opts.coalesceKey) === promise) inflight.delete(opts.coalesceKey);
+    },
+  );
 
   return promise;
 }

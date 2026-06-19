@@ -35,10 +35,22 @@ async function fetchChangeRangesFromNse(symbol: string): Promise<ChangeRanges | 
     throw new Error(`NSE returned ${res.status}`);
   }
   const payload = (await res.json()) as unknown;
-  if (!Array.isArray(payload) || payload.length === 0) {
-    throw new Error('Unexpected getYearwiseData response shape');
+  // NSE sometimes returns `{ data: [...] }`, sometimes a bare `[...]`,
+  // and sometimes an object/empty payload for unknown symbols (e.g.
+  // ARROWGREEN, which is too new for NSE's yearwise endpoint). Treat
+  // the latter as a soft miss (null) rather than throwing — throwing
+  // would trip the circuit breaker as if NSE were down.
+  let row: Record<string, unknown> | undefined;
+  if (Array.isArray(payload)) {
+    row = payload[0];
+  } else if (
+    payload &&
+    typeof payload === 'object' &&
+    Array.isArray((payload as { data?: unknown }).data)
+  ) {
+    row = ((payload as { data: unknown[] }).data[0] as Record<string, unknown>) ?? undefined;
   }
-  const row = payload[0] as Record<string, unknown>;
+  if (!row) return null;
   return parseChangeRangesRow(row);
 }
 
@@ -63,8 +75,10 @@ async function resolveChangeRanges(symbol: string): Promise<ChangeRanges | null>
   if (cached) return cached;
 
   try {
-    const value = await throttledNseCall(ENDPOINT_NAME, () =>
-      fetchChangeRangesFromNse(symbol),
+    const value = await throttledNseCall(
+      ENDPOINT_NAME,
+      () => fetchChangeRangesFromNse(symbol),
+      { coalesceKey: `${ENDPOINT_NAME}:${symbol}` },
     );
     if (value) cache.set(cacheKey, value, CHANGE_RANGES_TTL_SECONDS);
     return value;

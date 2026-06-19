@@ -152,6 +152,73 @@ async def confirm_match(
 # NOTE: {symbol} path-param routes must come AFTER all specific sub-paths
 # (pending-review, search/{prefix}, {symbol}/confirm-match) to prevent
 # FastAPI from matching "pending-review" as a symbol name.
+
+
+class NSEMarketRatiosResponse(BaseModel):
+    """Per-company market ratios from NSE's GetQuoteApi (live, no auth).
+
+    This is a FALLBACK data source used by the FDM widget when screener.in
+    is unavailable (HTTP 503). NSE provides a subset of what screener
+    returns — P/E, sector P/E, 52W high/low, plus the company name/ISIN.
+    iinvest also has the same ratios but only in the HTML overview page
+    (which the iinvest server only populates for authenticated browser
+    sessions, not the guest-JWT data APIs).
+    """
+    symbol: str
+    company_name: str | None = None
+    isin: str | None = None
+    symbol_pe: float | None = None
+    sector_pe: float | None = None
+    industry: str | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+    high_52w_date: datetime | None = None
+    low_52w_date: datetime | None = None
+    source: str = "NSE"
+
+
+@router.get(
+    "/stockuniverse/{symbol}/ratios",
+    response_model=NSEMarketRatiosResponse,
+    tags=["stockuniverse"],
+)
+async def get_market_ratios(
+    symbol: str,
+) -> NSEMarketRatiosResponse:
+    """Live per-company market ratios from NSE (no screener.in session needed).
+
+    Returns 4 of screener's 10 core ratios: P/E, sector P/E, 52W high, 52W low.
+    Used by the FDM widget as a fallback when screener.in returns 503.
+    """
+    from app.services.nse_client_async import nse_client_async, SymbolNotFoundError
+
+    symbol_upper = symbol.upper()
+    try:
+        meta = await nse_client_async.get_stock_metadata(symbol_upper)
+    except SymbolNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"symbol {symbol_upper} not found on NSE",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"NSE request failed: {exc}",
+        )
+    return NSEMarketRatiosResponse(
+        symbol=symbol_upper,
+        company_name=meta.companyName,
+        isin=meta.isin,
+        symbol_pe=meta.symbolPE,
+        sector_pe=meta.sectorPE,
+        industry=meta.industry,
+        high_52w=meta.high_52w,
+        low_52w=meta.low_52w,
+        high_52w_date=meta.high_52w_date,
+        low_52w_date=meta.low_52w_date,
+    )
+
+
 @router.get(
     "/stockuniverse/{symbol}",
     response_model=StockUniverseSchema,

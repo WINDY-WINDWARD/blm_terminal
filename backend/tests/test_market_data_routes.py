@@ -152,3 +152,84 @@ async def test_change_ranges_cache_hit(monkeypatch):
     second = await market_data.fetch_change_ranges_batch(["TCS"])
     assert second["TCS"] == {"oneDayPercent": 1.0}
     assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# HTTP route param binding (REST fallback used by the Next.js proxy)
+# ---------------------------------------------------------------------------
+
+
+def test_symbol_data_route_binds_single_query_param(monkeypatch):
+    """`/api/markets/symbol-data?symbol=X` must bind to the `symbol` list param.
+
+    The Next.js proxy at src/app/api/nse/symbol-data/route.ts hits this
+    route with a single `?symbol=X` query string when the NSE upstream
+    circuit is open. A binding regression (e.g. someone changing the
+    param to a path segment) would silently break the fallback.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import markets as markets_router_module
+    from app.services import market_data
+
+    captured: list[list[str]] = []
+
+    async def _fake(symbols):
+        captured.append(list(symbols))
+        return {symbols[0].upper(): {"ltp": 100.0, "pChange": 0.5, "yearHigh": 110, "yearLow": 90}}
+
+    # The router does `from app.services.market_data import fetch_symbol_data_batch`
+    # at module load, so we have to patch both the module attribute and the
+    # name the route closure already captured.
+    monkeypatch.setattr(market_data, "fetch_symbol_data_batch", _fake)
+    monkeypatch.setattr(markets_router_module, "fetch_symbol_data_batch", _fake)
+
+    app = FastAPI()
+    app.include_router(markets_router_module.router, prefix="/api")
+    client = TestClient(app)
+
+    resp = client.get("/api/markets/symbol-data?symbol=RELIANCE")
+
+    assert resp.status_code == 200, resp.text
+    assert captured == [["RELIANCE"]], captured
+    assert resp.json() == {
+        "data": {
+            "RELIANCE": {
+                "ltp": 100.0,
+                "pChange": 0.5,
+                "yearHigh": 110,
+                "yearLow": 90,
+            }
+        }
+    }
+
+
+def test_symbol_data_route_binds_repeated_query_params(monkeypatch):
+    """`?symbol=A&symbol=B` must bind both values to the `symbol` list param."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import markets as markets_router_module
+    from app.services import market_data
+
+    captured: list[list[str]] = []
+
+    async def _fake(symbols):
+        captured.append(list(symbols))
+        out = {}
+        for s in symbols:
+            out[s.upper()] = {"ltp": 100.0, "pChange": 0.5}
+        return out
+
+    monkeypatch.setattr(market_data, "fetch_symbol_data_batch", _fake)
+    monkeypatch.setattr(markets_router_module, "fetch_symbol_data_batch", _fake)
+
+    app = FastAPI()
+    app.include_router(markets_router_module.router, prefix="/api")
+    client = TestClient(app)
+
+    resp = client.get("/api/markets/symbol-data?symbol=RELIANCE&symbol=TCS")
+
+    assert resp.status_code == 200, resp.text
+    assert captured == [["RELIANCE", "TCS"]], captured

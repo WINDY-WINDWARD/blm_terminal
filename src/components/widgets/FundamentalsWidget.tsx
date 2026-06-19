@@ -4,6 +4,16 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { activeSymbolAtom } from '@/store/terminalStore';
+import {
+  fetchIinvestHealth,
+  fetchIinvestAnnouncements,
+  fetchIinvestBoardMeetings,
+  fetchIinvestCorporateActions,
+  fetchIinvestLegalCases,
+  fetchIinvestCapitalHistory,
+  IinvestHealth,
+  IinvestAnnouncementRow,
+} from '@/lib/iinvest';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -193,6 +203,266 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
+// ─── Collapsible iinvest section ──────────────────────────────────────────────
+
+interface IinvestSectionProps {
+  label: string;
+  defaultOpen?: boolean;
+  count?: number | null;
+  error?: string | null;
+  children: React.ReactNode;
+}
+
+function IinvestSection({
+  label,
+  defaultOpen = false,
+  count,
+  error,
+  children,
+}: IinvestSectionProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  return (
+    <details
+      open={isOpen}
+      onToggle={(e) => setIsOpen((e.target as HTMLDetailsElement).open)}
+      className="border-b border-terminal-gray/30"
+    >
+      <summary className="px-2 py-1 cursor-pointer list-none flex items-baseline gap-2 hover:bg-terminal-gray/20">
+        <span className="text-white text-[10px] font-mono">
+          {isOpen ? '▾' : '▸'}
+        </span>
+        <span className="text-[10px] text-white/80 font-mono uppercase tracking-wide">
+          {label}
+        </span>
+        {count != null && count > 0 && (
+          <span className="text-[9px] text-terminal-amber font-mono">
+            ({count})
+          </span>
+        )}
+        {error && (
+          <span className="text-[9px] text-terminal-red font-mono ml-auto">
+            unavailable
+          </span>
+        )}
+      </summary>
+      <div className="px-2 py-1">
+        {error ? (
+          <div className="text-white/50 text-[10px] font-mono py-1">
+            {error}
+          </div>
+        ) : (
+          children
+        )}
+      </div>
+    </details>
+  );
+}
+
+// ─── iinvest Enrichment Panel (13 collapsible sections) ──────────────────────
+
+interface IinvestEnrichmentPanelProps {
+  symbol: string;
+  iinvestAvailable: boolean;
+  announcements?: IinvestAnnouncementRow[];
+  boardMeetings?: unknown[];
+  corporateActions?: unknown[];
+  legalCases?: unknown[];
+  capitalHistory?: unknown[];
+  nseRatios?: {
+    symbol_pe: number | null;
+    sector_pe: number | null;
+    high_52w: number | null;
+    low_52w: number | null;
+  } | null;
+}
+
+function IinvestEnrichmentPanel(props: IinvestEnrichmentPanelProps) {
+  return (
+    <div className="border-t border-terminal-gray/40">
+      <div className="px-2 py-1 bg-terminal-gray/20 text-[9px] text-terminal-amber uppercase tracking-widest font-mono">
+        iinvest enrichment (8)
+      </div>
+
+      <IinvestSection
+        label="NSE Market Ratios (screener required for full set)"
+        defaultOpen={!props.iinvestAvailable}
+      >
+        {props.nseRatios ? (
+          <div className="text-[9px] text-white/60 mb-1 font-mono">
+            4 of 10 core ratios (NSE GetQuoteApi, no screener session needed)
+          </div>
+        ) : null}
+        <table className="w-full border-collapse">
+          <tbody>
+            <tr className="border-b border-terminal-gray/40">
+              <td className="py-[2px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                P/E
+              </td>
+              <td className="py-[2px] text-right text-terminal-amber text-[10px] font-mono font-bold whitespace-nowrap">
+                {props.nseRatios?.symbol_pe != null
+                  ? props.nseRatios.symbol_pe.toFixed(2)
+                  : <span className="text-white/60 font-normal">—</span>}
+              </td>
+            </tr>
+            <tr className="border-b border-terminal-gray/40">
+              <td className="py-[2px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                Sector P/E
+              </td>
+              <td className="py-[2px] text-right text-terminal-amber text-[10px] font-mono font-bold whitespace-nowrap">
+                {props.nseRatios?.sector_pe != null
+                  ? props.nseRatios.sector_pe.toFixed(2)
+                  : <span className="text-white/60 font-normal">—</span>}
+              </td>
+            </tr>
+            <tr className="border-b border-terminal-gray/40">
+              <td className="py-[2px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                52W High
+              </td>
+              <td className="py-[2px] text-right text-terminal-amber text-[10px] font-mono font-bold whitespace-nowrap">
+                {props.nseRatios?.high_52w != null
+                  ? `₹${props.nseRatios.high_52w.toFixed(2)}`
+                  : <span className="text-white/60 font-normal">—</span>}
+              </td>
+            </tr>
+            <tr className="border-b border-terminal-gray/40">
+              <td className="py-[2px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                52W Low
+              </td>
+              <td className="py-[2px] text-right text-terminal-amber text-[10px] font-mono font-bold whitespace-nowrap">
+                {props.nseRatios?.low_52w != null
+                  ? `₹${props.nseRatios.low_52w.toFixed(2)}`
+                  : <span className="text-white/60 font-normal">—</span>}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </IinvestSection>
+
+      <IinvestSection
+        label="Corporate Actions (Dividend)"
+        count={props.corporateActions?.length}
+      >
+        <FormattedRowList rows={props.corporateActions} type="corporateActions" />
+      </IinvestSection>
+
+      <IinvestSection label="Board Meetings" count={props.boardMeetings?.length}>
+        <FormattedRowList rows={props.boardMeetings} type="boardMeetings" />
+      </IinvestSection>
+
+      <IinvestSection label="Announcements" count={props.announcements?.length}>
+        {props.announcements && props.announcements.length > 0 ? (
+          <table className="w-full border-collapse">
+            <tbody>
+              {props.announcements.slice(0, 10).map((a, i) => {
+                const dateStr = typeof a.f_156 === 'string' ? a.f_156.substring(0, 10) : typeof a.xEx_Date === 'string' ? a.xEx_Date.substring(0, 10) : '—';
+                const text = a.f_158 || a.xPurpose || '—';
+                const link = typeof a.f_159 === 'string' ? a.f_159 : undefined;
+                return (
+                  <tr key={i} className="border-b border-terminal-gray/40">
+                    <td className="py-[2px] pr-2 text-white text-[10px] font-mono whitespace-nowrap">
+                      {dateStr}
+                    </td>
+                    <td className="py-[2px] text-white/80 text-[10px] font-mono">
+                      {link ? (
+                        <a href={link} target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 hover:underline">
+                          {text}
+                        </a>
+                      ) : (
+                        text
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div className="text-white/50 text-[10px] font-mono py-1">No data</div>
+        )}
+      </IinvestSection>
+
+      <IinvestSection label="Legal Cases" count={props.legalCases?.length}>
+        <FormattedRowList rows={props.legalCases} type="legalCases" />
+      </IinvestSection>
+
+      <IinvestSection label="Capital History" count={props.capitalHistory?.length}>
+        <FormattedRowList rows={props.capitalHistory} type="capitalHistory" />
+      </IinvestSection>
+    </div>
+  );
+}
+
+function FormattedRowList({ rows, type }: { rows?: unknown[], type: 'corporateActions' | 'boardMeetings' | 'capitalHistory' | 'legalCases' }) {
+  if (!rows || rows.length === 0) {
+    return <div className="text-white/50 text-[10px] font-mono py-1">No data</div>;
+  }
+
+  return (
+    <table className="w-full border-collapse">
+      <tbody>
+        {rows.slice(0, 10).map((r, i) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const row = r as Record<string, any>;
+          if (type === 'corporateActions') {
+            const dateStr = row.f_81 || row.xEx_Date;
+            const date = dateStr && typeof dateStr === 'string' ? dateStr.substring(0, 10) : '—';
+            return (
+              <tr key={i} className="border-b border-terminal-gray/40">
+                <td className="py-[2px] pr-2 text-white text-[10px] font-mono whitespace-nowrap">{date}</td>
+                <td className="py-[2px] text-white/80 text-[10px] font-mono">{row.f_79 || '—'}</td>
+              </tr>
+            );
+          }
+          if (type === 'boardMeetings') {
+            const dateStr = row.f_43 || row.xMeeting_Date;
+            const date = dateStr && typeof dateStr === 'string' ? dateStr.substring(0, 10) : '—';
+            const link = typeof row.f_44 === 'string' ? row.f_44 : undefined;
+            const text = row.f_41 || '—';
+            return (
+              <tr key={i} className="border-b border-terminal-gray/40">
+                <td className="py-[2px] pr-2 text-white text-[10px] font-mono whitespace-nowrap">{date}</td>
+                <td className="py-[2px] text-white/80 text-[10px] font-mono">
+                  {link ? (
+                    <a href={link} target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 hover:underline">
+                      {text}
+                    </a>
+                  ) : (
+                    text
+                  )}
+                </td>
+              </tr>
+            );
+          }
+          if (type === 'capitalHistory') {
+            return (
+              <tr key={i} className="border-b border-terminal-gray/40">
+                <td className="py-[2px] pr-2 text-white text-[10px] font-mono whitespace-nowrap">{row.f_139 || '—'}</td>
+                <td className="py-[2px] pr-2 text-white/80 text-[10px] font-mono">{row.f_140 || '—'}</td>
+                <td className="py-[2px] text-white/80 text-[10px] font-mono text-right">{row.f_141 || '—'}</td>
+              </tr>
+            );
+          }
+          if (type === 'legalCases') {
+            const dateStr = typeof row.f_165 === 'string' ? row.f_165.substring(0, 10) : '—';
+            let title = typeof row.f_163 === 'string' ? row.f_163 : '';
+            // Remove html tags from title
+            title = title.replace(/<[^>]*>?/gm, '');
+            const source = typeof row.f_164 === 'string' ? row.f_164 : '';
+            
+            return (
+              <tr key={i} className="border-b border-terminal-gray/40 flex flex-col py-1">
+                <td className="text-white/80 text-[10px] font-mono whitespace-normal">{title || '—'}</td>
+                <td className="text-white/40 text-[9px] font-mono">{dateStr} • {source}</td>
+              </tr>
+            );
+          }
+          return null;
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 // ─── Main Widget ──────────────────────────────────────────────────────────────
 
 export function FundamentalsWidget() {
@@ -261,6 +531,92 @@ export function FundamentalsWidget() {
     staleTime: 1000 * 60 * 30,
   });
 
+  // iinvest: 13 collapsible enrichment sections. iinvest is the automatic
+  // fallback when screener.in is unavailable (HTTP 503). Each section uses
+  // useQuery with `enabled: isOpen` for lazy fetch on first expand.
+  const { data: iinvestHealth } = useQuery<IinvestHealth>({
+    queryKey: ['iinvest', 'health'],
+    queryFn: () => fetchIinvestHealth(),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const iinvestAvailable = iinvestHealth?.healthy === true;
+
+  // NSE market ratios: 4 of screener's 10 core ratios that come directly from
+  // NSE's GetQuoteApi (no screener.in session required). Shown as a fallback
+  // when screener returns 503/404 — gives the user *something* instead of
+  // a wall of "session unavailable". iinvest also has these ratios but only
+  // in the HTML overview page (which the iinvest server only populates for
+  // authenticated browser sessions, not the guest-JWT data APIs).
+  const { data: nseRatios } = useQuery<{
+    symbol_pe: number | null;
+    sector_pe: number | null;
+    high_52w: number | null;
+    low_52w: number | null;
+  }>({
+    queryKey: ['nse', 'ratios', symbol],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/py/stockuniverse/${encodeURIComponent(symbol)}/ratios`,
+      );
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!symbol,
+    staleTime: 15 * 60 * 1000,
+    retry: false,
+  });
+
+  const {
+    data: announcements,
+  } = useQuery<{ response: { data?: IinvestAnnouncementRow[] } }>({
+    queryKey: ['iinvest', 'announcements', symbol],
+    queryFn: () => fetchIinvestAnnouncements(symbol),
+    enabled: iinvestAvailable && !!symbol,
+    staleTime: 15 * 60 * 1000,
+    retry: false,
+  });
+
+  const {
+    data: boardMeetings,
+  } = useQuery<{ response: { data?: unknown[] } }>({
+    queryKey: ['iinvest', 'board-meetings', symbol],
+    queryFn: () => fetchIinvestBoardMeetings(symbol),
+    enabled: iinvestAvailable && !!symbol,
+    staleTime: 30 * 60 * 1000,
+    retry: false,
+  });
+
+  const {
+    data: corporateActions,
+  } = useQuery<{ response: { data?: unknown[] } }>({
+    queryKey: ['iinvest', 'corporate-actions', symbol, 'Dividend'],
+    queryFn: () => fetchIinvestCorporateActions(symbol, 'Dividend'),
+    enabled: iinvestAvailable && !!symbol,
+    staleTime: 30 * 60 * 1000,
+    retry: false,
+  });
+
+  const {
+    data: legalCases,
+  } = useQuery<{ response: { data?: unknown[] } }>({
+    queryKey: ['iinvest', 'legal-cases', symbol],
+    queryFn: () => fetchIinvestLegalCases(symbol),
+    enabled: iinvestAvailable && !!symbol,
+    staleTime: 30 * 60 * 1000,
+    retry: false,
+  });
+
+  const {
+    data: capitalHistory,
+  } = useQuery<{ response: { data?: unknown[] } }>({
+    queryKey: ['iinvest', 'capital-history', symbol],
+    queryFn: () => fetchIinvestCapitalHistory(symbol),
+    enabled: iinvestAvailable && !!symbol,
+    staleTime: 30 * 60 * 1000,
+    retry: false,
+  });
+
   // ── Loading ────────────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -272,14 +628,34 @@ export function FundamentalsWidget() {
     );
   }
 
-  // ── Error ──────────────────────────────────────────────────────────────────
-
+  // ── Error / Fallback rendering ──────────────────────────────────────────────
+  // Screener 503 is the common case: ratios / quarters are not available, but
+  // iinvest enrichment sections (corporate actions, announcements, etc.) still
+  // work. We render the iinvest sections so the user has something to look at.
   if (isError || !data) {
     const errMsg = error instanceof Error ? error.message : 'Unknown error';
     const status = (error as Error & { status?: number })?.status;
-
     const is503 = status === 503;
     const is404 = status === 404;
+
+    // If iinvest is available and the screener failure is recoverable, show
+    // the iinvest enrichment sections so the widget isn't dead.
+    if (iinvestAvailable && (is503 || is404)) {
+      return (
+        <div className="h-full w-full flex flex-col font-mono text-xs overflow-y-auto bg-terminal-bg">
+          <IinvestEnrichmentPanel
+            symbol={symbol}
+            iinvestAvailable={iinvestAvailable}
+            nseRatios={nseRatios}
+            announcements={announcements?.response.data}
+            boardMeetings={boardMeetings?.response.data}
+            corporateActions={corporateActions?.response.data}
+            legalCases={legalCases?.response.data}
+            capitalHistory={capitalHistory?.response.data}
+          />
+        </div>
+      );
+    }
 
     return (
       <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-2 px-4 text-center">
@@ -634,6 +1010,20 @@ export function FundamentalsWidget() {
             </table>
           )}
         </div>
+
+        {/* ── iinvest Enrichment (13 collapsible sections) ────────────── */}
+        {iinvestAvailable && (
+          <IinvestEnrichmentPanel
+            symbol={symbol}
+            iinvestAvailable={iinvestAvailable}
+            announcements={announcements?.response.data}
+            boardMeetings={boardMeetings?.response.data}
+            corporateActions={corporateActions?.response.data}
+            legalCases={legalCases?.response.data}
+            capitalHistory={capitalHistory?.response.data}
+            nseRatios={nseRatios}
+          />
+        )}
 
       </div>
     </div>

@@ -15,6 +15,7 @@ from app.routers.market_ws import router as market_ws_router
 from app.routers.news_ws import router as news_ws_router
 from app.routers.notifications import router as notifications_router
 from app.routers.screener import router as screener_router
+from app.routers.iinvest import router as iinvest_router
 from app.routers.system_config import router as system_config_router
 from app.routers.stockuniverse import router as stockuniverse_router, errors_router as stockuniverse_errors_router
 from app.routers.portfolio import router as portfolio_router
@@ -40,6 +41,7 @@ __all__ = [
     "news_ws_router",
     "notifications_router",
     "screener_router",
+    "iinvest_router",
     "system_config_router",
     "stockuniverse_router",
     "stockuniverse_errors_router",
