@@ -24,6 +24,7 @@ _SSL_CONTEXT = ssl.create_default_context()
 
 from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse
+from app.services.nlp_service import analyze_article_dict
 
 
 @dataclass
@@ -663,6 +664,12 @@ class NewsFetcher:
                     if raw_author:
                         authors = [str(raw_author)]
 
+                nlp = analyze_article_dict(
+                    headline=title or "",
+                    summary=text or "",
+                    source_name=source,
+                )
+
                 result = {
                     "url": url,
                     "source": source,
@@ -671,6 +678,14 @@ class NewsFetcher:
                     "authors": authors,
                     "top_image": top_image,
                     "publish_date": publish_date,
+                    "sentiment": nlp["sentiment"],
+                    "sentiment_score": nlp["sentiment_score"],
+                    "confidence": nlp["confidence"],
+                    "language": nlp["language"],
+                    "entities": nlp["entities"],
+                    "threat_level": nlp["threat_level"],
+                    "threat_category": nlp["threat_category"],
+                    "source_credibility": nlp["source_credibility"],
                 }
                 logger.debug(
                     f"Parsed article: {title[:30] if title else 'No title'}..."
@@ -1113,7 +1128,6 @@ async def fetch_iinvest_company_news(
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from app.models.stockuniverse import StockUniverse as _SU
     from app.services.iinvest_client import get_iinvest_client
-    from app.services.nlp_service import analyze_article_dict
 
     symbol_upper = symbol.upper()
     row = (await db.execute(

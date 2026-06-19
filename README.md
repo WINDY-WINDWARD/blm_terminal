@@ -54,7 +54,6 @@ Browser
   └── Next.js 16 Frontend (port 3000)
         ├── /api/openalgo/*   → rate-limit → cache → OpenAlgo API (port 8800)
         ├── /api/py/*         → Python FastAPI backend (port 4455)
-        ├── /api/settings     → Prisma → SQLite (TopMoverSymbol, UserSettings)
         ├── /api/watchlist    → Python FastAPI backend (multiple watchlists in backend DB)
         └── /api/notifications → Watchlist price alerts
 
@@ -84,7 +83,6 @@ Python FastAPI Backend (port 4455)          ← standalone, no Next.js dependenc
 git clone <repo-url> blm_terminal
 cd blm_terminal
 npm install
-npx prisma generate
 ```
 
 ### 2 — Configure environment variables
@@ -154,7 +152,6 @@ LOG_LEVEL=INFO
 npm run dev       # dev server with Turbopack
 npm run build     # production build + TypeScript check
 npm run lint      # ESLint v9 flat config
-npx prisma generate   # regenerate client after schema changes
 ```
 
 ### Python backend
@@ -180,7 +177,6 @@ src/
 │   ├── api/                  # Next.js API routes (proxy layer)
 │   │   ├── openalgo/         # Broker proxy: rate-limit → cache → OpenAlgo
 │   │   ├── py/[...path]/     # Catch-all proxy → Python backend
-│   │   ├── settings/         # User settings (Prisma/SQLite)
 │   │   └── watchlist/        # Watchlist CRUD (proxied to Python backend)
 │   ├── globals.css           # Tailwind v4 design tokens
 │   ├── layout.tsx
@@ -193,7 +189,7 @@ src/
 │   ├── marketWs.ts           # Native WebSocket singleton for market ticks (wsService)
 │   ├── newsSocket.ts         # Native WebSocket singleton for live news feed
 │   ├── cache.ts              # In-memory TTL cache (Map-backed, fixed-window rate limiter)
-│   └── …                     # openalgo.ts, openalgo-server.ts, prisma.ts, logger.ts
+│   └── …                     # openalgo.ts, openalgo-server.ts, logger.ts
 └── store/
     └── terminalStore.ts      # All Jotai atoms
 backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatch build)
@@ -208,8 +204,6 @@ backend/                      # FastAPI analytics service (Python ≥ 3.11, Hatc
 │   └── backgroundtasks.py   # Fair value sync, notification worker (scheduled tasks)
 ├── alembic/                  # DB migrations (auto-applied on startup)
 └── main.py                   # FastAPI entrypoint + migration runner
-prisma/
-└── schema.prisma             # Models: TopMoverSymbol, UserSettings
                               # (watchlist & notifications live in the Python backend DB)
 blm-mcp-bundle/              # Claude Desktop MCP plugin
 ├── server/index.js           # Node.js proxy (stdio → HTTP)

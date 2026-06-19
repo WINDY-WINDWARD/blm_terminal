@@ -9,7 +9,6 @@ Guidelines for AI coding agents working in this repository.
 Financial terminal UI: **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, **Jotai** (with `atomWithStorage`), native **WebSocket** for real-time data.
 Widgets: Chart, Watch, Movers, Order, Pos, Settings, Deals, Largedeals, Breakouts, Fundamentals, News, Analysis, Notif, Ai, Announcements, Portfolio, Scan, Screener, Docs.
 Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy; manages its own SQLite DB via Alembic.
-Local persistence: **Prisma + SQLite** (`better-sqlite3`) for `TopMoverSymbol`, `UserSettings`.
 
 ### External data providers
 
@@ -28,7 +27,6 @@ npm run dev       # dev server
 npm run build     # production build + TypeScript check
 npm start         # serve production build
 npm run lint      # ESLint v9 flat config
-npx prisma generate  # regenerate Prisma client
 ```
 
 ### Python backend (`backend/`)
@@ -55,7 +53,6 @@ src/
 ├── app/api/
 │   ├── openalgo/    # proxy routes → rate-limit → cache → OpenAlgoServerClient
 │   ├── py/[...path]/route.ts   # catch-all → PYTHON_BACKEND_URL
-│   ├── settings/route.ts       # GET/PUT Prisma UserSettings
 │   ├── watchlist/route.ts      # single watchlist
 │   ├── watchlists/route.ts     # multiple watchlists
 │   ├── notifications/route.ts  # GET/POST
@@ -83,7 +80,6 @@ backend/  # FastAPI (Python ≥ 3.11)
 ├── app/orchestrator.py  # central background worker manager
 ├── app/backgroundtasks.py  # fair value sync, notification worker, stock universe sync
 └── tests/
-prisma/schema.prisma
 blm-mcp-bundle/  # Claude Desktop MCP plugin (52 tools: 32 base + 20 iinvest_*)
 ```
 

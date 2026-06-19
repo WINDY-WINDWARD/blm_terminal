@@ -14,7 +14,7 @@ import {
   IinvestHealth,
   IinvestAnnouncementRow,
 } from '@/lib/iinvest';
-import { fetchTradingViewFundamentals } from '@/lib/tradingview';
+import { fetchTradingViewFundamentals, TradingViewFundamentals } from '@/lib/tradingview';
 import { TradingViewPanel } from './TradingViewPanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -135,9 +135,9 @@ interface PeterLynchResult {
   epsKey: string | null;
 }
 
-function calcPeterLynch(ratios: ScreenerRatios): PeterLynchResult {
-  const pe       = parseNum(ratios.pe);
-  const divYield = parseNum(ratios.dividend_yield);
+function calcPeterLynch(ratios: ScreenerRatios, tvData?: TradingViewFundamentals | null): PeterLynchResult {
+  const pe       = tvData?.price_earnings_ttm ?? parseNum(ratios.pe);
+  const divYield = tvData?.dividends_yield ?? parseNum(ratios.dividend_yield);
 
   let epsGrowth: number | null = null;
   for (const key of EPS_GROWTH_KEYS) {
@@ -145,11 +145,14 @@ function calcPeterLynch(ratios: ScreenerRatios): PeterLynchResult {
     if (val !== null) { epsGrowth = val; break; }
   }
 
-  let latestEps: number | null = null;
-  let epsKey: string | null = null;
-  for (const key of EPS_KEYS) {
-    const val = parseNum(ratios[key]);
-    if (val !== null) { latestEps = val; epsKey = key; break; }
+  let latestEps: number | null = tvData?.earnings_per_share_basic_ttm ?? null;
+  let epsKey: string | null = latestEps !== null ? 'TV TTM' : null;
+
+  if (latestEps === null) {
+    for (const key of EPS_KEYS) {
+      const val = parseNum(ratios[key]);
+      if (val !== null) { latestEps = val; epsKey = key; break; }
+    }
   }
 
   const ratioMissingKey =
@@ -704,7 +707,7 @@ export function FundamentalsWidget() {
     ([k]) => !CORE_KEYS_SET.has(k as keyof ScreenerRatios),
   );
 
-  const lynch = calcPeterLynch(ratios);
+  const lynch = calcPeterLynch(ratios, tradingViewData);
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
@@ -724,6 +727,9 @@ export function FundamentalsWidget() {
 
       {/* ── Scrollable body: all sections ─────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto min-h-0">
+
+        {/* ── TradingView Fundamentals ────────────────────────────────── */}
+        {tradingViewData && <TradingViewPanel data={tradingViewData} />}
 
         {/* ── Ratios ──────────────────────────────────────────────────────── */}
         <div className="px-2 py-1">
@@ -1021,9 +1027,6 @@ export function FundamentalsWidget() {
             </table>
           )}
         </div>
-
-        {/* ── TradingView Fundamentals ────────────────────────────────── */}
-        {tradingViewData && <TradingViewPanel data={tradingViewData} />}
 
         {/* ── iinvest Enrichment (13 collapsible sections) ────────────── */}
         {iinvestAvailable && (

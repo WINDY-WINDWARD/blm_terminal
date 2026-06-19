@@ -20,7 +20,7 @@ export function TradingViewPanel({ data }: { data: TradingViewFundamentals }) {
   if (!data || Object.keys(data).length === 0) return null;
 
   return (
-    <div className="mt-4 flex flex-col gap-2">
+    <div className="mt-2 mb-4 flex flex-col gap-2">
       <div className="px-2 pb-1 border-b border-terminal-gray/40">
         <span className="text-[11px] text-white/80 font-bold uppercase tracking-widest">
           TradingView Snapshot (TTM/FQ)

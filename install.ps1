@@ -245,9 +245,7 @@ Invoke-Step "Installing Node.js dependencies (npm install)" {
     & npm install
 }
 
-Invoke-Step "Generating Prisma client (npx prisma generate)" {
     Set-Location $RepoRoot
-    & npx prisma generate
 }
 
 Invoke-Step "Building frontend (npm run build)" {
