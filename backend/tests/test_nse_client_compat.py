@@ -154,6 +154,58 @@ class TestAsyncDelegation:
         assert result is fake_df
         m.assert_awaited_once()
 
+    def test_facade_reuses_client_same_thread(self):
+        from app.services.nse_client import nse_client
+        import httpx
+
+        async def get_client_id():
+            client = await nse_client._async._get_client()
+            return id(client)
+
+        from app.backgroundtasks._runtime import _run_async, _cleanup_run_async_loops
+        try:
+            id1 = _run_async(get_client_id())
+            id2 = _run_async(get_client_id())
+            assert id1 == id2
+        finally:
+            _cleanup_run_async_loops()
+
+    def test_facade_separate_clients_per_thread(self):
+        from app.services.nse_client import nse_client
+        from app.backgroundtasks._runtime import _run_async, _cleanup_run_async_loops
+        import threading
+        
+        clients = []
+        
+        def worker():
+            async def get_client_id():
+                return id(await nse_client._async._get_client())
+            clients.append(_run_async(get_client_id()))
+            
+        t1 = threading.Thread(target=worker)
+        t2 = threading.Thread(target=worker)
+        
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        
+        try:
+            assert len(clients) == 2
+            assert clients[0] != clients[1]
+        finally:
+            _cleanup_run_async_loops()
+
+    def test_run_async_from_sync_rejects_async_context(self):
+        from app.services.nse_client_async import _run_async_from_sync
+        import asyncio
+        
+        async def go():
+            with pytest.raises(RuntimeError, match="Cannot use sync NSEClient facade from within an async context"):
+                _run_async_from_sync(asyncio.sleep(0))
+                
+        asyncio.run(go())
+
     def test_get_52week_high_delegates_to_async(self):
         from app.services.nse_client import NSEClient
 

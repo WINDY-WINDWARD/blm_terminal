@@ -74,33 +74,20 @@ class NSEClientAsync:
     """
 
     def __init__(self) -> None:
-        self._http: httpx.AsyncClient | None = None
-        self._http_loop_id: int | None = None
+        self._http_clients: dict[int, httpx.AsyncClient] = {}
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Lazily create the persistent httpx client.
+        """Lazily create the persistent httpx client per event loop.
 
-        Detects event loop changes and recreates the client to avoid using a
-        stale client bound to a different (possibly closed) event loop. This
-        is expected when the sync :class:`NSEClient` facade calls async
-        methods via ``asyncio.run()``, which creates a fresh event loop
-        per invocation.
+        Detects event loop changes and maintains a separate client per loop
+        to avoid using a stale client bound to a different (possibly closed)
+        event loop.
         """
         current_loop = asyncio.get_running_loop()
-        if self._http is not None and self._http_loop_id is not None and self._http_loop_id != id(current_loop):
-            logger.debug(
-                "NSEClientAsync: event loop changed (was %d, now %d), recreating httpx client",
-                self._http_loop_id, id(current_loop),
-            )
-            try:
-                await self._http.aclose()
-            except (RuntimeError, Exception):
-                pass
-            self._http = None
-            self._http_loop_id = None
+        loop_id = id(current_loop)
 
-        if self._http is None:
-            self._http = httpx.AsyncClient(
+        if loop_id not in self._http_clients:
+            self._http_clients[loop_id] = httpx.AsyncClient(
                 base_url=NSE_BASE_URL,
                 headers=NSE_HEADERS,
                 timeout=httpx.Timeout(30.0, connect=15.0),
@@ -111,14 +98,13 @@ class NSEClientAsync:
                     keepalive_expiry=30.0,
                 ),
             )
-            self._http_loop_id = id(current_loop)
 
-        return self._http
+        return self._http_clients[loop_id]
 
     async def close(self) -> None:
-        if self._http is not None:
-            await self._http.aclose()
-            self._http = None
+        for client in self._http_clients.values():
+            await client.aclose()
+        self._http_clients.clear()
 
     def _clean_df(self, df: pd.DataFrame) -> pd.DataFrame:
         return df.replace({np.nan: None, pd.NA: None})
@@ -472,6 +458,30 @@ nse_client_async = NSEClientAsync()
 # intentional outcome of the "drift-proof" audit goal.
 
 
+def _run_async_from_sync(coro):
+    """Run an async coroutine from sync code with the right strategy.
+
+    - If the calling thread has a registered event loop (daemon worker via
+      ``_run_async``), use it.
+    - Otherwise, create a new event loop with ``asyncio.run`` (FastAPI sync
+      path, one-off scripts).
+    """
+    from app.backgroundtasks._runtime import _run_async
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # no running loop — safe to use _run_async or asyncio.run
+    else:
+        raise RuntimeError(
+            "Cannot use sync NSEClient facade from within an async context. "
+            "Use `await nse_client_async.method()` instead."
+        )
+    
+    # We always use _run_async because it natively falls back to 
+    # creating a per-thread event loop if none exists.
+    return _run_async(coro)
+
+
 class NSEClient:
     """Sync-compatible facade over :class:`NSEClientAsync` (audit B.10).
 
@@ -503,47 +513,47 @@ class NSEClient:
             return nsepython.nse_eq_symbols()
 
     def get_stock_metadata(self, symbol: str) -> Any:
-        return asyncio.run(self._async.get_stock_metadata(symbol))
+        return _run_async_from_sync(self._async.get_stock_metadata(symbol))
 
     def get_corporate_filing_comparison(self, symbol: str) -> str:
         """Sync — delegates to ``NSEClientAsync.get_corporate_filing_comparison``."""
         return self._async.get_corporate_filing_comparison(symbol)
 
     def get_top_gainers(self) -> "pd.DataFrame":
-        return asyncio.run(self._async.get_top_gainers())
+        return _run_async_from_sync(self._async.get_top_gainers())
 
     def get_top_losers(self) -> "pd.DataFrame":
-        return asyncio.run(self._async.get_top_losers())
+        return _run_async_from_sync(self._async.get_top_losers())
 
     def check_bulk_deals(self, symbol: str) -> "pd.DataFrame":
-        return asyncio.run(self._async.check_bulk_deals(symbol))
+        return _run_async_from_sync(self._async.check_bulk_deals(symbol))
 
     def check_block_deals(self, symbol: str) -> "pd.DataFrame":
-        return asyncio.run(self._async.check_block_deals(symbol))
+        return _run_async_from_sync(self._async.check_block_deals(symbol))
 
     def get_high_short_interest(self) -> "pd.DataFrame":
-        return asyncio.run(self._async.get_high_short_interest())
+        return _run_async_from_sync(self._async.get_high_short_interest())
 
     def get_52week_low_stocks(self) -> dict:
-        return asyncio.run(self._async.get_52week_low_stocks())
+        return _run_async_from_sync(self._async.get_52week_low_stocks())
 
     def get_52week_high_stocks(self) -> dict:
-        return asyncio.run(self._async.get_52week_high_stocks())
+        return _run_async_from_sync(self._async.get_52week_high_stocks())
 
     def get_volume_gainers(self) -> dict:
-        return asyncio.run(self._async.get_volume_gainers())
+        return _run_async_from_sync(self._async.get_volume_gainers())
 
     def get_largedeal_snapshot(self) -> dict:
-        return asyncio.run(self._async.get_largedeal_snapshot())
+        return _run_async_from_sync(self._async.get_largedeal_snapshot())
 
     def get_market_variations(self, index: str) -> dict[str, Any]:
-        return asyncio.run(self._async.get_market_variations(index))
+        return _run_async_from_sync(self._async.get_market_variations(index))
 
     def get_change_ranges(self, symbol: str) -> dict[str, float]:
-        return asyncio.run(self._async.get_change_ranges(symbol))
+        return _run_async_from_sync(self._async.get_change_ranges(symbol))
 
     def get_symbol_data(self, symbol: str) -> dict[str, Any]:
-        return asyncio.run(self._async.get_symbol_data(symbol))
+        return _run_async_from_sync(self._async.get_symbol_data(symbol))
 
     async def close(self) -> None:
         """Async close (mirrors the legacy ``NSEClient.close`` signature)."""
