@@ -412,3 +412,33 @@ class TestFetchAndParseSemaphoreSleepParity:
         releases = [e for e in events if e[0] == "sem_release"]
         assert acquires == [("sem_acquire", 1)]
         assert releases == [("sem_release", 0)]
+
+@pytest.mark.perf
+async def test_news_fetcher_perf_streaming(monkeypatch, in_memory_db):
+    """Test that stream processing consumes less memory."""
+    import tracemalloc
+    from app.database import AsyncSessionLocal
+    
+    fake = FakeAsyncClient()
+    fetcher = make_fetcher(fake_client=fake)
+    
+    def mock_extract(*args):
+        return [f"https://www.moneycontrol.com/news/article-{i:06d}.html" for i in range(500)]
+        
+    async def mock_fetch_listing(*args):
+        return "html"
+        
+    fetcher._extract_article_urls = mock_extract
+    fetcher._fetch_listing_page = mock_fetch_listing
+    
+    tracemalloc.start()
+    start_mem, _ = tracemalloc.get_traced_memory()
+    
+    async with AsyncSessionLocal() as db:
+        await fetcher.crawl_and_store(pages=1, db=db)
+        
+    end_mem, _ = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    
+    diff_mb = (end_mem - start_mem) / (1024 * 1024)
+    assert diff_mb < 10.0, f"Memory leaked {diff_mb:.2f} MB"

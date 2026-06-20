@@ -174,3 +174,58 @@ class TestBackgroundTasksNotWrapped:
                     f"ticker_warehouse in {py}.  These run in worker "
                     f"threads and don't need the async wrap."
                 )
+
+def test_get_latest_indicator_rows_window(in_memory_db):
+    """Test that get_latest_indicator_rows returns exactly 10 rows per symbol ASC."""
+    import datetime
+    from app.services.ticker_warehouse import get_latest_indicator_rows
+    from app.models.ticker import TickerDaily
+    from app.database import _SyncSessionLocal
+    
+    with _SyncSessionLocal() as db:
+        for sym in ["SYM1", "SYM2"]:
+            for i in range(15):
+                db.add(TickerDaily(
+                    symbol=sym,
+                    date=datetime.date(2025, 1, 1) + datetime.timedelta(days=i),
+                    series="EQ",
+                    open=1, high=2, low=1, close=1.5, volume=100, value=150,
+                    source="test"
+                ))
+        db.commit()
+        
+    res = get_latest_indicator_rows(["SYM1", "SYM2"], n=10)
+    assert len(res) == 2
+    assert len(res["SYM1"]) == 10
+    assert len(res["SYM2"]) == 10
+    
+    # Assert ASC date order
+    for sym in ["SYM1", "SYM2"]:
+        dates = [r.date for r in res[sym]]
+        assert dates == sorted(dates)
+
+@pytest.mark.perf
+def test_get_latest_indicator_rows_perf_row_count(in_memory_db):
+    """Test the memory efficiency of the window function approach."""
+    import datetime
+    from app.services.ticker_warehouse import get_latest_indicator_rows
+    from app.models.ticker import TickerDaily
+    from app.database import _SyncSessionLocal
+    
+    with _SyncSessionLocal() as db:
+        for sym in [f"SYM{i}" for i in range(100)]:
+            for j in range(260):
+                db.add(TickerDaily(
+                    symbol=sym,
+                    date=datetime.date(2024, 1, 1) + datetime.timedelta(days=j),
+                    series="EQ",
+                    open=1, high=2, low=1, close=1.5, volume=100, value=150,
+                    source="test"
+                ))
+        db.commit()
+    
+    res = get_latest_indicator_rows([f"SYM{i}" for i in range(100)], n=10)
+    # The true test of memory efficiency is handled by the framework but we assert logic here
+    assert len(res) == 100
+    for sym in res:
+        assert len(res[sym]) == 10

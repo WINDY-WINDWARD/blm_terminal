@@ -700,16 +700,25 @@ def get_latest_indicator_rows(
     if not symbols:
         return {}
     with _get_session() as db:
-        rows = db.execute(
-            select(TickerDaily)
+        from sqlalchemy.orm import aliased
+        rn_col = func.row_number().over(
+            partition_by=TickerDaily.symbol,
+            order_by=TickerDaily.date.desc(),
+        ).label("rn")
+        subq = (
+            select(TickerDaily, rn_col)
             .where(TickerDaily.symbol.in_(symbols))
-            .order_by(TickerDaily.symbol, TickerDaily.date.desc())
+            .cte("_ranked")
+        )
+        RankedTD = aliased(TickerDaily, subq)
+        rows = db.execute(
+            select(RankedTD)
+            .where(subq.c.rn <= n)
+            .order_by(RankedTD.symbol, subq.c.rn)
         ).scalars().all()
     by_sym: dict[str, list[TickerDaily]] = {}
     for r in rows:
-        bucket = by_sym.setdefault(r.symbol, [])
-        if len(bucket) < n:
-            bucket.append(r)
+        by_sym.setdefault(r.symbol, []).append(r)
     for sym in by_sym:
         by_sym[sym].reverse()
     return by_sym

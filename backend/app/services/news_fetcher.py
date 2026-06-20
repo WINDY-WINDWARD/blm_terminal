@@ -751,18 +751,15 @@ class NewsFetcher:
             async with sem:
                 return await self._fetch_and_parse_article(url)
 
-        all_results = await asyncio.gather(
-            *[bounded_fetch(url) for url in new_urls],
-            return_exceptions=True,
-        )
-
-        logger.debug(f"Got {len(all_results)} results, filtering None values")
-        valid_results = [r for r in all_results if r is not None]
-        logger.debug(f"Valid results: {len(valid_results)}")
+        tasks = [asyncio.create_task(bounded_fetch(url)) for url in new_urls]
 
         pending_batch = []
-        for i, parsed in enumerate(valid_results):
+        for i, task in enumerate(asyncio.as_completed(tasks)):
             try:
+                parsed = await task
+                if parsed is None:
+                    continue
+
                 parsed["fetched_at"] = now
                 pending_batch.append(parsed)
 
@@ -774,10 +771,10 @@ class NewsFetcher:
                     )
                     await db.execute(stmt)
                     stored_count += len(pending_batch)
-                    logger.debug(f"Stored batch of {len(pending_batch)} ({i + 1}/{len(valid_results)} total)")
+                    logger.debug(f"Stored batch of {len(pending_batch)} ({i + 1}/{len(new_urls)} processed)")
                     pending_batch = []
             except Exception:
-                logger.exception(f"Error storing article {i}: {parsed.get('url')}")
+                logger.exception("Error storing article")
 
         if pending_batch:
             stmt = (
