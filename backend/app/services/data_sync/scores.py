@@ -151,6 +151,8 @@ def _ticker_scores_sync() -> None:
             db.commit()
             gc.collect()
 
+        update_job_status_sync("job.ticker_scores", "running", progress=95, message="Building screener snapshot (completed via batching)...")
+
         logger.info("ticker_scores_sync: complete, cached %d symbols", len(results))
         update_job_status_sync("job.ticker_scores", "waiting", progress=100, message=f"Cached {len(results)} symbols")
 

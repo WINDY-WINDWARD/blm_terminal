@@ -74,36 +74,49 @@ class NSEClientAsync:
     """
 
     def __init__(self) -> None:
-        self._http_clients: dict[int, httpx.AsyncClient] = {}
+        self._http_clients: dict[int, tuple[asyncio.AbstractEventLoop, httpx.AsyncClient]] = {}
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazily create the persistent httpx client per event loop.
 
         Detects event loop changes and maintains a separate client per loop
         to avoid using a stale client bound to a different (possibly closed)
-        event loop.
+        event loop. Proactively removes clients for closed loops to prevent memory leaks.
         """
         current_loop = asyncio.get_running_loop()
         loop_id = id(current_loop)
 
+        # Proactively clean up closed loops
+        stale_ids = []
+        for lid, (loop, client) in list(self._http_clients.items()):
+            if loop.is_closed():
+                stale_ids.append(lid)
+        
+        for lid in stale_ids:
+            del self._http_clients[lid]
+
         if loop_id not in self._http_clients:
-            self._http_clients[loop_id] = httpx.AsyncClient(
-                base_url=NSE_BASE_URL,
-                headers=NSE_HEADERS,
-                timeout=httpx.Timeout(30.0, connect=15.0),
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=10,
-                    max_keepalive_connections=5,
-                    keepalive_expiry=30.0,
-                ),
+            self._http_clients[loop_id] = (
+                current_loop,
+                httpx.AsyncClient(
+                    base_url=NSE_BASE_URL,
+                    headers=NSE_HEADERS,
+                    timeout=httpx.Timeout(30.0, connect=15.0),
+                    follow_redirects=True,
+                    limits=httpx.Limits(
+                        max_connections=10,
+                        max_keepalive_connections=5,
+                        keepalive_expiry=30.0,
+                    ),
+                )
             )
 
-        return self._http_clients[loop_id]
+        return self._http_clients[loop_id][1]
 
     async def close(self) -> None:
-        for client in self._http_clients.values():
-            await client.aclose()
+        for loop, client in self._http_clients.values():
+            if not loop.is_closed():
+                await client.aclose()
         self._http_clients.clear()
 
     def _clean_df(self, df: pd.DataFrame) -> pd.DataFrame:

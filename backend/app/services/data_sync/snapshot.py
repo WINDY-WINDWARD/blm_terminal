@@ -60,6 +60,7 @@ def _screener_snapshot_sync(
     daily_df: pd.DataFrame,
     today_date: date,
     now: datetime,
+    skip_progress_update: bool = False,
 ) -> None:
     """Build/refresh ticker_screener_snapshot from in-memory 252d daily data
     plus 2 supplementary queries (latest 1h/W/M intraday + stock_universe).
@@ -71,10 +72,11 @@ def _screener_snapshot_sync(
     from app.database import _SyncSessionLocal
     from app.jobs.runner import update_job_status_sync
 
-    update_job_status_sync(
-        "job.ticker_scores", "running", progress=95,
-        message="Building screener snapshot...",
-    )
+    if not skip_progress_update:
+        update_job_status_sync(
+            "job.ticker_scores", "running", progress=95,
+            message="Building screener snapshot...",
+        )
 
     # 1. Reduce 252d window to the latest row per symbol
     daily_df_sorted = daily_df.sort_values(["symbol", "date"], ascending=[True, False])

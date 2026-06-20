@@ -111,7 +111,7 @@ def _process_symbol_batch(batch_symbols: list[str], today_date: date, now: datet
         }
 
     try:
-        _screener_snapshot_sync(batch_df, today_date, now)
+        _screener_snapshot_sync(batch_df, today_date, now, skip_progress_update=True)
     except Exception:
         logger.exception("ticker_scores_sync: screener snapshot failed (non-fatal)")
 

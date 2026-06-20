@@ -589,55 +589,126 @@ async def screener_search(q: str) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-async def screener_company(
-    symbol: str | None = None,
-    symbols: list[str] | None = None,
+async def company_fdm(
+    symbol: str,
+    sections: list[str] | None = None,
     consolidated: bool = True,
 ) -> dict[str, Any]:
-    """Fetch fundamental ratios and quarterly results for one or multiple NSE companies from screener.in.
+    """Fetch comprehensive FDM widget data for an NSE company in a single call.
+
+    This tool aggregates fundamental data from multiple backend sources:
+    - "screener": Fundamentals, peer comparison, quarterly results (screener.in).
+    - "tradingview": TradingView financial statistics and metrics.
+    - "morningstar": Morningstar fair value and uncertainty rating.
+    - "valuation": DCF Valuation calculations based on Morningstar & Screener data.
+    - "nse_ratios": Historical NSE PE/PB/Div ratios.
+    - "corporate": iinvest corporate events (Announcements, Board Meetings, Legal Cases, Capital History, Corporate Actions).
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "HDFCBANK", "INFY").
-            Mutually exclusive with symbols.
-        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["HDFCBANK", "INFY"]).
-            Mutually exclusive with symbol.
-        consolidated: Use consolidated financials (default: True); set False for standalone.
-            Applies uniformly to all symbols in bulk mode.
-
-    Returns: symbol, name, ratios (P/E, ROCE, ROE, etc.), quarters (last 4).
-    In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
-    Requires screener.in authentication (browser session).
+        sections: List of data sections to return. If omitted or None, returns all.
+            Use this to filter data and avoid context bloat! Valid values:
+            ["screener", "tradingview", "morningstar", "valuation", "nse_ratios", "corporate"]
+        consolidated: Use consolidated financials for Screener data (default: True).
+            
+    Returns: A dictionary mapping section names to their respective data.
     """
-    if symbol is None and symbols is None:
-        raise ValueError("Provide either 'symbol' or 'symbols'")
-    if symbol is not None and symbols is not None:
-        raise ValueError("Provide either 'symbol' or 'symbols', not both")
+    symbol = symbol.upper().strip()
+    valid_sections = {"screener", "tradingview", "morningstar", "valuation", "nse_ratios", "corporate"}
+    
+    if sections:
+        sections_set = set(sections)
+        invalid = sections_set - valid_sections
+        if invalid:
+            raise ValueError(f"Invalid sections: {invalid}. Valid options: {valid_sections}")
+    else:
+        sections_set = valid_sections
 
-    if not screener_client.is_authenticated:
-        raise RuntimeError(
-            "screener.in session not available. "
-            "Log in at https://www.screener.in in Chrome, then restart the backend."
-        )
+    res = {"symbol": symbol}
+    
+    import asyncio
+    
+    async def _fetch_screener():
+        if not screener_client.is_authenticated:
+            return {"error": "screener.in session not available. Log in at https://www.screener.in in Chrome."}
+        try:
+            return await screener_client.get_company(symbol, consolidated=consolidated)
+        except Exception as e:
+            return {"error": str(e)}
 
-    async def _fetch(sym: str) -> dict[str, Any]:
-        sym = sym.upper().strip()
-        if not _SYMBOL_RE.fullmatch(sym):
-            raise ValueError(f"Invalid symbol format: {sym}")
-        cache_key = f"mcp_screener:company:{sym}:{'c' if consolidated else 's'}"
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            return cached
-        data = await screener_client.get_company(sym, consolidated=consolidated)
-        _cache_set(cache_key, data)
-        return data
+    async def _fetch_tradingview():
+        try:
+            from app.services.tradingview_client import fetch_tradingview_fundamentals
+            return await fetch_tradingview_fundamentals(symbol)
+        except Exception as e:
+            return {"error": str(e)}
 
-    if symbol is not None:
-        return await _fetch(symbol)
-    results = await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
-    return {
-        s.upper(): ({"error": str(r)} if isinstance(r, BaseException) else r)
-        for s, r in zip(symbols, results)
-    }
+    async def _fetch_morningstar():
+        try:
+            from app.services.morningstar_client import morningstar_client
+            return await morningstar_client.get_fair_value_by_symbol(symbol)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _fetch_valuation():
+        try:
+            from app.routers.valuation import get_valuation
+            res = await get_valuation(symbol, wacc=0.12, terminal_growth=0.05, stage1_growth=None)
+            return res.model_dump()
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _fetch_nse_ratios():
+        try:
+            res = await get_stock_universe(symbol=symbol)
+            return res
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _fetch_corporate():
+        try:
+            from app.services.iinvest_client import get_iinvest_client
+            client = get_iinvest_client()
+            isin, path = await client.resolve_path(symbol)
+            if not isin or not path:
+                return {"error": f"iinvest path not found for {symbol}"}
+            
+            corp_data = {}
+            # Fetch common corporate data in parallel
+            f_announcements = client.get_announcements(path)
+            f_board = client.get_board_meetings(path)
+            f_actions = client.get_corporate_actions(path)
+            f_cases = client.get_legal_cases(isin)
+            f_capital = client.get_capital_history(path)
+            
+            arr = await asyncio.gather(f_announcements, f_board, f_actions, f_cases, f_capital, return_exceptions=True)
+            corp_data["announcements"] = arr[0] if not isinstance(arr[0], Exception) else {"error": str(arr[0])}
+            corp_data["board_meetings"] = arr[1] if not isinstance(arr[1], Exception) else {"error": str(arr[1])}
+            corp_data["corporate_actions"] = arr[2] if not isinstance(arr[2], Exception) else {"error": str(arr[2])}
+            corp_data["legal_cases"] = arr[3] if not isinstance(arr[3], Exception) else {"error": str(arr[3])}
+            corp_data["capital_history"] = arr[4] if not isinstance(arr[4], Exception) else {"error": str(arr[4])}
+            return corp_data
+        except Exception as e:
+            return {"error": str(e)}
+
+    tasks = {}
+    if "screener" in sections_set:
+        tasks["screener"] = asyncio.create_task(_fetch_screener())
+    if "tradingview" in sections_set:
+        tasks["tradingview"] = asyncio.create_task(_fetch_tradingview())
+    if "morningstar" in sections_set:
+        tasks["morningstar"] = asyncio.create_task(_fetch_morningstar())
+    if "valuation" in sections_set:
+        tasks["valuation"] = asyncio.create_task(_fetch_valuation())
+    if "nse_ratios" in sections_set:
+        tasks["nse_ratios"] = asyncio.create_task(_fetch_nse_ratios())
+    if "corporate" in sections_set:
+        tasks["corporate"] = asyncio.create_task(_fetch_corporate())
+
+    for k, v in tasks.items():
+        res[k] = await v
+
+    return res
 
 
 @mcp.tool()
@@ -803,7 +874,7 @@ async def get_stock_universe(
     symbol: str | None = None,
     symbols: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Look up NSE stock universe metadata by symbol — prefer screener_company for deeper research.
+    """Look up NSE stock universe metadata by symbol — prefer company_fdm for deeper research.
 
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "TCS").
@@ -1444,24 +1515,12 @@ async def get_company_news(
     days: int = 30,
     limit: int = 50,
     refresh: bool = False,
-    source: str = "auto",
+    source: str = "iinvest",
     sentiment: str | None = None,
     threat_level: str | None = None,
     language: str | None = None,
 ) -> dict[str, Any]:
     """Fetch news for one or multiple NSE companies with NLP analysis.
-
-    iinvest is the primary source (faster, deterministic, ISIN-keyed).
-    MoneyControl is a fallback for breadth and deep history. NLP is
-    post-fetched for both sources (iinvest does NOT pre-tag).
-
-    Source priority (default "auto"):
-      - "iinvest"      → iinvest.cogencis.com (fast, 24h rolling, NLP run post-fetch)
-      - "moneycontrol" → MoneyControl stock quote page (slower, NLP post-processed)
-      - "merged"       → both, deduped by URL
-      - "auto"         → iinvest first, fall back to MoneyControl only when
-                         days>7 and iinvest returns 0 articles
-
     Args:
         symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "INFY").
             Mutually exclusive with symbols.
@@ -1470,7 +1529,7 @@ async def get_company_news(
         days: Number of days to look back (default: 30). Applies to all symbols.
         limit: Maximum number of articles to return per symbol (default: 50).
         refresh: Force a live fetch from upstream even if articles are fresh.
-        source: One of auto, iinvest, moneycontrol, merged.
+        source: News source to fetch from ("auto", "iinvest", "moneycontrol", "merged"). Default: "iinvest".
         sentiment: Filter by sentiment (POSITIVE, NEGATIVE, NEUTRAL).
         threat_level: Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL).
         language: Filter by two-letter language code (en, hi, zh, etc.).
@@ -1967,7 +2026,7 @@ _IINVEST_TOOL_NAMES = [
     "iinvest_financial_peers", "iinvest_financial_peer_filters",
     "iinvest_index_of_charges", "iinvest_insider_trading", "iinvest_key_shareholders",
     "iinvest_legal_cases", "iinvest_marketdata_timeseries", "iinvest_pledged_shares",
-    "iinvest_sast", "iinvest_tribunals", "iinvest_news", "iinvest_overview",
+    "iinvest_sast", "iinvest_tribunals", "iinvest_overview",
     "iinvest_path", "iinvest_all",
 ]
 
@@ -2033,7 +2092,6 @@ _IINVEST_FETCHERS = {
     "iinvest_pledged_shares": ("iinvest.get_pledged_shares", "iinvest_get_pledged_shares", "get_pledged_shares"),
     "iinvest_sast": ("iinvest.get_sast", "iinvest_get_sast", "get_sast"),
     "iinvest_tribunals": ("iinvest.get_tribunals", "iinvest_get_tribunals", "get_tribunals"),
-    "iinvest_news": ("iinvest.get_news", "iinvest_get_news", "get_news"),
 }
 
 
