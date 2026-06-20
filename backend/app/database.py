@@ -78,12 +78,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 from sqlalchemy import create_engine
 from sqlalchemy import event as _sa_event
 from sqlalchemy.orm import sessionmaker as _sync_sessionmaker
-from sqlalchemy.pool import NullPool as _SyncNullPool
+from sqlalchemy.pool import QueuePool as _SyncQueuePool
 
+# Sync engine: QueuePool reuses connections across the 14 daemon worker
+# threads. Each pooled connection keeps its PRAGMAs (WAL, cache_size, etc.)
+# alive, avoiding per-call allocation churn.
+# The async engine above deliberately stays on NullPool — aiosqlite
+# serialises access internally and high-concurrency request handlers
+# benefit from NullPool's simpler lifecycle.
 _sync_engine = create_engine(
     f"sqlite:///{settings.db_path}",
     connect_args={"check_same_thread": False},
-    poolclass=_SyncNullPool,
+    poolclass=_SyncQueuePool,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30.0,
 )
 
 

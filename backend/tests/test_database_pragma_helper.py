@@ -99,7 +99,8 @@ class TestApplySqlitePragmasHelper:
             loop.close()
 
         # 2. sync engine
-        from app.database import _SyncSessionLocal
+        from app.database import _SyncSessionLocal, _sync_engine
+        _sync_engine.dispose()  # Clear pool so connect listener fires
         with _SyncSessionLocal() as session:
             session.execute(text("SELECT 1"))
 
@@ -187,3 +188,28 @@ class TestThreadAsyncEngineRemoved:
         t.join(timeout=10)
         assert not t.is_alive(), "worker thread hung"
         assert not errors, f"worker thread errored: {errors!r}"
+
+    def test_sync_pool_concurrent_access(self, in_memory_db) -> None:
+        """Test that the sync engine (using QueuePool) can handle concurrent connections."""
+        from app.database import _SyncSessionLocal
+        from sqlalchemy import text
+        import threading
+        
+        errors = []
+        barrier = threading.Barrier(5)
+        
+        def sync_worker():
+            try:
+                with _SyncSessionLocal() as session:
+                    barrier.wait(timeout=5)
+                    session.execute(text("SELECT 1"))
+            except Exception as e:
+                errors.append(e)
+                
+        threads = [threading.Thread(target=sync_worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+            
+        assert not errors, f"Concurrent sync pool access failed: {errors}"
