@@ -45,6 +45,12 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY'>('PICKS');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [showDisclaimer, setShowDisclaimer] = useState(true);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setShowDisclaimer(false), 4000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const { data: picks, isLoading, error } = useQuery<AIPick[]>({
     queryKey: ['ai-picks'],
@@ -93,7 +99,18 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   }) || [];
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-terminal-bg font-mono text-xs text-white/80">
+    <div className="flex h-full w-full flex-col overflow-hidden bg-terminal-bg font-mono text-xs text-white/80 relative">
+      {showDisclaimer && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="border border-terminal-amber/50 bg-black p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-xl">
+            <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
+            <div className="text-[10px] leading-relaxed">
+              AI can make mistakes and the user takes all responsibility for any actions taken using the AI's advice/recommendations.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header Tabs */}
       <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
         <TabButton
@@ -205,6 +222,11 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
             );
           })
         )}
+      </div>
+
+      {/* Persistent Bottom Banner */}
+      <div className="shrink-0 bg-terminal-amber/10 border-t border-terminal-amber/30 p-2 text-center text-[10px] text-terminal-amber/80 font-bold tracking-wide">
+        AI CAN MAKE MISTAKES AND THE USER TAKES ALL RESPONSIBILITY FOR ANY ACTIONS TAKEN USING THE AI'S ADVICE/RECOMMENDATIONS.
       </div>
     </div>
   );

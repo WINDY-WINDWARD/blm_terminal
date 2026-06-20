@@ -351,6 +351,13 @@ export function AiWidget() {
   const exchange = useAtomValue(activeExchangeAtom);
   const queryClient = useQueryClient();
 
+  const [showDisclaimer, setShowDisclaimer] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowDisclaimer(false), 4000);
+    return () => clearTimeout(timer);
+  }, []);
+
   // ── Models ─────────────────────────────────────────────────────────────────
 
   const { data: modelsData } = useQuery<ModelOption[]>({
@@ -803,7 +810,18 @@ export function AiWidget() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full w-full flex overflow-hidden font-mono text-xs bg-terminal-bg">
+    <div className="h-full w-full flex overflow-hidden font-mono text-xs bg-terminal-bg relative">
+      {showDisclaimer && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="border border-terminal-amber/50 bg-black p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-xl">
+            <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
+            <div className="text-[10px] leading-relaxed">
+              AI can make mistakes and the user takes all responsibility for any actions taken using the AI's advice/recommendations.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Collapsible sidebar */}
       {sidebarOpen && (
         <div className="w-44 shrink-0 flex flex-col overflow-hidden">
