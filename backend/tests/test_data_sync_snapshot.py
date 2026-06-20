@@ -92,13 +92,14 @@ class TestSnapshotCoreExtraction:
         """Callers depend on the exact signature; refactor must not
         rename/remove/change parameter order."""
         from app.services.data_sync.snapshot import _screener_snapshot_sync
-
+    
         sig = inspect.signature(_screener_snapshot_sync)
         params = list(sig.parameters)
         assert params == [
             "daily_df",
             "today_date",
             "now",
+            "skip_progress_update",
         ], (
             f"Signature drift in _screener_snapshot_sync — "
             f"parameters changed: {params}"
