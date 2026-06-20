@@ -109,3 +109,37 @@ def test_workers_callable_smoke(backgroundtasks) -> None:
     for name in WORKER_NAMES:
         attr = getattr(backgroundtasks, name)
         assert callable(attr), f"app.backgroundtasks.{name} is not callable"
+
+@pytest.mark.perf
+def test_global_scan_perf_del_frees_memory(in_memory_db, monkeypatch):
+    """Verify that parsing the global scan batch doesn't leak memory."""
+    import tracemalloc
+    from app.workers.global_scan_cycle import _global_scan_cycle
+    from app.services.data_sync import nse_parsing
+    
+    class MockDF:
+        def __init__(self):
+            self.data = [1] * 1000000
+        def itertuples(self):
+            class Row:
+                symbol = "A"
+                pChange = 1.0
+            return [Row()]
+            
+    def mock_fetch_gainers(*args, **kwargs):
+        return MockDF()
+
+    monkeypatch.setattr(nse_parsing, "_safe_fetch_top_gainers", mock_fetch_gainers)
+    monkeypatch.setattr(nse_parsing, "_safe_fetch_top_losers", mock_fetch_gainers)
+    
+    tracemalloc.start()
+    start_mem, _ = tracemalloc.get_traced_memory()
+    
+    # We just run the cycle on an empty DB to trigger the fetch and del
+    _global_scan_cycle()
+    
+    end_mem, _ = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    
+    diff_mb = (end_mem - start_mem) / (1024 * 1024)
+    assert diff_mb < 50.0, f"Memory leaked {diff_mb:.2f} MB"

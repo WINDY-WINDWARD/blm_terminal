@@ -159,3 +159,10 @@ class TestCountBindBugRegression:
         result = run_screener_tql("1h:HV20 > 0.3", limit=10)
         assert result["count"] == 1
         assert result["results"][0]["symbol"] == "TATAMOTORS"
+
+def test_screener_html_cache_eviction():
+    from app.services.screener_client import _HTML_CACHE
+    _HTML_CACHE.clear()
+    for i in range(600):
+        _HTML_CACHE[f"key_{i}"] = f"html_{i}"
+    assert len(_HTML_CACHE) <= 500

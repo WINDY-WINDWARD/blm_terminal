@@ -16,6 +16,7 @@ A.13: migrated ``_bg_impl`` references to canonical imports.
 """
 from __future__ import annotations
 
+import gc
 import logging
 from datetime import datetime
 from typing import Optional
@@ -238,12 +239,14 @@ def _ticker_scores_sync() -> None:
             )
             db.execute(insert_stmt)
             db.commit()
+            gc.collect()
 
         # Phase B: also write pre-computed screener snapshot so TQL→SQL
         # queries are O(1) reads against a small denormalized table instead
         # of window-function scans over ticker_daily/ticker_intraday.
         try:
             _screener_snapshot_sync(df, today_date, now)
+            gc.collect()
         except Exception:
             logger.exception("ticker_scores_sync: screener snapshot failed (non-fatal)")
 

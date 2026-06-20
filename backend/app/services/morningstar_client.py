@@ -62,7 +62,6 @@ API_PARAMS = {
 
 _token_cache: dict[str, tuple[float, dict[str, str]]] = {}
 _token_refresh_lock: asyncio.Lock | None = None
-_html_cache: dict[str, tuple[float, str]] = {}
 _id_cache: dict[str, tuple[float, str]] = {}
 
 _client: httpx.AsyncClient | None = None

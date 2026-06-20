@@ -43,25 +43,7 @@ _TRADES_RE = re.compile(r"/trades/company-(\d+)/")
 # lifetime of the process and is populated on first access per symbol.
 _trades_id_cache: dict[str, str] = {}
 
-# ---------------------------------------------------------------------------
-# Raw HTML cache — shared between company and quarterly endpoints so the
-# same page is never fetched twice within the TTL window.
-# key → (expiry_monotonic, html_text)
-# ---------------------------------------------------------------------------
-_HTML_CACHE: dict[str, tuple[float, str]] = {}
-HTML_CACHE_TTL: float = 15 * 60  # 900 seconds
-
-
-def _html_cache_get(key: str) -> str | None:
-    entry = _HTML_CACHE.get(key)
-    if entry and time.monotonic() < entry[0]:
-        return entry[1]
-    return None
-
-
-def _html_cache_set(key: str, html: str) -> None:
-    _HTML_CACHE[key] = (time.monotonic() + HTML_CACHE_TTL, html)
-
+from app.services.cache import screener_html_cache as _HTML_CACHE
 
 def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
     """Extract sessionid and csrftoken from rookiepy cookie list.
@@ -667,7 +649,7 @@ class ScreenerClient:
         mode = "consolidated" if consolidated else "standalone"
         html_key = f"screener:html:{symbol_upper}:{'c' if consolidated else 's'}"
 
-        cached_html = _html_cache_get(html_key)
+        cached_html = _HTML_CACHE.get(html_key)
         if cached_html is not None:
             logger.debug("HTML cache hit for %s (%s)", symbol_upper, mode)
             return cached_html
@@ -697,7 +679,7 @@ class ScreenerClient:
 
         resp.raise_for_status()
 
-        _html_cache_set(html_key, resp.text)
+        _HTML_CACHE[html_key] = resp.text
         return resp.text
 
     async def get_company(

@@ -137,6 +137,9 @@ def _global_scan_cycle() -> None:
                 if pchg:
                     losers_by_symbol[sym] = float(pchg)
 
+        del high52_raw, low52_raw, vol_raw, deals_raw
+        del gainers_df, losers_df
+
         processed = 0
         alerts_generated = 0
 
