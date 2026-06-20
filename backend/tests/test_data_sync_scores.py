@@ -140,3 +140,24 @@ class TestFunctionSignaturesPreserved:
         assert len(sig.parameters) == 0, (
             f"_ticker_scores_sync should take no arguments, got {sig}"
         )
+
+@pytest.mark.perf
+def test_scores_perf_peak_memory(in_memory_db, monkeypatch):
+    import tracemalloc
+    from app.services.data_sync.scores import _ticker_scores_sync
+    
+    tracemalloc.start()
+    start_mem, _ = tracemalloc.get_traced_memory()
+    
+    _ticker_scores_sync()
+    
+    end_mem, _ = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    
+    diff_mb = (end_mem - start_mem) / (1024 * 1024)
+    assert diff_mb < 200.0, f"Memory leaked {diff_mb:.2f} MB"
+
+def test_scores_batch_module_under_200_loc():
+    path = ROOT / "app" / "services" / "data_sync" / "_scores_batch.py"
+    loc = sum(1 for _ in path.read_text().splitlines())
+    assert loc < 200, f"_scores_batch.py is {loc} LOC, expected < 200"
