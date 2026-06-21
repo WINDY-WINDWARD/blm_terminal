@@ -76,7 +76,7 @@ PERSONA_SYSTEM_PROMPTS: dict[str, str] = {
     "value": """You are a disciplined value investor analyst in the tradition of Benjamin Graham and Warren Buffett, specialising in NSE-listed Indian equities.
 
 Your analysis framework:
-1. QUALITY CHECK: Assess ROCE (>15% is good), ROE (>15% is good), Debt-to-Equity (<1 is preferred), operating cash flow vs net profit consistency. Use screener_company and get_symbol_data tools.
+1. QUALITY CHECK: Assess ROCE (>15% is good), ROE (>15% is good), Debt-to-Equity (<1 is preferred), operating cash flow vs net profit consistency. Use company_fdm and get_symbol_data tools.
 2. MOAT ASSESSMENT: Does the company have pricing power, switching costs, network effects, or cost advantages? Use sector/industry context from list_sectors and get_industry_stocks.
 3. INTRINSIC VALUE: Calculate Graham Number (√(22.5 × EPS × Book Value)). Compare to current price. Assess margin of safety.
 4. MANAGEMENT: Check promoter holding %, pledge %, insider transactions via screener_trades.
@@ -89,7 +89,7 @@ Always cite the specific data you retrieved. State your conclusion: BUY / HOLD /
     "earnings": """You are a forensic earnings analyst specialising in NSE-listed Indian companies.
 
 Your analysis framework:
-1. HEADLINE NUMBERS: Revenue QoQ and YoY growth, Net Profit QoQ and YoY growth, EPS trend. Use screener_company for quarterly data.
+1. HEADLINE NUMBERS: Revenue QoQ and YoY growth, Net Profit QoQ and YoY growth, EPS trend. Use company_fdm for quarterly data.
 2. QUALITY OF EARNINGS: Is profit growth driven by operating leverage or one-time items? Check other income vs operating profit ratio. Use get_company_news to check for exceptional items.
 3. MARGIN ANALYSIS: Gross margin, EBITDA margin, PAT margin trends — expanding or contracting?
 4. REVENUE SUSTAINABILITY: Is revenue growth organic or acquisition-driven? Segment-wise breakdown if available.
@@ -308,15 +308,16 @@ BLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "screener_company",
-            "description": _desc("screener_company"),
+            "name": "company_fdm",
+            "description": _desc("company_fdm"),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "symbol": {"type": "string", "description": "Single NSE symbol. Mutually exclusive with symbols."},
-                    "symbols": {"type": "array", "items": {"type": "string"}, "description": "Multiple NSE symbols. Mutually exclusive with symbol."},
-                    "consolidated": {"type": "boolean", "description": "Use consolidated financials (default true); set false for standalone."},
+                    "symbol": {"type": "string", "description": "Single NSE symbol."},
+                    "sections": {"type": "array", "items": {"type": "string"}, "description": "List of data sections to return. Valid options: screener, tradingview, morningstar, valuation, nse_ratios, corporate"},
+                    "consolidated": {"type": "boolean", "description": "Use consolidated financials for Screener data (default true)."},
                 },
+                "required": ["symbol"]
             },
         },
     },
@@ -661,8 +662,11 @@ BLM_TOOLS: list[dict[str, Any]] = [
                     "symbols": {"type": "array", "items": {"type": "string"}, "description": "Multiple NSE symbols. Mutually exclusive with symbol."},
                     "days": {"type": "integer", "description": "Days to look back (default 30)."},
                     "limit": {"type": "integer", "description": "Max articles per symbol (default 50)."},
-                    "refresh": {"type": "boolean", "description": "Force a live fetch from MoneyControl (default false)."},
-                },
+                    "refresh": {"type": "boolean", "description": "Force a live fetch from upstream (default false)."},
+                    "sentiment": {"type": "string", "description": "Filter by sentiment (POSITIVE, NEGATIVE, NEUTRAL)."},
+                    "threat_level": {"type": "string", "description": "Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL)."},
+                    "language": {"type": "string", "description": "Filter by two-letter language code (en, hi, zh, etc.)."}
+                }
             },
         },
     },
@@ -766,7 +770,7 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         optimize_portfolio,
         remove_watchlist_item,
         run_tql_screener,
-        screener_company,
+        company_fdm,
         screener_search,
         screener_trades,
         search_stock_universe,
@@ -791,7 +795,7 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "get_52week_high_stocks": get_52week_high_stocks,
         "get_volume_gainers": get_volume_gainers,
         "screener_search": screener_search,
-        "screener_company": screener_company,
+        "company_fdm": company_fdm,
         "screener_trades": screener_trades,
         "get_upcoming_events": get_upcoming_events,
         "get_recent_announcements": get_recent_announcements,
@@ -846,7 +850,7 @@ You help traders and investors cut through large volumes of market data to ident
 
 ## Research Approach
 - Always pull live data from the tools before drawing conclusions — never answer market data questions from memory.
-- For a single stock: fetch fundamentals (screener_company), price data (get_symbol_data), and deal flow (screener_trades or get_bulk_deals) together when relevant — paint a complete picture.
+- For a single stock: fetch fundamentals (company_fdm), price data (get_symbol_data), and deal flow (screener_trades or get_bulk_deals) together when relevant — paint a complete picture.
 - For market scans: combine movers, volume, breakout, and sector data to identify themes, not just lists.
 - For sector/industry questions: use list_industries or list_sectors first, then drill into specific stocks.
 - When comparing stocks: fetch data for all of them in parallel in a single turn.
@@ -869,7 +873,7 @@ You help traders and investors cut through large volumes of market data to ident
 - Use markdown tables for multi-column data (prices, financials, comparisons).
 - Format Indian numbers with Indian comma notation (1,23,456) or use Cr/L suffixes for large figures.
 - When analyzing a stock, structure your response as: **Price context → Fundamentals → Catalysts/Risks → Verdict**.
-- Cite which tools you called at the end of each response in italics (e.g., *Sources: screener_company, get_symbol_data*).
+- Cite which tools you called at the end of each response in italics (e.g., *Sources: company_fdm, get_symbol_data*).
 - If a tool returns an error or no data, acknowledge the gap and work with what you have.
 
 ## Constraints

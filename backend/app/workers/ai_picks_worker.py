@@ -52,7 +52,7 @@ You have access to tools to independently verify the setups (technicals, fundame
 
 INSTRUCTIONS:
 1. I will provide a JSON list of proposed setups.
-2. For each setup, use your tools (`get_company_news`, `screener_company`, `get_upcoming_events`) to independently verify the detailed thesis provided.
+2. For each setup, use your tools (`get_company_news`, `company_fdm`, `get_upcoming_events`) to independently verify the detailed thesis provided.
 3. Reject ONLY setups that have clear red flags (imminent bad news, extremely overvalued, or poor technical structure). Preserve strong mid-cap growth setups.
 4. Refine the entry, take_profit, and stop_loss levels to be mathematically sound (e.g., RR > 2:1).
 5. Output the surviving, verified picks strictly as a JSON array inside a <verified_picks> XML tag.
