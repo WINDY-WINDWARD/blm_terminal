@@ -238,3 +238,149 @@ class TestFetchIinvestCompanyNews:
                 symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
             )
         assert count == 0
+
+    @pytest.mark.asyncio
+    async def test_same_story_for_multiple_symbols_does_not_violate_pk(self, in_memory_db_session):
+        """iinvest returns the same story (same URL, same story_id) for several
+        unrelated companies. The first symbol writes the row; the second must
+        update the row's metadata without raising
+        ``UNIQUE constraint failed: news_articles.url``.
+
+        Regression for the runtime warning:
+            get_company_news: iinvest fetch failed for WABAG: UNIQUE
+            constraint failed: news_articles.url
+        which surfaced when the upsert target was ``iinvest_story_id`` and a
+        prior MoneyControl global crawl had already claimed the URL.
+        """
+        from app.services.news_fetcher import fetch_iinvest_company_news
+        from app.services import iinvest_client as mod
+        from sqlalchemy import select
+
+        SHARED_URL = "https://www.moneycontrol.com/news/business/markets/jio-ipo-13955446.html"
+        SHARED_STORY_ID = "Tzn_7Z4BulMo73FspGcq"
+
+        # Two different iinvest payloads that BOTH reference the same URL/story
+        payload = lambda sym, isin: {
+            "status": True,
+            "response": {
+                "pagingInfo": {"pageNo": 1, "pageSize": 50, "total": 1},
+                "data": [
+                    {
+                        "id": SHARED_STORY_ID,
+                        "headline": "Jio IPO brings Reliance closer to value unlocking",
+                        "synopsis": "Brokerages peg valuation at up to $128B",
+                        "story": "<p>Full body</p>",
+                        "sourceLink": SHARED_URL,
+                        "sourceName": "cogencis",
+                        "sourceDateTime": "2026-06-22T11:59:05",
+                        "isins": [isin],
+                        "categories": [],
+                    },
+                ],
+            },
+        }
+
+        fake = MagicMock()
+        with patch.object(mod, "get_iinvest_client", return_value=fake):
+            # Stub the iinvest path resolver for both symbols (they aren't
+            # seeded in stock_universe and we don't want to hit NSE).
+            async def _resolve(symbol, db=None):
+                return {
+                    "KIRLOSBROS": ("INE732A01036", "ine732a01036/symbol/ns/kirlosbros/kirlosbros"),
+                    "WABAG": ("INE956G01038", "ine956g01038/symbol/ns/wabag/wabag"),
+                }[symbol]
+            fake.resolve_path = AsyncMock(side_effect=_resolve)
+
+            # Symbol 1 — gets the row created
+            fake.get_news = AsyncMock(return_value=payload("KIRLOSBROS", "INE732A01036"))
+            await fetch_iinvest_company_news(
+                symbol="KIRLOSBROS", db=in_memory_db_session, days=30, limit=50,
+            )
+
+            # Symbol 2 — same story_id and same URL but different ISIN.
+            # Must NOT raise IntegrityError.
+            fake.get_news = AsyncMock(return_value=payload("WABAG", "INE956G01038"))
+            await fetch_iinvest_company_news(
+                symbol="WABAG", db=in_memory_db_session, days=30, limit=50,
+            )
+
+        # Exactly one row should exist (same URL → one PK).
+        # Force a fresh read — expire_on_commit=False + the in-memory
+        # identity map would otherwise hand back the pre-update row.
+        in_memory_db_session.expire_all()
+        stmt = select(NewsArticle).where(NewsArticle.url == SHARED_URL)
+        result = await in_memory_db_session.execute(stmt)
+        rows = list(result.scalars())
+        assert len(rows) == 1, f"expected 1 row, got {len(rows)}"
+
+        # The first symbol to write the row owns the company_symbol tag —
+        # the second must NOT clobber it.
+        row = rows[0]
+        assert row.company_symbol == "KIRLOSBROS"
+        assert row.iinvest_story_id == SHARED_STORY_ID
+
+    @pytest.mark.asyncio
+    async def test_upsert_after_moneycontrol_row_with_same_url(self, in_memory_db_session):
+        """If a row with the same URL was already written by a MoneyControl
+        global crawl (with ``iinvest_story_id IS NULL``), the iinvest
+        upsert-by-iinvest_story_id path used to raise IntegrityError. The
+        fix upserts by ``url`` and tolerates the existing row.
+        """
+        from app.services.news_fetcher import fetch_iinvest_company_news
+        from app.services import iinvest_client as mod
+        from sqlalchemy import select
+
+        SHARED_URL = "https://www.moneycontrol.com/news/business/markets/reliance-q1-12345678.html"
+        SHARED_STORY_ID = "rel-q1-story-001"
+
+        # Pre-seed: a MoneyControl global crawl row for the same URL.
+        existing = NewsArticle(
+            url=SHARED_URL,
+            source="moneycontrol_global",
+            title="Old MoneyControl title",
+            text="Old body",
+            fetched_at=datetime(2026, 6, 21, 0, 0, 0),
+            company_symbol=None,
+        )
+        in_memory_db_session.add(existing)
+        await in_memory_db_session.commit()
+
+        iinvest_payload = {
+            "status": True,
+            "response": {
+                "pagingInfo": {"pageNo": 1, "pageSize": 50, "total": 1},
+                "data": [
+                    {
+                        "id": SHARED_STORY_ID,
+                        "headline": "Reliance Q1 jumps 12%",
+                        "synopsis": "Beats estimates",
+                        "story": "<p>Fresh body</p>",
+                        "sourceLink": SHARED_URL,
+                        "sourceName": "cogencis",
+                        "sourceDateTime": "2026-06-22T10:00:00",
+                        "isins": ["INE002A01018"],
+                        "categories": [],
+                    },
+                ],
+            },
+        }
+
+        fake = MagicMock()
+        fake.get_news = AsyncMock(return_value=iinvest_payload)
+        with patch.object(mod, "get_iinvest_client", return_value=fake):
+            # Must NOT raise IntegrityError.
+            await fetch_iinvest_company_news(
+                symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
+            )
+
+        # Still one row, now tagged with the iinvest symbol and story_id.
+        # Force a fresh read — expire_on_commit=False + the in-memory
+        # identity map would otherwise hand back the pre-update row.
+        in_memory_db_session.expire_all()
+        stmt = select(NewsArticle).where(NewsArticle.url == SHARED_URL)
+        result = await in_memory_db_session.execute(stmt)
+        rows = list(result.scalars())
+        assert len(rows) == 1
+        assert rows[0].source == "iinvest:cogencis"
+        assert rows[0].iinvest_story_id == SHARED_STORY_ID
+        assert rows[0].company_symbol == "RELIANCE"

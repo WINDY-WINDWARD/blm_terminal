@@ -1218,11 +1218,42 @@ async def fetch_iinvest_company_news(
             "iinvest_story_id": str(story.get("id", "")),
             "iinvest_published_at": publish_date,
         }
-        # Upsert by iinvest_story_id (unique-indexed)
+        # Upsert by url (the primary key). The same iinvest story can be
+        # returned for multiple unrelated companies; the first symbol to
+        # write the row owns the company_symbol tag — later symbols
+        # update the metadata but never overwrite the original tag, and
+        # they get a tickers entry in the entities JSON so downstream
+        # readers can still see they were related. See
+        # backend/tests/test_iinvest_news_fetcher.py for the regression
+        # test that pins this behaviour.
+        from sqlalchemy import case
+
+        update_set = {
+            "source": parsed["source"],
+            "title": parsed["title"],
+            "text": parsed["text"],
+            "top_image": parsed["top_image"],
+            "publish_date": parsed["publish_date"],
+            "fetched_at": parsed["fetched_at"],
+            "sentiment": parsed["sentiment"],
+            "sentiment_score": parsed["sentiment_score"],
+            "confidence": parsed["confidence"],
+            "language": parsed["language"],
+            "entities": parsed["entities"],
+            "threat_level": parsed["threat_level"],
+            "threat_category": parsed["threat_category"],
+            "source_credibility": parsed["source_credibility"],
+            "iinvest_story_id": parsed["iinvest_story_id"],
+            "iinvest_published_at": parsed["iinvest_published_at"],
+            "company_symbol": case(
+                (NewsArticle.company_symbol.is_(None), parsed["company_symbol"]),
+                else_=NewsArticle.company_symbol,
+            ),
+        }
         stmt = sqlite_insert(NewsArticle).values(**parsed)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["iinvest_story_id"],
-            set_={k: v for k, v in parsed.items() if k not in ("url",)},
+            index_elements=["url"],
+            set_=update_set,
         )
         await db.execute(stmt)
         new_count += 1
