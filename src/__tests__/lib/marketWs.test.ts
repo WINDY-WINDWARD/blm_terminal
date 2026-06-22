@@ -133,27 +133,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   instances.length = 0;
   vi.stubGlobal('WebSocket', makeFakeWebSocketFactory() as unknown as typeof WebSocket);
-  // Default ws-config fallback for tests — most tests don't care
-  // about the URL path; they just want the socket to open.
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () =>
-      new Response(JSON.stringify({ marketWsUrl: 'ws://test.local/ws/market' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    ) as unknown as typeof fetch,
-  );
   resetSingleton();
 });
-
-afterEach(() => {
-  if (debugSpy.mock.calls.length) {
-    console.log('DEBUG MARKET_WS:', JSON.stringify(debugSpy.mock.calls, null, 2));
-  }
-});
-
-const debugSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -172,53 +153,35 @@ async function tick(ms = 0) {
 }
 
 describe('MarketWsService — URL resolution', () => {
-  it('uses NEXT_PUBLIC_MARKET_WS_URL when set (skips ws-config fetch)', async () => {
+  // Mirrors src/lib/newsSocket.ts:fetchWsUrl:
+  //   1. NEXT_PUBLIC_MARKET_WS_URL env var (dev override, optional)
+  //   2. Same-origin WS derived from window.location (production default)
+  //
+  // The browser is already at the public origin (https://blm.example.com),
+  // so deriving the WS base from window.location is the correct cross-
+  // environment pattern. In production the dev-server's `server.js` already
+  // proxies /ws/market to the Python backend, so the browser connecting to
+  // the same origin it loaded the page from is the right call.
+  it('uses NEXT_PUBLIC_MARKET_WS_URL when set', async () => {
     const original = process.env.NEXT_PUBLIC_MARKET_WS_URL;
-    process.env.NEXT_PUBLIC_MARKET_WS_URL = 'ws://env-host/ws/market';
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
+    process.env.NEXT_PUBLIC_MARKET_WS_URL = 'wss://env-host/ws/market';
     try {
       marketWsService.connect();
       await tick(0);
       expect(instances).toHaveLength(1);
-      expect(instances[0].url).toBe('ws://env-host/ws/market');
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(instances[0].url).toBe('wss://env-host/ws/market');
     } finally {
       if (original === undefined) delete process.env.NEXT_PUBLIC_MARKET_WS_URL;
       else process.env.NEXT_PUBLIC_MARKET_WS_URL = original;
     }
   });
 
-  it('falls back to /api/py/ws-config when env var is unset', async () => {
+  it('falls back to ws://<window.location.host>/ws/market when env var is unset', async () => {
     const original = process.env.NEXT_PUBLIC_MARKET_WS_URL;
     delete process.env.NEXT_PUBLIC_MARKET_WS_URL;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ marketWsUrl: 'ws://fromconfig:9000/ws/market' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
-      ) as unknown as typeof fetch,
-    );
-
-    marketWsService.connect();
-    await tick(0);
-    expect(instances).toHaveLength(1);
-    expect(instances[0].url).toBe('ws://fromconfig:9000/ws/market');
-    if (original !== undefined) process.env.NEXT_PUBLIC_MARKET_WS_URL = original;
-  });
-
-  it('falls back to localhost when ws-config fetch fails', async () => {
-    const original = process.env.NEXT_PUBLIC_MARKET_WS_URL;
-    delete process.env.NEXT_PUBLIC_MARKET_WS_URL;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response('upstream down', { status: 500 })) as unknown as typeof fetch,
-    );
     const originalLocation = window.location;
     Object.defineProperty(window, 'location', {
-      value: { ...originalLocation, protocol: 'http:', host: 'fallback.test:3000' },
+      value: { ...originalLocation, protocol: 'http:', host: 'blm.example.com' },
       writable: true,
       configurable: true,
     });
@@ -227,7 +190,34 @@ describe('MarketWsService — URL resolution', () => {
       marketWsService.connect();
       await tick(0);
       expect(instances).toHaveLength(1);
-      expect(instances[0].url).toBe('ws://fallback.test:3000/ws/market');
+      // Production-equivalent: page is at https://blm.example.com,
+      // WS URL is wss://blm.example.com/ws/market. The browser-side
+      // upgrade is then handled by the production reverse proxy.
+      expect(instances[0].url).toBe('ws://blm.example.com/ws/market');
+    } finally {
+      Object.defineProperty(window, 'location', {
+        value: originalLocation,
+        configurable: true,
+      });
+      if (original !== undefined) process.env.NEXT_PUBLIC_MARKET_WS_URL = original;
+    }
+  });
+
+  it('uses wss:// (not ws://) when the page is loaded over https', async () => {
+    const original = process.env.NEXT_PUBLIC_MARKET_WS_URL;
+    delete process.env.NEXT_PUBLIC_MARKET_WS_URL;
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      value: { ...originalLocation, protocol: 'https:', host: 'blm.example.com' },
+      writable: true,
+      configurable: true,
+    });
+
+    try {
+      marketWsService.connect();
+      await tick(0);
+      expect(instances).toHaveLength(1);
+      expect(instances[0].url).toBe('wss://blm.example.com/ws/market');
     } finally {
       Object.defineProperty(window, 'location', {
         value: originalLocation,

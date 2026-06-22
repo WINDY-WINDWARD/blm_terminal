@@ -12,6 +12,21 @@
  *   completes — so a 20-symbol watchlist can paint its first row in
  *   ~200ms (cache hit) and fill in the rest as NSE responds.
  *
+ * URL resolution (mirrors `src/lib/newsSocket.ts:fetchWsUrl`):
+ *   - `NEXT_PUBLIC_MARKET_WS_URL` env var (dev override, optional)
+ *   - Same-origin WS derived from `window.location` (production default)
+ *
+ * The browser is already at the public origin (e.g. https://blm.example.com),
+ * so deriving the WS base from `window.location` is the correct cross-
+ * environment pattern. In production the dev-server's `server.js` (or the
+ * production reverse proxy) already proxies `/ws/market` to the Python
+ * backend, so the browser connecting to the same origin it loaded the
+ * page from works. We deliberately do NOT round-trip through
+ * `/api/py/ws-config`: that route resolves to PYTHON_BACKEND_URL on the
+ * server, which in production is often unreachable from the browser
+ * (different host, no public DNS, or no path through the reverse proxy
+ * for the WS upgrade).
+ *
  * Protocol (server side: `backend/app/routers/market_ws.py`):
  *   Client → Server:
  *     { action: "get_change_ranges", request_id: N, symbols: [...] }
@@ -83,6 +98,7 @@ class MarketWsService {
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private wsUrl: string | null = null;
   private wsUrlFetchInitiated = false;
+  private wsUrlFailedOnce = false;
 
   // ── Request correlation ─────────────────────────────────────────────────
   private nextRequestId = 1;
@@ -128,31 +144,25 @@ class MarketWsService {
 
     this.connectInitiated = true;
 
-    const envUrl = process.env.NEXT_PUBLIC_MARKET_WS_URL;
-    if (envUrl) {
-      this.wsUrl = envUrl;
-      this.openSocket();
+    if (!this.wsUrl && !this.wsUrlFetchInitiated) {
+      this.wsUrlFetchInitiated = true;
+      this.fetchWsUrl().then((url) => {
+        if (url) {
+          this.wsUrl = url;
+          this.openSocket();
+        } else {
+          console.warn('[marketWs] Failed to resolve WS URL, retrying in 2s');
+          this.wsUrlFailedOnce = true;
+          this.wsUrlFetchInitiated = false;
+          this.connectInitiated = false;
+          setTimeout(() => this.connect(), 2000);
+        }
+      });
       return;
     }
 
-    if (!this.wsUrlFetchInitiated) {
-      this.wsUrlFetchInitiated = true;
-      this.fetchWsUrl()
-        .then((url) => {
-          if (url) {
-            this.wsUrl = url;
-            this.openSocket();
-          } else {
-            // ws-config fetch failed — fall back to localhost
-            this.wsUrl = this.localhostFallback();
-            this.openSocket();
-          }
-        })
-        .catch(() => {
-          this.wsUrl = this.localhostFallback();
-          this.openSocket();
-        });
-    }
+    if (!this.wsUrl) return; // still waiting for URL
+    this.openSocket();
   }
 
   public disconnect(): void {
@@ -234,6 +244,7 @@ class MarketWsService {
     this.reconnectAttempts = 0;
     this.wsUrl = null;
     this.wsUrlFetchInitiated = false;
+    this.wsUrlFailedOnce = false;
     this.changeRangesListeners.clear();
     this.symbolDataListeners.clear();
     this.connectionListeners.clear();
@@ -344,16 +355,21 @@ class MarketWsService {
   // ── Socket lifecycle ────────────────────────────────────────────────────
 
   private async fetchWsUrl(): Promise<string | null> {
-    try {
-      const res = await fetch('/api/py/ws-config', {
-        headers: { Accept: 'application/json' },
-      });
-      if (!res.ok) return null;
-      const body = (await res.json()) as { marketWsUrl?: string };
-      return body.marketWsUrl ?? null;
-    } catch {
-      return null;
-    }
+    // Resolution mirrors src/lib/newsSocket.ts:env var first, then
+    // a same-origin fallback. The browser is already at the public
+    // origin (https://blm.example.com), so deriving the WS base from
+    // window.location is the correct cross-environment pattern.
+    //
+    // We deliberately do NOT round-trip through /api/py/ws-config
+    // here: that route resolves to PYTHON_BACKEND_URL on the server,
+    // which in production is often unreachable from the browser
+    // (different host, no public DNS, or no path through the reverse
+    // proxy for the WS upgrade). The env-var pattern lets deploys
+    // override the URL explicitly when the Python backend is on a
+    // different host.
+    const envUrl = process.env.NEXT_PUBLIC_MARKET_WS_URL;
+    if (envUrl) return envUrl;
+    return this.localhostFallback();
   }
 
   private localhostFallback(): string {
