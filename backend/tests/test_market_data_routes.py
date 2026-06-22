@@ -35,24 +35,42 @@ def _patch_active_client(monkeypatch, *, change_ranges=None, symbol_data=None, r
 
     `_active_client` is bound at import time (sync or async variant), so we
     monkeypatch the `get_change_ranges` / `get_symbol_data` attributes on
-    whichever object was selected.
+    whichever object was selected. Since `USE_ASYNC_NSE` now defaults to
+    `true`, the active client is the async one; we install async stubs in
+    that case so the production call path's `await` works.
     """
+    import asyncio
+
     from app.services import market_data
 
     client = market_data._active_client
+    is_async = getattr(market_data, "USE_ASYNC_NSE", False)
 
-    def _change_ranges(sym):
-        if raise_exc is not None:
-            raise raise_exc
-        return change_ranges
+    if is_async:
+        async def _change_ranges(sym):
+            if raise_exc is not None:
+                raise raise_exc
+            return change_ranges
 
-    def _symbol_data(sym):
-        if raise_exc is not None:
-            raise raise_exc
-        return symbol_data
+        async def _symbol_data(sym):
+            if raise_exc is not None:
+                raise raise_exc
+            return symbol_data
+    else:
+        def _change_ranges(sym):
+            if raise_exc is not None:
+                raise raise_exc
+            return change_ranges
+
+        def _symbol_data(sym):
+            if raise_exc is not None:
+                raise raise_exc
+            return symbol_data
 
     monkeypatch.setattr(client, "get_change_ranges", _change_ranges)
     monkeypatch.setattr(client, "get_symbol_data", _symbol_data)
+    # Silence unused-import lint
+    del asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +157,10 @@ async def test_change_ranges_cache_hit(monkeypatch):
 
     call_count = {"n": 0}
 
-    def _change_ranges(sym):
+    # The active client is async (USE_ASYNC_NSE=true by default), so
+    # the stub must be a coroutine — the production call path does
+    # `await partial(client.get_change_ranges, sym)`.
+    async def _change_ranges(sym):
         call_count["n"] += 1
         return {"oneDayPercent": 1.0}
 

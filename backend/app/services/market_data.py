@@ -19,7 +19,16 @@ from app.services.nse_rate_limiter import throttled_nse_call
 
 logger = logging.getLogger(__name__)
 
-USE_ASYNC_NSE = os.getenv("USE_ASYNC_NSE", "false").lower() == "true"
+# Default to the async NSE client. The async client keeps a single
+# httpx.AsyncClient per event loop, which is required for the WS
+# /ws/market path: the rate limiter's asyncio.Semaphore and
+# httpx.AsyncClient must all be bound to the same event loop as the
+# WS handler. The sync facade goes through asyncio.run() per call
+# which creates a fresh loop each time, so its semaphores end up
+# bound to a stale loop and trigger
+# "Semaphore ... is bound to a different event loop" RuntimeErrors
+# (visible in backend/logs/backend.log.4 from 2026-06-15).
+USE_ASYNC_NSE = os.getenv("USE_ASYNC_NSE", "true").lower() == "true"
 if USE_ASYNC_NSE:
     from app.services.nse_client_async import nse_client_async as _active_client
 else:

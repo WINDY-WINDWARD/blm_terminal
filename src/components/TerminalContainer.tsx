@@ -79,6 +79,10 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   // Track market WebSocket connection state
   useEffect(() => {
     const unsub = marketDataService.onConnectionChange((connected) => setWsConnected(connected));
+    // Eagerly open the WS so the first watchlist render has zero
+    // handshake latency. `connect()` is idempotent — no-op if the
+    // socket is already open or connecting.
+    marketDataService.connect();
     return () => {
       unsub();
     };
