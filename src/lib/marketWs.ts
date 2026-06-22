@@ -48,6 +48,7 @@
  */
 
 import type { ChangeRanges, SymbolDataExtract } from './nseTypes';
+import { extractSymbolData, type RawNseSymbolData } from './nseTypes';
 
 type ChangeRangesHandler = (symbol: string, data: ChangeRanges | null) => void;
 type SymbolDataHandler = (symbol: string, data: SymbolDataExtract | null) => void;
@@ -573,7 +574,13 @@ class MarketWsService {
       }
       this.notifyChangeRanges(msg.symbol, data);
     } else {
-      const data = (msg.data ?? null) as SymbolDataExtract | null;
+      // The backend streams the raw NSE payload for symbol-data
+      // (the same shape NSE returns from getSymbolData). We extract
+      // the {ltp, pChange, yearHigh, yearLow} fields here, matching
+      // what the HTTP proxy's extractSymbolData() does. This way the
+      // WS path and the HTTP path produce identical downstream data.
+      const raw = (msg.data ?? null) as RawNseSymbolData | null;
+      const data = extractSymbolData(raw);
       if (data) {
         this.symbolDataCache.set(msg.symbol, {
           data,

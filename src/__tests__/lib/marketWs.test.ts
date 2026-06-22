@@ -149,7 +149,6 @@ beforeEach(() => {
 
 afterEach(() => {
   if (debugSpy.mock.calls.length) {
-    // eslint-disable-next-line no-console
     console.log('DEBUG MARKET_WS:', JSON.stringify(debugSpy.mock.calls, null, 2));
   }
 });
@@ -433,39 +432,67 @@ describe('MarketWsService — per-symbol fan-out on partials', () => {
     expect(bySymbol.TCS).toEqual({ oneWeekPercent: 0.8, oneMonthPercent: 2.1 });
   });
 
-  it('symbol-data partials fan out to onSymbolData listeners with the LTP', async () => {
+  it('symbol-data partials extract ltp/pChange/yearHigh/yearLow from the raw NSE payload', async () => {
+    // The backend streams the raw NSE getSymbolData payload (the
+    // same shape the HTTP proxy receives). The service MUST extract
+    // it into SymbolDataExtract before notifying listeners — that
+    // way the WS path produces the same downstream shape the HTTP
+    // path's extractSymbolData() does.
     marketWsService.connect();
     await tick(0);
     instances[0].__open();
     await tick(0);
 
-    const events: Array<{ symbol: string; ltp: number | null }> = [];
+    const events: Array<{ symbol: string; data: { ltp: number; pChange: number; yearHigh?: number; yearLow?: number } | null }> = [];
     marketWsService.onSymbolData((symbol, data) => {
-      events.push({ symbol, ltp: data?.ltp ?? null });
+      events.push({ symbol, data });
     });
 
     marketWsService.requestSymbolData(['RELIANCE', 'TCS']);
     await vi.advanceTimersByTimeAsync(60);
-    const requestId = JSON.parse(instances[0].sent[0]).request_id;
+    const requestId = JSON.parse(instances[0].send.mock.calls[0][0]).request_id;
 
+    // Raw NSE payload shape (mirrors what the backend sends on the
+    // wire — see backend/app/routers/market_ws.py:_stream_batch).
+    const rawNse = {
+      equityResponse: [
+        {
+          orderBook: { lastPrice: 1284.5 },
+          tradeInfo: { lastPrice: 1284.5 },
+          metaData: { pChange: 1.23 },
+          priceInfo: { yearHigh: 1350, yearLow: 980 },
+        },
+      ],
+    };
     instances[0].__message({
       type: 'symbol_data_partial',
       request_id: requestId,
       symbol: 'RELIANCE',
-      data: { ltp: 1284.5, pChange: 1.23, yearHigh: 1350, yearLow: 980 },
+      data: rawNse,
     });
+    // Soft miss: backend sends data: null on per-symbol failure.
     instances[0].__message({
       type: 'symbol_data_partial',
       request_id: requestId,
       symbol: 'TCS',
       data: null,
-      error: 'NSE returned 500',
     });
     await tick(0);
 
-    const bySymbol = Object.fromEntries(events.map((e) => [e.symbol, e.ltp]));
     expect(events).toHaveLength(2);
-    expect(bySymbol.RELIANCE).toBe(1284.5);
+    const bySymbol = Object.fromEntries(events.map((e) => [e.symbol, e.data]));
+    expect(bySymbol.RELIANCE).toEqual({
+      ltp: 1284.5,
+      pChange: 1.23,
+      yearHigh: 1350,
+      yearLow: 980,
+    });
+    // The raw payload is NOT passed through to listeners — only the
+    // extracted shape. This is the regression the previous test
+    // missed: it asserted the wrong (already-extracted) shape, and
+    // a backend sending raw NSE would have passed through silently
+    // with no LTP rendered in the watchlist.
+    expect(bySymbol.RELIANCE).not.toHaveProperty('equityResponse');
     expect(bySymbol.TCS).toBeNull();
   });
 

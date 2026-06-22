@@ -216,10 +216,38 @@ async def test_change_ranges_sends_started_partials_complete(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_symbol_data_sends_per_symbol_partials_with_ltp(monkeypatch):
+async def test_symbol_data_sends_per_symbol_partials_with_raw_nse_payload(monkeypatch):
+    """The backend streams the RAW NSE getSymbolData payload for
+    each symbol (not an extracted shape). The frontend's marketWs
+    service is responsible for calling extractSymbolData() before
+    notifying listeners — that's the contract documented in
+    src/lib/marketWs.ts.
+
+    This test pins down the wire shape so the backend can't drift
+    to either an extracted shape (which would break the WS path's
+    fan-out contract) or a different raw shape (which would break
+    the frontend's extractor).
+    """
+    raw_reliance = {
+        "equityResponse": [
+            {
+                "orderBook": {"lastPrice": 1284.5},
+                "metaData": {"pChange": 1.23},
+                "priceInfo": {"yearHigh": 1350, "yearLow": 980},
+            }
+        ]
+    }
+    raw_tcs = {
+        "equityResponse": [
+            {
+                "orderBook": {"lastPrice": 3450.0},
+                "metaData": {"pChange": -0.5},
+            }
+        ]
+    }
     _patch_batch(monkeypatch, symbol_data={
-        "RELIANCE": {"ltp": 1284.5, "pChange": 1.23},
-        "TCS": {"ltp": 3450.0, "pChange": -0.5},
+        "RELIANCE": raw_reliance,
+        "TCS": raw_tcs,
     })
     ws = FakeWebSocket()
     messages = await _drive(ws, {
@@ -238,8 +266,16 @@ async def test_symbol_data_sends_per_symbol_partials_with_ltp(monkeypatch):
     ]
 
     partials = {m["symbol"]: m for m in stream if m["type"] == "symbol_data_partial"}
-    assert partials["RELIANCE"]["data"] == {"ltp": 1284.5, "pChange": 1.23}
-    assert partials["TCS"]["data"] == {"ltp": 3450.0, "pChange": -0.5}
+    # The wire shape is the raw NSE payload — exactly what NSE
+    # returns from getSymbolData. The frontend extracts from this.
+    assert partials["RELIANCE"]["data"] == raw_reliance
+    assert partials["TCS"]["data"] == raw_tcs
+    # Sanity: the partials do NOT carry the extracted shape. If a
+    # future refactor moves the extraction to the backend, this
+    # test will fail and force the author to update both the
+    # frontend and the test in lockstep — which is the right
+    # safety net given the WS vs HTTP path asymmetry.
+    assert "equityResponse" in partials["RELIANCE"]["data"]
 
 
 @pytest.mark.asyncio
