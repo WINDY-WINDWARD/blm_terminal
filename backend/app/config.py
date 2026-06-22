@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     opencode_zen_api_key: str = "none"
     zen_base_url: str = "https://opencode.ai/zen/go/v1"
 
+    # AI Picks Zen API resilience — Phase 1 fix for httpx.ReadTimeout failures.
+    # 5 min per-call gives Kimi/MiniMax time to reason over multi-tool results
+    # (parallel tool execution + 4096-token generation can exceed 120s easily).
+    zen_api_timeout_seconds: float = 300.0
+    # Number of retries on ReadTimeout/ConnectTimeout before failing the loop.
+    zen_api_max_retries: int = 2
+    # Sleep between retries (seconds).
+    zen_api_retry_backoff_seconds: float = 5.0
+
     # Market hours (IST) - for scheduler to determine when to run
     market_start_hour: int = 9
     market_start_minute: int = 15

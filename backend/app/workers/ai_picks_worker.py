@@ -17,6 +17,62 @@ from app.services.ai_chat_service import BLM_TOOLS, BLM_TOOLS_ANTHROPIC, _run_to
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Zen API resilience (Phase 1: timeout + retry)
+# ---------------------------------------------------------------------------
+# Deep-research loops (Hunter/Verifier/Evaluator) call 6-8 tools in parallel
+# per turn and then generate up to 4k tokens of reasoning. With the previous
+# 120s timeout the 7th-3rd API call would routinely exceed the deadline and
+# fail the entire pipeline. We now use a configurable, longer timeout and
+# retry transient timeouts before giving up.
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    caller: str,
+    **kwargs: Any,
+) -> httpx.Response:
+    """POST to the Zen API with retry on transient timeouts.
+
+    - Forces ``timeout=zen_api_timeout_seconds`` (overrides any caller value).
+    - Retries ``httpx.ReadTimeout`` and ``httpx.ConnectTimeout`` up to
+      ``zen_api_max_retries`` times, sleeping ``zen_api_retry_backoff_seconds``
+      between attempts.
+    - Other ``httpx.HTTPError`` subclasses (connect refused, 5xx after
+      ``raise_for_status``) bubble up immediately — only *timeout* is
+      considered transient here, matching the failure mode in the incident
+      report (June 22 — both runs failed on ``httpx.ReadTimeout``).
+    """
+    timeout = settings.zen_api_timeout_seconds
+    max_retries = max(0, settings.zen_api_max_retries)
+    backoff = max(0.0, settings.zen_api_retry_backoff_seconds)
+
+    # Caller might have passed timeout=...; always override to the configured value.
+    kwargs.pop("timeout", None)
+
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await client.post(url, timeout=timeout, **kwargs)
+        except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+            last_exc = exc
+            if attempt >= max_retries:
+                logger.error(
+                    "Zen API call from %s exhausted %d retries (last error: %s)",
+                    caller, max_retries, exc,
+                )
+                raise
+            logger.warning(
+                "Zen API call from %s timed out (attempt %d/%d): %s — retrying in %.1fs",
+                caller, attempt + 1, max_retries + 1, exc, backoff,
+            )
+            if backoff > 0:
+                await asyncio.sleep(backoff)
+    # Defensive — the loop above always either returns or raises.
+    assert last_exc is not None
+    raise last_exc
+
 # Bullet-proof System Prompts
 HUNTER_PROMPT = """You are 'The Hunter', an elite, quantitative equity research AI specializing in actionable mid-cap swing trades.
 Your objective: Execute a deep search across the NSE to identify 4-6 highly actionable, high-probability mid-cap swing trade setups.
@@ -113,8 +169,10 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
     messages.append({"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."})
     
     for turn_idx in range(60):
-        resp = await client.post(
+        resp = await _post_with_retry(
+            client,
             f"{settings.zen_base_url}/chat/completions",
+            caller=f"hunter:turn{turn_idx}",
             headers={"Authorization": f"Bearer {settings.opencode_zen_api_key}"},
             json={
                 "model": "kimi-k2.6",
@@ -122,13 +180,12 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
                 "tools": BLM_TOOLS,
                 "temperature": 0.2
             },
-            timeout=120.0
         )
         resp.raise_for_status()
         data = resp.json()
         message = data["choices"][0]["message"]
         messages.append(message)
-        
+
         if message.get("tool_calls"):
             tool_calls = message["tool_calls"]
             logger.info(f"Hunter using tools: {[tc['function']['name'] for tc in tool_calls]}")
@@ -139,10 +196,10 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
             _, tool_msgs = await _run_tools_parallel(normalised, set())
             for tm in tool_msgs:
                 messages.append({"role": "tool", "tool_call_id": tm["id"], "content": tm["content"]})
-            
+
             if turn_idx == 45:
                 messages.append({
-                    "role": "user", 
+                    "role": "user",
                     "content": "WARNING: You have used 45 turns. The strict limit is 60. Please finalize your analysis and output your final <picks> block soon."
                 })
         else:
@@ -164,8 +221,10 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
     ]
     
     for turn_idx in range(60):
-        resp = await client.post(
+        resp = await _post_with_retry(
+            client,
             f"{settings.zen_base_url}/messages",
+            caller=f"verifier:turn{turn_idx}",
             headers={
                 "x-api-key": settings.opencode_zen_api_key,
                 "anthropic-version": "2023-06-01"
@@ -178,14 +237,13 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
                 "max_tokens": 4096,
                 "temperature": 0.1
             },
-            timeout=120.0
         )
         resp.raise_for_status()
         data = resp.json()
-        
+
         assistant_msg = {"role": "assistant", "content": data["content"]}
         messages.append(assistant_msg)
-        
+
         tool_uses = [c for c in data["content"] if c["type"] == "tool_use"]
         if tool_uses:
             logger.info(f"Verifier using tools: {[tu['name'] for tu in tool_uses]}")
@@ -194,7 +252,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
                 for tu in tool_uses
             ]
             _, tool_msgs = await _run_tools_parallel(normalised, set())
-            
+
             anthropic_results = []
             for tm in tool_msgs:
                 anthropic_results.append({
@@ -202,22 +260,22 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
                     "tool_use_id": tm["id"],
                     "content": [{"type": "text", "text": tm["content"]}]
                 })
-                
+
             if turn_idx == 45:
                 anthropic_results.append({
                     "type": "text",
                     "text": "WARNING: You have used 45 turns. The strict limit is 60. Please finalize your analysis and output your final XML block soon."
                 })
-                
+
             messages.append({"role": "user", "content": anthropic_results})
         else:
             break
-            
+
     content = ""
     for c in messages[-1].get("content", []):
         if c["type"] == "text":
             content += c["text"]
-            
+
     try:
         return _extract_json_block(content, "verified_picks")
     except Exception as e:
@@ -231,8 +289,10 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
     ]
     
     for turn_idx in range(60):
-        resp = await client.post(
+        resp = await _post_with_retry(
+            client,
             f"{settings.zen_base_url}/messages",
+            caller=f"evaluator:turn{turn_idx}",
             headers={
                 "x-api-key": settings.opencode_zen_api_key,
                 "anthropic-version": "2023-06-01"
@@ -245,7 +305,6 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
                 "max_tokens": 4096,
                 "temperature": 0.1
             },
-            timeout=120.0
         )
         resp.raise_for_status()
         data = resp.json()
