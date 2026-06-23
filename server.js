@@ -2,6 +2,9 @@ const { createServer } = require('http');
 const { parse } = require('url');
 const next = require('next');
 const httpProxy = require('http-proxy');
+const { WebSocketServer } = require('ws');
+
+const { handleMarketWsConnection } = require('./server/marketWsHandler');
 
 const dev = process.env.NODE_ENV !== 'production';
 const port = parseInt(process.env.PORT || '3000', 10);
@@ -21,6 +24,15 @@ proxy.on('error', (err, _req, socket) => {
   if (socket && typeof socket.destroy === 'function') socket.destroy();
 });
 
+// In-process WS server for /ws/market. The browser connects
+// here directly (same-origin), and we resolve each symbol via
+// NSE-direct + Python-fallback (see server/marketWsHandler.js).
+const marketWss = new WebSocketServer({ noServer: true });
+
+marketWss.on('connection', (ws) => {
+  handleMarketWsConnection(ws);
+});
+
 app.prepare().then(() => {
   const server = createServer((req, res) => {
     handle(req, res, parse(req.url, true));
@@ -28,8 +40,13 @@ app.prepare().then(() => {
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = parse(req.url || '');
-    if (pathname === '/ws/market' || pathname === '/ws/news') {
-      console.log(`[server] WS upgrade: ${pathname}`);
+    if (pathname === '/ws/market') {
+      console.log('[server] WS upgrade: /ws/market (handled in-process)');
+      marketWss.handleUpgrade(req, socket, head, (ws) => {
+        marketWss.emit('connection', ws, req);
+      });
+    } else if (pathname === '/ws/news') {
+      console.log('[server] WS upgrade: /ws/news → Python');
       proxy.ws(req, socket, head);
     } else {
       socket.destroy();
@@ -39,6 +56,7 @@ app.prepare().then(() => {
   server.listen(port, '0.0.0.0', (err) => {
     if (err) throw err;
     console.log(`[server] Ready on http://0.0.0.0:${port} (${dev ? 'dev' : 'prod'})`);
-    console.log(`[server] WS proxy → ${backendUrl}`);
+    console.log(`[server] /ws/market → in-process Next.js handler`);
+    console.log(`[server] /ws/news → ${backendUrl}`);
   });
 });

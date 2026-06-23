@@ -236,3 +236,18 @@ export function getCircuitStats(): Record<
   }
   return out;
 }
+
+/**
+ * Test-only helper. Resets all per-endpoint state — the circuit
+ * breaker, the in-flight coalesce map, the per-endpoint lock
+ * queue, and the courtesy-delay timestamp. NOT for production use.
+ */
+export function __resetThrottleStateForTests(): void {
+  CONSECUTIVE_FAILURES.clear();
+  CIRCUIT_OPEN.clear();
+  CIRCUIT_OPENED_AT.clear();
+  CIRCUIT_HALF_OPEN.clear();
+  inflight.clear();
+  endpointLocks.clear();
+  lastRequestAt.clear();
+}

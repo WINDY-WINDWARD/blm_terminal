@@ -63,10 +63,10 @@ src/
 │   ├── jobs/route.ts           # Background job monitoring
 │   └── stockuniverse/errors/route.ts  # Stock universe error tracking
 ├── components/widgets/  # ChartWidget, WatchWidget, MoversWidget, OrderWidget, PosWidget, SettingsWidget, DealsWidget, LargedealsWidget, BreakoutsWidget, FundamentalsWidget, NewsWidget, AnalysisWidget, NotifWidget, AiWidget, AnnouncementsWidget, PortfolioWidget, ScanWidget, ScreenerWidget, DocsWidget
-├── lib/        # api-config, cache, logger, marketWs, newsSocket, openalgo-server, openalgo, rate-limiter, screenerTql, utils, widgetDocs
+├── lib/        # api-config, cache, logger, marketWs, marketWsStreamer, marketWsRoute, newsSocket, openalgo-server, openalgo, rate-limiter, screenerTql, utils, widgetDocs
 └── store/terminalStore.ts  # all Jotai atoms
 backend/  # FastAPI (Python ≥ 3.11)
-├── app/routers/   # markets, market_ws, news, news_ws, screener, iinvest, stockuniverse,
+├── app/routers/   # markets, news, news_ws, screener, iinvest, stockuniverse,
 │                  # watchlist, ai_summarizer, ai_chat, notifications, corporatefilings,
 │                  # morningstar, announcements, valuation, portfolio, ticker, jobs,
 │                  # system_config, nonpersistence, mcp_server
