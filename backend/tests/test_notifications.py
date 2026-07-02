@@ -93,14 +93,33 @@ class TestNotificationsAPI:
                 f"Missing keys: {required - set(item.keys())}"
             )
 
-    def test_get_requires_watchlist_id(self):
-        """Missing watchlist_id should return 422."""
+    def test_get_omitted_watchlist_id(self):
+        """Omitting watchlist_id should return 200 (queries all user watchlists)."""
         resp = get("/api/notifications")
-        assert resp.status_code == 422
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_get_all_true_ignores_foreign_watchlist_id(self):
+        """all=true ignores the supplied watchlist_id and returns all owned watchlists."""
+        resp = get("/api/notifications?watchlist_id=99999&all=true")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_get_per_watchlist_still_works(self):
+        """Providing a valid watchlist_id without all=true returns 200."""
+        resp = get(f"/api/notifications?watchlist_id={TEST_WATCHLIST_ID}")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
 
     def test_delete_all_returns_200(self):
         """DELETE ?all=true should succeed."""
         resp = delete(f"/api/notifications?all=true&watchlist_id={TEST_WATCHLIST_ID}")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+    def test_delete_all_omitted_watchlist_id(self):
+        """DELETE ?all=true without watchlist_id should succeed and dismiss all owned."""
+        resp = delete("/api/notifications?all=true")
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
 

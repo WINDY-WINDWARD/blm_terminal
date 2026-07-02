@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom } from 'jotai';
 import { useQuery } from '@tanstack/react-query';
 import ReactDOM from 'react-dom';
 import {
   activeCommandAtom,
-  activeWatchlistIdAtom,
   seenNotifIdsAtom,
   notifAlertVisibleAtom,
   notifAlertCountAtom,
@@ -31,7 +30,6 @@ interface Notification {
 }
 
 export function NotifAlertModal() {
-  const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
   const [seenIds, setSeenIds] = useAtom(seenNotifIdsAtom);
   const [visible, setVisible] = useAtom(notifAlertVisibleAtom);
   const [alertCount, setAlertCount] = useAtom(notifAlertCountAtom);
@@ -42,10 +40,10 @@ export function NotifAlertModal() {
   const progressRef = useRef(100);
 
   const { data } = useQuery<Notification[]>({
-    queryKey: ['notif-alert-modal', activeWatchlistId],
+    queryKey: ['notif-alert-modal-global'],
     queryFn: async () => {
       const res = await fetch(
-        `/api/py/notifications?watchlist_id=${activeWatchlistId}&days=1&read_filter=unread`,
+        `/api/py/notifications?days=1&read_filter=unread`,
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();

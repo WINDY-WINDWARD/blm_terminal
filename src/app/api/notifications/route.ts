@@ -17,12 +17,11 @@ function forwardSetCookie(upstream: Response, res: NextResponse): void {
 }
 
 export async function GET(req: NextRequest) {
-  const watchlistId = req.nextUrl.searchParams.get('watchlist_id') ?? '1';
+  const watchlistId = req.nextUrl.searchParams.get('watchlist_id');
   try {
-    const upstream = await fetch(
-      `${BACKEND_URL}/api/notifications?watchlist_id=${watchlistId}`,
-      { headers: forwardAuthHeaders(req) },
-    );
+    const params = new URLSearchParams(req.nextUrl.search);
+    const upstreamUrl = `${BACKEND_URL}/api/notifications${params.toString() ? '?' + params.toString() : ''}`;
+    const upstream = await fetch(upstreamUrl, { headers: forwardAuthHeaders(req) });
     const data: unknown = await upstream.json();
     const res = NextResponse.json(data, { status: upstream.status });
     forwardSetCookie(upstream, res);
@@ -34,10 +33,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const watchlistId = req.nextUrl.searchParams.get('watchlist_id') ?? '1';
   try {
-    const url = `${BACKEND_URL}/api/notifications?all=true&watchlist_id=${watchlistId}`;
-    const upstream = await fetch(url, { method: 'DELETE', headers: forwardAuthHeaders(req) });
+    const params = new URLSearchParams(req.nextUrl.search);
+    if (!params.has('all')) {
+      params.set('all', 'true');
+    }
+    const upstreamUrl = `${BACKEND_URL}/api/notifications${params.toString() ? '?' + params.toString() : ''}`;
+    const upstream = await fetch(upstreamUrl, { method: 'DELETE', headers: forwardAuthHeaders(req) });
     const data: unknown = await upstream.json();
     const res = NextResponse.json(data, { status: upstream.status });
     forwardSetCookie(upstream, res);

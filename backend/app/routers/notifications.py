@@ -20,25 +20,37 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 @router.get("/notifications", response_model=list[NotificationOut], tags=["notifications"])
 async def list_notifications(
-    watchlist_id: Annotated[int, Query()],
+    watchlist_id: Annotated[int | None, Query()] = None,
+    all_watchlists: Annotated[bool, Query(alias="all")] = False,
     days: Annotated[int, Query()] = 2,
     read_filter: Annotated[str, Query()] = "unread",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationOut]:
-    """Return notifications for a watchlist, newest first.
+    """Return notifications for a watchlist or all user watchlists, newest first.
 
+    - watchlist_id: specific watchlist to query. If omitted (or all=true), queries all watchlists owned by user.
     - days: number of past days to include (default 2)
     - read_filter: 'unread' (default), 'read', or 'all'
     """
-    watchlist = await db.get(WatchlistModel, watchlist_id)
-    if watchlist is None or watchlist.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+    if watchlist_id is not None and not all_watchlists:
+        watchlist = await db.get(WatchlistModel, watchlist_id)
+        if watchlist is None or watchlist.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+
     cutoff_date = date.today() - timedelta(days=days - 1)
+
     stmt = select(Notification).where(
-        Notification.watchlist_id == watchlist_id,
         Notification.triggered_date >= cutoff_date,
     )
+
+    if watchlist_id is not None and not all_watchlists:
+        stmt = stmt.where(Notification.watchlist_id == watchlist_id)
+    else:
+        # If no watchlist_id provided, or all=True, restrict to watchlists owned by the current user
+        user_watchlists = select(WatchlistModel.id).where(WatchlistModel.user_id == current_user.id)
+        stmt = stmt.where(Notification.watchlist_id.in_(user_watchlists))
+
     if read_filter == "unread":
         stmt = stmt.where(Notification.is_read == False)
     elif read_filter == "read":
@@ -78,27 +90,34 @@ async def dismiss_notification(
 @router.delete("/notifications", tags=["notifications"])
 async def dismiss_all_notifications(
     all: Annotated[bool, Query(alias="all")],
-    watchlist_id: Annotated[int, Query()],
+    watchlist_id: Annotated[int | None, Query()] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Soft-delete all unread notifications for a watchlist.
+    """Soft-delete all unread notifications.
 
     Requires ?all=true query param. Without it, returns 400.
+    If watchlist_id is provided, deletes only for that watchlist.
+    If omitted, deletes for all watchlists owned by user.
     """
     if not all:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing ?all=true query param",
         )
-    watchlist = await db.get(WatchlistModel, watchlist_id)
-    if watchlist is None or watchlist.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
-    stmt = (
-        update(Notification)
-        .where(Notification.watchlist_id == watchlist_id, Notification.is_read == False)
-        .values(is_read=True)
-    )
+
+    stmt = update(Notification).where(Notification.is_read == False)
+
+    if watchlist_id is not None:
+        watchlist = await db.get(WatchlistModel, watchlist_id)
+        if watchlist is None or watchlist.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail=f"Watchlist {watchlist_id} not found")
+        stmt = stmt.where(Notification.watchlist_id == watchlist_id)
+    else:
+        user_watchlists = select(WatchlistModel.id).where(WatchlistModel.user_id == current_user.id)
+        stmt = stmt.where(Notification.watchlist_id.in_(user_watchlists))
+
+    stmt = stmt.values(is_read=True)
     await db.execute(stmt)
     await db.commit()
     return {"ok": True}
