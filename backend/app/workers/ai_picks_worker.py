@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.models.ai_picks import AIPick, PickStatus, PickDirection
+from app.models.ai_picks import AIPick, PickStatus, PickDirection, AIPickTrace
+import time
 from app.workers.lifecycle import _startup_pipeline_done
 from app.services.ai_chat_service import BLM_TOOLS, BLM_TOOLS_ANTHROPIC, _run_tools_parallel
 
@@ -122,7 +123,13 @@ OUTPUT FORMAT:
     "entry": 100.50,
     "take_profit": 115.00,
     "stop_loss": 96.00,
-    "thesis": "Verified: Solid fundamentals, no immediate bad news. Adjusted TP for better R:R."
+    "note": "Verified: Solid fundamentals. Adjusted TP for better R:R.",
+    "verdict": "BULLISH",
+    "technical": "RSI solid.",
+    "fundamental": "No immediate bad news.",
+    "catalyst": "Earnings upcoming.",
+    "risk": "Market weakness.",
+    "action": "BUY"
   }
 ]
 </verified_picks>
@@ -140,11 +147,34 @@ INSTRUCTIONS:
 OUTPUT FORMAT:
 <evaluation>
 {
-  "note": "Price hit strong resistance at 105. Suggest tightening stop loss to 102 to protect profits.",
+  "note": "Price hit strong resistance at 105. Suggest tightening stop loss.",
+  "verdict": "NEUTRAL",
+  "technical": "Resistance at 105.",
+  "fundamental": "No change.",
+  "catalyst": "None.",
+  "risk": "High if market drops.",
   "action": "HOLD" // or "CLOSE"
 }
 </evaluation>
 """
+
+
+async def _save_trace(db: AsyncSession, symbol: str, role: str, prompt: str, response: str, duration_ms: int, status: str, err: str | None = None):
+    try:
+        trace = AIPickTrace(
+            symbol=symbol,
+            agent_role=role,
+            prompt=prompt,
+            response=response,
+            duration_ms=duration_ms,
+            status=status,
+            error_message=err
+        )
+        db.add(trace)
+        await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to save AI trace: {e}")
+
 
 def _extract_json_block(content: str, tag: str) -> dict | list:
     """Safely extract JSON from within XML-style tags, handling markdown code blocks."""
@@ -161,9 +191,10 @@ def _extract_json_block(content: str, tag: str) -> dict | list:
     return json.loads(json_str)
 
 
-async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
+async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession) -> list[dict]:
     """Loop 1: Run Kimi 2.6 to hunt for picks."""
     logger.info("Loop 1: Kimi Hunter starting")
+    start_time = time.time()
     
     messages = [{"role": "system", "content": HUNTER_PROMPT}]
     messages.append({"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."})
@@ -206,16 +237,24 @@ async def _call_kimi_hunter(client: httpx.AsyncClient) -> list[dict]:
             break
             
     content = messages[-1].get("content", "")
+    start_time = time.time()
+
+    duration = int((time.time() - start_time) * 1000)
+    prompt_str = json.dumps(messages[:-1])
+    response_str = messages[-1].get("content", "") if messages else ""
+    await _save_trace(db, "MULTI", "HUNTER", prompt_str, response_str, duration, "SUCCESS")
     try:
         return _extract_json_block(content, "picks")
     except Exception as e:
         logger.error(f"Hunter parsing failed: {e}. Raw content: {content}")
     return []
 
-async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list[dict]) -> list[dict]:
+async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, proposed_picks: list[dict]) -> list[dict]:
     """Loop 2: Run MiniMax 2.5 to verify picks."""
     logger.info("Loop 2: MiniMax Verifier starting")
+    start_time = time.time()
     
+    start_time = time.time()
     messages = [
         {"role": "user", "content": f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"}
     ]
@@ -276,14 +315,21 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, proposed_picks: list
         if c["type"] == "text":
             content += c["text"]
 
+    start_time = time.time()
+
+    duration = int((time.time() - start_time) * 1000)
+    prompt_str = json.dumps(messages[:-1])
+    response_str = content
+    await _save_trace(db, "MULTI", "VERIFIER", prompt_str, response_str, duration, "SUCCESS")
     try:
         return _extract_json_block(content, "verified_picks")
     except Exception as e:
         logger.error(f"Verifier parsing failed: {e}. Raw content: {content}")
     return []
 
-async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) -> dict:
+async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, pick_data: dict) -> dict:
     """Loop 3: Run MiniMax 2.5 to evaluate an existing pick."""
+    start_time = time.time()
     messages = [
         {"role": "user", "content": f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"}
     ]
@@ -343,6 +389,12 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
         if c["type"] == "text":
             content += c["text"]
             
+    start_time = time.time()
+
+    duration = int((time.time() - start_time) * 1000)
+    prompt_str = json.dumps(messages[:-1])
+    response_str = content
+    await _save_trace(db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", prompt_str, response_str, duration, "SUCCESS")
     try:
         return _extract_json_block(content, "evaluation")
     except Exception as e:
@@ -354,12 +406,12 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, pick_data: dict) ->
 async def run_loop_1_and_2():
     """Execute Hunter (8am) and Verifier pipelines."""
     async with httpx.AsyncClient() as client:
-        proposed_picks = await _call_kimi_hunter(client)
+            proposed_picks = await _call_kimi_hunter(client, db)
         if not proposed_picks:
             logger.info("Loop 1 found no valid setups today.")
             return
             
-        verified_picks = await _call_minimax_verifier(client, proposed_picks)
+            verified_picks = await _call_minimax_verifier(client, db, proposed_picks)
         if not verified_picks:
             logger.info("Loop 2 rejected all setups.")
             return
@@ -411,7 +463,7 @@ async def run_loop_3():
                             if age > timedelta(hours=48):
                                 return pick_id, {"action": "ABANDON", "note": "Auto-abandoned due to 48h timeout with no action."}
                                 
-                        eval_data = await _call_minimax_evaluator(client, p_data)
+                        eval_data = await _call_minimax_evaluator(client, db, p_data)
                         return pick_id, eval_data
                     except Exception as e:
                         logger.error(f"Failed to evaluate pick {pick_id}: {e}")

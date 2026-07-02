@@ -17,12 +17,24 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
 
 VACUUM_CRON = "0 4 * * 0"   # Every Sunday 04:00 (low-traffic window)
+
+
+def _purge_ai_traces(con: sqlite3.Connection) -> None:
+    """Purge AI Pick traces older than 90 days."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        # SQLite uses string comparison for ISO8601 datetimes.
+        cutoff_date = cutoff.replace("+00:00", "")
+        con.execute("DELETE FROM ai_pick_traces WHERE created_at < ?", (cutoff_date,))
+        logger.info("vacuum: purged old AI pick traces")
+    except sqlite3.OperationalError as e:
+        logger.warning(f"vacuum: failed to purge ai_pick_traces: {e}")
 
 
 def _run_vacuum() -> None:
@@ -43,6 +55,9 @@ def _run_vacuum() -> None:
         # connection with isolation_level=None (autocommit) so each
         # statement is its own transaction.
         with sqlite3.connect(db_path, timeout=600, isolation_level=None) as con:
+            
+            _purge_ai_traces(con)
+
             # 1. checkpoint WAL to fold pending writes into the main DB
             update_job_status_sync("job.vacuum", "running", progress=20,
                                             message="Checkpointing WAL...")

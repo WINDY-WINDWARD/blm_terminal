@@ -10,6 +10,12 @@ interface PickNote {
   timestamp: string;
   note: string;
   model: string;
+  verdict?: string;
+  technical?: string;
+  fundamental?: string;
+  catalyst?: string;
+  risk?: string;
+  action?: string;
 }
 
 interface AIPick {
@@ -39,6 +45,22 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
       {label}
     </button>
   );
+}
+
+
+function getActionPill(pick: AIPick) {
+  if (!pick.notes || pick.notes.length === 0) return null;
+  const latestNote = pick.notes[pick.notes.length - 1];
+  const label = latestNote.action || latestNote.verdict;
+  if (!label) return null;
+  
+  let colorCls = 'bg-zinc-800 text-white border-zinc-600';
+  const uc = label.toUpperCase();
+  if (uc === 'BUY' || uc === 'BULLISH') colorCls = 'bg-green-900/40 text-green-400 border-green-800';
+  else if (uc === 'SELL' || uc === 'BEARISH' || uc === 'CLOSE' || uc === 'ABANDON') colorCls = 'bg-red-900/40 text-red-400 border-red-800';
+  else if (uc === 'HOLD' || uc === 'NEUTRAL') colorCls = 'bg-blue-900/40 text-blue-400 border-blue-800';
+  
+  return <span className={cn('px-1.5 py-0.5 text-[10px] rounded-sm font-bold border', colorCls)}>{uc}</span>;
 }
 
 export function AiPicksWidget({ panelId }: { panelId: string }) {
@@ -156,12 +178,13 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                 >
                   <div className="flex items-center gap-3">
                     <span className="font-bold text-terminal-amber text-[13px]">{pick.symbol}</span>
-                    <span className={cn(
-                      'px-1.5 py-0.5 text-[10px] rounded-sm font-bold',
+                                        <span className={cn(
+                      'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border border-transparent',
                       pick.direction === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
                     )}>
                       {pick.direction}
                     </span>
+                    {getActionPill(pick)}
                     <span className="text-[10px] uppercase text-white/50 border border-terminal-gray px-1">
                       {pick.status}
                     </span>
@@ -191,6 +214,14 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                           <div className="text-white/90 text-[11px] leading-relaxed whitespace-pre-wrap">
                             {n.note}
                           </div>
+                          {(n.technical || n.fundamental || n.catalyst || n.risk) && (
+                            <div className="mt-1 pt-1 border-t border-zinc-800 flex flex-col gap-1 text-[11px]">
+                              {n.technical && <div><span className="text-terminal-blue font-bold uppercase">TECH:</span> <span className="text-white/80">{n.technical}</span></div>}
+                              {n.fundamental && <div><span className="text-terminal-purple font-bold uppercase">FUND:</span> <span className="text-white/80">{n.fundamental}</span></div>}
+                              {n.catalyst && <div><span className="text-terminal-amber font-bold uppercase">CAT:</span> <span className="text-white/80">{n.catalyst}</span></div>}
+                              {n.risk && <div><span className="text-red-400 font-bold uppercase">RISK:</span> <span className="text-white/80">{n.risk}</span></div>}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>

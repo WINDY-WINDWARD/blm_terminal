@@ -7,6 +7,27 @@ class PickNote(BaseModel):
     timestamp: datetime
     note: str
     model: str
+    verdict: Optional[str] = None
+    technical: Optional[str] = None
+    fundamental: Optional[str] = None
+    catalyst: Optional[str] = None
+    risk: Optional[str] = None
+    action: Optional[str] = None
+
+class AIPickTraceResponse(BaseModel):
+    id: int
+    pick_id: Optional[int]
+    symbol: str
+    agent_role: str
+    prompt: str
+    response: str
+    duration_ms: int
+    status: str
+    error_message: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 class AIPickBase(BaseModel):
     symbol: str = Field(..., description="NSE ticker symbol")

@@ -1,14 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from typing import List, Optional
 from datetime import datetime, timezone
 
 from app.database import get_db
-from app.models.ai_picks import AIPick, PickStatus
-from app.schemas.ai_picks import AIPickResponse, PickStatusUpdate
+from app.models.ai_picks import AIPick, PickStatus, AIPickTrace
+from app.schemas.ai_picks import AIPickResponse, PickStatusUpdate, AIPickTraceResponse
 
 router = APIRouter(prefix="/ai", tags=["ai-picks"])
+
+@router.get("/picks/traces", response_model=List[AIPickTraceResponse])
+async def get_pick_traces(
+    limit: int = Query(50, description="Max traces to return"),
+    db: AsyncSession = Depends(get_db)
+):
+    query = select(AIPickTrace).order_by(desc(AIPickTrace.created_at)).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
 
 @router.get("/picks", response_model=List[AIPickResponse])
 async def get_all_picks(
