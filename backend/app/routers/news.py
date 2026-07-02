@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, or_, func, select, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -75,6 +75,7 @@ async def get_global_news(
     ),
     limit: int = Query(default=50, ge=1, le=100, description="Number of articles per page"),
     offset: int = Query(default=0, ge=0, description="Number of articles to skip"),
+    q: str | None = Query(default=None, description="Text search query"),
     db: AsyncSession = Depends(get_db),
 ) -> NewsPaginatedOut:
     """Return paginated cached news articles from MoneyControl filtered by date range.
@@ -93,6 +94,14 @@ async def get_global_news(
         conditions.append(NewsArticle.publish_date >= start_date)
     if end_date:
         conditions.append(NewsArticle.publish_date <= end_date)
+    if q:
+        conditions.append(
+            or_(
+                NewsArticle.title.ilike(f"%{q}%"),
+                NewsArticle.text.ilike(f"%{q}%"),
+                cast(NewsArticle.entities, String).ilike(f"%{q}%"),
+            )
+        )
 
     count_stmt = (
         select(func.count())
@@ -204,6 +213,7 @@ async def get_company_news(
         description="One of: auto, iinvest, moneycontrol, merged",
         pattern="^(auto|iinvest|moneycontrol|merged)$",
     ),
+    q: str | None = Query(default=None, description="Text search query"),
     db: AsyncSession = Depends(get_db),
 ) -> NewsPaginatedOut:
     """Return paginated cached news articles tagged with *symbol*.
@@ -290,6 +300,14 @@ async def get_company_news(
         conditions.append(NewsArticle.publish_date >= start_date)
     if end_date:
         conditions.append(NewsArticle.publish_date <= end_date)
+    if q:
+        conditions.append(
+            or_(
+                NewsArticle.title.ilike(f"%{q}%"),
+                NewsArticle.text.ilike(f"%{q}%"),
+                cast(NewsArticle.entities, String).ilike(f"%{q}%"),
+            )
+        )
 
     count_stmt = select(func.count()).select_from(NewsArticle).where(and_(*conditions))
     precomputed_total = (await db.scalar(count_stmt) or 0)
@@ -321,6 +339,14 @@ async def get_company_news(
             conditions.append(NewsArticle.publish_date >= start_date)
         if end_date:
             conditions.append(NewsArticle.publish_date <= end_date)
+        if q:
+            conditions.append(
+                or_(
+                    NewsArticle.title.ilike(f"%{q}%"),
+                    NewsArticle.text.ilike(f"%{q}%"),
+                    cast(NewsArticle.entities, String).ilike(f"%{q}%"),
+                )
+            )
         count_stmt = select(func.count()).select_from(NewsArticle).where(and_(*conditions))
         precomputed_total = (await db.scalar(count_stmt) or 0)
         logger.debug(
@@ -450,6 +476,7 @@ async def get_all_news(
     end_date: datetime | None = Query(default=None, description="End date for filtering"),
     limit: int = Query(default=50, ge=1, le=100, description="Number of articles per page"),
     offset: int = Query(default=0, ge=0, description="Number of articles to skip"),
+    q: str | None = Query(default=None, description="Text search query"),
     db: AsyncSession = Depends(get_db),
 ) -> NewsPaginatedOut:
     """Return paginated aggregated news from all RSS sources with optional filtering.
@@ -480,6 +507,14 @@ async def get_all_news(
 
     conditions.append(NewsArticle.publish_date >= start_date)
     conditions.append(NewsArticle.publish_date <= end_date)
+    if q:
+        conditions.append(
+            or_(
+                NewsArticle.title.ilike(f"%{q}%"),
+                NewsArticle.text.ilike(f"%{q}%"),
+                cast(NewsArticle.entities, String).ilike(f"%{q}%"),
+            )
+        )
 
     # Get total count
     count_query = select(func.count()).select_from(NewsArticle)

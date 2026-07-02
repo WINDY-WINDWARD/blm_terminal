@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news import NewsArticle
 from app.services.nlp_service import analyze_article_dict, Sentiment
+from app.services.mc_nlp import analyze_mc_article_dict
 from app.services.rss_parser import ParsedArticle, fetch_all_feeds, FetchResult
 from app.services.news_sources import (
     ALL_SOURCES,
@@ -47,11 +48,18 @@ def _naive_datetime(dt: datetime | None) -> datetime | None:
 
 def _parsed_article_to_db_dict(article: ParsedArticle) -> dict[str, Any]:
     """Convert a ParsedArticle to a dictionary suitable for database insertion."""
-    nlp = analyze_article_dict(
-        headline=article.title or "",
-        summary=article.summary or "",
-        source_name=article.source_name,
-    )
+    if article.source_id == "moneycontrol":
+        nlp = analyze_mc_article_dict(
+            headline=article.title or "",
+            summary=article.summary or "",
+            source_name=article.source_name,
+        )
+    else:
+        nlp = analyze_article_dict(
+            headline=article.title or "",
+            summary=article.summary or "",
+            source_name=article.source_name,
+        )
 
     return {
         "url": article.url,

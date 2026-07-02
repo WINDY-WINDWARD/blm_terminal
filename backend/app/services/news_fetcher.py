@@ -25,6 +25,7 @@ _SSL_CONTEXT = ssl.create_default_context()
 from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse
 from app.services.nlp_service import analyze_article_dict
+from app.services.mc_nlp import analyze_mc_article_dict
 
 
 @dataclass
@@ -664,11 +665,18 @@ class NewsFetcher:
                     if raw_author:
                         authors = [str(raw_author)]
 
-                nlp = analyze_article_dict(
-                    headline=title or "",
-                    summary=text or "",
-                    source_name=source,
-                )
+                if source in ("moneycontrol_global", "moneycontrol_company"):
+                    nlp = analyze_mc_article_dict(
+                        headline=title or "",
+                        summary=text or "",
+                        source_name=source,
+                    )
+                else:
+                    nlp = analyze_article_dict(
+                        headline=title or "",
+                        summary=text or "",
+                        source_name=source,
+                    )
 
                 result = {
                     "url": url,

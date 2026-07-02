@@ -345,15 +345,17 @@ export const newsWsConnectedAtom = atom<boolean>(false);
 export const liveNewsArticlesAtom = atom<NewsArticle[]>([]);
 
 export interface NewsFilters {
-  sources: string[];
+  excludedSources: string[];
   sentiment: string | null;
   threatLevel: string | null;
+  searchQuery: string;
 }
 
 export const newsFiltersAtom = atomWithStorage<NewsFilters>('news.filters', {
-  sources: [],
+  excludedSources: [],
   sentiment: null,
   threatLevel: null,
+  searchQuery: '',
 });
 
 // ─── Saved Layouts ────────────────────────────────────────────────────────────

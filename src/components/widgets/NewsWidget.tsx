@@ -388,27 +388,35 @@ function ArticleRow({
   );
 }
 
-function matchesFilters(article: NewsArticle, filters: { sources: string[]; sentiment: string | null; threatLevel: string | null }): boolean {
-  if (filters.sources.length > 0 && !filters.sources.includes(article.source || '')) return false;
+function matchesFilters(article: NewsArticle, filters: { excludedSources?: string[]; sentiment: string | null; threatLevel: string | null; searchQuery?: string }): boolean {
+  if ((filters.excludedSources || []).includes(article.source || '')) return false;
   if (filters.sentiment && article.sentiment !== filters.sentiment) return false;
   if (filters.threatLevel && article.threat_level !== filters.threatLevel) return false;
+  const sq = filters.searchQuery || '';
+  if (sq) {
+    const q = sq.toLowerCase();
+    const title = article.title?.toLowerCase() || '';
+    const text = article.text?.toLowerCase() || '';
+    const entities = JSON.stringify(article.entities || {}).toLowerCase();
+    if (!title.includes(q) && !text.includes(q) && !entities.includes(q)) return false;
+  }
   return true;
 }
 
 function SourceFilterChips({
-  selected,
+  excluded,
   onChange,
 }: {
-  selected: string[];
-  onChange: (sources: string[]) => void;
+  excluded: string[];
+  onChange: (excluded: string[]) => void;
 }) {
   const allSources = Object.keys(SOURCE_LABELS);
 
   const toggle = (sourceId: string) => {
-    if (selected.includes(sourceId)) {
-      onChange(selected.filter((s) => s !== sourceId));
+    if (excluded.includes(sourceId)) {
+      onChange(excluded.filter((s) => s !== sourceId));
     } else {
-      onChange([...selected, sourceId]);
+      onChange([...excluded, sourceId]);
     }
   };
 
@@ -420,7 +428,7 @@ function SourceFilterChips({
           onClick={() => toggle(id)}
           title={SOURCE_FULL_NAMES[id] || id}
           className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
-            selected.includes(id)
+            !excluded.includes(id)
               ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
               : 'text-white/50 border-terminal-gray/40 hover:text-terminal-amber hover:border-terminal-amber'
           }`}
@@ -428,12 +436,12 @@ function SourceFilterChips({
           {SOURCE_LABELS[id]}
         </button>
       ))}
-      {selected.length > 0 && (
+      {excluded.length > 0 && (
         <button
           onClick={() => onChange([])}
           className="text-[9px] px-1.5 py-0.5 text-white/40 hover:text-terminal-amber"
         >
-          Clear
+          Select All
         </button>
       )}
     </div>
@@ -482,7 +490,20 @@ export function NewsWidget() {
   const [globalOffset, setGlobalOffset] = useState(0);
   const [companyOffset, setCompanyOffset] = useState(0);
   const [companySource, setCompanySource] = useState<'auto' | 'iinvest' | 'moneycontrol' | 'merged'>('auto');
+  const [localSearch, setLocalSearch] = useState(filters.searchQuery || '');
   const queryClient = useQueryClient();
+  
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if ((filters.searchQuery || '') !== localSearch) {
+        setFilters(prev => ({ ...prev, searchQuery: localSearch }));
+        setGlobalOffset(0);
+        setCompanyOffset(0);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [localSearch, filters.searchQuery, setFilters]);
+
 
   useEffect(() => {
     newsSocketService.connect();
@@ -537,7 +558,18 @@ export function NewsWidget() {
         limit: String(PAGE_LIMIT),
         offset: String(globalOffset),
       });
-      if (filters.sources.length > 0) params.set('sources', filters.sources.join(','));
+      const allSourceIds = Object.keys(SOURCE_LABELS);
+      const excludedSources = filters.excludedSources || [];
+      if (excludedSources.length > 0) {
+        const included = allSourceIds.filter(s => !excludedSources.includes(s));
+        if (included.length > 0) {
+          params.set('sources', included.join(','));
+        } else {
+          // If all are excluded, fetch something that matches nothing, or just pass an invalid source
+          params.set('sources', 'NONE');
+        }
+      }
+      if (filters.searchQuery) params.set('q', filters.searchQuery);
       if (filters.sentiment) params.set('sentiment', filters.sentiment);
       if (filters.threatLevel) params.set('threat_level', filters.threatLevel);
       const res = await fetch(`/api/py/news/all?${params.toString()}`);
@@ -557,8 +589,9 @@ export function NewsWidget() {
   } = useQuery<NewsPaginatedResponse>({
     queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset, source: companySource }],
     queryFn: async () => {
+      const sq = filters.searchQuery ? `&q=${encodeURIComponent(filters.searchQuery)}` : '';
       const res = await fetch(
-        `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}&source=${companySource}`,
+        `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}&source=${companySource}${sq}`,
       );
       if (res.status === 404) {
         const postRes = await fetch('/api/py/news/company', {
@@ -606,8 +639,8 @@ export function NewsWidget() {
     }
   };
 
-  const handleSourceFilterChange = (sources: string[]) => {
-    setFilters((prev) => ({ ...prev, sources }));
+  const handleSourceFilterChange = (excludedSources: string[]) => {
+    setFilters((prev) => ({ ...prev, excludedSources }));
     setGlobalOffset(0); // reset to page 1 whenever filters change
   };
 
@@ -632,6 +665,15 @@ export function NewsWidget() {
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden">
+      <div className="shrink-0 px-2 py-1 border-b border-terminal-gray flex gap-2 items-center">
+        <input
+          type="text"
+          placeholder="Search body, pills, headlines..."
+          className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[10px] text-white focus:outline-none focus:border-terminal-amber transition-colors"
+          value={localSearch}
+          onChange={(e) => setLocalSearch(e.target.value)}
+        />
+      </div>
       <div className="flex border-b border-terminal-gray shrink-0">
         <TabButton
           active={activeTab === 'global'}
@@ -684,7 +726,7 @@ export function NewsWidget() {
 
       {activeTab === 'global' && (
         <SourceFilterChips
-          selected={filters.sources}
+          excluded={filters.excludedSources || []}
           onChange={handleSourceFilterChange}
         />
       )}
