@@ -50,8 +50,11 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
 
 function getActionPill(pick: AIPick) {
   if (!pick.notes || pick.notes.length === 0) return null;
-  const latestNote = pick.notes[pick.notes.length - 1];
-  const label = latestNote.action || latestNote.verdict;
+  // find the latest note with an action or verdict
+  const note = [...pick.notes].reverse().find(n => n.action || n.verdict);
+  if (!note) return null;
+  
+  const label = note.action || note.verdict;
   if (!label) return null;
   
   let colorCls = 'bg-zinc-800 text-white border-zinc-600';
@@ -205,25 +208,44 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                   <div className="mt-3 pt-3 border-t border-terminal-gray flex flex-col gap-2">
                     <div className="text-terminal-amber mb-1 font-bold text-[10px] uppercase">TIMELINE</div>
                     <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                      {pick.notes.map((n, i) => (
-                        <div key={i} className="flex flex-col gap-1 bg-zinc-900 p-2 rounded-sm border border-terminal-gray">
-                          <div className="flex justify-between text-[10px] text-white/40">
-                            <span>{new Date(n.timestamp).toLocaleString()}</span>
-                            <span className="text-terminal-amber/60">{n.model}</span>
-                          </div>
-                          <div className="text-white/90 text-[11px] leading-relaxed whitespace-pre-wrap">
-                            {n.note}
-                          </div>
-                          {(n.technical || n.fundamental || n.catalyst || n.risk) && (
-                            <div className="mt-1 pt-1 border-t border-zinc-800 flex flex-col gap-1 text-[11px]">
-                              {n.technical && <div><span className="text-terminal-blue font-bold uppercase">TECH:</span> <span className="text-white/80">{n.technical}</span></div>}
-                              {n.fundamental && <div><span className="text-terminal-purple font-bold uppercase">FUND:</span> <span className="text-white/80">{n.fundamental}</span></div>}
-                              {n.catalyst && <div><span className="text-terminal-amber font-bold uppercase">CAT:</span> <span className="text-white/80">{n.catalyst}</span></div>}
-                              {n.risk && <div><span className="text-red-400 font-bold uppercase">RISK:</span> <span className="text-white/80">{n.risk}</span></div>}
+                      {pick.notes.map((n, i) => {
+                        if (n.model === 'market-context') {
+                          return (
+                            <details key={i} className="group bg-zinc-900/50 rounded-sm border border-terminal-gray/50">
+                              <summary className="flex cursor-pointer list-none items-center justify-between p-2 text-[10px] text-white/50 hover:text-white/80 transition-colors">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-terminal-amber/60">🌐 MARKET CONTEXT</span>
+                                  <span>{new Date(n.timestamp).toLocaleString()}</span>
+                                </div>
+                                <span className="group-open:rotate-180 transition-transform">▾</span>
+                              </summary>
+                              <div className="p-2 pt-0 text-white/70 text-[11px] leading-relaxed whitespace-pre-wrap border-t border-terminal-gray/30 mt-1">
+                                {n.note}
+                              </div>
+                            </details>
+                          );
+                        }
+
+                        return (
+                          <div key={i} className="flex flex-col gap-1 bg-zinc-900 p-2 rounded-sm border border-terminal-gray">
+                            <div className="flex justify-between text-[10px] text-white/40">
+                              <span>{new Date(n.timestamp).toLocaleString()}</span>
+                              <span className="text-terminal-amber/60">{n.model}</span>
                             </div>
-                          )}
-                        </div>
-                      ))}
+                            <div className="text-white/90 text-[11px] leading-relaxed whitespace-pre-wrap">
+                              {n.note}
+                            </div>
+                            {(n.technical || n.fundamental || n.catalyst || n.risk) && (
+                              <div className="mt-1 pt-1 border-t border-zinc-800 flex flex-col gap-1 text-[11px]">
+                                {n.technical && <div><span className="text-terminal-blue font-bold uppercase">TECH:</span> <span className="text-white/80">{n.technical}</span></div>}
+                                {n.fundamental && <div><span className="text-terminal-purple font-bold uppercase">FUND:</span> <span className="text-white/80">{n.fundamental}</span></div>}
+                                {n.catalyst && <div><span className="text-terminal-amber font-bold uppercase">CAT:</span> <span className="text-white/80">{n.catalyst}</span></div>}
+                                {n.risk && <div><span className="text-red-400 font-bold uppercase">RISK:</span> <span className="text-white/80">{n.risk}</span></div>}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     
                     {/* Actions */}

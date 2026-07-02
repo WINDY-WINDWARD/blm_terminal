@@ -191,12 +191,12 @@ def _extract_json_block(content: str, tag: str) -> dict | list:
     return json.loads(json_str)
 
 
-async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession) -> list[dict]:
+async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession, market_context: str = "") -> list[dict]:
     """Loop 1: Run Kimi 2.6 to hunt for picks."""
     logger.info("Loop 1: Kimi Hunter starting")
     start_time = time.time()
     
-    messages = [{"role": "system", "content": HUNTER_PROMPT}]
+    messages = [{"role": "system", "content": HUNTER_PROMPT + "\n\n" + market_context}]
     messages.append({"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."})
     
     for turn_idx in range(60):
@@ -249,7 +249,7 @@ async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession) -> list
         logger.error(f"Hunter parsing failed: {e}. Raw content: {content}")
     return []
 
-async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, proposed_picks: list[dict]) -> list[dict]:
+async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, proposed_picks: list[dict], market_context: str = "") -> list[dict]:
     """Loop 2: Run MiniMax 2.5 to verify picks."""
     logger.info("Loop 2: MiniMax Verifier starting")
     start_time = time.time()
@@ -270,7 +270,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, pr
             },
             json={
                 "model": "minimax-m2.5",
-                "system": VERIFIER_PROMPT,
+                "system": VERIFIER_PROMPT + "\n\n" + market_context,
                 "messages": messages,
                 "tools": BLM_TOOLS_ANTHROPIC,
                 "max_tokens": 4096,
@@ -327,7 +327,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, pr
         logger.error(f"Verifier parsing failed: {e}. Raw content: {content}")
     return []
 
-async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, pick_data: dict) -> dict:
+async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, pick_data: dict, market_context: str = "") -> dict:
     """Loop 3: Run MiniMax 2.5 to evaluate an existing pick."""
     start_time = time.time()
     messages = [
@@ -345,7 +345,7 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, p
             },
             json={
                 "model": "minimax-m2.5",
-                "system": EVALUATOR_PROMPT,
+                "system": EVALUATOR_PROMPT + "\n\n" + market_context,
                 "messages": messages,
                 "tools": BLM_TOOLS_ANTHROPIC,
                 "max_tokens": 4096,
@@ -403,21 +403,68 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, p
     return {"note": "Failed to generate evaluation.", "action": "HOLD"}
 
 
+
+from app.mcp_server import get_top_gainers, get_top_losers, get_volume_gainers, get_global_news
+
+async def _fetch_market_context() -> str:
+    """Fetch a high-level summary of the broader market conditions."""
+    context_parts = ["### GLOBAL MARKET CONTEXT ###"]
+    
+    # 1. Top Gainers & Losers
+    try:
+        gainers = await get_top_gainers(category="allSec")
+        losers = await get_top_losers(category="allSec")
+        
+        g_symbols = [g.get('symbol', '') for g in gainers[:5]]
+        l_symbols = [l.get('symbol', '') for l in losers[:5]]
+        
+        context_parts.append(f"Top Gainers: {', '.join(g_symbols)}")
+        context_parts.append(f"Top Losers: {', '.join(l_symbols)}")
+    except Exception as e:
+        logger.error(f"Failed to fetch market gainers/losers: {e}")
+        
+    # 2. Volume Surge
+    try:
+        vol = await get_volume_gainers()
+        v_symbols = [v.get('symbol', '') for v in vol[:5]]
+        context_parts.append(f"Volume Surges: {', '.join(v_symbols)}")
+    except Exception as e:
+        logger.error(f"Failed to fetch volume gainers: {e}")
+        
+    # 3. Global News
+    try:
+        news = await get_global_news(limit=5)
+        articles = news.get("articles", [])
+        news_lines = []
+        for a in articles:
+            title = a.get("title", "")
+            sentiment = a.get("sentiment_label", "NEUTRAL")
+            news_lines.append(f"- [{sentiment}] {title}")
+        if news_lines:
+            context_parts.append("Latest Global News:\n" + "\n".join(news_lines))
+    except Exception as e:
+        logger.error(f"Failed to fetch global news: {e}")
+        
+    return "\n\n".join(context_parts)
+
+
 async def run_loop_1_and_2():
     """Execute Hunter (8am) and Verifier pipelines."""
-    async with httpx.AsyncClient() as client:
-            proposed_picks = await _call_kimi_hunter(client, db)
-        if not proposed_picks:
-            logger.info("Loop 1 found no valid setups today.")
-            return
-            
-            verified_picks = await _call_minimax_verifier(client, db, proposed_picks)
-        if not verified_picks:
-            logger.info("Loop 2 rejected all setups.")
-            return
-            
-        # Commit to DB
-        async with AsyncSessionLocal() as db:
+    market_context = await _fetch_market_context()
+    
+    async with AsyncSessionLocal() as db:
+        async with httpx.AsyncClient() as client:
+            proposed_picks = await _call_kimi_hunter(client, db, market_context)
+            if not proposed_picks:
+                logger.info("Loop 1 found no valid setups today.")
+                return
+                
+            verified_picks = await _call_minimax_verifier(client, db, proposed_picks, market_context)
+            if not verified_picks:
+                logger.info("Loop 2 rejected all setups.")
+                return
+                
+            # Commit to DB
             for pick in verified_picks:
                 try:
                     new_pick = AIPick(
@@ -427,11 +474,24 @@ async def run_loop_1_and_2():
                         take_profit=float(pick['take_profit']),
                         stop_loss=float(pick['stop_loss']),
                         status=PickStatus.NEW,
-                        notes=[{
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "note": f"WHY THIS STOCK WAS PICKED:\n{pick.get('thesis', 'Verified by MiniMax 2.5')}",
-                            "model": "minimax-m2.5"
-                        }]
+                        notes=[
+                            {
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "note": market_context,
+                                "model": "market-context"
+                            },
+                            {
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "note": f"WHY THIS STOCK WAS PICKED:\n{pick.get('note', pick.get('thesis', 'Verified by MiniMax 2.5'))}",
+                                "model": "minimax-m2.5",
+                                "verdict": pick.get("verdict"),
+                                "technical": pick.get("technical"),
+                                "fundamental": pick.get("fundamental"),
+                                "catalyst": pick.get("catalyst"),
+                                "risk": pick.get("risk"),
+                                "action": pick.get("action")
+                            }
+                        ]
                     )
                     db.add(new_pick)
                 except Exception as e:
@@ -439,8 +499,10 @@ async def run_loop_1_and_2():
             await db.commit()
             logger.info(f"Loop 1 & 2 completed. Saved {len(verified_picks)} picks.")
 
+
 async def run_loop_3():
     """Execute Evaluator (5pm) pipeline."""
+    market_context = await _fetch_market_context()
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(AIPick).where(AIPick.status.in_([PickStatus.NEW, PickStatus.ACTED_ON]))
@@ -463,7 +525,7 @@ async def run_loop_3():
                             if age > timedelta(hours=48):
                                 return pick_id, {"action": "ABANDON", "note": "Auto-abandoned due to 48h timeout with no action."}
                                 
-                        eval_data = await _call_minimax_evaluator(client, db, p_data)
+                        eval_data = await _call_minimax_evaluator(client, db, p_data, market_context)
                         return pick_id, eval_data
                     except Exception as e:
                         logger.error(f"Failed to evaluate pick {pick_id}: {e}")
@@ -499,8 +561,19 @@ async def run_loop_3():
             else:
                 notes.append({
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "note": market_context,
+                    "model": "market-context"
+                })
+                notes.append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "note": eval_data.get("note", "Re-evaluated."),
-                    "model": "minimax-m2.5"
+                    "model": "minimax-m2.5",
+                    "verdict": eval_data.get("verdict"),
+                    "technical": eval_data.get("technical"),
+                    "fundamental": eval_data.get("fundamental"),
+                    "catalyst": eval_data.get("catalyst"),
+                    "risk": eval_data.get("risk"),
+                    "action": eval_data.get("action")
                 })
             pick.notes = notes
             
