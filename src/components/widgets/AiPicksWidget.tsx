@@ -3,8 +3,9 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
-import { useAtomValue } from 'jotai';
-import { activeSymbolAtom } from '@/store/terminalStore';
+import { useAtom, useAtomValue } from 'jotai';
+import { activeSymbolAtom, tickDataAtom } from '@/store/terminalStore';
+import { marketDataService } from '@/lib/marketWs';
 
 interface PickNote {
   timestamp: string;
@@ -71,6 +72,8 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY'>('PICKS');
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
+  const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const tickData = useAtomValue(tickDataAtom);
 
   React.useEffect(() => {
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
@@ -86,6 +89,35 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
     },
     refetchInterval: 60000,
   });
+
+  // Real-time data subscription for all visible picks
+  React.useEffect(() => {
+    if (!picks || picks.length === 0) return;
+
+    // Calculate filtered picks
+    const filteredPicks = picks.filter((p) => {
+      if (p.status === 'ABANDONED') return false;
+      if (activeTab === 'PICKS') return p.status === 'NEW';
+      if (activeTab === 'ACTIVE') return p.status === 'ACTED_ON';
+      if (activeTab === 'HISTORY') return p.status === 'CLOSED';
+      return false;
+    });
+
+    // Extract symbols from filtered picks
+    const symbols = filteredPicks.map(p => `${p.symbol}.NSE`);
+    
+    if (symbols.length === 0) return;
+
+    // Request symbol data immediately
+    marketDataService.requestSymbolData(symbols);
+
+    // Repeat request every 60 seconds
+    const interval = setInterval(() => {
+      marketDataService.requestSymbolData(symbols);
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [picks, activeTab]);
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: number; status: string }) => {
@@ -180,8 +212,13 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                   onClick={() => setExpandedId(isExpanded ? null : pick.id)}
                 >
                   <div className="flex items-center gap-3">
-                    <span className="font-bold text-terminal-amber text-[13px]">{pick.symbol}</span>
-                                        <span className={cn(
+                    <span 
+                      className="font-bold text-terminal-amber text-[13px] cursor-pointer hover:text-white hover:underline transition-colors"
+                      onClick={(e) => { e.stopPropagation(); setActiveSymbol(pick.symbol); }}
+                    >
+                      {pick.symbol}
+                    </span>
+                    <span className={cn(
                       'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border border-transparent',
                       pick.direction === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
                     )}>
@@ -194,6 +231,20 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                   </div>
                   
                   <div className="flex items-center gap-3 text-[10px] text-white/60 font-mono">
+                    {(() => {
+                      const currentPrice = tickData[`${pick.symbol}.NSE`]?.ltp;
+                      let pnlPct: number | null = null;
+                      if (currentPrice !== undefined && currentPrice !== null) {
+                        pnlPct = ((currentPrice - pick.entry_price) / pick.entry_price) * 100;
+                      }
+                      return (
+                        <span className={cn(
+                          pick.direction === 'LONG' && pnlPct !== null ? (pnlPct > 0 ? 'text-terminal-green' : pnlPct < 0 ? 'text-terminal-red' : 'text-white') : 'text-white'
+                        )}>
+                          PnL%:<span className="ml-1 font-bold">{pnlPct !== null ? `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%` : '—'}</span>
+                        </span>
+                      );
+                    })()}
                     <span>E:<span className="text-white ml-1">{pick.entry_price}</span></span>
                     <span>TP:<span className="text-terminal-green ml-1">{pick.take_profit}</span></span>
                     <span>SL:<span className="text-terminal-red ml-1">{pick.stop_loss}</span></span>

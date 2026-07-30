@@ -188,6 +188,8 @@ function formatRatioLabel(key: string): string {
 }
 
 function RatioRow({ label, value }: { label: string; value: string | null | undefined }) {
+  if (value == null) return null;
+  
   return (
     <tr className="border-b border-terminal-gray/40">
       <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
@@ -770,98 +772,83 @@ export function FundamentalsWidget() {
                   {(() => {
                     const raw = ratios.piotroski_score;
                     const score = parseNum(raw);
+                    if (score === null) return null;
+                    
                     const color =
-                      score === null ? 'text-white/40' :
                       score >= 7    ? 'text-terminal-green' :
                       score >= 4    ? 'text-terminal-amber' :
-                                      'text-terminal-red';
+                                       'text-terminal-red';
                     return (
                       <tr className="border-b border-terminal-gray/40">
                         <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
                           Piotroski Score
                         </td>
                         <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                          {score !== null ? (
-                            <span className={color}>{score.toFixed(0)} / 9</span>
-                          ) : (
-                            <span className="text-white/40 font-normal text-[9px]">N/A</span>
-                          )}
+                          <span className={color}>{score.toFixed(0)} / 9</span>
                         </td>
                       </tr>
                     );
                   })()}
 
                   {/* Peter Lynch FV Ratio */}
-                  <tr className="border-b border-terminal-gray/40">
-                    <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                      Peter Lynch FV Ratio
-                    </td>
-                    <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                      {lynch.fairValueRatio !== null ? (
-                        <span className="text-terminal-amber">
-                          {lynch.fairValueRatio.toFixed(2)}
-                        </span>
-                      ) : (
-                        <span
-                          className="text-white/40 font-normal text-[9px] cursor-help"
-                          title={`N/A — missing: ${lynch.ratioMissingKey}. Formula: (EPS Growth 5Y% + Div Yield%) / P/E`}
+                  {lynch.fairValueRatio !== null && (
+                    <>
+                      <tr className="border-b border-terminal-gray/40">
+                        <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                          Peter Lynch FV Ratio
+                        </td>
+                        <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                          <span className="text-terminal-amber">
+                            {lynch.fairValueRatio.toFixed(2)}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-terminal-gray/40">
+                        <td
+                          colSpan={2}
+                          className="pb-1 text-[9px] text-white/40 font-mono"
                         >
-                          N/A {lynch.ratioMissingKey ? `(no ${lynch.ratioMissingKey})` : ''}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                  <tr className="border-b border-terminal-gray/40">
-                    <td
-                      colSpan={2}
-                      className="pb-1 text-[9px] text-white/40 font-mono"
-                    >
-                      = ({lynch.epsGrowth ?? '?'}% growth + {lynch.divYield ?? '0'}% yield) / {lynch.pe ?? '?'} PE
-                    </td>
-                  </tr>
+                          = ({lynch.epsGrowth ?? '?'}% growth + {lynch.divYield ?? '0'}% yield) / {lynch.pe ?? '?'} PE
+                        </td>
+                      </tr>
+                    </>
+                  )}
 
                   {/* Peter Lynch FV Price */}
-                  <tr className="border-b border-terminal-gray/40">
-                    <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                      Peter Lynch FV
-                    </td>
-                    <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                      {lynch.fairValuePrice !== null ? (
-                        <span className="text-terminal-amber">
-                          ₹{lynch.fairValuePrice.toFixed(2)}
-                        </span>
-                      ) : (
-                        <span
-                          className="text-white/40 font-normal text-[9px] cursor-help"
-                          title={`N/A — missing: ${lynch.priceMissingKey}. Formula: EPS Growth 5Y% × Latest EPS`}
+                  {lynch.fairValuePrice !== null && (
+                    <>
+                      <tr className="border-b border-terminal-gray/40">
+                        <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                          Peter Lynch FV
+                        </td>
+                        <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
+                          <span className="text-terminal-amber">
+                            ₹{lynch.fairValuePrice.toFixed(2)}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td
+                          colSpan={2}
+                          className="pb-1 text-[9px] text-white/40 font-mono"
                         >
-                          N/A {lynch.priceMissingKey ? `(no ${lynch.priceMissingKey})` : ''}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td
-                      colSpan={2}
-                      className="pb-1 text-[9px] text-white/40 font-mono"
-                    >
-                      = {lynch.epsGrowth ?? '?'}% growth × ₹{lynch.latestEps ?? '?'} EPS{lynch.epsKey ? ` [${lynch.epsKey}]` : ''}
-                    </td>
-                  </tr>
+                          = {lynch.epsGrowth ?? '?'}% growth × ₹{lynch.latestEps ?? '?'} EPS{lynch.epsKey ? ` [${lynch.epsKey}]` : ''}
+                        </td>
+                      </tr>
+                    </>
+                  )}
 
                   {/* Morningstar Fair Value */}
-                  <tr className="border-b border-terminal-gray/40">
-                    <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
-                      MS Fair Value
-                    </td>
-                    <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
-                      {msFairValue != null ? (
+                  {msFairValue != null && (
+                    <tr className="border-b border-terminal-gray/40">
+                      <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
+                        MS Fair Value
+                      </td>
+                      <td className="py-[3px] text-right text-[10px] font-mono font-bold whitespace-nowrap">
                         <span className="text-terminal-amber">₹{msFairValue.toFixed(2)}</span>
-                      ) : (
-                        <span className="text-white/40 font-normal">—</span>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
               {/* ── Valuation ────────────────────────────────────────────────────── */}
@@ -905,60 +892,70 @@ export function FundamentalsWidget() {
                   </div>
                 </div>
                 {valuationLoading ? (
-                  <div className="text-white/30 text-[11px] font-mono">Loading valuation models...</div>
-                ) : valuationData ? (
-                  <>
-                    <div className="text-[10px] text-white/30 font-mono mb-1">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
-                    <table className="w-full text-[10px] border-collapse font-mono">
-                      <thead>
-                        <tr className="text-white/30 text-left border-b border-terminal-gray/40">
-                          <th className="pb-1 font-normal">Model</th>
-                          <th className="pb-1 text-right font-normal">Fair Value</th>
-                          <th className="pb-1 text-right font-normal">vs CMP</th>
-                          <th className="pb-1 text-right font-normal">Signal</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[
-                          { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
-                          { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
-                          { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
-                          { label: 'EV/EBITDA', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
-                          { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
-                        ].map((row) => {
-                          const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
-                          const signalColor = signal === 'UNDERVALUED' ? 'text-terminal-green' : signal === 'OVERVALUED' ? 'text-terminal-red' : 'text-terminal-amber';
-                          return (
-                            <tr key={row.label} className="border-b border-terminal-gray/40">
-                              <td className="py-[3px] pr-2 text-white/60 whitespace-nowrap">{row.label}</td>
-                              <td className="py-[3px] text-right text-white/80 font-bold whitespace-nowrap">
-                                {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
-                              </td>
-                              <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + (row.upside !== null ? (row.upside > 0 ? 'text-terminal-green' : 'text-terminal-red') : 'text-white/30')}>
-                                {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
-                              </td>
-                              <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + signalColor}>
-                                {signal ?? '—'}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {valuationData.dcf_assumptions && (
-                      <div className="text-[9px] text-white/50 mt-1 pt-1 font-mono">
-                        DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
-                        Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
-                        Term {valuationData.dcf_assumptions.terminal_growth_pct}% |
-                        WACC {valuationData.dcf_assumptions.wacc_pct}%
-                        {valuationData.dcf_assumptions.base_fcf_cr !== null &&
-                          ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>
-                )}
+                   <div className="text-white/30 text-[11px] font-mono">Loading valuation models...</div>
+                 ) : valuationData ? (
+                   (() => {
+                     const models = [
+                       { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
+                       { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
+                       { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
+                       { label: 'EV/EBITDA', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
+                       { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
+                     ].filter((row) => row.value !== null);
+
+                     if (models.length === 0) {
+                       return <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>;
+                     }
+
+                     return (
+                       <>
+                         <div className="text-[10px] text-white/30 font-mono mb-1">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
+                         <table className="w-full text-[10px] border-collapse font-mono">
+                           <thead>
+                             <tr className="text-white/30 text-left border-b border-terminal-gray/40">
+                               <th className="pb-1 font-normal">Model</th>
+                               <th className="pb-1 text-right font-normal">Fair Value</th>
+                               <th className="pb-1 text-right font-normal">vs CMP</th>
+                               <th className="pb-1 text-right font-normal">Signal</th>
+                             </tr>
+                           </thead>
+                           <tbody>
+                             {models.map((row) => {
+                               const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
+                               const signalColor = signal === 'UNDERVALUED' ? 'text-terminal-green' : signal === 'OVERVALUED' ? 'text-terminal-red' : 'text-terminal-amber';
+                               return (
+                                 <tr key={row.label} className="border-b border-terminal-gray/40">
+                                   <td className="py-[3px] pr-2 text-white/60 whitespace-nowrap">{row.label}</td>
+                                   <td className="py-[3px] text-right text-white/80 font-bold whitespace-nowrap">
+                                     {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
+                                   </td>
+                                   <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + (row.upside !== null ? (row.upside > 0 ? 'text-terminal-green' : 'text-terminal-red') : 'text-white/30')}>
+                                     {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
+                                   </td>
+                                   <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + signalColor}>
+                                     {signal ?? '—'}
+                                   </td>
+                                 </tr>
+                               );
+                             })}
+                           </tbody>
+                         </table>
+                         {valuationData.dcf_assumptions && (
+                           <div className="text-[9px] text-white/50 mt-1 pt-1 font-mono">
+                             DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
+                             Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
+                             Term {valuationData.dcf_assumptions.terminal_growth_pct}% |
+                             WACC {valuationData.dcf_assumptions.wacc_pct}%
+                             {valuationData.dcf_assumptions.base_fcf_cr !== null &&
+                               ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
+                           </div>
+                         )}
+                       </>
+                     );
+                   })()
+                 ) : (
+                   <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>
+                 )}
               </div>
             </div>
           </div>
