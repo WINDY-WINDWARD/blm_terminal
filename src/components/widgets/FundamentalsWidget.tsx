@@ -188,8 +188,7 @@ function formatRatioLabel(key: string): string {
 }
 
 function RatioRow({ label, value }: { label: string; value: string | null | undefined }) {
-  if (value == null) return null;
-  
+  if (value == null || value === '-') return null;
   return (
     <tr className="border-b border-terminal-gray/40">
       <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
@@ -773,11 +772,10 @@ export function FundamentalsWidget() {
                     const raw = ratios.piotroski_score;
                     const score = parseNum(raw);
                     if (score === null) return null;
-                    
                     const color =
                       score >= 7    ? 'text-terminal-green' :
                       score >= 4    ? 'text-terminal-amber' :
-                                       'text-terminal-red';
+                                      'text-terminal-red';
                     return (
                       <tr className="border-b border-terminal-gray/40">
                         <td className="py-[3px] pr-3 text-white text-[10px] font-mono whitespace-nowrap">
@@ -892,70 +890,70 @@ export function FundamentalsWidget() {
                   </div>
                 </div>
                 {valuationLoading ? (
-                   <div className="text-white/30 text-[11px] font-mono">Loading valuation models...</div>
-                 ) : valuationData ? (
-                   (() => {
-                     const models = [
-                       { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
-                       { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
-                       { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
-                       { label: 'EV/EBITDA', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
-                       { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
-                     ].filter((row) => row.value !== null);
-
-                     if (models.length === 0) {
-                       return <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>;
-                     }
-
-                     return (
-                       <>
-                         <div className="text-[10px] text-white/30 font-mono mb-1">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
-                         <table className="w-full text-[10px] border-collapse font-mono">
-                           <thead>
-                             <tr className="text-white/30 text-left border-b border-terminal-gray/40">
-                               <th className="pb-1 font-normal">Model</th>
-                               <th className="pb-1 text-right font-normal">Fair Value</th>
-                               <th className="pb-1 text-right font-normal">vs CMP</th>
-                               <th className="pb-1 text-right font-normal">Signal</th>
-                             </tr>
-                           </thead>
-                           <tbody>
-                             {models.map((row) => {
-                               const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
-                               const signalColor = signal === 'UNDERVALUED' ? 'text-terminal-green' : signal === 'OVERVALUED' ? 'text-terminal-red' : 'text-terminal-amber';
-                               return (
-                                 <tr key={row.label} className="border-b border-terminal-gray/40">
-                                   <td className="py-[3px] pr-2 text-white/60 whitespace-nowrap">{row.label}</td>
-                                   <td className="py-[3px] text-right text-white/80 font-bold whitespace-nowrap">
-                                     {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
-                                   </td>
-                                   <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + (row.upside !== null ? (row.upside > 0 ? 'text-terminal-green' : 'text-terminal-red') : 'text-white/30')}>
-                                     {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
-                                   </td>
-                                   <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + signalColor}>
-                                     {signal ?? '—'}
-                                   </td>
-                                 </tr>
-                               );
-                             })}
-                           </tbody>
-                         </table>
-                         {valuationData.dcf_assumptions && (
-                           <div className="text-[9px] text-white/50 mt-1 pt-1 font-mono">
-                             DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
-                             Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
-                             Term {valuationData.dcf_assumptions.terminal_growth_pct}% |
-                             WACC {valuationData.dcf_assumptions.wacc_pct}%
-                             {valuationData.dcf_assumptions.base_fcf_cr !== null &&
-                               ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
-                           </div>
-                         )}
-                       </>
-                     );
-                   })()
-                 ) : (
-                   <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>
-                 )}
+                  <div className="text-white/30 text-[11px] font-mono">Loading valuation models...</div>
+                ) : valuationData ? (
+                   <>
+                    <div className="text-[10px] text-white/30 font-mono mb-1">CMP: ₹{valuationData.cmp?.toLocaleString('en-IN')}</div>
+                    {(() => {
+                      const validModels = [
+                        { label: 'Graham Number', value: valuationData.graham_number, upside: valuationData.graham_upside_pct },
+                        { label: 'DCF (10Y)', value: valuationData.dcf_value, upside: valuationData.dcf_upside_pct },
+                        { label: 'DDM', value: valuationData.ddm_value, upside: valuationData.ddm_upside_pct },
+                        { label: 'EV/EBITDA', value: valuationData.ev_ebitda_value, upside: valuationData.ev_ebitda_upside_pct },
+                        { label: 'PEG Fair Value', value: valuationData.peg_value, upside: valuationData.peg_upside_pct },
+                      ].filter(row => row.value !== null);
+                      
+                      if (validModels.length === 0) {
+                        return <div className="text-white/30 text-[11px] font-mono">No valid valuation models available</div>;
+                      }
+                      
+                      return (
+                        <table className="w-full text-[10px] border-collapse font-mono">
+                          <thead>
+                            <tr className="text-white/30 text-left border-b border-terminal-gray/40">
+                              <th className="pb-1 font-normal">Model</th>
+                              <th className="pb-1 text-right font-normal">Fair Value</th>
+                              <th className="pb-1 text-right font-normal">vs CMP</th>
+                              <th className="pb-1 text-right font-normal">Signal</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {validModels.map((row) => {
+                              const signal = row.upside === null ? null : row.upside > 15 ? 'UNDERVALUED' : row.upside < -15 ? 'OVERVALUED' : 'FAIR';
+                              const signalColor = signal === 'UNDERVALUED' ? 'text-terminal-green' : signal === 'OVERVALUED' ? 'text-terminal-red' : 'text-terminal-amber';
+                              return (
+                                <tr key={row.label} className="border-b border-terminal-gray/40">
+                                  <td className="py-[3px] pr-2 text-white/60 whitespace-nowrap">{row.label}</td>
+                                  <td className="py-[3px] text-right text-white/80 font-bold whitespace-nowrap">
+                                    {row.value !== null ? `₹${row.value.toLocaleString('en-IN')}` : '—'}
+                                  </td>
+                                  <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + (row.upside !== null ? (row.upside > 0 ? 'text-terminal-green' : 'text-terminal-red') : 'text-white/30')}>
+                                    {row.upside !== null ? `${row.upside > 0 ? '+' : ''}${row.upside.toFixed(1)}%` : '—'}
+                                  </td>
+                                  <td className={'py-[3px] text-right font-bold whitespace-nowrap ' + signalColor}>
+                                    {signal ?? '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      );
+                    })()}
+                    {valuationData.dcf_assumptions && (
+                      <div className="text-[9px] text-white/50 mt-1 pt-1 font-mono">
+                        DCF: Stage1 {valuationData.dcf_assumptions.stage1_growth_pct}% →
+                        Stage2 {valuationData.dcf_assumptions.stage2_growth_pct}% →
+                        Term {valuationData.dcf_assumptions.terminal_growth_pct}% |
+                        WACC {valuationData.dcf_assumptions.wacc_pct}%
+                        {valuationData.dcf_assumptions.base_fcf_cr !== null &&
+                          ` | Base FCF ₹${valuationData.dcf_assumptions.base_fcf_cr.toFixed(0)}Cr`}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-white/30 text-[11px] font-mono">No valuation data available</div>
+                )}
               </div>
             </div>
           </div>

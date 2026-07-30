@@ -25,6 +25,7 @@ class AIPick(Base):
     entry_price = Column(Float, nullable=False)
     take_profit = Column(Float, nullable=False)
     stop_loss = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=True)
     
     # Array of dicts: [{"timestamp": "2026-06-12T...", "note": "...", "model": "..."}]
     notes = Column(JSON, default=list, nullable=False)

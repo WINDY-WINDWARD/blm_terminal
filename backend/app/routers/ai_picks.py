@@ -48,7 +48,12 @@ async def update_pick_status(
     if pick.status != update_data.status:
         pick.status = update_data.status
         pick.status_updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(pick)
+    
+    # Update exit_price if provided
+    if update_data.exit_price is not None:
+        pick.exit_price = update_data.exit_price
+    
+    await db.commit()
+    await db.refresh(pick)
         
     return pick

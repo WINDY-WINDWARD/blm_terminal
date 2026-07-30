@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { useAtom, useAtomValue } from 'jotai';
 import { activeSymbolAtom, tickDataAtom } from '@/store/terminalStore';
-import { marketDataService } from '@/lib/marketWs';
+import { marketWsService } from '@/lib/marketWs';
 
 interface PickNote {
   timestamp: string;
@@ -26,6 +26,7 @@ interface AIPick {
   entry_price: number;
   take_profit: number;
   stop_loss: number;
+  exit_price?: number | null;
   status: 'NEW' | 'ACTED_ON' | 'CLOSED' | 'ABANDONED';
   notes: PickNote[];
   created_at: string;
@@ -72,7 +73,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY'>('PICKS');
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
-  const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const tickData = useAtomValue(tickDataAtom);
 
   React.useEffect(() => {
@@ -90,41 +91,34 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
     refetchInterval: 60000,
   });
 
-  // Real-time data subscription for all visible picks
+  // Create stable dependency string for WebSocket subscription
+  const filteredPicks = picks?.filter((p) => {
+    if (p.status === 'ABANDONED') return false; // Never show abandoned
+    if (activeTab === 'PICKS') return p.status === 'NEW';
+    if (activeTab === 'ACTIVE') return p.status === 'ACTED_ON';
+    if (activeTab === 'HISTORY') return p.status === 'CLOSED';
+    return false;
+  }) || [];
+
+  const activeSymbolsStr = filteredPicks.map(p => p.symbol).sort().join(',');
+
+  // Safe real-time data subscription with stable dependency
   React.useEffect(() => {
-    if (!picks || picks.length === 0) return;
-
-    // Calculate filtered picks
-    const filteredPicks = picks.filter((p) => {
-      if (p.status === 'ABANDONED') return false;
-      if (activeTab === 'PICKS') return p.status === 'NEW';
-      if (activeTab === 'ACTIVE') return p.status === 'ACTED_ON';
-      if (activeTab === 'HISTORY') return p.status === 'CLOSED';
-      return false;
-    });
-
-    // Extract symbols from filtered picks
-    const symbols = filteredPicks.map(p => `${p.symbol}.NSE`);
-    
-    if (symbols.length === 0) return;
-
-    // Request symbol data immediately
-    marketDataService.requestSymbolData(symbols);
-
-    // Repeat request every 60 seconds
+    if (!activeSymbolsStr) return;
+    const symbols = activeSymbolsStr.split(',');
+    marketWsService.requestSymbolData(symbols);
     const interval = setInterval(() => {
-      marketDataService.requestSymbolData(symbols);
+      marketWsService.requestSymbolData(symbols);
     }, 60000);
-
     return () => clearInterval(interval);
-  }, [picks, activeTab]);
+  }, [activeSymbolsStr]);
 
   const updateStatusMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: number; status: string }) => {
+    mutationFn: async ({ id, status, exit_price }: { id: number; status: string; exit_price?: number }) => {
       const res = await fetch(`/api/py/ai/picks/${id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, exit_price }),
       });
       if (!res.ok) throw new Error('Failed to update status');
     },
@@ -146,14 +140,6 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
       </div>
     );
   }
-
-  const filteredPicks = picks?.filter((p) => {
-    if (p.status === 'ABANDONED') return false; // Never show abandoned
-    if (activeTab === 'PICKS') return p.status === 'NEW';
-    if (activeTab === 'ACTIVE') return p.status === 'ACTED_ON';
-    if (activeTab === 'HISTORY') return p.status === 'CLOSED';
-    return false;
-  }) || [];
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal-bg font-mono text-xs text-white/80 relative">
@@ -203,6 +189,20 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
         ) : (
           filteredPicks.map((pick) => {
             const isExpanded = expandedId === pick.id;
+            
+            // Calculate PnL (Live vs Closed)
+            const currentLivePrice = tickData[`${pick.symbol}.NSE`]?.ltp;
+            const isClosed = pick.status === 'CLOSED';
+            const referencePrice = isClosed ? pick.exit_price : currentLivePrice;
+
+            let pnlDisplay = '-';
+            let pnlColor = 'text-white/50';
+            if (referencePrice && pick.entry_price) {
+              const pnlPct = ((referencePrice - pick.entry_price) / pick.entry_price) * 100;
+              pnlDisplay = `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
+              pnlColor = pnlPct > 0 ? 'text-terminal-green' : 'text-terminal-red';
+            }
+            
             return (
               <div key={pick.id} className="flex flex-col border border-terminal-gray bg-black p-2 hover:bg-zinc-900/40 transition-colors">
                 
@@ -218,7 +218,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                     >
                       {pick.symbol}
                     </span>
-                    <span className={cn(
+                                        <span className={cn(
                       'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border border-transparent',
                       pick.direction === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
                     )}>
@@ -230,28 +230,15 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                     </span>
                   </div>
                   
-                  <div className="flex items-center gap-3 text-[10px] text-white/60 font-mono">
-                    {(() => {
-                      const currentPrice = tickData[`${pick.symbol}.NSE`]?.ltp;
-                      let pnlPct: number | null = null;
-                      if (currentPrice !== undefined && currentPrice !== null) {
-                        pnlPct = ((currentPrice - pick.entry_price) / pick.entry_price) * 100;
-                      }
-                      return (
-                        <span className={cn(
-                          pick.direction === 'LONG' && pnlPct !== null ? (pnlPct > 0 ? 'text-terminal-green' : pnlPct < 0 ? 'text-terminal-red' : 'text-white') : 'text-white'
-                        )}>
-                          PnL%:<span className="ml-1 font-bold">{pnlPct !== null ? `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%` : '—'}</span>
-                        </span>
-                      );
-                    })()}
+                   <div className="flex items-center gap-3 text-[10px] text-white/60 font-mono">
+                    <span className={`font-bold ${pnlColor}`}>PnL: {pnlDisplay}</span>
                     <span>E:<span className="text-white ml-1">{pick.entry_price}</span></span>
                     <span>TP:<span className="text-terminal-green ml-1">{pick.take_profit}</span></span>
                     <span>SL:<span className="text-terminal-red ml-1">{pick.stop_loss}</span></span>
                     <span className="text-white/50 text-[10px] w-4 text-right">
                       {isExpanded ? '▾' : '▸'}
                     </span>
-                  </div>
+                   </div>
                 </div>
 
                 {/* Expanded Content */}
@@ -313,7 +300,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                     {activeTab === 'ACTIVE' && pick.status === 'ACTED_ON' && (
                       <div className="flex mt-2">
                         <button
-                          onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'CLOSED' }); }}
+                          onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'CLOSED', exit_price: currentLivePrice }); }}
                           className="bg-red-900/20 border border-red-500/50 text-red-400 px-3 py-1 text-[10px] hover:bg-red-900/40 transition-colors font-bold uppercase tracking-wider"
                         >
                           [ CLOSE POSITION ]

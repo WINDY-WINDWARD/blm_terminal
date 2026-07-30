@@ -181,10 +181,9 @@ def _run_migrations_sync() -> None:
                 # 2. Clear stale version and stamp at HEAD.
                 with sync_engine2.begin() as conn:
                     conn.execute(sa_text("DELETE FROM alembic_version"))
-                    conn.execute(sa_text(
-                        "INSERT INTO alembic_version (version_num) VALUES ('x99999999999a')"
-                    ))
-                logger.info("migrations: stamped at HEAD (x99999999999a)")
+                logger.info("migrations: cleared stale alembic_version")
+                alembic_command.stamp(alembic_cfg, "head")
+                logger.info("migrations: stamped at HEAD")
             finally:
                 sync_engine2.dispose()
 
@@ -212,13 +211,9 @@ def _run_migrations_sync() -> None:
                 _ensure_admin_user()
                 _ensure_watchlist_data()
                 logger.info("migrations: seed functions (admin user, watchlist) applied")
-                with sync_engine2.begin() as conn:
-                    conn.execute(sa_text("DELETE FROM alembic_version"))
-                    # Stamp at the head of the post-squash chain so the
-                    # new iinvest migrations are still applied on next boot.
-                    conn.execute(sa_text(
-                        "INSERT INTO alembic_version (version_num) VALUES ('31a1b2c3d4e6')"
-                    ))
+                # Stamp at HEAD so the database is marked as up-to-date
+                # with the latest migration, permanently breaking any infinite loop.
+                alembic_command.stamp(alembic_cfg, "head")
             finally:
                 sync_engine2.dispose()
 

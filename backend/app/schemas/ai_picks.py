@@ -44,6 +44,7 @@ class AIPickResponse(AIPickBase):
     id: int
     status: PickStatus
     notes: List[PickNote]
+    exit_price: Optional[float] = None
     created_at: datetime
     updated_at: datetime
     status_updated_at: datetime
@@ -53,3 +54,4 @@ class AIPickResponse(AIPickBase):
 
 class PickStatusUpdate(BaseModel):
     status: PickStatus
+    exit_price: Optional[float] = None
