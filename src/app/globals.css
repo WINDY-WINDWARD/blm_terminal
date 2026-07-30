@@ -32,16 +32,6 @@ input, button {
   outline: none;
 }
 
-/* LiveTicker scrolling animation */
-@keyframes ticker {
-  0%   { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-
-@utility animate-ticker {
-  animation: ticker 30s linear infinite;
-}
-
 @keyframes flash-green {
   0% { background-color: transparent; }
   50% { background-color: color-mix(in srgb, var(--color-terminal-green) 40%, transparent); }
