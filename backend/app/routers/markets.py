@@ -13,7 +13,7 @@ from typing import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -100,8 +100,8 @@ async def get_industry_stocks(
             "Use GET /markets/industries to list all available industries.",
         )
 
-    # Get all stocks and filter in Python (SQLite JSON query limitations)
-    stmt = select(MarketCategoryStock)
+    # Get stocks and filter in Python, but pre-filter in DB with LIKE for performance
+    stmt = select(MarketCategoryStock).where(MarketCategoryStock.categories.cast(String).like(f'%"{slug}"%'))
     result = await db.execute(stmt)
     all_stocks = result.scalars().all()
 
@@ -147,8 +147,8 @@ async def get_sector_stocks(
             "Use GET /markets/sectors to list all available sectors.",
         )
 
-    # Get all stocks and filter in Python (SQLite JSON query limitations)
-    stmt = select(MarketCategoryStock)
+    # Get stocks and filter in Python, but pre-filter in DB with LIKE for performance
+    stmt = select(MarketCategoryStock).where(MarketCategoryStock.categories.cast(String).like(f'%"{slug}"%'))
     result = await db.execute(stmt)
     all_stocks = result.scalars().all()
 

@@ -188,7 +188,7 @@ async def trigger_daily_update() -> TriggerResponse:
 @router.get("/returns/{symbol}", response_model=ReturnsResponse)
 async def get_returns(symbol: str) -> ReturnsResponse:
     """Get multi-period returns for a symbol (1d, 1w, 1m, 3m, 6m, 1y)."""
-    data = returns_service.get_returns(symbol.upper())
+    data = await asyncio.to_thread(returns_service.get_returns, symbol.upper())
     return ReturnsResponse(
         symbol=data["symbol"],
         d1=data.get("1d"),
@@ -207,7 +207,7 @@ async def get_returns_bulk(
 ) -> list[ReturnsResponse]:
     """Get multi-period returns for multiple symbols."""
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    results = returns_service.get_returns_bulk(symbol_list)
+    results = await asyncio.to_thread(returns_service.get_returns_bulk, symbol_list)
     return [
         ReturnsResponse(
             symbol=r["symbol"],
@@ -231,7 +231,7 @@ async def get_universe_returns(
     limit: int = Query(50, ge=1, le=200, description="Max results"),
 ) -> UniverseReturnsResponse:
     """Get ranked returns across the universe."""
-    results = returns_service.get_universe_returns(period, sort_by, order, limit)
+    results = await asyncio.to_thread(returns_service.get_universe_returns, period, sort_by, order, limit)
     return UniverseReturnsResponse(
         period=period,
         count=len(results),
@@ -244,7 +244,7 @@ async def get_sector_returns(
     period: str = Query("1m", description="Return period: 1d, 1w, 1m, 3m, 6m, 1y"),
 ) -> SectorReturnsResponse:
     """Get average and median returns by sector."""
-    results = returns_service.get_sector_returns(period)
+    results = await asyncio.to_thread(returns_service.get_sector_returns, period)
     return SectorReturnsResponse(
         period=period,
         results=results,
@@ -254,7 +254,7 @@ async def get_sector_returns(
 @router.get("/position/52w/{symbol}", response_model=Position52wResponse)
 async def get_52w_position(symbol: str) -> Position52wResponse:
     """Get 52-week high/low position for a symbol."""
-    data = returns_service.get_52w_position(symbol.upper())
+    data = await asyncio.to_thread(returns_service.get_52w_position, symbol.upper())
     return Position52wResponse(
         symbol=data["symbol"],
         high_52w=data.get("high_52w"),
@@ -272,7 +272,7 @@ async def get_52w_position(symbol: str) -> Position52wResponse:
 @router.get("/momentum-score/{symbol}", response_model=MomentumScoreResponse)
 async def get_momentum_score(symbol: str) -> MomentumScoreResponse:
     """Get composite momentum score for a symbol."""
-    data = momentum_service.get_momentum_score(symbol.upper())
+    data = await asyncio.to_thread(momentum_service.get_momentum_score, symbol.upper())
     return MomentumScoreResponse(
         symbol=data["symbol"],
         score=data.get("score"),
@@ -288,7 +288,7 @@ async def get_momentum_leaderboard(
     limit: int = Query(50, ge=1, le=200, description="Max results"),
 ) -> MomentumLeaderboardResponse:
     """Get top N symbols by momentum score."""
-    results = momentum_service.get_momentum_leaderboard(limit)
+    results = await asyncio.to_thread(momentum_service.get_momentum_leaderboard, limit)
     return MomentumLeaderboardResponse(
         count=len(results),
         results=results,
@@ -322,7 +322,7 @@ async def get_indicators(
 @router.get("/streaks/{symbol}", response_model=StreakResponse)
 async def get_streaks(symbol: str) -> StreakResponse:
     """Get streak metrics for a symbol (consecutive up/down days, volume streaks, etc.)."""
-    data = returns_service.get_streak_tracking(symbol.upper())
+    data = await asyncio.to_thread(returns_service.get_streak_tracking, symbol.upper())
     return StreakResponse(
         symbol=data["symbol"],
         consecutive_up_days=data.get("consecutive_up_days", 0),

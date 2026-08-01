@@ -114,17 +114,17 @@ async function proxyRequest(
       }
     }
 
-    try {
-      const data = JSON.parse(rawBody)
-      const res = NextResponse.json(data, { status: upstream.status })
-      if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
-      return res
-    } catch {
-      // Fallback for 200 OK responses that are not JSON — forward as plain text
-      const res = new Response(rawBody, { status: upstream.status })
-      if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
-      return res
+    if (contentType.includes('application/json')) {
+      const resHeaders = new Headers()
+      resHeaders.set('content-type', contentType)
+      if (upstreamSetCookie) resHeaders.set('set-cookie', upstreamSetCookie)
+      return new Response(rawBody, { status: upstream.status, headers: resHeaders })
     }
+
+    // Fallback for 200 OK responses that are not JSON — forward as plain text
+    const res = new Response(rawBody, { status: upstream.status })
+    if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+    return res
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
 

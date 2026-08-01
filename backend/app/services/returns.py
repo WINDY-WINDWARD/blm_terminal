@@ -40,6 +40,7 @@ def get_returns(symbol: str, target_date: Optional[date] = None) -> dict:
             select(TickerDaily)
             .where(TickerDaily.symbol == symbol)
             .order_by(TickerDaily.date.desc())
+            .limit(252)
         )
         rows = db.execute(stmt).scalars().all()
 
@@ -273,6 +274,7 @@ def get_streak_tracking(symbol: str) -> dict:
             select(TickerDaily)
             .where(TickerDaily.symbol == symbol.upper())
             .order_by(TickerDaily.date.desc())
+            .limit(252)
         )
         rows = list(db.execute(stmt).scalars().all())
 
