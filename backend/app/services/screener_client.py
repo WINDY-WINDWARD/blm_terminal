@@ -836,6 +836,50 @@ def _is_login_page(html: str) -> bool:
     return "<title>Login" in html or 'action="/login/"' in html.lower()
 
 
+def _parse_shareholding(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    """Parse the shareholding pattern table."""
+    section = soup.select_one("#shareholding")
+    if not section:
+        return []
+
+    q_div = section.select_one("#quarterly-shp")
+    table = q_div.select_one("table") if q_div else section.select_one("table")
+    if not table:
+        return []
+
+    headers = [th.get_text(strip=True) for th in table.select("thead th")]
+    periods = headers[1:]
+
+    row_map = {}
+    target_rows = {"Promoters", "FIIs", "DIIs", "Public", "Government"}
+
+    for tr in table.select("tbody tr"):
+        cells = [td.get_text(strip=True) for td in tr.select("td")]
+        if not cells:
+            continue
+        label = cells[0].replace("+", "").strip()
+        if label in target_rows:
+            vals = []
+            for cell in cells[1:]:
+                try:
+                    vals.append(float(cell.replace("%", "").strip()))
+                except ValueError:
+                    vals.append(None)
+            row_map[label.lower()] = vals
+
+    if not row_map:
+        return []
+
+    results = []
+    for i, period in enumerate(periods):
+        data = {"period": period}
+        for k, v in row_map.items():
+            data[k] = v[i] if i < len(v) else None
+        results.append(data)
+    
+    return results
+
+
 def _parse_company_page(symbol: str, html: str) -> dict[str, Any]:
     """
     Parse the screener.in company HTML page.
@@ -850,6 +894,7 @@ def _parse_company_page(symbol: str, html: str) -> dict[str, Any]:
     name = _parse_name(soup)
     ratios = _parse_ratios(soup)
     quarters = _parse_quarters(soup)
+    shareholding = _parse_shareholding(soup)
     warehouse_id = _parse_warehouse_id(soup)
 
     return {
@@ -858,6 +903,7 @@ def _parse_company_page(symbol: str, html: str) -> dict[str, Any]:
         "screener_warehouse_id": warehouse_id,
         "ratios": ratios,
         "quarters": quarters,
+        "shareholding": shareholding,
     }
 
 

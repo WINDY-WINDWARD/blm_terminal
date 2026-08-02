@@ -1,4 +1,5 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active architecture: [orchestrator.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/orchestrator.py), [backgroundtasks.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/backgroundtasks.py), [lifecycle.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/workers/lifecycle.py).
 
 ---
 

@@ -123,6 +123,7 @@ class TestMCPToolDiscovery:
             "list_sectors",
             "get_industry_stocks",
             "get_sector_stocks",
+            "get_market_fii_dii_activity",
         }
         assert expected_tools.issubset(tool_names)
 

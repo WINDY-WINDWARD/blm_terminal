@@ -1,4 +1,5 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active implementation: [jobs.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/jobs.py), [jobs/route.ts](file:///d:/500GB/p1/Projects/blm_terminal/src/app/api/jobs/route.ts), [orchestrator.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/orchestrator.py).
 
 ---
 

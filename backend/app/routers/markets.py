@@ -8,6 +8,8 @@ GET  /markets/change-ranges             - REST fallback for the Next.js proxy
 GET  /markets/symbol-data               - REST fallback for the Next.js proxy
 """
 
+import asyncio
+import json
 import logging
 from typing import Sequence
 
@@ -197,3 +199,31 @@ async def get_symbol_data(
     """
     data = await fetch_symbol_data_batch([s.upper() for s in symbol])
     return {"data": data}
+
+
+@router.get(
+    "/fiidii",
+    summary="Get global market FII/DII activity",
+)
+async def get_fii_dii() -> dict:
+    """Fetch daily FII and DII Cash/F&O market activity from NSE.
+    
+    Returns a JSON list of records containing buyValue, sellValue, netValue for FII and DII.
+    """
+    def _fetch():
+        import nsepython
+        df = nsepython.nse_fiidii()
+        if df is None or df.empty:
+            return []
+        # Replace NaNs with None and convert to dict records
+        import pandas as pd
+        import numpy as np
+        df = df.replace({np.nan: None, pd.NA: None})
+        return df.to_dict(orient="records")
+
+    try:
+        data = await asyncio.to_thread(_fetch)
+        return {"data": data}
+    except Exception as e:
+        logger.error(f"Failed to fetch FII/DII data: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch FII/DII data")

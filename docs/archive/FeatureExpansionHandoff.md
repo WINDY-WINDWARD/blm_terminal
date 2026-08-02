@@ -1,12 +1,15 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active codebase conventions and guidelines can be found in [AGENTS.md](file:///d:/500GB/p1/Projects/blm_terminal/AGENTS.md) and [SUMMARY.md](file:///d:/500GB/p1/Projects/blm_terminal/docs/archive/SUMMARY.md).
 
 ---
 
 # BLM Terminal — Agent Implementation Handoff
 
 **For**: AI coding agent  
-**Project root**: `/Users/glubglub/Documents/blm_terminal` *(corrected from stale Windows path)*  
-**Read PLAN.md first**: `docs/PLAN.md` — this handoff assumes you've read it.
+**Active implementation locations**:
+- AI Personas: [AiWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/AiWidget.tsx), [ai_chat.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/ai_chat.py)
+- Valuation Models: [ValuationWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/ValuationWidget.tsx), [valuation.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/valuation.py)
+- Portfolio Optimizer: [PortfolioWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/PortfolioWidget.tsx), [portfolio.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/portfolio.py)
 
 ---
 

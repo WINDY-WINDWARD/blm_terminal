@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
+import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend } from 'recharts';
 import { activeSymbolAtom } from '@/store/terminalStore';
 import {
   fetchIinvestPledgedShares,
@@ -37,6 +38,17 @@ interface ScreenerTradesResponse {
   insider_trades: TradeRecord[];
   bulk_deals: TradeRecord[];
   block_deals: TradeRecord[];
+}
+
+export interface ScreenerCompanyData {
+  shareholding?: Array<{
+    period: string;
+    promoters: number | null;
+    fiis: number | null;
+    diis: number | null;
+    public: number | null;
+    government: number | null;
+  }>;
 }
 
 type Tab = 'insider' | 'bulk' | 'block' | 'pledged' | 'shareholding' | 'sast';
@@ -142,16 +154,6 @@ function SectionTable({ rows, showCategory }: SectionTableProps) {
 }
 
 // ─── iinvest → TradeRecord mapper ────────────────────────────────────────────
-//
-// iinvest returns rows as dicts with f_* field codes. The schema matches
-// screener's trade data closely:
-//   f_28  date         f_4   person
-//   f_5   category     f_7   prev shares
-//   f_8   prev %       f_10  quantity
-//   f_12  Buy/Sell     f_14  post shares
-//   f_15  post %       f_19  mode
-// We map these onto the screener TradeRecord shape so the existing
-// SectionTable + DirectionCell renderers work unchanged.
 
 function mapIinvestInsiderToTradeRecords(rows: IinvestInsiderRow[]): TradeRecord[] {
   const toNum = (v: string | number | undefined): number | null => {
@@ -182,12 +184,6 @@ function mapIinvestInsiderToTradeRecords(rows: IinvestInsiderRow[]): TradeRecord
   });
 }
 
-// iinvest block-deal row fields (verified live 2026-06-18):
-//   f_32  client name
-//   f_33  type (BUY/SELL)
-//   f_34  quantity
-//   f_35  date
-//   f_36  weighted avg price
 function mapIinvestBlockToTradeRecords(rows: Array<Record<string, unknown>>): TradeRecord[] {
   const toNum = (v: unknown): number | null => {
     if (v === undefined || v === null) return null;
@@ -217,15 +213,13 @@ function mapIinvestBlockToTradeRecords(rows: Array<Record<string, unknown>>): Tr
   });
 }
 
-
-
 // ─── Main Widget ──────────────────────────────────────────────────────────────
 
 export function DealsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
   const [activeTab, setActiveTab] = useState<Tab>('insider');
 
-  const { data, isLoading, isError, error } = useQuery<ScreenerTradesResponse>({
+  const { data, isLoading, isError } = useQuery<ScreenerTradesResponse>({
     queryKey: ['screener/trades', symbol],
     queryFn: async () => {
       const res = await fetch(
@@ -249,8 +243,20 @@ export function DealsWidget() {
     enabled: !!symbol,
   });
 
-  // iinvest queries for the 3 new tabs. Declared BEFORE any early-return
-  // so React's hook count stays stable across renders.
+  const { data: screenerCompany } = useQuery<ScreenerCompanyData>({
+    queryKey: ['screener/company', symbol],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/py/screener/company/${encodeURIComponent(symbol)}?consolidated=true`,
+      );
+      if (!res.ok) throw new Error('Failed to fetch screener company');
+      return res.json() as Promise<ScreenerCompanyData>;
+    },
+    staleTime: 15 * 60 * 1000,
+    retry: false,
+    enabled: !!symbol && activeTab === 'shareholding',
+  });
+
   const { data: pledgedData } = useQuery<IinvestResponse<Record<string, unknown>>>({
     queryKey: ['iinvest', 'pledged-shares', symbol],
     queryFn: () => fetchIinvestPledgedShares(symbol),
@@ -278,9 +284,6 @@ export function DealsWidget() {
     retry: false,
   });
 
-  // iinvest fallbacks for the 3 screener tabs. We only fire these when
-  // screener has failed or returned empty data, so we don't waste iinvest
-  // requests when screener is already serving the data.
   const screenerHasInsider = data && data.insider_trades.length > 0;
   const screenerHasBulk = data && data.bulk_deals.length > 0;
   const screenerHasBlock = data && data.block_deals.length > 0;
@@ -299,12 +302,6 @@ export function DealsWidget() {
     retry: false,
   });
 
-  // iinvest's /api/v1/blockdeals endpoint serves BOTH bulk and block
-  // deals via the `type` param:
-  //   type=1 → Block deals (negotiated trade window 09:15-09:40 IST, 5%+)
-  //   type=2 → Bulk deals (single trade crossing 0.5% of paid-up capital)
-  // We keep them as SEPARATE queries so the Bulk and Block tabs show
-  // genuinely different data (not the same merged list).
   const { data: iinvestBlockData } = useQuery<IinvestResponse<Record<string, unknown>>>({
     queryKey: ['iinvest', 'block-deals', symbol, 'block'],
     queryFn: () => fetchIinvestBlockDeals(symbol),
@@ -319,14 +316,8 @@ export function DealsWidget() {
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
-  // NOTE: The previous version merged both deal types into one list and
-  // showed the same data in both tabs. The HAR analysis confirmed they're
-  // distinct categories on iinvest's web view (Bulk vs Block), so we now
-  // route each tab to its own deal-type response.
   const iinvestBulkCount = iinvestBulkData?.response.data?.length ?? 0;
   const iinvestBlockCount = iinvestBlockData?.response.data?.length ?? 0;
-
-  // ── No symbol ─────────────────────────────────────────────────────────────
 
   if (!symbol) {
     return (
@@ -335,8 +326,6 @@ export function DealsWidget() {
       </div>
     );
   }
-
-  // ── Loading ────────────────────────────────────────────────────────────────
 
   if (isLoading) {
     return (
@@ -347,36 +336,20 @@ export function DealsWidget() {
     );
   }
 
-  // ── Error ──────────────────────────────────────────────────────────────────
-
-  // Screener may have failed (commonly 503). Don't bail out — show the
-  // tabs anyway. The iinvest-only tabs (Pledged / Shareholding / SAST)
-  // still work. The 3 deal tabs (Insider / Bulk / Block) will use iinvest
-  // fallback data when available. We synthesize an empty ScreenerTradesResponse
-  // so the tab counts and rows fall through to the iinvest fallback logic.
   const screenerData: ScreenerTradesResponse = data ?? {
     insider_trades: [],
     bulk_deals: [],
     block_deals: [],
   };
-  const screenerUnavailable = isError;
 
-  // ── Data ───────────────────────────────────────────────────────────────────
-
-  // Map iinvest fallback data to TradeRecord[] (screener-compatible shape)
   const iinvestInsiderRows = iinvestInsider?.response.data
     ? mapIinvestInsiderToTradeRecords(iinvestInsider.response.data)
     : [];
 
-  // For the 3 deal tabs, prefer screener data; fall back to iinvest if
-  // screener returned empty (e.g. session unavailable).
   const insiderRows = screenerData.insider_trades.length > 0
     ? screenerData.insider_trades
     : iinvestInsiderRows;
     
-  // For Bulk and Block deals, iinvest accurately separates them by type
-  // whereas screener sometimes returns identical lists for both.
-  // We prefer iinvest if it has equal or more data.
   const iinvestBulkRawRows = iinvestBulkData?.response.data ?? [];
   const iinvestBlockRawRows = iinvestBlockData?.response.data ?? [];
   const iinvestBulkTradeRecords = mapIinvestBlockToTradeRecords(iinvestBulkRawRows);
@@ -443,12 +416,12 @@ export function DealsWidget() {
             rows={activeRows}
             showCategory={activeTab === 'insider'}
           />
-        ) : activeTab === 'shareholding' ? (
-          <ShareholdingTable data={shareholderData?.response.data ?? []} />
+        ) : activeTab === 'shareholding' && shareholderData?.response?.data ? (
+          <ShareholdingTable data={shareholderData.response.data} screenerData={screenerCompany} />
         ) : activeTab === 'pledged' ? (
           <IinvestGenericTable
             data={pledgedData?.response.data ?? []}
-            columns={(pledgedData?.response.columns ?? []) as IinvestColumn[]}
+            columns={(pledgedData?.response.columns ?? []) as any}
             emptyMsg={
               symbol
                 ? `${symbol} has no pledged shares on record.`
@@ -480,7 +453,7 @@ export function DealsWidget() {
 
 type ShareholdingCellValue = { per?: number; val?: number } | null | undefined;
 
-function ShareholdingTable({ data }: { data: unknown }) {
+function ShareholdingTable({ data, screenerData }: { data: unknown, screenerData?: ScreenerCompanyData }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   if (!Array.isArray(data) || data.length === 0) {
@@ -539,47 +512,144 @@ function ShareholdingTable({ data }: { data: unknown }) {
     });
   };
 
+  const latestQ = quarterIdxs[0];
+  const prevQ = quarterIdxs[1];
+
+  // Handle Pie Chart and QoQ using Screener Data
+  let pieData: Array<{ name: string; value: number }> = [];
+  let fiiQoQ: number | null = null;
+  let diiQoQ: number | null = null;
+  let latestPeriod = quarterLabels[0] ?? 'Latest';
+  let prevPeriod = quarterLabels[1] ?? 'Previous';
+
+  if (screenerData?.shareholding && screenerData.shareholding.length >= 2) {
+    const sh = screenerData.shareholding;
+    const latest = sh[sh.length - 1];
+    const prev = sh[sh.length - 2];
+    
+    latestPeriod = latest.period;
+    prevPeriod = prev.period;
+
+    if (latest.promoters) pieData.push({ name: 'Promoters', value: latest.promoters });
+    if (latest.fiis) pieData.push({ name: 'FIIs', value: latest.fiis });
+    if (latest.diis) pieData.push({ name: 'DIIs', value: latest.diis });
+    if (latest.public) pieData.push({ name: 'Public', value: latest.public });
+    if (latest.government) pieData.push({ name: 'Govt', value: latest.government });
+    
+    pieData = pieData.sort((a, b) => b.value - a.value);
+
+    if (latest.fiis !== null && prev.fiis !== null) fiiQoQ = latest.fiis - prev.fiis;
+    if (latest.diis !== null && prev.diis !== null) diiQoQ = latest.diis - prev.diis;
+  } else {
+    // Fallback pie chart from iinvest data
+    pieData = groups.map(group => {
+      const groupId = String(group[idIdx]);
+      const groupDesc = (group[descIdx] as string) ?? `Group ${groupId}`;
+      
+      const children = childrenByParent[groupId] ?? [];
+      let perSumLatest = 0;
+      for (const row of children) {
+        if (latestQ) {
+           const cell = row[latestQ.i] as ShareholdingCellValue;
+           if (cell && cell.per != null) perSumLatest += cell.per;
+        }
+      }
+      
+      return {
+         name: groupDesc.length > 20 ? groupDesc.substring(0, 20) + '...' : groupDesc,
+         value: Number(perSumLatest.toFixed(2))
+      };
+    }).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+  }
+
+  const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
   return (
-    <table className="w-full border-collapse">
-      <thead>
-        <tr className="text-[9px] text-white/60 uppercase">
-          <th className="text-left pb-1 font-normal">Description</th>
-          {quarterLabels.map((q) => {
-            // q is e.g. "Mar-26" — render as "Mar-26" with a "% Holding
-            // | No of Shares" sub-label stacked below.
-            return (
-              <th key={q} className="text-right pb-1 pr-2 font-normal whitespace-nowrap">
-                <div className="leading-tight">
-                  <div>{q}</div>
-                  <div className="text-white/40 text-[8px]">% Holding | No of Shares</div>
+    <div className="flex flex-col h-full w-full">
+      {pieData.length > 0 && (
+        <div className="flex flex-row items-center justify-between p-2 mb-2 bg-zinc-900/50 rounded flex-shrink-0">
+          <div className="flex flex-col items-center flex-1 h-[140px] min-w-0">
+            <span className="text-white font-bold text-[10px] uppercase mb-1">Holdings ({latestPeriod})</span>
+            <ResponsiveContainer width="100%" height="100%">
+               <PieChart>
+                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={25} outerRadius={45} stroke="none">
+                     {pieData.map((e, i) => <Cell key={`cell-${i}`} fill={COLORS[i % COLORS.length]} />)}
+                  </Pie>
+                  <RechartsTooltip 
+                    contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', fontSize: '10px' }}
+                    itemStyle={{ color: '#fff' }}
+                    formatter={(val: any) => [`${Number(val).toFixed(2)}%`, undefined]}
+                  />
+                  <Legend 
+                    wrapperStyle={{ fontSize: '9px' }} 
+                    layout="vertical" 
+                    verticalAlign="middle" 
+                    align="right"
+                    formatter={(value, entry: any) => `${value} (${entry.payload.value.toFixed(2)}%)`}
+                  />
+               </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-col flex-1 items-center justify-center gap-2 min-w-0">
+            <span className="text-white/60 text-[10px] uppercase font-bold text-center">QoQ Change ({prevPeriod} to {latestPeriod})</span>
+            <div className="flex flex-col gap-1">
+              {fiiQoQ !== null && (
+                <div className="flex gap-2 items-center text-[11px]">
+                    <span className="text-white/80 w-8">FII:</span>
+                    {(fiiQoQ as number) > 0.005 ? <span className="text-terminal-green font-bold">▲ +{(fiiQoQ as number).toFixed(2)}%</span> : (fiiQoQ as number) < -0.005 ? <span className="text-terminal-red font-bold">▼ {(fiiQoQ as number).toFixed(2)}%</span> : <span className="text-white/50">0.00%</span>}
                 </div>
-              </th>
-            );
-          })}
-        </tr>
-      </thead>
-      <tbody>
-        {groups.map((group) => {
-          const groupId = String(group[idIdx]);
-          const groupDesc = (group[descIdx] as string) ?? `Group ${groupId}`;
-          const isCollapsed = collapsedGroups.has(groupId);
-          const children = childrenByParent[groupId] ?? [];
-          return (
-            <ShareholdingGroupFragment
-              key={groupId}
-              groupId={groupId}
-              groupDesc={groupDesc}
-              isCollapsed={isCollapsed}
-              onToggle={() => toggleGroup(groupId)}
-              descIdx={descIdx}
-              quarterIdxs={quarterIdxs}
-            >
-              {children}
-            </ShareholdingGroupFragment>
-          );
-        })}
-      </tbody>
-    </table>
+              )}
+              {diiQoQ !== null && (
+                <div className="flex gap-2 items-center text-[11px]">
+                    <span className="text-white/80 w-8">DII:</span>
+                    {(diiQoQ as number) > 0.005 ? <span className="text-terminal-green font-bold">▲ +{(diiQoQ as number).toFixed(2)}%</span> : (diiQoQ as number) < -0.005 ? <span className="text-terminal-red font-bold">▼ {(diiQoQ as number).toFixed(2)}%</span> : <span className="text-white/50">0.00%</span>}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex-1 overflow-auto min-h-0">
+        <table className="w-full border-collapse">
+          <thead className="sticky top-0 bg-terminal-bg z-10">
+            <tr className="text-[9px] text-white/60 uppercase">
+              <th className="text-left pb-1 font-normal">Description</th>
+              {quarterLabels.map((q) => {
+                return (
+                  <th key={q} className="text-right pb-1 pr-2 font-normal whitespace-nowrap bg-terminal-bg">
+                    <div className="leading-tight">
+                      <div>{q}</div>
+                      <div className="text-white/40 text-[8px]">% Holding | No of Shares</div>
+                    </div>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((group) => {
+              const groupId = String(group[idIdx]);
+              const groupDesc = (group[descIdx] as string) ?? `Group ${groupId}`;
+              const isCollapsed = collapsedGroups.has(groupId);
+              const children = childrenByParent[groupId] ?? [];
+              return (
+                <ShareholdingGroupFragment
+                  key={groupId}
+                  groupId={groupId}
+                  groupDesc={groupDesc}
+                  isCollapsed={isCollapsed}
+                  onToggle={() => toggleGroup(groupId)}
+                  descIdx={descIdx}
+                  quarterIdxs={quarterIdxs}
+                >
+                  {children}
+                </ShareholdingGroupFragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

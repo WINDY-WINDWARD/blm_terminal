@@ -1,4 +1,5 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active implementation: [NotifWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/NotifWidget.tsx), [notifications/route.ts](file:///d:/500GB/p1/Projects/blm_terminal/src/app/api/notifications/route.ts), [notifications.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/notifications.py).
 
 ---
 

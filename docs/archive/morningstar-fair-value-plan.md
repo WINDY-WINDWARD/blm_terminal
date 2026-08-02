@@ -1,4 +1,5 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active implementation: [morningstar.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/morningstar.py), [morningstar_client.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/services/morningstar_client.py).
 
 ---
 

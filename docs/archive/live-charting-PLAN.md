@@ -1,4 +1,5 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active implementation: [ChartWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/ChartWidget.tsx), [marketWs.ts](file:///d:/500GB/p1/Projects/blm_terminal/src/lib/marketWs.ts), [server.js](file:///d:/500GB/p1/Projects/blm_terminal/server.js), [nse_charting_client.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/services/nse_charting_client.py).
 
 ---
 

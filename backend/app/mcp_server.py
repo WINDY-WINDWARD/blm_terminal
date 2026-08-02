@@ -112,6 +112,39 @@ async def health_check() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+@mcp.tool()
+async def get_market_fii_dii_activity() -> list[dict[str, Any]]:
+    """Fetch daily global market FII and DII (Foreign and Domestic Institutional Investors) activity from the NSE.
+    
+    This provides market-wide (not stock-specific) Cash/F&O activity containing
+    buyValue, sellValue, netValue, category, and date for FIIs and DIIs.
+    Use this to gauge overall institutional inflows and outflows for the current day.
+    """
+    cache_key = "mcp_fiidii_activity"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    def _fetch():
+        import nsepython
+        df = nsepython.nse_fiidii()
+        if df is None or df.empty:
+            return []
+        import pandas as pd
+        import numpy as np
+        df = df.replace({np.nan: None, pd.NA: None})
+        return df.to_dict(orient="records")
+
+    try:
+        data = await asyncio.to_thread(_fetch)
+        _cache_set(cache_key, data)
+        return data
+    except Exception as e:
+        logger.error(f"Failed to fetch FII/DII data: {e}")
+        return []
+
+
+
 async def _mcp_snapshot() -> dict:
     """Fetch largedeal snapshot through the rate limiter (one NSE call)."""
     return await throttled_nse_call(

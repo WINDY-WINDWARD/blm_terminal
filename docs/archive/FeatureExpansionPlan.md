@@ -1,12 +1,16 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> See [SUMMARY.md](file:///d:/500GB/p1/Projects/blm_terminal/docs/archive/SUMMARY.md) for full index.
 
 ---
 
 # BLM Terminal — Feature Expansion Plan
 
 **Date**: 2026-05-29  
-**Scope**: Three new features to improve Indian market trading intelligence  
-**Based on**: Clean-room analysis of FinceptTerminal (https://github.com/Fincept-Corporation/FinceptTerminal)
+**Status**: Implementation Complete ✅  
+**Active Implementation Locations**:
+- AI Personas: [AiWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/AiWidget.tsx), [ai_chat.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/ai_chat.py)
+- Valuation Tab: [ValuationWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/ValuationWidget.tsx), [valuation.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/valuation.py)
+- Portfolio Optimizer: [PortfolioWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/PortfolioWidget.tsx), [portfolio.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/portfolio.py)
 
 ---
 

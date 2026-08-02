@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend } from 'recharts';
 
-type DealTab = 'bulk' | 'block' | 'short';
+type DealTab = 'bulk' | 'block' | 'short' | 'fii';
 
 interface LargedealRow {
   date: string;
@@ -44,7 +45,16 @@ function fmtNumber(raw: string | number | null): string {
 
 function DealBadge({ kind, count, active }: { kind: DealTab; count: number; active?: boolean }) {
   const label =
-    kind === 'bulk' ? 'Bulk Deals' : kind === 'block' ? 'Block Deals' : 'Short Deals';
+    kind === 'bulk' ? 'Bulk Deals' : kind === 'block' ? 'Block Deals' : kind === 'fii' ? 'FII / DII' : 'Short Deals';
+  
+  if (kind === 'fii') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px]">
+        <span>{label}</span>
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-1 text-[10px]">
       <span>{label}</span>
@@ -57,6 +67,72 @@ function DealBadge({ kind, count, active }: { kind: DealTab; count: number; acti
   );
 }
 
+interface FiiDiiRow {
+  buyValue: number;
+  sellValue: number;
+  netValue: number;
+  category: string;
+  date: string;
+}
+
+function FiiDiiChart({ data }: { data: FiiDiiRow[] }) {
+  if (!data || data.length === 0) return <div className="p-4 text-white/50 text-center text-[10px]">No FII/DII data available.</div>;
+  
+  const fiiRow = data.find(r => r.category.includes('FII'));
+  const diiRow = data.find(r => r.category.includes('DII'));
+  const date = data[0]?.date || '';
+
+  const renderPie = (row: FiiDiiRow | undefined, title: string) => {
+    if (!row) return null;
+    const pieData = [
+      { name: 'Buy', value: Number(row.buyValue) || 0, color: '#10b981' }, // terminal-green
+      { name: 'Sell', value: Number(row.sellValue) || 0, color: '#ef4444' }, // terminal-red
+    ];
+    return (
+      <div className="flex flex-col items-center flex-1 min-w-0">
+        <div className="text-white font-bold text-[11px] mb-2 uppercase">{title}</div>
+        <div className="text-white/60 text-[9px] mb-2 text-center">Net: <span className={row.netValue >= 0 ? "text-terminal-green" : "text-terminal-red font-bold"}>₹{fmtNumber(row.netValue)} Cr</span></div>
+        <div className="w-full h-[160px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={pieData}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={35}
+                outerRadius={60}
+                stroke="none"
+              >
+                {pieData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.color} />
+                ))}
+              </Pie>
+              <RechartsTooltip 
+                contentStyle={{ backgroundColor: '#18181b', border: '1px solid #3f3f46', fontSize: '10px' }}
+                itemStyle={{ color: '#fff' }}
+                formatter={(val: any) => [`₹${Number(val).toLocaleString()} Cr`, undefined]}
+              />
+              <Legend wrapperStyle={{ fontSize: '10px' }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-4 p-2 h-full overflow-y-auto w-full">
+      <div className="text-center text-white/60 text-[10px]">Market Activity for {date}</div>
+      <div className="flex flex-row justify-around w-full mt-2">
+        {renderPie(fiiRow, 'FII / FPI Activity')}
+        {renderPie(diiRow, 'DII Activity')}
+      </div>
+    </div>
+  );
+}
+
 interface CompanyAccordionProps {
   group: CompanyGroup;
   expanded: boolean;
@@ -65,7 +141,7 @@ interface CompanyAccordionProps {
 
 function CompanyAccordion({ group, expanded, onToggle }: CompanyAccordionProps) {
   return (
-    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden">
+    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden flex-shrink-0">
       <button
         type="button"
         onClick={onToggle}
@@ -174,6 +250,18 @@ export function LargedealsWidget() {
     retry: false,
   });
 
+  const { data: fiiData, isLoading: fiiLoading, isError: fiiError } = useQuery<{data: FiiDiiRow[]}>({
+    queryKey: ['market/fiidii'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/markets/fiidii');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
   const toggleKey = (key: string) => {
     setExpandedKeys((prev) => {
       const next = new Set(prev);
@@ -241,10 +329,12 @@ export function LargedealsWidget() {
     a.name.localeCompare(b.name),
   );
 
-  const tabs: { id: DealTab; count: number }[] = [
+
+  const dealTabs: { id: DealTab; count?: number }[] = [
     { id: 'bulk', count: bulkRows.length },
     { id: 'block', count: blockRows.length },
     { id: 'short', count: shortRows.length },
+    { id: 'fii' },
   ];
 
   return (
@@ -259,7 +349,7 @@ export function LargedealsWidget() {
       </div>
 
       <div className="flex-shrink-0 flex border-b border-terminal-gray/60">
-        {tabs.map((tab) => (
+        {dealTabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
@@ -270,13 +360,21 @@ export function LargedealsWidget() {
             }`}
             style={activeTab === tab.id ? { borderBottomColor: '#ffb900' } : undefined}
           >
-            <DealBadge kind={tab.id} count={tab.count} active={activeTab === tab.id} />
+            <DealBadge kind={tab.id} count={tab.count ?? 0} active={activeTab === tab.id} />
           </button>
         ))}
       </div>
 
-      <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
-        {groups.length === 0 ? (
+      <div className="flex-1 overflow-auto px-2 py-1 min-h-0 flex flex-col">
+        {activeTab === 'fii' ? (
+          fiiLoading ? (
+            <div className="flex items-center justify-center h-full w-full text-white/50">Loading FII/DII data...</div>
+          ) : fiiError || !fiiData ? (
+            <div className="flex items-center justify-center h-full w-full text-terminal-red">Failed to load FII/DII data</div>
+          ) : (
+            <FiiDiiChart data={fiiData.data} />
+          )
+        ) : groups.length === 0 ? (
           <div className="text-white/40 text-[10px] py-2 px-1">
             No records for this deal type.
           </div>

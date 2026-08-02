@@ -1,4 +1,5 @@
 > **ARCHIVED** — This document describes a completed implementation. It is kept for historical reference only and is no longer maintained.
+> Active implementation: [NewsWidget.tsx](file:///d:/500GB/p1/Projects/blm_terminal/src/components/widgets/NewsWidget.tsx), [newsSocket.ts](file:///d:/500GB/p1/Projects/blm_terminal/src/lib/newsSocket.ts), [news_ws.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/routers/news_ws.py), [news_aggregator.py](file:///d:/500GB/p1/Projects/blm_terminal/backend/app/services/news_aggregator.py).
 
 ---
 
