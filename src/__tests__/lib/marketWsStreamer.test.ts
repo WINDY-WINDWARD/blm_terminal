@@ -260,17 +260,17 @@ describe('fetchSymbolDataWithFallback', () => {
         // Python's /api/markets/symbol-data returns the raw NSE
         // payload; the streamer extracts it.
         respond: () => jsonResponse(200, {
-          data: { HAL: { equityResponse: [{ orderBook: { lastPrice: 2200 }, metaData: { pChange: 1.1 } }] } },
+          data: { AAA: { equityResponse: [{ orderBook: { lastPrice: 2200 }, metaData: { pChange: 1.1 } }] } },
         }),
       },
     ]);
     vi.stubGlobal('fetch', spy as unknown as typeof fetch);
 
-    const out = await fetchSymbolDataWithFallback('HAL');
+    const out = await fetchSymbolDataWithFallback('AAA');
     expect(out).toEqual({ ltp: 2200, pChange: 1.1, yearHigh: undefined, yearLow: undefined });
     // No NSE calls — only the Python fallback.
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe(`${PYTHON_BACKEND_URL}/api/markets/symbol-data?symbol=HAL`);
+    expect(calls[0].url).toBe(`${PYTHON_BACKEND_URL}/api/markets/symbol-data?symbol=AAA`);
   }, 20_000);
 });
 

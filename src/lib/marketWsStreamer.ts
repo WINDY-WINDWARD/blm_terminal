@@ -208,7 +208,7 @@ export async function fetchSymbolDataWithFallback(
     // throttle — otherwise the two retry loops would compose and
     // produce 3 × 3 = 9 attempts on a transient failure.
     const value = await throttledNseCall(
-      ENDPOINT_SYMBOL_DATA,
+      cacheKey,
       () => fetchWithRetries(`${ENDPOINT_SYMBOL_DATA}:${sym}`, () => fetchSymbolDataFromNse(sym)),
       { coalesceKey: `${ENDPOINT_SYMBOL_DATA}:${sym}`, retries: 0 },
     );
@@ -258,7 +258,7 @@ export async function fetchChangeRangesWithFallback(
   let nseFailed = false;
   try {
     const value = await throttledNseCall(
-      ENDPOINT_CHANGE_RANGES,
+      cacheKey,
       () => fetchWithRetries(`${ENDPOINT_CHANGE_RANGES}:${sym}`, () => fetchChangeRangesFromNse(sym)),
       { coalesceKey: `${ENDPOINT_CHANGE_RANGES}:${sym}`, retries: 0 },
     );
