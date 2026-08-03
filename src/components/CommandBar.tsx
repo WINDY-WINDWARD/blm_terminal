@@ -87,6 +87,7 @@ export function CommandBar() {
 
   // Debounced symbol search
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!isSymbolMode) {
       setSymbolSuggestions([]);
       return;

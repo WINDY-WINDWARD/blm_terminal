@@ -415,6 +415,7 @@ function FilingViewer() {
   const [showRaw, setShowRaw] = useState(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!url) {
       setState({ status: 'error', message: 'No URL provided.' });
       return;
