@@ -70,7 +70,7 @@ function getActionPill(pick: AIPick) {
 
 export function AiPicksWidget({ panelId }: { panelId: string }) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY'>('PICKS');
+  const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY' | 'ABANDONED'>('PICKS');
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
@@ -93,10 +93,10 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
 
   // Create stable dependency string for WebSocket subscription
   const filteredPicks = picks?.filter((p) => {
-    if (p.status === 'ABANDONED') return false; // Never show abandoned
     if (activeTab === 'PICKS') return p.status === 'NEW';
     if (activeTab === 'ACTIVE') return p.status === 'ACTED_ON';
     if (activeTab === 'HISTORY') return p.status === 'CLOSED';
+    if (activeTab === 'ABANDONED') return p.status === 'ABANDONED';
     return false;
   }) || [];
 
@@ -154,33 +154,41 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
         </div>
       )}
 
-      {/* Header Tabs */}
-      <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
-        <TabButton
-          active={activeTab === 'PICKS'}
-          onClick={() => {
-            setActiveTab('PICKS');
-            setExpandedId(null);
-          }}
-          label="PICKS"
-        />
-        <TabButton
-          active={activeTab === 'ACTIVE'}
-          onClick={() => {
-            setActiveTab('ACTIVE');
-            setExpandedId(null);
-          }}
-          label="ACTIVE"
-        />
-        <TabButton
-          active={activeTab === 'HISTORY'}
-          onClick={() => {
-            setActiveTab('HISTORY');
-            setExpandedId(null);
-          }}
-          label="HISTORY"
-        />
-      </div>
+       {/* Header Tabs */}
+       <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
+         <TabButton
+           active={activeTab === 'PICKS'}
+           onClick={() => {
+             setActiveTab('PICKS');
+             setExpandedId(null);
+           }}
+           label="PICKS"
+         />
+         <TabButton
+           active={activeTab === 'ACTIVE'}
+           onClick={() => {
+             setActiveTab('ACTIVE');
+             setExpandedId(null);
+           }}
+           label="ACTIVE"
+         />
+         <TabButton
+           active={activeTab === 'HISTORY'}
+           onClick={() => {
+             setActiveTab('HISTORY');
+             setExpandedId(null);
+           }}
+           label="HISTORY"
+         />
+         <TabButton
+           active={activeTab === 'ABANDONED'}
+           onClick={() => {
+             setActiveTab('ABANDONED');
+             setExpandedId(null);
+           }}
+           label="ABANDONED"
+         />
+       </div>
 
       {/* Picks List */}
       <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-2">
@@ -204,7 +212,15 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
             }
             
             return (
-              <div key={pick.id} className="flex flex-col border border-terminal-gray bg-black p-2 hover:bg-zinc-900/40 transition-colors">
+              <div 
+                key={pick.id} 
+                className={cn(
+                  "flex flex-col border p-2 hover:bg-zinc-900/40 transition-colors",
+                  pick.status === 'ABANDONED' 
+                    ? "border-zinc-700 bg-zinc-950/50 hover:bg-zinc-900/20" 
+                    : "border-terminal-gray bg-black"
+                )}
+              >
                 
                 {/* Header Row */}
                 <div 
@@ -213,7 +229,10 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                 >
                   <div className="flex items-center gap-3">
                     <span 
-                      className="font-bold text-terminal-amber text-[13px] cursor-pointer hover:text-white hover:underline transition-colors"
+                      className={cn(
+                        "text-[13px] cursor-pointer hover:text-white hover:underline transition-colors font-bold",
+                        pick.status === 'ABANDONED' ? "text-white/40" : "text-terminal-amber"
+                      )}
                       onClick={(e) => { e.stopPropagation(); setActiveSymbol(pick.symbol); }}
                     >
                       {pick.symbol}
@@ -286,27 +305,32 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                       })}
                     </div>
                     
-                    {/* Actions */}
-                    {activeTab === 'PICKS' && pick.status === 'NEW' && (
-                      <div className="flex mt-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'ACTED_ON' }); }}
-                          className="bg-terminal-amber/10 border border-terminal-amber text-terminal-amber px-3 py-1 text-[10px] hover:bg-terminal-amber/20 transition-colors font-bold uppercase tracking-wider"
-                        >
-                          [ MARK ACTED ON ]
-                        </button>
-                      </div>
-                    )}
-                    {activeTab === 'ACTIVE' && pick.status === 'ACTED_ON' && (
-                      <div className="flex mt-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'CLOSED', exit_price: currentLivePrice }); }}
-                          className="bg-red-900/20 border border-red-500/50 text-red-400 px-3 py-1 text-[10px] hover:bg-red-900/40 transition-colors font-bold uppercase tracking-wider"
-                        >
-                          [ CLOSE POSITION ]
-                        </button>
-                      </div>
-                    )}
+                     {/* Actions */}
+                     {activeTab === 'PICKS' && pick.status === 'NEW' && (
+                       <div className="flex mt-2">
+                         <button
+                           onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'ACTED_ON' }); }}
+                           className="bg-terminal-amber/10 border border-terminal-amber text-terminal-amber px-3 py-1 text-[10px] hover:bg-terminal-amber/20 transition-colors font-bold uppercase tracking-wider"
+                         >
+                           [ MARK ACTED ON ]
+                         </button>
+                       </div>
+                     )}
+                     {activeTab === 'ACTIVE' && pick.status === 'ACTED_ON' && (
+                       <div className="flex mt-2">
+                         <button
+                           onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'CLOSED', exit_price: currentLivePrice }); }}
+                           className="bg-red-900/20 border border-red-500/50 text-red-400 px-3 py-1 text-[10px] hover:bg-red-900/40 transition-colors font-bold uppercase tracking-wider"
+                         >
+                           [ CLOSE POSITION ]
+                         </button>
+                       </div>
+                     )}
+                     {activeTab === 'ABANDONED' && pick.status === 'ABANDONED' && (
+                       <div className="text-white/40 mt-2 text-[10px] italic">
+                         Position was automatically abandoned due to no action taken.
+                       </div>
+                     )}
                   </div>
                 )}
               </div>

@@ -80,11 +80,16 @@ Your objective: Execute a deep search across the NSE to identify 4-6 highly acti
 
 INSTRUCTIONS:
 1. DEEP SEARCH START: First, use `get_global_notifications` and `get_volume_gainers` to identify stocks that have recently triggered technical breakouts or abnormal volume.
-2. TECHNICAL SCREENING: Use `run_tql_screener` to find growth stocks with bullish momentum (e.g., RSI > 55, MACDHist > 0, From52wHigh > -15). Focus on mid-cap setups.
+2. TECHNICAL SCREENING: Use `run_tql_screener` to find growth stocks with bullish momentum (e.g., RSI > 55, MACDHist > 0, From52wHigh > -15). Focus on mid-cap setups with clear support/resistance levels.
 3. CATALYST & FUNDAMENTAL CHECK: For your top candidates, deeply analyze them using `get_company_news` and `get_upcoming_events`.
 4. RIGOROUS FILTERING: Discard any stock with imminent adverse events, poor relative strength, or weak news sentiment. Ensure you return exactly 4 to 6 high-conviction, actionable setups.
-5. DETAILED THESIS: Your thesis for each pick MUST be extremely detailed. Break down the technical setup considered, the specific news catalysts evaluated, and upcoming events.
-6. OUTPUT: You MUST output your final 4-6 picks strictly as a JSON array inside a <picks> XML tag.
+5. DETAILED THESIS: Your thesis for each pick MUST be extremely detailed. Include:
+   - Technical setup considered (support/resistance, moving averages, chart pattern).
+   - Specific news catalysts evaluated (positive sentiment, upcoming events).
+   - Risk/Reward ratio (must be > 2:1).
+   - Expected timeframe for the setup to play out (typically 3-7 trading days for swing trades).
+6. ENTRY & EXIT PRECISION: Entry, take_profit, and stop_loss must be based on real support/resistance, not arbitrary numbers. Include your reasoning.
+7. OUTPUT: You MUST output your final 4-6 picks strictly as a JSON array inside a <picks> XML tag.
 
 OUTPUT FORMAT:
 <picks>
@@ -95,7 +100,7 @@ OUTPUT FORMAT:
     "entry": 100.50,
     "take_profit": 110.00,
     "stop_loss": 95.00,
-    "thesis": "[Details Considered] Technicals: RSI at 60, MACD crossover confirmed. Scan/Notifs: Triggered volume breakout alert today. Catalyst: Positive sentiment from recent contract win news. Events: No major earnings risk in the next 14 days."
+    "thesis": "[Detailed Analysis] Technicals: Price broke above 100-level resistance with volume surge, RSI at 60 (bullish). Entry at 100.50 places stop below support at 95. Target 110 gives 2.9:1 RR. Catalyst: Recent contract win news (positive sentiment), no adverse events. Timeframe: 5-7 trading days expected for move to TP. Support: 95.00, Resistance: 110.00."
   }
 ]
 </picks>
@@ -104,15 +109,20 @@ Do not include markdown outside the tags or conversational filler. Only the <pic
 """
 
 VERIFIER_PROMPT = """You are 'The Verifier', a strict Chief Risk Officer AI.
-Your objective: Evaluate a list of 4-6 proposed mid-cap swing trade setups and independently verify them.
+Your objective: Evaluate a list of 4-6 proposed mid-cap swing trade setups and independently verify them with discipline.
 You have access to tools to independently verify the setups (technicals, fundamentals, news, fair value).
 
 INSTRUCTIONS:
 1. I will provide a JSON list of proposed setups.
 2. For each setup, use your tools (`get_company_news`, `company_fdm`, `get_upcoming_events`) to independently verify the detailed thesis provided.
-3. Reject ONLY setups that have clear red flags (imminent bad news, extremely overvalued, or poor technical structure). Preserve strong mid-cap growth setups.
-4. Refine the entry, take_profit, and stop_loss levels to be mathematically sound (e.g., RR > 2:1).
-5. Output the surviving, verified picks strictly as a JSON array inside a <verified_picks> XML tag.
+3. REJECTION CRITERIA: Reject ONLY setups with clear red flags:
+   - Imminent bad news (earnings miss expected, major downgrades, legal action, scandal).
+   - Extremely overvalued (P/E far above peer average, valuation unreasonable).
+   - BROKEN technical structure (support cleanly broken, major reversal pattern confirmed, downtrend established).
+   - DO NOT reject due to minor price weakness, sideways consolidation, or lack of immediate catalyst. Swing trades need time to develop.
+4. PRESERVATION LOGIC: If a setup has solid fundamentals and intact technicals, PRESERVE it. Small thesis refinements are OK; blanket rejections are not.
+5. REFINEMENT: For verified picks, refine entry, take_profit, and stop_loss levels to be mathematically sound (e.g., RR > 2:1). Explain your adjustments.
+6. Output the surviving, verified picks strictly as a JSON array inside a <verified_picks> XML tag.
 
 OUTPUT FORMAT:
 <verified_picks>
@@ -123,40 +133,88 @@ OUTPUT FORMAT:
     "entry": 100.50,
     "take_profit": 115.00,
     "stop_loss": 96.00,
-    "note": "Verified: Solid fundamentals. Adjusted TP for better R:R.",
+    "note": "Verified: Solid fundamentals (no downgrade risk), technicals intact (support at 96 holds). Adjusted TP to 115 for better R:R (3.1:1). Thesis preserved.",
     "verdict": "BULLISH",
-    "technical": "RSI solid.",
-    "fundamental": "No immediate bad news.",
-    "catalyst": "Earnings upcoming.",
-    "risk": "Market weakness.",
+    "technical": "Support at 96 strong; RSI consolidating above 50. Breakout setup intact.",
+    "fundamental": "No adverse news; P/E within peer range.",
+    "catalyst": "Upcoming event in 2 weeks; good timing for swing trade.",
+    "risk": "If support at 96 breaks on volume, thesis invalidated.",
     "action": "BUY"
   }
 ]
 </verified_picks>
 """
 
-EVALUATOR_PROMPT = """You are 'The Evaluator', a portfolio management AI.
-Your objective: Re-evaluate active swing trade positions based on today's price action and news.
+EVALUATOR_PROMPT = """You are 'The Evaluator', a portfolio management AI specializing in swing trades.
+Your objective: Re-evaluate active swing trade positions based on today's price action and news, with patience and discipline.
 You will be given the current state of a pick. 
 
-INSTRUCTIONS:
-1. Use your tools to check today's closing price, recent news, and technicals for the given symbol.
-2. Evaluate if the thesis is still intact, if targets should be adjusted, or if the position should be closed.
-3. Output your evaluation strictly as a JSON object inside an <evaluation> XML tag.
+CRITICAL INSTRUCTIONS:
+1. PATIENCE WITH UNFILLED SETUPS: If a position has NOT YET hit its entry or stop loss, treat this as NORMAL and expected. Most swing trades take 3-7 trading days to develop. Default to HOLD unless:
+   - The entry price has been surpassed in an adverse direction (price is far below entry for LONG, or far above entry for SHORT).
+   - OR fundamental thesis has completely deteriorated (major adverse news, earnings miss, downgrade).
+   - OR technical structure has fully broken (support broken cleanly on high volume, reversal patterns confirmed).
+
+2. EVALUATE TODAY'S CONTEXT:
+   - Use your tools to check today's closing price, recent news, and technicals for the given symbol.
+   - Assess if the thesis remains intact, targets need adjustment, or position must close.
+   - Compare current price action to the entry point and stop loss level.
+
+3. DECISION LOGIC:
+   - HOLD: Setup is progressing normally, no adverse signals, OR position not yet triggered.
+   - ADJUST: Price is moving favorably; consider tightening stops or raising targets.
+   - CLOSE: Clear evidence of thesis breakdown OR stop loss hit OR price invalidates technical structure.
+
+4. Output your evaluation strictly as a JSON object inside an <evaluation> XML tag.
 
 OUTPUT FORMAT:
 <evaluation>
 {
-  "note": "Price hit strong resistance at 105. Suggest tightening stop loss.",
+  "note": "Price consolidating near entry at 98.50. RSI in overbought territory but thesis intact. No adverse news.",
   "verdict": "NEUTRAL",
-  "technical": "Resistance at 105.",
-  "fundamental": "No change.",
-  "catalyst": "None.",
-  "risk": "High if market drops.",
-  "action": "HOLD" // or "CLOSE"
+  "technical": "Consolidation pattern forming; watch for breakout above 102.",
+  "fundamental": "No change in thesis; waiting for price confirmation.",
+  "catalyst": "Earnings expected in 2 weeks; thesis still stands.",
+  "risk": "If price breaks below 96.00 on volume, thesis is broken.",
+  "action": "HOLD" // or "ADJUST" or "CLOSE" only if thesis is fundamentally broken
 }
 </evaluation>
 """
+
+
+def _calculate_business_days_elapsed(start_dt: datetime, end_dt: datetime = None) -> int:
+    """Calculate the number of business days (excluding weekends) between two datetimes.
+    
+    Counts only fully elapsed calendar days (does not include the current/end day).
+    
+    Args:
+        start_dt: The start datetime (typically when the pick was created).
+        end_dt: The end datetime (defaults to now in UTC).
+    
+    Returns:
+        Number of business days (Mon-Fri only) fully elapsed since creation.
+    """
+    if end_dt is None:
+        end_dt = datetime.now(timezone.utc)
+    
+    # Ensure both are timezone-aware
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    
+    business_days = 0
+    current = start_dt.date()
+    end_date = end_dt.date()
+    
+    # Count only fully elapsed business days (do not include the current/end day)
+    while current < end_date:
+        # weekday() returns 0-6 (Mon-Sun), so Mon-Fri are 0-4
+        if current.weekday() < 5:
+            business_days += 1
+        current += timedelta(days=1)
+    
+    return business_days
 
 
 async def _save_trace(db: AsyncSession, symbol: str, role: str, prompt: str, response: str, duration_ms: int, status: str, err: str | None = None):
@@ -521,9 +579,11 @@ async def run_loop_3():
                 async with sem:
                     try:
                         if pick_status == PickStatus.NEW:
-                            age = datetime.now(timezone.utc) - pick_created_at.replace(tzinfo=timezone.utc)
-                            if age > timedelta(hours=48):
-                                return pick_id, {"action": "ABANDON", "note": "Auto-abandoned due to 48h timeout with no action."}
+                            # Calculate business days (Mon-Fri only) since pick creation.
+                            # Picks are abandoned after 2+ fully elapsed business days (roughly 48h of market time).
+                            business_days = _calculate_business_days_elapsed(pick_created_at)
+                            if business_days >= 2:
+                                return pick_id, {"action": "ABANDON", "note": f"Auto-abandoned after {business_days} fully elapsed business days with no action."}
                                 
                         eval_data = await _call_minimax_evaluator(client, db, p_data, market_context)
                         return pick_id, eval_data
