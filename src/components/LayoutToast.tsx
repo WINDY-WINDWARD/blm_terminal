@@ -7,7 +7,13 @@ import {
   layoutToastAtom,
   layoutConfirmAtom,
   savedLayoutsAtom,
+  authAtom,
 } from '@/store/terminalStore';
+import {
+  enqueueQueueOperation,
+  updateAndPersistLayouts,
+} from '@/lib/layouts';
+import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 
 const AUTO_DISMISS_MS = 3_000;
 
@@ -15,6 +21,9 @@ export function LayoutToast() {
   const [toast, setToast] = useAtom(layoutToastAtom);
   const [confirm, setConfirm] = useAtom(layoutConfirmAtom);
   const [, setSavedLayouts] = useAtom(savedLayoutsAtom);
+  const [auth] = useAtom(authAtom);
+  const { processPendingQueue } = useSavedLayoutsSync();
+  const userId = auth?.user?.id;
   const progressRef = useRef(100);
 
   // ── Toast auto-dismiss ────────────────────────────────────────────────────
@@ -57,13 +66,28 @@ export function LayoutToast() {
 
   const handleConfirmOverwrite = useCallback(() => {
     if (!confirm.pendingLayout) return;
-    setSavedLayouts((prev) => ({
-      ...prev,
-      [confirm.layoutName]: confirm.pendingLayout!,
-    }));
+    const layout = confirm.pendingLayout;
+    setSavedLayouts((prev) => {
+      const next = { ...prev, [confirm.layoutName]: layout };
+      if (userId) {
+        updateAndPersistLayouts(userId, () => next);
+      }
+      return next;
+    });
+
+    // Enqueue exactly one save operation for the overwrite
+    if (userId) {
+      const uId = userId;
+      enqueueQueueOperation(uId, {
+        type: 'save',
+        name: confirm.layoutName,
+        payload: layout,
+      });
+      processPendingQueue(uId);
+    }
     setConfirm({ visible: false, layoutName: '', pendingLayout: null });
     setToast({ visible: true, message: `Layout "${confirm.layoutName}" saved`, type: 'success' });
-  }, [confirm, setSavedLayouts, setConfirm, setToast]);
+  }, [confirm.layoutName, confirm.pendingLayout, setSavedLayouts, setConfirm, setToast, userId, processPendingQueue]);
 
   const handleCancelOverwrite = useCallback(() => {
     setConfirm({ visible: false, layoutName: '', pendingLayout: null });

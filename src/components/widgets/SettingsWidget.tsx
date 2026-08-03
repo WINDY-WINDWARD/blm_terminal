@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import Link from 'next/link';
 import {
   wsConnectedAtom,
@@ -18,10 +18,18 @@ import {
   mergedGroupsAtom,
   authAtom,
   savedLayoutsAtom,
+  layoutSyncStatusAtom,
+  layoutToastAtom,
   type Watchlist,
   type PanelCount,
   type SavedLayout,
 } from '@/store/terminalStore';
+import {
+  enqueueQueueOperation,
+  updateAndPersistLayouts,
+  normalizeRenameNameWithFlag,
+} from '@/lib/layouts';
+import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 
 const NOTIF_CONFIG_KEYS = [
   'notif.rsi_oversold_threshold',
@@ -176,6 +184,9 @@ export function SettingsWidget() {
   const [, setMergedGroups] = useAtom(mergedGroupsAtom);
   const [auth] = useAtom(authAtom);
   const [savedLayouts, setSavedLayouts] = useAtom(savedLayoutsAtom);
+  const [syncStatus] = useAtom(layoutSyncStatusAtom);
+  const setLayoutToast = useSetAtom(layoutToastAtom);
+  const { processPendingQueue } = useSavedLayoutsSync();
   const [notifConfig, setNotifConfig] = useState<NotifConfigState>(DEFAULT_NOTIF_CONFIG);
   const [appVersion, setAppVersion] = useState<string>('');
   const [renamingLayout, setRenamingLayout] = useState<string | null>(null);
@@ -266,8 +277,18 @@ export function SettingsWidget() {
     setSavedLayouts((prev) => {
       const next = { ...prev };
       delete next[name];
+      if (auth?.user?.id) {
+        updateAndPersistLayouts(auth.user.id, () => next);
+      }
       return next;
     });
+
+    // Enqueue exactly one delete operation; processPendingQueue will handle it
+    if (auth?.user?.id) {
+      const uId = auth.user.id;
+      enqueueQueueOperation(uId, { type: 'delete', name });
+      processPendingQueue(uId);
+    }
   };
 
   const handleStartRename = (layout: SavedLayout) => {
@@ -276,21 +297,61 @@ export function SettingsWidget() {
   };
 
   const handleFinishRename = (oldName: string) => {
-    const newName = renameValue.trim().toLowerCase();
+    const rawNewName = renameValue.trim();
+    const { name: newName, wasShortened } = normalizeRenameNameWithFlag(
+      rawNewName,
+      Object.keys(savedLayouts),
+      oldName
+    );
     setRenamingLayout(null);
+    
     if (!newName || newName === oldName || newName === 'save') return;
+    
+    if (wasShortened) {
+      setLayoutToast({
+        visible: true,
+        message: `Name was shortened to: "${newName}"`,
+        type: 'success',
+      });
+    }
+    
     if (savedLayouts[newName]) {
-      alert(`Layout "${newName}" already exists.`);
+      setLayoutToast({
+        visible: true,
+        message: `Layout "${newName}" already exists.`,
+        type: 'error',
+      });
       return;
     }
+
+    // Get the original layout payload for rollback on conflict
+    const originalLayout = savedLayouts[oldName];
+    if (!originalLayout) return;
+
     setSavedLayouts((prev) => {
       const next = { ...prev };
       const layout = next[oldName];
       if (!layout) return prev;
       delete next[oldName];
       next[newName] = { ...layout, name: newName };
+      if (auth?.user?.id) {
+        updateAndPersistLayouts(auth.user.id, () => next);
+      }
       return next;
     });
+
+    // Enqueue exactly one rename operation with original payload for rollback
+    if (auth?.user?.id) {
+      const uId = auth.user.id;
+      enqueueQueueOperation(uId, {
+        type: 'rename',
+        name: oldName,
+        oldName,
+        newName,
+        payload: originalLayout, // Store original layout for rollback on conflict
+      });
+      processPendingQueue(uId);
+    }
   };
 
   const handleNotifConfigChange = (key: NotifConfigKey, value: string) => {
@@ -360,8 +421,27 @@ export function SettingsWidget() {
       {/* Saved Layouts */}
       {Object.keys(savedLayouts).length > 0 && (
         <div className="flex flex-col gap-1">
-          <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
-            Saved Layouts
+          <div className="flex items-center justify-between">
+            <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+              Saved Layouts
+            </div>
+            {auth?.user && (
+              <div
+                className={`text-[9px] font-mono uppercase tracking-wider mb-1 ${
+                  syncStatus.status === 'error'
+                    ? 'text-terminal-red'
+                    : syncStatus.status === 'pending'
+                    ? 'text-terminal-amber/70'
+                    : 'text-terminal-green/70'
+                }`}
+              >
+                {syncStatus.status === 'pending'
+                  ? `Syncing (${syncStatus.pendingCount})`
+                  : syncStatus.status === 'error'
+                  ? 'Sync Error'
+                  : 'Synced'}
+              </div>
+            )}
           </div>
           <div className="flex flex-col gap-0.5">
             {Object.values(savedLayouts)

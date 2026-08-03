@@ -18,9 +18,16 @@ import {
   savedLayoutsAtom,
   layoutToastAtom,
   layoutConfirmAtom,
+  authAtom,
 } from '@/store/terminalStore';
 import type { SavedLayout } from '@/store/terminalStore';
 import { marketDataService } from '@/lib/nseFetch';
+import {
+  enqueueQueueOperation,
+  updateAndPersistLayouts,
+  normalizeSaveNameWithFlag,
+} from '@/lib/layouts';
+import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 
 function isTextInputFocused(): boolean {
   const el = document.activeElement;
@@ -70,6 +77,9 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const setLayoutToast = useSetAtom(layoutToastAtom);
   const setLayoutConfirm = useSetAtom(layoutConfirmAtom);
   const activePanels = useAtomValue(activePanelsAtom);
+  const [auth] = useAtom(authAtom);
+
+  const { processPendingQueue } = useSavedLayoutsSync();
 
   // Clean up legacy localStorage keys once on mount
   useEffect(() => {
@@ -194,7 +204,11 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
 
     // ── Layout save ──────────────────────────────────────────────────────
     if (activeCommand.startsWith('__SAVE_LAYOUT:')) {
-      const name = activeCommand.slice('__SAVE_LAYOUT:'.length);
+      const rawName = activeCommand.slice('__SAVE_LAYOUT:'.length);
+      const { name, wasShortened } = normalizeSaveNameWithFlag(
+        rawName,
+        Object.keys(savedLayouts)
+      );
       const layout: SavedLayout = {
         name,
         activePanels: { ...activePanels },
@@ -202,11 +216,34 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
         mergedGroups: { ...mergedGroups },
         savedAt: Date.now(),
       };
+      
+      if (wasShortened) {
+        setLayoutToast({
+          visible: true,
+          message: `Name was shortened to: "${name}"`,
+          type: 'success',
+        });
+      }
+      
       if (savedLayouts[name]) {
         // Existing layout — show overwrite confirmation
         setLayoutConfirm({ visible: true, layoutName: name, pendingLayout: layout });
       } else {
-        setSavedLayouts((prev) => ({ ...prev, [name]: layout }));
+        // New layout — update atom and enqueue
+        setSavedLayouts((prev) => {
+          const next = { ...prev, [name]: layout };
+          if (auth?.user?.id) {
+            updateAndPersistLayouts(auth.user.id, () => next);
+          }
+          return next;
+        });
+
+        // Enqueue exactly one save operation; processPendingQueue will handle it
+        if (auth?.user?.id) {
+          const uId = auth.user.id;
+          enqueueQueueOperation(uId, { type: 'save', name, payload: layout });
+          processPendingQueue(uId);
+        }
         setLayoutToast({ visible: true, message: `Layout "${name}" saved`, type: 'success' });
       }
       setActiveCommand('');
@@ -249,7 +286,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: targetCommand }));
     }
     setActiveCommand('');
-  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels]);
+  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue]);
 
   return (
     <main className="flex flex-col h-screen w-screen bg-terminal-bg text-terminal-amber overflow-hidden">

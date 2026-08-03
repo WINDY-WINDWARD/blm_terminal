@@ -391,3 +391,14 @@ export const layoutConfirmAtom = atom<{
   layoutName: '',
   pendingLayout: null,
 });
+
+export interface LayoutSyncStatus {
+  status: 'synced' | 'pending' | 'error';
+  pendingCount: number;
+  lastError?: string;
+}
+
+export const layoutSyncStatusAtom = atom<LayoutSyncStatus>({
+  status: 'synced',
+  pendingCount: 0,
+});

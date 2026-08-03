@@ -41,6 +41,7 @@ from app.routers import (
     valuation_router,
     portfolio_router,
     watchlist_router,
+    layout_router,
     jobs_router,
     auth_router,
     users_router,
@@ -311,6 +312,30 @@ def _ensure_user_columns() -> None:
         conn.close()
 
 
+def _ensure_user_layouts_columns() -> None:
+    """Add missing deleted_at column to user_layouts if table exists.
+
+    Handles existing DBs where user_layouts table was created before tombstones.
+    SQLite's ALTER TABLE ADD COLUMN is idempotent (errors if column exists).
+    """
+    import sqlite3
+
+    db_path = Path(settings.db_path)
+    if not db_path.exists():
+        return
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        try:
+            conn.execute("ALTER TABLE user_layouts ADD COLUMN deleted_at BIGINT NULL")
+            conn.commit()
+            logger.info("_ensure_user_layouts_columns: added deleted_at to user_layouts")
+        except sqlite3.OperationalError:
+            pass  # column already exists or table doesn't exist yet — fine
+    finally:
+        conn.close()
+
+
 def _ensure_admin_user() -> None:
     """Create a default admin user (admin/admin) if the users table is empty.
 
@@ -504,6 +529,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up BLM Analytics backend...")
     await asyncio.to_thread(_run_migrations_sync)
     await asyncio.to_thread(_ensure_user_columns)
+    await asyncio.to_thread(_ensure_user_layouts_columns)
     await asyncio.to_thread(_ensure_admin_user)
     await asyncio.to_thread(_ensure_watchlist_data)
     await asyncio.to_thread(_backfill_entities_double_encoding)
@@ -643,6 +669,7 @@ app.include_router(system_config_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
+app.include_router(layout_router, prefix="/api")
 app.include_router(valuation_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
