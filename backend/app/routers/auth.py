@@ -47,8 +47,7 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    import os
-    is_prod = os.environ.get("ENV") == "production"
+    is_prod = settings.is_production
 
     access_token = create_access_token(data={"sub": user.username})
     response = JSONResponse({"access_token": access_token, "token_type": "bearer"})

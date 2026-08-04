@@ -69,6 +69,9 @@ This README explains how to run the backend locally and lists all available endp
 
 Copy `backend/.env.example` to `backend/.env` and adjust values as needed. Important variables:
 
+- `ENV` — environment mode (`development`, `staging`, `production`). Any non-development mode enables strict security checks.
+- `SECRET_KEY` — strong secret for signing JWT tokens (min 16 chars). Required in non-development mode.
+- `ADMIN_PASSWORD` — password used when bootstrapping the initial `admin` account on a fresh database. Required in non-development mode.
 - `NSE_BASE_URL` — base URL for NSE (default: `https://www.nseindia.com`)
 - `DB_PATH` — SQLite DB file path used by this backend (default: `./data.db`)
 - `PORT` — port the server listens on (default: `4455`)

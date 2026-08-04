@@ -18,8 +18,8 @@ import os
 current_user_id = contextvars.ContextVar("current_user_id", default=None)
 
 SECRET_KEY = settings.secret_key
-if os.environ.get("ENV") == "production" and SECRET_KEY == "dev_secret_key_change_in_production":
-    raise RuntimeError("CRITICAL: Must set SECRET_KEY environment variable in production!")
+if settings.is_production and (SECRET_KEY == "dev_secret_key_change_in_production" or len(SECRET_KEY) < 16):
+    raise RuntimeError("CRITICAL: Must set a strong SECRET_KEY (min 16 chars) in environment for non-development mode!")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days

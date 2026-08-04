@@ -135,6 +135,9 @@ NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE=NSE
 ### Python backend — `backend/.env`
 
 ```env
+ENV=development
+SECRET_KEY=dev_secret_key_change_in_production
+ADMIN_PASSWORD=change_this_admin_password
 NSE_BASE_URL=https://www.nseindia.com
 DB_PATH=./data.db
 PORT=4455

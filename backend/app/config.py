@@ -15,8 +15,21 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Environment mode: development | staging | production
+    env: str = "development"
+
     # JWT secret key for authentication
     secret_key: str = "dev_secret_key_change_in_production"
+
+    @property
+    def is_development(self) -> bool:
+        """Return True only if running in explicit development/local/testing modes."""
+        return self.env.lower().strip() in ("dev", "development", "local", "test", "testing")
+
+    @property
+    def is_production(self) -> bool:
+        """Return True for any non-development environment (fail-closed default)."""
+        return not self.is_development
 
     # OpenAI-compatible LLM API settings
     ai_api_base_url: str = "https://api.openai.com/v1"

@@ -345,7 +345,6 @@ def _ensure_admin_user() -> None:
     import sqlite3
     import bcrypt
     import os
-    import secrets
 
     db_path = Path(settings.db_path)
     if not db_path.exists():
@@ -359,9 +358,8 @@ def _ensure_admin_user() -> None:
         
         admin_pass = os.environ.get("ADMIN_PASSWORD")
         if not admin_pass:
-            is_prod = os.environ.get("ENV") == "production"
-            if is_prod:
-                raise RuntimeError("CRITICAL: ADMIN_PASSWORD environment variable must be set in production to bootstrap the admin user.")
+            if settings.is_production:
+                raise RuntimeError("CRITICAL: ADMIN_PASSWORD environment variable must be set in production/non-development mode to bootstrap the admin user.")
             else:
                 admin_pass = "admin"
                 logger.warning("No ADMIN_PASSWORD provided in env. Defaulting to insecure 'admin' password for local development only.")
@@ -374,6 +372,9 @@ def _ensure_admin_user() -> None:
         )
         conn.commit()
         logger.info("_ensure_admin_user: created default admin user 'admin'")
+    except RuntimeError:
+        # Configuration errors must bubble up to abort startup immediately
+        raise
     except Exception:
         logger.exception("_ensure_admin_user: failed")
     finally:
@@ -691,8 +692,7 @@ app.include_router(ticker_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 
-import os as _os
-if _os.environ.get("ENV") != "production":
+if settings.is_development:
     from app.routers.notifications import _dev_router
     app.include_router(_dev_router, prefix="/api")
 

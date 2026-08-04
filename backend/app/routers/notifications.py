@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user, get_admin_user
+from app.config import settings
 from app.database import get_db
 from app.models.notification import Notification, GlobalNotification
 from app.models.user import User
@@ -214,7 +215,7 @@ async def trigger_notification_cycle() -> dict:
     **For development and testing only.** Disabled when ENV=production.
     Raises 403 in production environments.
     """
-    if os.environ.get("ENV") == "production":
+    if settings.is_production:
         raise HTTPException(
             status_code=403,
             detail="Notification trigger endpoint is disabled in production",
