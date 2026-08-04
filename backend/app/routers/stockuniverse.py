@@ -13,6 +13,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.auth import get_admin_user
+from app.models.user import User
 from app.models.stockuniverse import StockUniverse as StockUniverseModel
 from app.models.ticker import TickerDaily
 from app.schemas.stockuniverse import (
@@ -107,7 +109,7 @@ async def search_stock_universe(
     response_model=MatchResultResponse,
     tags=["stockuniverse"],
 )
-async def run_mc_linker(db: AsyncSession = Depends(get_db)) -> MatchResultResponse:
+async def run_mc_linker(db: AsyncSession = Depends(get_db), admin: User = Depends(get_admin_user)) -> MatchResultResponse:
     """Run the MoneyControl stock linker to match stocks with MC data."""
     linker = MCStockLinker(db)
     result = await linker.run_matching()
@@ -137,6 +139,7 @@ async def confirm_match(
     symbol: str,
     body: ConfirmMatchRequest,
     db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ) -> StockUniverseSchema:
     """Confirm or reject an ambiguous match."""
     linker = MCStockLinker(db)
@@ -236,7 +239,7 @@ async def get_stock_universe(
     return _orm_to_schema(rec)
 
 
-errors_router = APIRouter()
+errors_router = APIRouter(prefix="/stockuniverse/errors", dependencies=[Depends(get_admin_user)])
 
 
 @errors_router.get(

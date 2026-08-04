@@ -337,13 +337,15 @@ def _ensure_user_layouts_columns() -> None:
 
 
 def _ensure_admin_user() -> None:
-    """Create a default admin user (admin/admin) if the users table is empty.
+    """Create a default admin user if the users table is empty.
 
-    This guarantees the app is always loginable after a fresh DB or a
-    migration that created an empty users table.
+    Requires ADMIN_PASSWORD env var or generates a secure random one.
+    Never uses admin/admin.
     """
     import sqlite3
     import bcrypt
+    import os
+    import secrets
 
     db_path = Path(settings.db_path)
     if not db_path.exists():
@@ -354,14 +356,24 @@ def _ensure_admin_user() -> None:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if count > 0:
             return
-        hashed = bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode("utf-8")
+        
+        admin_pass = os.environ.get("ADMIN_PASSWORD")
+        if not admin_pass:
+            is_prod = os.environ.get("ENV") == "production"
+            if is_prod:
+                raise RuntimeError("CRITICAL: ADMIN_PASSWORD environment variable must be set in production to bootstrap the admin user.")
+            else:
+                admin_pass = "admin"
+                logger.warning("No ADMIN_PASSWORD provided in env. Defaulting to insecure 'admin' password for local development only.")
+            
+        hashed = bcrypt.hashpw(admin_pass.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         conn.execute(
             "INSERT INTO users (username, hashed_password, is_admin, created_at) "
             "VALUES (?, ?, 1, datetime('now'))",
             ("admin", hashed),
         )
         conn.commit()
-        logger.info("_ensure_admin_user: created default admin user (admin/admin)")
+        logger.info("_ensure_admin_user: created default admin user 'admin'")
     except Exception:
         logger.exception("_ensure_admin_user: failed")
     finally:

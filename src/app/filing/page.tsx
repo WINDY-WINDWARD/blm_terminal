@@ -280,23 +280,39 @@ function HighlightedXml({ raw }: { raw: string }) {
           const tagMatch = part.match(/^(<\/?)([\w:-]+)([\s\S]*?)(\/?>)$/);
           if (tagMatch) {
             const [, open, name, rest, close] = tagMatch;
-            // Highlight attribute names and values in the rest
-            const restHighlighted = rest.replace(
-              /([\w:-]+)(=)("([^"]*)")/g,
-              (_, attrName, eq, fullVal, val) =>
-                `<attrname>${attrName}</attrname>${eq}<attrval>${fullVal}</attrval>`
-            );
+            
+            // Highlight attribute names and values without dangerouslySetInnerHTML
+            const renderAttributes = (attrStr: string) => {
+              const regex = /([\w:-]+)(=)("([^"]*)")/g;
+              const parts = [];
+              let lastIndex = 0;
+              let match;
+
+              while ((match = regex.exec(attrStr)) !== null) {
+                if (match.index > lastIndex) {
+                  parts.push(<span key={`text-${lastIndex}`}>{attrStr.slice(lastIndex, match.index)}</span>);
+                }
+                const [, attrName, eq, fullVal] = match;
+                parts.push(
+                  <span key={`attr-${match.index}`}>
+                    <span className="text-yellow-400/80">{attrName}</span>
+                    {eq}
+                    <span className="text-green-400/70">{fullVal}</span>
+                  </span>
+                );
+                lastIndex = regex.lastIndex;
+              }
+              if (lastIndex < attrStr.length) {
+                parts.push(<span key={`text-${lastIndex}`}>{attrStr.slice(lastIndex)}</span>);
+              }
+              return parts;
+            };
+
             return (
               <span key={i}>
                 <span className="text-blue-400">{open}</span>
                 <span className="text-cyan-400">{name}</span>
-                <span
-                  dangerouslySetInnerHTML={{
-                    __html: restHighlighted
-                      .replace(/<attrname>(.*?)<\/attrname>/g, '<span class="text-yellow-400/80">$1</span>')
-                      .replace(/<attrval>(.*?)<\/attrval>/g, '<span class="text-green-400/70">$1</span>'),
-                  }}
-                />
+                <span>{renderAttributes(rest)}</span>
                 <span className="text-blue-400">{close}</span>
               </span>
             );

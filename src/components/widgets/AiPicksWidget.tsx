@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { useAtom, useAtomValue } from 'jotai';
-import { activeSymbolAtom, tickDataAtom } from '@/store/terminalStore';
+import { activeSymbolAtom, tickDataAtom, authAtom } from '@/store/terminalStore';
 import { marketWsService } from '@/lib/marketWs';
 
 interface PickNote {
@@ -75,6 +75,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const tickData = useAtomValue(tickDataAtom);
+  const auth = useAtomValue(authAtom);
 
   React.useEffect(() => {
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
@@ -120,6 +121,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, exit_price }),
       });
+      if (res.status === 403) throw new Error('Permission denied: Admin access required');
       if (!res.ok) throw new Error('Failed to update status');
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ai-picks'] }),
@@ -306,7 +308,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                     </div>
                     
                      {/* Actions */}
-                     {activeTab === 'PICKS' && pick.status === 'NEW' && (
+                     {activeTab === 'PICKS' && pick.status === 'NEW' && auth?.user?.is_admin && (
                        <div className="flex mt-2">
                          <button
                            onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'ACTED_ON' }); }}
@@ -316,7 +318,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                          </button>
                        </div>
                      )}
-                     {activeTab === 'ACTIVE' && pick.status === 'ACTED_ON' && (
+                     {activeTab === 'ACTIVE' && pick.status === 'ACTED_ON' && auth?.user?.is_admin && (
                        <div className="flex mt-2">
                          <button
                            onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'CLOSED', exit_price: currentLivePrice }); }}

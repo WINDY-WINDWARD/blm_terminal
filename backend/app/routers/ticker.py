@@ -7,8 +7,11 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
+
+from app.auth import get_admin_user
+from app.models.user import User
 
 from app.schemas.ticker import (
     IntradayCandleRow,
@@ -150,7 +153,7 @@ async def get_status() -> TickerStatusResponse:
 
 
 @router.post("/trigger-backfill", response_model=TriggerResponse)
-async def trigger_backfill() -> TriggerResponse:
+async def trigger_backfill(admin: User = Depends(get_admin_user)) -> TriggerResponse:
     """Manually trigger a backfill job run."""
     try:
         await trigger_job("job.ticker_backfill")
@@ -168,7 +171,7 @@ async def trigger_backfill() -> TriggerResponse:
 
 
 @router.post("/trigger-daily-update", response_model=TriggerResponse)
-async def trigger_daily_update() -> TriggerResponse:
+async def trigger_daily_update(admin: User = Depends(get_admin_user)) -> TriggerResponse:
     """Manually trigger a daily update job run."""
     try:
         await trigger_job("job.ticker_daily_update")

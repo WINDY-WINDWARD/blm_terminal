@@ -15,6 +15,9 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # JWT secret key for authentication
+    secret_key: str = "dev_secret_key_change_in_production"
+
     # OpenAI-compatible LLM API settings
     ai_api_base_url: str = "https://api.openai.com/v1"
     ai_api_key: str = "none"

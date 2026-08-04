@@ -47,12 +47,16 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    import os
+    is_prod = os.environ.get("ENV") == "production"
+
     access_token = create_access_token(data={"sub": user.username})
     response = JSONResponse({"access_token": access_token, "token_type": "bearer"})
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
+        secure=is_prod,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
         path="/",

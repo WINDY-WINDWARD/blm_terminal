@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_current_user
+from app.auth import get_current_user, get_admin_user
 from app.database import get_db
 from app.models.notification import Notification, GlobalNotification
 from app.models.user import User
@@ -164,6 +164,7 @@ async def list_global_notifications(
 async def dismiss_global_notification(
     notif_id: int,
     db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ) -> dict:
     """Soft-delete a single global notification (set is_read=True)."""
     notif = await db.get(GlobalNotification, notif_id)
@@ -178,6 +179,7 @@ async def dismiss_global_notification(
 async def dismiss_all_global_notifications(
     all: Annotated[bool, Query(alias="all")],
     db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user),
 ) -> dict:
     """Soft-delete all unread global notifications.
 

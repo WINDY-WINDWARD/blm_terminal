@@ -12,11 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User
+from app.config import settings
+import os
 
 current_user_id = contextvars.ContextVar("current_user_id", default=None)
 
-# In a real app, load this from settings. For this project, a hardcoded secret or environment variable is fine.
-SECRET_KEY = "supersecretkey_for_blm_terminal"
+SECRET_KEY = settings.secret_key
+if os.environ.get("ENV") == "production" and SECRET_KEY == "dev_secret_key_change_in_production":
+    raise RuntimeError("CRITICAL: Must set SECRET_KEY environment variable in production!")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 

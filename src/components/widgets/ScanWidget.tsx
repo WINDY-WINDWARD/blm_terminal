@@ -9,6 +9,7 @@ import {
   activeSymbolAtom,
   scanSubFiltersAtom,
   scanStreakMinDaysAtom,
+  authAtom,
   type SubFilterMap,
 } from '@/store/terminalStore';
 import { parseStreakDays } from './NotifWidget';
@@ -363,6 +364,7 @@ function SubFilterBar({
 
 export function ScanWidget() {
   const queryClient = useQueryClient();
+  const [auth] = useAtom(authAtom);
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
   const [daysFilter, setDaysFilter] = useState<DaysFilter>(2);
   const [readFilter, setReadFilter] = useState<ReadFilter>('unread');
@@ -427,6 +429,7 @@ export function ScanWidget() {
   const dismissMutation = useMutation({
     mutationFn: async (id: number) => {
       const res = await fetch(`/api/py/notifications/global/${id}`, { method: 'DELETE' });
+      if (res.status === 403) throw new Error('Permission denied: Admin access required');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     },
     onSuccess: () => {
@@ -437,6 +440,7 @@ export function ScanWidget() {
   const clearAllMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch('/api/py/notifications/global?all=true', { method: 'DELETE' });
+      if (res.status === 403) throw new Error('Permission denied: Admin access required');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     },
     onSuccess: () => {
@@ -558,7 +562,7 @@ export function ScanWidget() {
           <option value="all">ALL</option>
         </select>
         <span className="text-white/60 text-[10px] shrink-0">({filteredNotifications.length})</span>
-        {(data ?? []).length > 0 && readFilter === 'unread' && (
+        {(data ?? []).length > 0 && readFilter === 'unread' && auth?.user?.is_admin && (
           <button
             onClick={() => clearAllMutation.mutate()}
             className="ml-auto text-[9px] text-white/50 hover:text-terminal-red transition-colors shrink-0"
@@ -633,13 +637,15 @@ export function ScanWidget() {
                 <span className="text-white/40 text-[9px] shrink-0">
                   {formatDateTime(n.triggered_at)}
                 </span>
-                <button
-                  onClick={(e) => handleDismiss(e, n.id)}
-                  className="shrink-0 text-white/30 hover:text-terminal-red text-[11px] w-4 text-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="Dismiss"
-                >
-                  ×
-                </button>
+                {auth?.user?.is_admin && (
+                  <button
+                    onClick={(e) => handleDismiss(e, n.id)}
+                    className="shrink-0 text-white/30 hover:text-terminal-red text-[11px] w-4 text-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Dismiss"
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             ))}
           </div>

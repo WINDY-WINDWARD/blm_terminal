@@ -5,6 +5,8 @@ from typing import List, Optional
 from datetime import datetime, timezone
 
 from app.database import get_db
+from app.auth import get_admin_user
+from app.models.user import User
 from app.models.ai_picks import AIPick, PickStatus, AIPickTrace
 from app.schemas.ai_picks import AIPickResponse, PickStatusUpdate, AIPickTraceResponse
 
@@ -36,7 +38,8 @@ async def get_all_picks(
 async def update_pick_status(
     pick_id: int, 
     update_data: PickStatusUpdate, 
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_admin_user)
 ):
     result = await db.execute(select(AIPick).where(AIPick.id == pick_id))
     pick = result.scalar_one_or_none()
