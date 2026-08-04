@@ -212,6 +212,16 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
               pnlDisplay = `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
               pnlColor = pnlPct > 0 ? 'text-terminal-green' : 'text-terminal-red';
             }
+
+            const formattedDate = pick.created_at
+              ? new Date(pick.created_at).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                })
+              : '';
             
             return (
               <div 
@@ -239,7 +249,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                     >
                       {pick.symbol}
                     </span>
-                                        <span className={cn(
+                    <span className={cn(
                       'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border border-transparent',
                       pick.direction === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
                     )}>
@@ -249,6 +259,11 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
                     <span className="text-[10px] uppercase text-white/50 border border-terminal-gray px-1">
                       {pick.status}
                     </span>
+                    {formattedDate && (
+                      <span className="text-[10px] text-white/40 font-mono">
+                        {formattedDate}
+                      </span>
+                    )}
                   </div>
                   
                    <div className="flex items-center gap-3 text-[10px] text-white/60 font-mono">

@@ -204,10 +204,10 @@ def _calculate_business_days_elapsed(start_dt: datetime, end_dt: datetime = None
         end_dt = end_dt.replace(tzinfo=timezone.utc)
     
     business_days = 0
-    current = start_dt.date()
+    current = (start_dt + timedelta(days=1)).date()
     end_date = end_dt.date()
     
-    # Count only fully elapsed business days (do not include the current/end day)
+    # Count only fully elapsed business days between creation day and end day
     while current < end_date:
         # weekday() returns 0-6 (Mon-Sun), so Mon-Fri are 0-4
         if current.weekday() < 5:

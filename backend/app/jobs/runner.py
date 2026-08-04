@@ -194,8 +194,39 @@ def report_progress(job_key: str, percent: int, message: str) -> None:
         pass
 
 
+async def _execute_triggered_job(job_key: str, job_def: Any) -> None:
+    """Execute a triggered job asynchronously in the background and update job status."""
+    try:
+        if job_def.callable:
+            if job_def.is_async:
+                await job_def.callable()
+            else:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, job_def.callable)
+
+        now = datetime.now(timezone.utc)
+        await update_job_status(
+            job_key,
+            "idle",
+            progress=100,
+            message="Completed",
+            last_completed=now,
+        )
+        logger.info(f"Job {job_key} completed successfully")
+
+    except Exception as e:
+        logger.exception(f"Job {job_key} failed")
+        await update_job_status(job_key, "failed", error=str(e)[:512])
+
+    finally:
+        JobRegistry.set_running(job_key, False)
+
+
 async def trigger_job(job_key: str, force: bool = False) -> dict:
     """Manually trigger a job.
+
+    Spawns the execution task asynchronously in the background so the HTTP endpoint
+    returns immediately without timing out for long-running tasks.
 
     Args:
         job_key: The stable job identifier
@@ -235,29 +266,7 @@ async def trigger_job(job_key: str, force: bool = False) -> dict:
 
     JobRegistry.set_running(job_key, True)
 
-    try:
-        if job_def.callable:
-            if job_def.is_async:
-                await job_def.callable()
-            else:
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, job_def.callable)
-
-        await update_job_status(
-            job_key,
-            "idle",
-            progress=100,
-            message="Completed",
-            last_completed=now,
-        )
-        logger.info(f"Job {job_key} completed successfully")
-
-    except Exception as e:
-        logger.exception(f"Job {job_key} failed")
-        await update_job_status(job_key, "failed", error=str(e)[:512])
-
-    finally:
-        JobRegistry.set_running(job_key, False)
+    asyncio.create_task(_execute_triggered_job(job_key, job_def))
 
     return {
         "ok": True,

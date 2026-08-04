@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_current_user, verify_password
+from app.config import settings
 from app.database import get_db
 from app.models.user import User
 

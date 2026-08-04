@@ -243,7 +243,7 @@ errors_router = APIRouter(prefix="/stockuniverse/errors", dependencies=[Depends(
 
 
 @errors_router.get(
-    "/",
+    "",
     response_model=StockUniverseErrorsResponse,
     tags=["stockuniverse"],
 )
