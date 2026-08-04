@@ -69,9 +69,14 @@ This README explains how to run the backend locally and lists all available endp
 
 Copy `backend/.env.example` to `backend/.env` and adjust values as needed. Important variables:
 
-- `ENV` — environment mode (`development`, `staging`, `production`). Any non-development mode enables strict security checks.
-- `SECRET_KEY` — strong secret for signing JWT tokens (min 16 chars). Required in non-development mode.
-- `ADMIN_PASSWORD` — password used when bootstrapping the initial `admin` account on a fresh database. Required in non-development mode.
+- `ENV` — environment mode.
+  - **Development modes**: `development` (default), `dev`, `local`, `test`, `testing`. Allows local development fallbacks.
+  - **Non-development / Strict modes**: `production`, `prod`, `staging` (or any other string). Enables strict fail-closed security checks.
+- `SECRET_KEY` — strong secret key used for signing JWT authentication tokens (min 16 chars). Required in non-development mode.
+  - Generate via OpenSSL: `openssl rand -hex 32`
+  - Generate via Python: `python3 -c "import secrets; print(secrets.token_hex(32))"`
+- `ADMIN_PASSWORD` — password used to bootstrap the default `admin` user on a fresh database (when the `users` table is empty). Required in non-development mode.
+  - Example: `ADMIN_PASSWORD="YourStrongAdminPassword123!"`
 - `NSE_BASE_URL` — base URL for NSE (default: `https://www.nseindia.com`)
 - `DB_PATH` — SQLite DB file path used by this backend (default: `./data.db`)
 - `PORT` — port the server listens on (default: `4455`)

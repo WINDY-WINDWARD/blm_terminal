@@ -135,9 +135,16 @@ NEXT_PUBLIC_OPENALGO_DEFAULT_EXCHANGE=NSE
 ### Python backend — `backend/.env`
 
 ```env
+# ENV modes: development (or dev, local) | production (or prod, staging)
 ENV=development
+
+# JWT Secret Key (required in non-development mode; min 16 chars)
+# Generate via: openssl rand -hex 32  OR  python -c "import secrets; print(secrets.token_hex(32))"
 SECRET_KEY=dev_secret_key_change_in_production
+
+# Initial Admin Password for fresh DB bootstrap (required in non-development mode)
 ADMIN_PASSWORD=change_this_admin_password
+
 NSE_BASE_URL=https://www.nseindia.com
 DB_PATH=./data.db
 PORT=4455
