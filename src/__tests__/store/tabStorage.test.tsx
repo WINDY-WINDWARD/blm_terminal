@@ -56,8 +56,6 @@ describe('tab storage isolation', () => {
         value: { rowSizes: [50, 50], colSizes: [[50, 50]], mergedColSizes: [50, 50] },
       },
       { atom: focusedPanelAtom, key: 'terminal.focusedPanel', value: 'panel-2' },
-      { atom: activeSymbolAtom, key: 'terminal.activeSymbol', value: 'INFY' },
-      { atom: activeExchangeAtom, key: 'terminal.activeExchange', value: 'BSE' },
       { atom: watchlistColumnsAtom, key: 'terminal.watchlistColumns', value: ['ltp', 'chg'] },
       { atom: moversColumnsAtom, key: 'terminal.moversColumns', value: ['close', 'chg'] },
       { atom: moversCategoryAtom, key: 'terminal.moversCategory', value: 'NIFTY' },
@@ -78,12 +76,24 @@ describe('tab storage isolation', () => {
     });
   });
 
-  describe('seenNotifIdsAtom should remain in localStorage', () => {
+  describe('Global atoms should use localStorage', () => {
     it('writes "notif.seenIds" to localStorage and not sessionStorage', () => {
       setAtomValue(seenNotifIdsAtom, [1, 2, 3]);
 
       expect(localStorage.getItem('notif.seenIds')).not.toBeNull();
       expect(sessionStorage.getItem('notif.seenIds')).toBeNull();
+    });
+
+    it('writes "terminal.activeSymbol" to localStorage and not sessionStorage', () => {
+      setAtomValue(activeSymbolAtom, 'INFY');
+      expect(localStorage.getItem('terminal.activeSymbol')).not.toBeNull();
+      expect(sessionStorage.getItem('terminal.activeSymbol')).toBeNull();
+    });
+
+    it('writes "terminal.activeExchange" to localStorage and not sessionStorage', () => {
+      setAtomValue(activeExchangeAtom, 'BSE');
+      expect(localStorage.getItem('terminal.activeExchange')).not.toBeNull();
+      expect(sessionStorage.getItem('terminal.activeExchange')).toBeNull();
     });
   });
 });

@@ -249,11 +249,11 @@ export function validateMergeSelection(
 
 // ─── Global Active Symbol ─────────────────────────────────────────────────────
 
-/** The currently active trading symbol — tab-isolated via sessionStorage */
-export const activeSymbolAtom = atomWithStorage<string>('terminal.activeSymbol', 'RELIANCE', tabStorage);
+/** The currently active trading symbol — global across tabs via localStorage */
+export const activeSymbolAtom = atomWithStorage<string>('terminal.activeSymbol', 'RELIANCE');
 
-/** The currently active exchange — tab-isolated via sessionStorage */
-export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchange', 'NSE', tabStorage);
+/** The currently active exchange — global across tabs via localStorage */
+export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchange', 'NSE');
 
 // ─── Other Atoms ─────────────────────────────────────────────────────────────
 
