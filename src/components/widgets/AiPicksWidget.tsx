@@ -74,7 +74,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
-  const tickData = useAtomValue(tickDataAtom);
+  const [tickData, setTickData] = useAtom(tickDataAtom);
   const auth = useAtomValue(authAtom);
 
   React.useEffect(() => {
@@ -103,16 +103,40 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
 
   const activeSymbolsStr = filteredPicks.map(p => p.symbol).sort().join(',');
 
-  // Safe real-time data subscription with stable dependency
-  React.useEffect(() => {
+// Safe real-time data subscription with stable dependency
+React.useEffect(() => {
     if (!activeSymbolsStr) return;
     const symbols = activeSymbolsStr.split(',');
+    
+    // 1. Send initial request and setup periodic refresh
     marketWsService.requestSymbolData(symbols);
     const interval = setInterval(() => {
       marketWsService.requestSymbolData(symbols);
     }, 60000);
-    return () => clearInterval(interval);
-  }, [activeSymbolsStr]);
+
+    // 2. Listen for WebSocket responses and populate global tick data
+    const unsub = marketWsService.onSymbolData((symbol, data) => {
+      if (data && symbols.includes(symbol)) {
+        setTickData((prev) => ({
+          ...prev,
+          [`${symbol}.NSE`]: { 
+            symbol, 
+            exchange: 'NSE', 
+            ltp: data.ltp, 
+            pChange: data.pChange, 
+            yearHigh: data.yearHigh, 
+            yearLow: data.yearLow 
+          },
+        }));
+      }
+    });
+
+    // 3. Cleanup on unmount or when dependencies change
+    return () => {
+      clearInterval(interval);
+      unsub();
+    };
+}, [activeSymbolsStr, setTickData]);
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status, exit_price }: { id: number; status: string; exit_price?: number }) => {
