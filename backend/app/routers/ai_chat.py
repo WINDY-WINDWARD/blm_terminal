@@ -23,6 +23,8 @@ from app.models.ai_chat import ChatMessageRecord, ChatSession
 from app.models.user import User
 from app.services.ai_chat_service import AVAILABLE_MODELS, run_chat_agent
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai-chat"])
@@ -100,7 +102,15 @@ def _make_title(first_user_content: str) -> str:
 
 @router.get("/chat/models")
 async def get_chat_models() -> list[dict]:
-    """Return available MiniMax model options."""
+    """Return available model options dynamically based on the active provider."""
+    if settings.ai_provider == "antigravity":
+        return [
+            {"id": "gemini-3.6-flash-low",    "label": "Gemini 3.6 Flash (Fast / Low)"},
+            {"id": "gemini-3.6-flash-medium", "label": "Gemini 3.6 Flash (Medium)"},
+            {"id": "gemini-3.6-flash-high",   "label": "Gemini 3.6 Flash (Reasoning / High)"},
+            {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
+        ]
+        
     return AVAILABLE_MODELS
 
 

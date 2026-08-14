@@ -21,6 +21,7 @@ import asyncio
 import httpx
 
 from app.config import settings
+from app.services.antigravity_auth import get_antigravity_token
 
 logger = logging.getLogger(__name__)
 
@@ -933,293 +934,13 @@ async def _run_tools_parallel(
 # ---------------------------------------------------------------------------
 
 
-async def _run_openai_loop(
-    messages: list[dict[str, Any]],
-    model: str,
-    api_key: str,
-) -> AsyncGenerator[str, None]:
-    url = f"{settings.zen_base_url}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    seen_calls: set[str] = set()
 
-    client = _get_shared_client()
-    for _iteration in range(MAX_ITER):
-        payload = {
-            "model": model,
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "max_tokens": 4096,
-            "tools": BLM_TOOLS,
-            "tool_choice": "auto",
-            "stream": True,
-            "messages": messages,
-        }
-
-        try:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                if response.status_code != 200:
-                    body = await response.aread()
-                    yield json.dumps({"type": "error", "message": f"Zen API {response.status_code}: {body.decode()[:300]}"})
-                    yield json.dumps({"type": "done"})
-                    return
-
-                content = ""
-                reasoning = ""
-                finish_reason: str | None = None
-                tool_calls_map: dict[int, dict[str, Any]] = {}
-
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: ") or line == "data: [DONE]":
-                        continue
-                    try:
-                        chunk = json.loads(line[6:])
-                    except json.JSONDecodeError:
-                        continue
-
-                    choices = chunk.get("choices")
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    finish_reason = choice.get("finish_reason") or finish_reason
-                    delta = choice.get("delta", {})
-
-                    if delta.get("reasoning_content"):
-                        reasoning += delta["reasoning_content"]
-
-                    if delta.get("content"):
-                        content += delta["content"]
-                        yield json.dumps({"type": "token", "text": delta["content"]})
-
-                    for tc in delta.get("tool_calls", []):
-                        idx = tc.get("index", 0)
-                        if idx not in tool_calls_map:
-                            tool_calls_map[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                        entry = tool_calls_map[idx]
-                        entry["id"] += tc.get("id") or ""
-                        fn = tc.get("function") or {}
-                        entry["function"]["name"] += fn.get("name") or ""
-                        entry["function"]["arguments"] += fn.get("arguments") or ""
-
-        except httpx.RequestError as exc:
-            yield json.dumps({"type": "error", "message": f"Network error: {exc}"})
-            yield json.dumps({"type": "done"})
-            return
-
-        tool_calls_list = [tool_calls_map[i] for i in sorted(tool_calls_map)]
-
-        # Reconstruct assistant message preserving reasoning for multi-turn quality
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
-        if reasoning:
-            assistant_msg["reasoning_content"] = reasoning
-        if tool_calls_list:
-            assistant_msg["tool_calls"] = tool_calls_list
-        messages.append(assistant_msg)
-
-        if finish_reason == "stop" or (finish_reason is None and not tool_calls_list):
-            yield json.dumps({"type": "done"})
-            return
-
-        if tool_calls_list:
-            # Yield tool_call events before executing
-            for tc in tool_calls_list:
-                try:
-                    args_preview = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-                except json.JSONDecodeError:
-                    args_preview = {}
-                yield json.dumps({"type": "tool_call", "name": tc["function"]["name"], "args": args_preview})
-
-            # Normalise for shared executor
-            normalised = [
-                {"id": tc["id"], "name": tc["function"]["name"], "args": json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}}
-                for tc in tool_calls_list
-            ]
-            sse_events, tool_msgs = await _run_tools_parallel(normalised, seen_calls)
-
-            for ev in sse_events:
-                yield ev
-
-            for tm in tool_msgs:
-                messages.append({"role": "tool", "tool_call_id": tm["id"], "content": tm["content"]})
-            continue
-
-        yield json.dumps({"type": "done"})
-        return
-
-    yield json.dumps({"type": "error", "message": f"Agent exceeded {MAX_ITER} iterations. Try a more specific question."})
-    yield json.dumps({"type": "done"})
+from app.services.llm_provider import stream_chat_completion
 
 
 # ---------------------------------------------------------------------------
-# Anthropic loop — MiniMax M2.5 and M2.7 via /messages
+# Public entry point
 # ---------------------------------------------------------------------------
-
-
-async def _run_anthropic_loop(
-    messages: list[dict[str, Any]],
-    system_prompt: str,
-    model: str,
-    api_key: str,
-) -> AsyncGenerator[str, None]:
-    url = f"{settings.zen_base_url}/messages"
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
-    seen_calls: set[str] = set()
-
-    client = _get_shared_client()
-    for _iteration in range(MAX_ITER):
-        payload = {
-            "model": model,
-            "max_tokens": 4096,
-            "system": system_prompt,
-            "tools": BLM_TOOLS_ANTHROPIC,
-            "stream": True,
-            "messages": messages,
-        }
-
-        try:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                if response.status_code != 200:
-                    body = await response.aread()
-                    yield json.dumps({"type": "error", "message": f"Zen API {response.status_code}: {body.decode()[:300]}"})
-                    yield json.dumps({"type": "done"})
-                    return
-
-                # Anthropic SSE: track content blocks by index
-                # block_types[idx] = "text" | "tool_use" | "thinking"
-                block_types: dict[int, str] = {}
-                block_ids: dict[int, str] = {}
-                block_names: dict[int, str] = {}
-                block_args: dict[int, str] = {}
-                block_text: dict[int, str] = {}
-                stop_reason: str | None = None
-
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    raw = line[5:].strip()
-                    if not raw or raw == "[DONE]":
-                        continue
-                    try:
-                        ev = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-
-                    etype = ev.get("type", "")
-
-                    if etype == "content_block_start":
-                        idx = ev["index"]
-                        block = ev.get("content_block", {})
-                        btype = block.get("type", "")
-                        block_types[idx] = btype
-                        if btype == "tool_use":
-                            block_ids[idx] = block.get("id", "")
-                            block_names[idx] = block.get("name", "")
-                            block_args[idx] = ""
-                        elif btype == "text":
-                            block_text[idx] = ""
-
-                    elif etype == "content_block_delta":
-                        idx = ev["index"]
-                        delta = ev.get("delta", {})
-                        dtype = delta.get("type", "")
-
-                        if dtype == "text_delta":
-                            text = delta.get("text", "")
-                            block_text[idx] = block_text.get(idx, "") + text
-                            yield json.dumps({"type": "token", "text": text})
-
-                        elif dtype == "input_json_delta":
-                            block_args[idx] = block_args.get(idx, "") + delta.get("partial_json", "")
-
-                        # thinking_delta — ignore for output, not stored
-
-                    elif etype == "message_delta":
-                        stop_reason = ev.get("delta", {}).get("stop_reason")
-
-        except httpx.RequestError as exc:
-            yield json.dumps({"type": "error", "message": f"Network error: {exc}"})
-            yield json.dumps({"type": "done"})
-            return
-
-        # Reconstruct full content array for history (Anthropic requires this)
-        content_blocks: list[dict[str, Any]] = []
-        tool_use_indices: list[int] = []
-
-        for idx in sorted(block_types):
-            btype = block_types[idx]
-            if btype == "text":
-                text_val = block_text.get(idx, "")
-                if text_val:
-                    content_blocks.append({"type": "text", "text": text_val})
-            elif btype == "tool_use":
-                try:
-                    input_val = json.loads(block_args.get(idx, "{}") or "{}")
-                except json.JSONDecodeError:
-                    input_val = {}
-                content_blocks.append({
-                    "type": "tool_use",
-                    "id": block_ids[idx],
-                    "name": block_names[idx],
-                    "input": input_val,
-                })
-                tool_use_indices.append(idx)
-            # thinking blocks are intentionally omitted from reconstructed history
-            # (MiniMax on Go does not require them to be echoed back)
-
-        messages.append({"role": "assistant", "content": content_blocks})
-
-        if stop_reason == "end_turn" or (stop_reason is None and not tool_use_indices):
-            yield json.dumps({"type": "done"})
-            return
-
-        if tool_use_indices:
-            # Yield tool_call events
-            for idx in tool_use_indices:
-                try:
-                    args_preview = json.loads(block_args.get(idx, "{}") or "{}")
-                except json.JSONDecodeError:
-                    args_preview = {}
-                yield json.dumps({"type": "tool_call", "name": block_names[idx], "args": args_preview})
-
-            # Normalise for shared executor
-            normalised = [
-                {
-                    "id": block_ids[idx],
-                    "name": block_names[idx],
-                    "args": json.loads(block_args.get(idx, "{}") or "{}"),
-                }
-                for idx in tool_use_indices
-            ]
-            sse_events, tool_msgs = await _run_tools_parallel(normalised, seen_calls)
-
-            for ev in sse_events:
-                yield ev
-
-            # Anthropic tool results go back as a single user turn with tool_result blocks
-            tool_result_blocks = [
-                {"type": "tool_result", "tool_use_id": tm["id"], "content": tm["content"]}
-                for tm in tool_msgs
-            ]
-            messages.append({"role": "user", "content": tool_result_blocks})
-            continue
-
-        yield json.dumps({"type": "done"})
-        return
-
-    yield json.dumps({"type": "error", "message": f"Agent exceeded {MAX_ITER} iterations. Try a more specific question."})
-    yield json.dumps({"type": "done"})
-
-
-# ---------------------------------------------------------------------------
-# Public entry point — dispatches to the correct loop
-# ---------------------------------------------------------------------------
-
 
 async def run_chat_agent(
     messages: list[dict[str, Any]],
@@ -1228,34 +949,19 @@ async def run_chat_agent(
     model: str = "kimi-k2.5",
     persona: str | None = None,
 ) -> AsyncGenerator[str, None]:
-    """Run the agentic loop and yield SSE-formatted JSON strings.
-
-    Yielded event formats:
-      {"type": "token", "text": "..."}
-      {"type": "tool_call", "name": "...", "args": {...}}
-      {"type": "tool_result", "name": "...", "preview": "..."}
-      {"type": "error", "message": "..."}
-      {"type": "done"}
-    """
-    api_key = settings.opencode_zen_api_key
-    if not api_key or api_key == "none":
-        yield json.dumps({"type": "error", "message": "OPENCODE_ZEN_API_KEY is not configured."})
-        yield json.dumps({"type": "done"})
-        return
-
     system_prompt = _get_system_prompt(symbol, exchange, persona)
+    
+    seen_calls = set()
+    async def executor(tool_calls: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+        return await _run_tools_parallel(tool_calls, seen_calls)
 
-    if model in ANTHROPIC_MODELS:
-        # Anthropic format: system prompt is a top-level field, not a message
-        # Convert any existing system messages in history to a user context note
-        anthropic_messages = [m for m in messages if m.get("role") != "system"]
-        async for chunk in _run_anthropic_loop(anthropic_messages, system_prompt, model, api_key):
-            yield chunk
-    else:
-        # OpenAI format: system prompt is first message
-        full_messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            *messages,
-        ]
-        async for chunk in _run_openai_loop(full_messages, model, api_key):
-            yield chunk
+    tools = BLM_TOOLS if model not in {"minimax-m2.5", "minimax-m2.7"} else BLM_TOOLS_ANTHROPIC
+
+    async for chunk in stream_chat_completion(
+        messages=messages,
+        model=model,
+        tools=tools,
+        tool_executor=executor,
+        system_prompt=system_prompt,
+    ):
+        yield chunk

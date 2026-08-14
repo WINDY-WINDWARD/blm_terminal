@@ -7,7 +7,7 @@ echo "Starting BLM Backend in a new window (Production Mode)..."
 PY_CMD=$(command -v python3 &>/dev/null && echo python3 || echo python)
 
 # Define the backend commands (always install, no --reload)
-BACKEND_CMD="cd backend && if [ ! -d '.venv' ]; then $PY_CMD -m venv .venv; fi && source .venv/bin/activate && pip install -e . && uvicorn main:app --port 4455"
+BACKEND_CMD="cd backend && if [ ! -d '.venv' ]; then $PY_CMD -m venv .venv; fi && source .venv/bin/activate && pip install -e . && python scripts/ag_login.py && uvicorn main:app --port 4455"
 
 # Try to open a new terminal window using common Linux terminal emulators
 if command -v gnome-terminal &> /dev/null; then

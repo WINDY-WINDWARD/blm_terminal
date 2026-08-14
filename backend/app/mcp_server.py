@@ -35,7 +35,7 @@ def _safe_entities(v: Any) -> dict | None:
 import numpy as np
 import pandas as pd
 from mcp.server import FastMCP
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 from app.database import AsyncSessionLocal
 from app.models.corporatefilings import CorporateFiling
@@ -627,9 +627,11 @@ async def company_fdm(
     sections: list[str] | None = None,
     consolidated: bool = True,
 ) -> dict[str, Any]:
-    """Fetch comprehensive FDM widget data for an NSE company in a single call.
+    """Fetch comprehensive Fundamental Data and Corporate Events for an NSE company.
+    
+    WHEN TO USE: Use this tool to get deep fundamental analysis, corporate announcements, fair value estimates, and financial results. This is also the fallback tool if `get_company_news` fails.
 
-    This tool aggregates fundamental data from multiple backend sources:
+    This tool aggregates data from multiple backend sources:
     - "screener": Fundamentals, peer comparison, quarterly results (screener.in).
     - "tradingview": TradingView financial statistics and metrics.
     - "morningstar": Morningstar fair value and uncertainty rating.
@@ -1553,23 +1555,21 @@ async def get_company_news(
     threat_level: str | None = None,
     language: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch news for one or multiple NSE companies with NLP analysis.
-    Args:
-        symbol: NSE ticker symbol for a single lookup (e.g. "RELIANCE", "INFY").
-            Mutually exclusive with symbols.
-        symbols: List of NSE ticker symbols for a bulk lookup (e.g. ["RELIANCE", "INFY"]).
-            Mutually exclusive with symbol.
-        days: Number of days to look back (default: 30). Applies to all symbols.
-        limit: Maximum number of articles to return per symbol (default: 50).
-        refresh: Force a live fetch from upstream even if articles are fresh.
-        source: News source to fetch from ("auto", "iinvest", "moneycontrol", "merged"). Default: "iinvest".
-        sentiment: Filter by sentiment (POSITIVE, NEGATIVE, NEUTRAL).
-        threat_level: Filter by threat level (LOW, MEDIUM, HIGH, CRITICAL).
-        language: Filter by two-letter language code (en, hi, zh, etc.).
+    """Fetch financial news articles for one or multiple NSE companies, enriched with NLP analysis.
+    
+    WHEN TO USE: Use this to check for catalysts, sentiment, or upcoming events for a stock.
+    FALLBACK: If this tool returns a backend error, immediately use the `company_fdm` tool instead to get corporate announcements.
 
-    Returns a dict with `articles` (list) and `source_used` (str) in single-symbol
-    mode. In bulk mode returns a dict keyed by symbol; failed symbols return
-    {"error": "<message>"}.
+    Args:
+        symbol: Single NSE ticker symbol (e.g., "RELIANCE"). Mutually exclusive with symbols.
+        symbols: List of NSE ticker symbols (e.g., ["RELIANCE", "INFY"]). Mutually exclusive with symbol.
+        days: Days to look back (default 30).
+        limit: Max articles per symbol (default 50).
+        refresh: Force a live fetch (default False).
+        source: News source ("auto", "iinvest", "moneycontrol", "merged"). Default is "iinvest".
+        sentiment: Filter by sentiment ("POSITIVE", "NEGATIVE", "NEUTRAL").
+        threat_level: Filter by threat ("LOW", "MEDIUM", "HIGH", "CRITICAL").
+        language: Two-letter language code (e.g., "en").
     """
     from sqlalchemy import func, or_
     from app.services.news_fetcher import fetch_iinvest_company_news

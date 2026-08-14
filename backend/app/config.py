@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     ai_max_tokens: int = 512
     ai_temperature: float = 0.3
 
+    # AI Provider: "zen" | "antigravity"
+    ai_provider: str = "zen"
+
     # OpenCode Zen / MiniMax chat agent settings
     opencode_zen_api_key: str = "none"
     zen_base_url: str = "https://opencode.ai/zen/go/v1"
