@@ -23,10 +23,11 @@ Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy;
 
 ### Frontend (repo root)
 ```bash
-npm run dev       # dev server
+npm run dev       # custom dev server (node server.js)
 npm run build     # production build + TypeScript check
 npm start         # serve production build
 npm run lint      # ESLint v9 flat config
+npm run test      # vitest run
 ```
 
 ### Python backend (`backend/`)

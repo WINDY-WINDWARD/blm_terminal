@@ -533,8 +533,16 @@ def _backfill_entities_double_encoding() -> None:
 
 
 
+from app.services.antigravity_auth import get_antigravity_token
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Antigravity Auth check
+    if settings.ai_provider == "antigravity":
+        token = await get_antigravity_token()
+        if not token:
+            raise RuntimeError("Antigravity Auth Failed. Please run 'python backend/scripts/ag_login.py' to authenticate.")
+
     # Re-configure logging: restores our handlers after uvicorn's own startup
     # logging setup (which runs after module import in reload mode).
     _configure_logging()
@@ -598,6 +606,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         logger.info("Shutting down — stopping workers and closing clients...")
         await orchestrator.stop()
+
+        from app.services.llm_provider import cleanup_shared_clients
+        await cleanup_shared_clients()
 
 
 # ---------------------------------------------------------------------------

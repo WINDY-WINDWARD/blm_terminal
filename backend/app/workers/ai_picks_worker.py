@@ -14,6 +14,7 @@ from app.database import AsyncSessionLocal
 from app.models.ai_picks import AIPick, PickStatus, PickDirection, AIPickTrace
 import time
 from app.workers.lifecycle import _startup_pipeline_done
+from app.services.llm_provider import stream_chat_completion
 from app.services.ai_chat_service import BLM_TOOLS, BLM_TOOLS_ANTHROPIC, _run_tools_parallel
 
 logger = logging.getLogger(__name__)
@@ -75,23 +76,40 @@ async def _post_with_retry(
     raise last_exc
 
 # Bullet-proof System Prompts
-HUNTER_PROMPT = """You are 'The Hunter', an elite, quantitative equity research AI specializing in actionable mid-cap swing trades.
-Your objective: Execute a deep search across the NSE to identify 4-6 highly actionable, high-probability mid-cap swing trade setups.
+HUNTER_PROMPT = """<persona>
+You are 'The Hunter', an elite, quantitative equity research AI specializing in actionable mid-cap swing trades on the NSE. Your expertise lies in combining technical momentum with fundamental catalysts to identify high-probability setups with >2:1 Risk/Reward.
+</persona>
 
-INSTRUCTIONS:
-1. DEEP SEARCH START: First, use `get_global_notifications` and `get_volume_gainers` to identify stocks that have recently triggered technical breakouts or abnormal volume.
-2. TECHNICAL SCREENING: Use `run_tql_screener` to find growth stocks with bullish momentum (e.g., RSI > 55, MACDHist > 0, From52wHigh > -15). Focus on mid-cap setups with clear support/resistance levels.
-3. CATALYST & FUNDAMENTAL CHECK: For your top candidates, deeply analyze them using `get_company_news` and `get_upcoming_events`.
-4. RIGOROUS FILTERING: Discard any stock with imminent adverse events, poor relative strength, or weak news sentiment. Ensure you return exactly 4 to 6 high-conviction, actionable setups.
-5. DETAILED THESIS: Your thesis for each pick MUST be extremely detailed. Include:
-   - Technical setup considered (support/resistance, moving averages, chart pattern).
-   - Specific news catalysts evaluated (positive sentiment, upcoming events).
-   - Risk/Reward ratio (must be > 2:1).
-   - Expected timeframe for the setup to play out (typically 3-7 trading days for swing trades).
-6. ENTRY & EXIT PRECISION: Entry, take_profit, and stop_loss must be based on real support/resistance, not arbitrary numbers. Include your reasoning.
-7. OUTPUT: You MUST output your final 4-6 picks strictly as a JSON array inside a <picks> XML tag.
+<context>
+You are operating within an autonomous agentic loop. You must proactively use the provided tools to gather live market data. Evaluate each data point in your thought process to decide on your next tool call before arriving at your final answer.
+</context>
 
-OUTPUT FORMAT:
+<task>
+Execute a deep market scan across the NSE to identify exactly 4 to 6 highly actionable mid-cap swing trade setups.
+
+Workflow Directives:
+1. DISCOVERY: Call `get_global_notifications` and `get_volume_gainers` to identify stocks with recent technical breakouts or abnormal volume surges.
+2. SCREENING: Call `run_tql_screener` with strict momentum filters (e.g., RSI > 55, MACDHist > 0, From52wHigh > -15) to narrow down candidates.
+3. CATALYST VALIDATION: For top candidates, call `get_company_news` and `get_upcoming_events` to confirm positive catalysts and avoid adverse events.
+4. SYNTHESIS: Select the absolute best 4-6 setups. Discard weak setups.
+</task>
+
+<tool_usage_guidelines>
+- Use `get_global_notifications` for real-time alerts and `get_volume_gainers` for volume surges.
+- If `get_company_news` fails or returns insufficient data, immediately fallback to `company_fdm` to check recent corporate announcements.
+- Do not guess parameter values (e.g., sector slugs). If you need an industry list, call `list_industries` first.
+</tool_usage_guidelines>
+
+<format>
+For each selected pick, your thesis MUST include:
+- Technical Setup (support/resistance, moving averages, volume, chart pattern).
+- Catalysts (sentiment, recent news, upcoming events).
+- Expected Timeframe (typically 3-7 trading days).
+- Precise Entry, Take Profit, and Stop Loss based on real support/resistance levels.
+
+CRITICAL FINAL OUTPUT:
+When you have finished all tool calls and are ready to finalize your answer, you MUST output your final picks strictly as a JSON array enclosed within a <picks> XML tag.
+
 <picks>
 [
   {
@@ -100,31 +118,36 @@ OUTPUT FORMAT:
     "entry": 100.50,
     "take_profit": 110.00,
     "stop_loss": 95.00,
-    "thesis": "[Detailed Analysis] Technicals: Price broke above 100-level resistance with volume surge, RSI at 60 (bullish). Entry at 100.50 places stop below support at 95. Target 110 gives 2.9:1 RR. Catalyst: Recent contract win news (positive sentiment), no adverse events. Timeframe: 5-7 trading days expected for move to TP. Support: 95.00, Resistance: 110.00."
+    "thesis": "[Detailed Analysis] Technicals: Price broke above 100-level resistance with volume surge. Entry at 100.50 places stop below support at 95. Target 110 gives 2.9:1 RR. Catalyst: Contract win news. Timeframe: 5-7 days."
   }
 ]
 </picks>
-
-Do not include markdown outside the tags or conversational filler. Only the <picks> block.
+</format>
 """
 
-VERIFIER_PROMPT = """You are 'The Verifier', a strict Chief Risk Officer AI.
-Your objective: Evaluate a list of 4-6 proposed mid-cap swing trade setups and independently verify them with discipline.
-You have access to tools to independently verify the setups (technicals, fundamentals, news, fair value).
+VERIFIER_PROMPT = """<persona>
+You are 'The Verifier', a strict Chief Risk Officer AI. You operate with absolute discipline and are highly averse to uncalculated risk.
+</persona>
 
-INSTRUCTIONS:
-1. I will provide a JSON list of proposed setups.
-2. For each setup, use your tools (`get_company_news`, `company_fdm`, `get_upcoming_events`) to independently verify the detailed thesis provided.
-3. REJECTION CRITERIA: Reject ONLY setups with clear red flags:
-   - Imminent bad news (earnings miss expected, major downgrades, legal action, scandal).
-   - Extremely overvalued (P/E far above peer average, valuation unreasonable).
-   - BROKEN technical structure (support cleanly broken, major reversal pattern confirmed, downtrend established).
-   - DO NOT reject due to minor price weakness, sideways consolidation, or lack of immediate catalyst. Swing trades need time to develop.
-4. PRESERVATION LOGIC: If a setup has solid fundamentals and intact technicals, PRESERVE it. Small thesis refinements are OK; blanket rejections are not.
-5. REFINEMENT: For verified picks, refine entry, take_profit, and stop_loss levels to be mathematically sound (e.g., RR > 2:1). Explain your adjustments.
-6. Output the surviving, verified picks strictly as a JSON array inside a <verified_picks> XML tag.
+<context>
+The Hunter AI has provided a list of proposed mid-cap swing trade setups. Your job is to independently verify them using your available tools. You serve as a strict filter to protect capital.
+</context>
 
-OUTPUT FORMAT:
+<task>
+1. Independently verify the technicals, fundamentals, news, and fair value of each proposed setup.
+2. Call tools like `get_symbol_data`, `company_fdm`, and `get_company_news` to check for red flags.
+3. REJECT any setup that has poor financials, bad news sentiment, or overextended technicals.
+4. Keep only the absolute best 2 to 3 setups. If none pass your strict criteria, return an empty array.
+</task>
+
+<tool_usage_guidelines>
+- If `get_company_news` fails or returns insufficient data, immediately fallback to `company_fdm` to check recent corporate announcements.
+</tool_usage_guidelines>
+
+<format>
+CRITICAL FINAL OUTPUT:
+Output your final approved list of 2-3 setups strictly as a JSON array inside a <verified_picks> XML tag. Use the exact same JSON object structure as the input, but update the 'thesis' field to append your verification notes.
+
 <verified_picks>
 [
   {
@@ -143,6 +166,7 @@ OUTPUT FORMAT:
   }
 ]
 </verified_picks>
+</format>
 """
 
 EVALUATOR_PROMPT = """You are 'The Evaluator', a portfolio management AI specializing in swing trades.
@@ -236,8 +260,11 @@ async def _save_trace(db: AsyncSession, symbol: str, role: str, prompt: str, res
 
 def _extract_json_block(content: str, tag: str) -> dict | list:
     """Safely extract JSON from within XML-style tags, handling markdown code blocks."""
-    if f"<{tag}>" in content:
-        content = content.split(f"<{tag}>")[1].split(f"</{tag}>")[0].strip()
+    # Find the LAST occurrence of the tags to avoid matching conversational mentions
+    start_idx = content.rfind(f"<{tag}>")
+    end_idx = content.rfind(f"</{tag}>")
+    if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+        content = content[start_idx + len(f"<{tag}>"):end_idx].strip()
     
     # Use regex to find the innermost JSON if it's wrapped in markdown
     match = re.search(r"```(?:json)?\n?(.*?)\n?```", content, re.DOTALL)
@@ -249,11 +276,51 @@ def _extract_json_block(content: str, tag: str) -> dict | list:
     return json.loads(json_str)
 
 
+
+async def _run_antigravity_worker_loop(messages: list[dict], model: str, system_prompt: str | None = None) -> str:
+    seen_calls = set()
+    async def executor(tool_calls: list[dict]) -> tuple[list[str], list[dict]]:
+        return await _run_tools_parallel(tool_calls, seen_calls)
+        
+    full_content = ""
+    async for chunk in stream_chat_completion(
+        messages=messages,
+        model=model,
+        tools=BLM_TOOLS,
+        tool_executor=executor,
+        system_prompt=system_prompt,
+        max_iter=60
+    ):
+        evt = json.loads(chunk)
+        if evt["type"] == "token":
+            full_content += evt["text"]
+        elif evt["type"] == "error":
+            raise RuntimeError(f"Antigravity API error: {evt['message']}")
+            
+    return full_content
+
 async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession, market_context: str = "") -> list[dict]:
     """Loop 1: Run Kimi 2.6 to hunt for picks."""
     logger.info("Loop 1: Kimi Hunter starting")
     start_time = time.time()
     
+    if settings.ai_provider == "antigravity":
+        sys_prompt = HUNTER_PROMPT + "\n\n" + market_context
+        messages = [{"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."}]
+        text = await _run_antigravity_worker_loop(
+            messages=messages,
+            model="gemini-3.1-pro-high",
+            system_prompt=sys_prompt
+        )
+        duration = int((time.time() - start_time) * 1000)
+        full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
+        await _save_trace(db, "MULTI", "HUNTER", full_prompt, text, duration, "SUCCESS")
+        try:
+            return _extract_json_block(text, "picks")
+        except Exception as e:
+            logger.error(f"Hunter parsing failed: {e}. Raw content: {text}")
+        return []
+
     messages = [{"role": "system", "content": HUNTER_PROMPT + "\n\n" + market_context}]
     messages.append({"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."})
     
@@ -312,7 +379,24 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, pr
     logger.info("Loop 2: MiniMax Verifier starting")
     start_time = time.time()
     
-    start_time = time.time()
+    if settings.ai_provider == "antigravity":
+        sys_prompt = VERIFIER_PROMPT + "\n\n" + market_context
+        user_msg = f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"
+        messages = [{"role": "user", "content": user_msg}]
+        text = await _run_antigravity_worker_loop(
+            messages=messages,
+            model="gemini-3.6-flash-medium",
+            system_prompt=sys_prompt
+        )
+        duration = int((time.time() - start_time) * 1000)
+        full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
+        await _save_trace(db, "MULTI", "VERIFIER", full_prompt, text, duration, "SUCCESS")
+        try:
+            return _extract_json_block(text, "verified_picks")
+        except Exception as e:
+            logger.error(f"Verifier parsing failed: {e}. Raw content: {text}")
+        return []
+
     messages = [
         {"role": "user", "content": f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"}
     ]
@@ -373,8 +457,6 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, pr
         if c["type"] == "text":
             content += c["text"]
 
-    start_time = time.time()
-
     duration = int((time.time() - start_time) * 1000)
     prompt_str = json.dumps(messages[:-1])
     response_str = content
@@ -388,6 +470,24 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, pr
 async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, pick_data: dict, market_context: str = "") -> dict:
     """Loop 3: Run MiniMax 2.5 to evaluate an existing pick."""
     start_time = time.time()
+    if settings.ai_provider == "antigravity":
+        sys_prompt = EVALUATOR_PROMPT + "\n\n" + market_context
+        user_msg = f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"
+        messages = [{"role": "user", "content": user_msg}]
+        text = await _run_antigravity_worker_loop(
+            messages=messages,
+            model="gemini-3.6-flash-medium",
+            system_prompt=sys_prompt
+        )
+        duration = int((time.time() - start_time) * 1000)
+        full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
+        await _save_trace(db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, text, duration, "SUCCESS")
+        try:
+            return _extract_json_block(text, "evaluation")
+        except Exception as e:
+            logger.error(f"Evaluator parsing failed: {e}. Raw content: {text}")
+        return {}
+
     messages = [
         {"role": "user", "content": f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"}
     ]
@@ -447,8 +547,6 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, p
         if c["type"] == "text":
             content += c["text"]
             
-    start_time = time.time()
-
     duration = int((time.time() - start_time) * 1000)
     prompt_str = json.dumps(messages[:-1])
     response_str = content
@@ -484,7 +582,7 @@ async def _fetch_market_context() -> str:
     # 2. Volume Surge
     try:
         vol = await get_volume_gainers()
-        v_symbols = [v.get('symbol', '') for v in vol[:5]]
+        v_symbols = [v.get('symbol', '') for v in vol.get('data', [])[:5]]
         context_parts.append(f"Volume Surges: {', '.join(v_symbols)}")
     except Exception as e:
         logger.error(f"Failed to fetch volume gainers: {e}")

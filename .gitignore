@@ -66,3 +66,4 @@ cookies/manifest.json
 
 # network captures
 *.har
+*credentials.json
