@@ -187,6 +187,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       layout: {
         background: { type: ColorType.Solid, color: '#000000' },
         textColor: '#FFB900',
+        fontFamily: 'JetBrains Mono, monospace',
       },
       grid: {
         vertLines: { color: '#222' },

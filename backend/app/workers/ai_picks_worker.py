@@ -300,8 +300,8 @@ async def _run_antigravity_worker_loop(messages: list[dict], model: str, system_
     return full_content
 
 async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession, market_context: str = "") -> list[dict]:
-    """Loop 1: Run Kimi 2.6 to hunt for picks."""
-    logger.info("Loop 1: Kimi Hunter starting")
+    """Loop 1: Run hunt for picks."""
+    logger.info("Loop 1: Hunter starting")
     start_time = time.time()
     
     if settings.ai_provider == "antigravity":
@@ -375,8 +375,8 @@ async def _call_kimi_hunter(client: httpx.AsyncClient, db: AsyncSession, market_
     return []
 
 async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, proposed_picks: list[dict], market_context: str = "") -> list[dict]:
-    """Loop 2: Run MiniMax 2.5 to verify picks."""
-    logger.info("Loop 2: MiniMax Verifier starting")
+    """Loop 2: Run verify picks."""
+    logger.info("Loop 2: Verifier starting")
     start_time = time.time()
     
     if settings.ai_provider == "antigravity":
@@ -385,7 +385,7 @@ async def _call_minimax_verifier(client: httpx.AsyncClient, db: AsyncSession, pr
         messages = [{"role": "user", "content": user_msg}]
         text = await _run_antigravity_worker_loop(
             messages=messages,
-            model="gemini-3.6-flash-medium",
+            model="gemini-3.7-flash-medium",
             system_prompt=sys_prompt
         )
         duration = int((time.time() - start_time) * 1000)
@@ -476,7 +476,7 @@ async def _call_minimax_evaluator(client: httpx.AsyncClient, db: AsyncSession, p
         messages = [{"role": "user", "content": user_msg}]
         text = await _run_antigravity_worker_loop(
             messages=messages,
-            model="gemini-3.6-flash-medium",
+            model="gemini-3.7-flash-medium",
             system_prompt=sys_prompt
         )
         duration = int((time.time() - start_time) * 1000)

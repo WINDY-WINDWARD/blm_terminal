@@ -16,22 +16,18 @@ import weakref
 logger = logging.getLogger(__name__)
 
 # Mirrors the plugin's getRandomizedHeaders() from constants.js
-_AG_VERSION = "1.18.3"
+_AG_VERSION = "2.5.5"
 _AG_PLATFORMS = ["windows/amd64", "darwin/arm64", "darwin/amd64"]
 _AG_API_CLIENTS = [
-    "google-cloud-sdk vscode_cloudshelleditor/0.1",
-    "google-cloud-sdk vscode/1.96.0",
-    "google-cloud-sdk vscode/1.95.0",
+    "google-cloud-sdk antigravity/2.5.5"
 ]
 
 def _get_antigravity_headers(token: str) -> dict[str, str]:
     platform = random.choice(_AG_PLATFORMS)
-    metadata_platform = "WINDOWS" if platform.startswith("windows") else "MACOS"
     return {
         "Authorization": f"Bearer {token}",
         "User-Agent": f"antigravity/{_AG_VERSION} {platform}",
         "X-Goog-Api-Client": random.choice(_AG_API_CLIENTS),
-        "Client-Metadata": f'{{"ideType":"ANTIGRAVITY","platform":"{metadata_platform}","pluginType":"GEMINI"}}',
         "Content-Type": "application/json",
     }
 

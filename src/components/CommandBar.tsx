@@ -61,9 +61,18 @@ export function CommandBar() {
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const [symbolSuggestions, setSymbolSuggestions] = useState<SymbolSuggestion[]>([]);
   const [statusMsg, setStatusMsg] = useState('');
+  const [placeholderIdx, setPlaceholderIdx] = useState(0);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Rotate placeholder hints every 3 seconds
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setPlaceholderIdx((prev) => (prev + 1) % 4);
+    }, 6000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Fetch account funds every 30s
   useQuery({
@@ -344,11 +353,18 @@ export function CommandBar() {
     );
   };
 
+  const defaultHints = [
+    WIDGET_COMMANDS.map((w) => w.cmd).join(' · '),
+    'Type a command to open a widget (e.g., CHART, WATCH, POS)…',
+    'Type /<symbol> to change the global active company…',
+    'Type :save <name> to save layout, or :<name> to load…',
+  ];
+
   const placeholder = isMetaMode
     ? ':save <name> · :<name> to load'
     : isSymbolMode
       ? 'Type symbol or company name…'
-      : WIDGET_COMMANDS.map((w) => w.cmd).join(' · ');
+      : defaultHints[placeholderIdx];
 
   return (
     <div className="flex items-center bg-blue-900 text-white h-8 px-2 border-b border-terminal-gray font-sans font-bold text-sm shrink-0 gap-3 relative">

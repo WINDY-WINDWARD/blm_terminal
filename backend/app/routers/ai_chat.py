@@ -105,9 +105,9 @@ async def get_chat_models() -> list[dict]:
     """Return available model options dynamically based on the active provider."""
     if settings.ai_provider == "antigravity":
         return [
-            {"id": "gemini-3.6-flash-low",    "label": "Gemini 3.6 Flash (Fast / Low)"},
-            {"id": "gemini-3.6-flash-medium", "label": "Gemini 3.6 Flash (Medium)"},
-            {"id": "gemini-3.6-flash-high",   "label": "Gemini 3.6 Flash (Reasoning / High)"},
+            {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
+            {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
+            {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
             {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
         ]
         
