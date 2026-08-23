@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useAtom, useAtomValue } from 'jotai';
 import { 
   activeSymbolAtom, 
@@ -47,7 +47,9 @@ interface WatchRowData {
   yearLow: number | null;
   fairValue: number | null;
   alertCount: number;
-  isLoading: boolean;
+  symbolLoading: boolean;
+  rangesLoading: boolean;
+  fairValueLoading: boolean;
 }
 
 interface ResultCellValue {
@@ -160,21 +162,21 @@ interface WatchRowProps {
 }
 
 function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash, onAlertClick }: WatchRowProps) {
-  const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, alertCount, isLoading } = rowData;
+  const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, alertCount, symbolLoading, rangesLoading, fairValueLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
   const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
-  const dash = <span className="text-white/60">—</span>;
+  const dash = <span className="text-white/60">-</span>;
 
   const renderCell = (col: string) => {
     switch (col) {
       case 'ltp':
-        return isLoading ? dash : ltp != null ? (
+        return symbolLoading ? dash : ltp != null ? (
           <span className={flash === 'up' ? 'animate-flash-green' : flash === 'down' ? 'animate-flash-red' : ''}>
             {ltp.toFixed(2)}
           </span>
         ) : dash;
       case 'chg':
-        return isLoading
+        return symbolLoading
           ? dash
           : chgPct != null
           ? (
@@ -184,27 +186,27 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
             )
           : dash;
       case '1w':
-        return formatRange(oneWeek);
+        return rangesLoading ? dash : formatRange(oneWeek);
       case '1m':
-        return formatRange(oneMonth);
+        return rangesLoading ? dash : formatRange(oneMonth);
       case '3m':
-        return formatRange(threeMonth);
+        return rangesLoading ? dash : formatRange(threeMonth);
       case '6m':
-        return formatRange(sixMonth);
+        return rangesLoading ? dash : formatRange(sixMonth);
       case '1y':
-        return formatRange(oneYear);
+        return rangesLoading ? dash : formatRange(oneYear);
       case '2y':
-        return formatRange(twoYear);
+        return rangesLoading ? dash : formatRange(twoYear);
       case '3y':
-        return formatRange(threeYear);
+        return rangesLoading ? dash : formatRange(threeYear);
       case '5y':
-        return formatRange(fiveYear);
+        return rangesLoading ? dash : formatRange(fiveYear);
       case '52wh':
-        return isLoading ? dash : formatPrice(yearHigh);
+        return symbolLoading ? dash : formatPrice(yearHigh);
       case '52wl':
-        return isLoading ? dash : formatPrice(yearLow);
+        return symbolLoading ? dash : formatPrice(yearLow);
       case 'msfv':
-        return isLoading ? dash : fairValue != null ? (
+        return fairValueLoading ? dash : fairValue != null ? (
           <span className="text-terminal-amber">₹{fairValue.toFixed(2)}</span>
         ) : dash;
       case 'results': {
@@ -497,19 +499,23 @@ export function WatchWidget() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchlist.map((i) => i.symbol).join(',')]);
 
-  const fairValueQueries = useQueries({
-    queries: watchlist.map((item) => ({
-      queryKey: ['morningstar/fairvalue', item.symbol],
-      queryFn: async () => {
-        const res = await fetch(`/api/py/morningstar/fairvalue/${encodeURIComponent(item.symbol)}`);
-        if (!res.ok) return null;
-        const data = await res.json();
-        const fv = data?.fairValue;
-        return typeof fv === 'number' ? fv : typeof fv === 'string' ? parseFloat(fv) : null;
-      },
-      staleTime: 300_000,
-      enabled: !!item.symbol,
-    })),
+  const symbolsList = watchlist.map((i) => i.symbol).filter(Boolean);
+  const fairValueBatchQuery = useQuery({
+    queryKey: ['morningstar/fairvalue-batch', symbolsList],
+    queryFn: async () => {
+      if (symbolsList.length === 0) return {};
+      const res = await fetch(`/api/py/morningstar/fairvalue/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: symbolsList }),
+      });
+      if (!res.ok) return {};
+      const data = await res.json();
+      return data as Record<string, { fairValue: number | null }>;
+    },
+    staleTime: 300_000,
+    enabled: symbolsList.length > 0,
+    placeholderData: keepPreviousData,
   });
 
   // Fetch unread notification counts for the active watchlist (2-day window).
@@ -549,7 +555,8 @@ export function WatchWidget() {
   const rowDataList: WatchRowData[] = watchlist.map((item, idx) => {
     const quote = symbolDataMap.get(item.symbol);
     const ranges = changeRangesMap.get(item.symbol);
-    const fairValue = fairValueQueries[idx];
+    const fvRaw = fairValueBatchQuery.data?.[item.symbol]?.fairValue;
+    const fairValue = typeof fvRaw === 'number' ? fvRaw : typeof fvRaw === 'string' ? parseFloat(fvRaw) : null;
 
     const symbolLoading = !symbolDataReceived.has(item.symbol);
     const rangesLoading = !changeRangesReceived.has(item.symbol);
@@ -568,9 +575,11 @@ export function WatchWidget() {
       fiveYear: ranges?.fiveYearPercent ?? null,
       yearHigh: quote?.yearHigh ?? null,
       yearLow: quote?.yearLow ?? null,
-      fairValue: fairValue?.data ?? null,
+      fairValue,
       alertCount: alertCountMap.get(item.symbol) ?? 0,
-      isLoading: symbolLoading || rangesLoading || (fairValue?.isLoading ?? false),
+      symbolLoading,
+      rangesLoading,
+      fairValueLoading: fairValueBatchQuery.isLoading,
     };
   });
 

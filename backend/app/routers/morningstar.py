@@ -6,11 +6,21 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from app.services.morningstar_client import morningstar_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["morningstar"])
+
+class FairValueBatchRequest(BaseModel):
+    symbols: list[str]
+
+@router.post("/morningstar/fairvalue/batch")
+async def get_fair_value_batch(request: FairValueBatchRequest) -> dict[str, dict[str, Any]]:
+    """Get fair value for multiple stock symbols."""
+    symbols = list(dict.fromkeys(s.upper().strip() for s in request.symbols))
+    return await morningstar_client.get_fair_value_batch(symbols)
 
 
 @router.get("/morningstar/fairvalue/{symbol}")

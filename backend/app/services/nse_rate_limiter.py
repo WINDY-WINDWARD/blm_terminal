@@ -62,7 +62,7 @@ _last_request_at: dict[str, float] = defaultdict(float)
 
 
 def _get_endpoint_lock(key: str) -> asyncio.Lock:
-    """Get or create a lock for the given endpoint key."""
+    """Get or create a per-endpoint lock for courtesy delay tracking."""
     if key not in _endpoint_locks:
         _endpoint_locks[key] = asyncio.Lock()
     return _endpoint_locks[key]
@@ -90,9 +90,9 @@ class NSEServiceUnavailableError(Exception):
     pass
 
 
-def _check_circuit(endpoint_name: str) -> None:
+def _check_circuit(key: str) -> None:
     """
-    Check if the circuit is open for this endpoint.
+    Check if the circuit is open for this coalesce key.
 
     State machine:
       CLOSED  → normal operation, proceed
@@ -103,37 +103,37 @@ def _check_circuit(endpoint_name: str) -> None:
                    - Success → CLOSED (via _record_success)
                    - Failure → OPEN (via _record_failure, timer restarts)
     """
-    if not _CIRCUIT_OPEN.get(endpoint_name, False):
+    if not _CIRCUIT_OPEN.get(key, False):
         return
 
-    if _CIRCUIT_HALF_OPEN.get(endpoint_name, False):
+    if _CIRCUIT_HALF_OPEN.get(key, False):
         return
 
-    elapsed = time.monotonic() - _CIRCUIT_OPENED_AT.get(endpoint_name, 0)
+    elapsed = time.monotonic() - _CIRCUIT_OPENED_AT.get(key, 0)
     if elapsed >= CIRCUIT_RESET_TIMEOUT:
-        _CIRCUIT_HALF_OPEN[endpoint_name] = True
+        _CIRCUIT_HALF_OPEN[key] = True
         logger.info(
             "Circuit breaker HALF_OPEN for '%s' — allowing probe request after %.0fs",
-            endpoint_name,
+            key,
             elapsed,
         )
         return
 
     raise NSEServiceUnavailableError(
-        f"Circuit breaker is OPEN for '{endpoint_name}' "
+        f"Circuit breaker is OPEN for '{key}' "
         f"(opened {elapsed:.0f}s ago, reset after {CIRCUIT_RESET_TIMEOUT:.0f}s). "
         f"Will retry automatically."
     )
 
 
-def _record_success(endpoint_name: str) -> None:
+def _record_success(key: str) -> None:
     """Reset all circuit breaker state on a successful call."""
-    _CONSECUTIVE_FAILURES[endpoint_name] = 0
-    _CIRCUIT_OPEN[endpoint_name] = False
-    _CIRCUIT_HALF_OPEN[endpoint_name] = False
+    _CONSECUTIVE_FAILURES[key] = 0
+    _CIRCUIT_OPEN[key] = False
+    _CIRCUIT_HALF_OPEN[key] = False
 
 
-def _record_failure(endpoint_name: str) -> None:
+def _record_failure(key: str) -> None:
     """
     Increment failure count; open circuit if threshold is reached.
 
@@ -146,18 +146,18 @@ def _record_failure(endpoint_name: str) -> None:
     elapsed >= CIRCUIT_RESET_TIMEOUT again, letting another probe through — turning
     the circuit into a permanent HALF_OPEN state.
     """
-    _CONSECUTIVE_FAILURES[endpoint_name] += 1
-    if _CONSECUTIVE_FAILURES[endpoint_name] >= CIRCUIT_FAIL_MAX:
-        was_half_open = _CIRCUIT_HALF_OPEN.get(endpoint_name, False)
-        was_already_open = _CIRCUIT_OPEN.get(endpoint_name, False)
-        _CIRCUIT_OPEN[endpoint_name] = True
-        _CIRCUIT_HALF_OPEN[endpoint_name] = False
+    _CONSECUTIVE_FAILURES[key] += 1
+    if _CONSECUTIVE_FAILURES[key] >= CIRCUIT_FAIL_MAX:
+        was_half_open = _CIRCUIT_HALF_OPEN.get(key, False)
+        was_already_open = _CIRCUIT_OPEN.get(key, False)
+        _CIRCUIT_OPEN[key] = True
+        _CIRCUIT_HALF_OPEN[key] = False
         if not was_already_open or was_half_open:
-            _CIRCUIT_OPENED_AT[endpoint_name] = time.monotonic()
+            _CIRCUIT_OPENED_AT[key] = time.monotonic()
         logger.warning(
             "Circuit breaker OPEN for '%s' after %d consecutive failures "
             "(half_open_probe_failed=%s, timer_restarted=%s)",
-            endpoint_name,
+            key,
             CIRCUIT_FAIL_MAX,
             was_half_open,
             not was_already_open or was_half_open,
@@ -190,11 +190,11 @@ async def throttled_nse_call(
     Raises:
         NSEServiceUnavailableError: If the circuit is open for this endpoint.
     """
-    _check_circuit(endpoint_name)
-
     running_loop = asyncio.get_running_loop()
 
     c_key = coalesce_key or endpoint_name
+
+    _check_circuit(c_key)
 
     if c_key in _inflight:
         inflight_future = _inflight[c_key]
@@ -215,49 +215,51 @@ async def throttled_nse_call(
     try:
         async with _nse_semaphore:
             endpoint_lock = _get_endpoint_lock(endpoint_name)
-            async with endpoint_lock:
-                elapsed = time.monotonic() - _last_request_at[endpoint_name]
-                wait = NSE_COURTESY_DELAY_SECONDS - elapsed
-                if wait > 0:
-                    logger.debug(
-                        "NSE courtesy delay: sleeping %.2fs before '%s' request",
-                        wait,
-                        endpoint_name,
-                    )
-                    await asyncio.sleep(wait)
+            last_exc: Exception | None = None
+            
+            for attempt in range(NSE_MAX_RETRIES + 1):
+                # Per-endpoint lock protects only courtesy delay + timestamp update
+                async with endpoint_lock:
+                    elapsed = time.monotonic() - _last_request_at[endpoint_name]
+                    wait = NSE_COURTESY_DELAY_SECONDS - elapsed
+                    if wait > 0:
+                        logger.debug(
+                            "NSE courtesy delay: sleeping %.2fs before '%s' request",
+                            wait,
+                            endpoint_name,
+                        )
+                        await asyncio.sleep(wait)
+                    _last_request_at[endpoint_name] = time.monotonic()
 
-                last_exc: Exception | None = None
-                for attempt in range(NSE_MAX_RETRIES + 1):
-                    try:
-                        if is_async_fn:
-                            result = await fn(*args)
-                        else:
-                            result = await asyncio.to_thread(fn, *args)
-                        _record_success(endpoint_name)
-                        inflight_future.set_result(result)
-                        return result
-                    except Exception as exc:
-                        last_exc = exc
-                        if attempt < NSE_MAX_RETRIES and _is_retriable(exc):
-                            backoff = NSE_RETRY_BACKOFF * (2**attempt)
-                            logger.warning(
-                                "Transient NSE error on '%s' (attempt %d/%d): %s. Retrying in %.1fs",
-                                endpoint_name,
-                                attempt + 1,
-                                NSE_MAX_RETRIES,
-                                exc,
-                                backoff,
-                            )
-                            await asyncio.sleep(backoff)
-                            continue
-                        break
-                    finally:
-                        _last_request_at[endpoint_name] = time.monotonic()
+                # Execute API call outside the endpoint lock to allow concurrency
+                try:
+                    if is_async_fn:
+                        result = await fn(*args)
+                    else:
+                        result = await asyncio.to_thread(fn, *args)
+                    _record_success(c_key)
+                    inflight_future.set_result(result)
+                    return result
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < NSE_MAX_RETRIES and _is_retriable(exc):
+                        backoff = NSE_RETRY_BACKOFF * (2**attempt)
+                        logger.warning(
+                            "Transient NSE error on '%s' (attempt %d/%d): %s. Retrying in %.1fs",
+                            endpoint_name,
+                            attempt + 1,
+                            NSE_MAX_RETRIES,
+                            exc,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+                    break
 
-                _record_failure(endpoint_name)
-                inflight_future.set_exception(last_exc)
-                inflight_future.exception()
-                raise last_exc  # type: ignore[misc]
+            _record_failure(c_key)
+            inflight_future.set_exception(last_exc)
+            inflight_future.exception()
+            raise last_exc  # type: ignore[misc]
 
     finally:
         if c_key in _inflight and _inflight[c_key] is inflight_future:

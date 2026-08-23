@@ -392,6 +392,18 @@ class MorningstarClient:
             else None,
         }
 
+    async def get_fair_value_batch(
+        self, symbols: list[str], db: AsyncSession | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch fair value for multiple symbols concurrently (chunked)."""
+        results: list[dict[str, Any]] = []
+        for i in range(0, len(symbols), 5):
+            chunk = symbols[i : i + 5]
+            tasks = [self.get_fair_value_by_symbol(sym, db) for sym in chunk]
+            chunk_results = await asyncio.gather(*tasks)
+            results.extend(chunk_results)
+        return {res["symbol"]: res for res in results}
+
     def get_fair_value_result(self, symbol: str, ms_id: str | None, fair_value: float | None) -> FairValueResult:
         """Create a FairValueResult from raw values."""
         return FairValueResult(

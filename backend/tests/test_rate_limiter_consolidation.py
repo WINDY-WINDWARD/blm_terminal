@@ -156,13 +156,13 @@ class TestThrottledCallConcurrency:
 
     def test_global_semaphore_limits_concurrency(self) -> None:
         """Even if screener, morningstar, and NSE all call at once,
-        only NSE_CONCURRENCY_LIMIT (default 2) may be active at a
-        time."""
-        from app.services.nse_rate_limiter import throttled_nse_call, NSE_CONCURRENCY_LIMIT
+        only NSE_CONCURRENCY_LIMIT may be active at a time."""
+        from app.services.nse_rate_limiter import throttled_nse_call
 
         active = 0
         peak = 0
         lock = asyncio.Lock()
+        limit = 3
 
         async def slow():
             nonlocal active, peak
@@ -174,18 +174,24 @@ class TestThrottledCallConcurrency:
                 active -= 1
             return "ok"
 
-        async def go():
-            return await asyncio.gather(*[
-                throttled_nse_call(
-                    f"test.concurrency.{i}", slow, is_async_fn=True
-                )
-                for i in range(8)
-            ])
+        patched_semaphore = asyncio.Semaphore(limit)
+        original = nse_rate_limiter._nse_semaphore
+        nse_rate_limiter._nse_semaphore = patched_semaphore
+        try:
+            async def go():
+                return await asyncio.gather(*[
+                    throttled_nse_call(
+                        f"test.concurrency.{i}", slow, is_async_fn=True
+                    )
+                    for i in range(8)
+                ])
 
-        asyncio.run(go())
+            asyncio.run(go())
+        finally:
+            nse_rate_limiter._nse_semaphore = original
 
-        assert peak == NSE_CONCURRENCY_LIMIT, (
-            f"global semaphore should cap at {NSE_CONCURRENCY_LIMIT}, "
+        assert peak == limit, (
+            f"global semaphore should cap at {limit}, "
             f"observed peak {peak}"
         )
 

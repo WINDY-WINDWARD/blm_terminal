@@ -38,8 +38,8 @@ const SYMBOL_DATA_TTL_SECONDS = 60;
 const CHANGE_RANGES_TTL_SECONDS = 300;
 const NSE_MAX_SYMBOLS_PER_REQUEST = 50;
 const NSE_MAX_ATTEMPTS = 3;
-const NSE_CONCURRENCY = 2;
-const NSE_COURTESY_DELAY = 1.5;
+const NSE_CONCURRENCY = parseInt(process.env.NSE_CONCURRENCY || '5', 10);
+const NSE_COURTESY_DELAY = parseFloat(process.env.NSE_COURTESY_DELAY || '0.5');
 
 const symbolDataCache = new Map();
 const changeRangesCache = new Map();

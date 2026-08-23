@@ -82,8 +82,8 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_MAX_ATTEMPTS = 10;
 const DEBOUNCE_MS = 50;
-const CHANGE_RANGES_TTL_MS = 60 * 1000;
-const SYMBOL_DATA_TTL_MS = 10 * 1000;
+const CHANGE_RANGES_TTL_MS = 5 * 60 * 1000;
+const SYMBOL_DATA_TTL_MS = 60 * 1000;
 
 class MarketWsService {
   private static instance: MarketWsService;
