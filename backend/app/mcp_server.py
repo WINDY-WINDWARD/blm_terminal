@@ -148,9 +148,10 @@ async def get_market_fii_dii_activity() -> list[dict[str, Any]]:
 async def _mcp_snapshot() -> dict:
     """Fetch largedeal snapshot through the rate limiter (one NSE call)."""
     return await throttled_nse_call(
-        "mcp:largedeal-snapshot",
+        "nse",
         _active_client.get_largedeal_snapshot,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="mcp:largedeal-snapshot",
     )
 
 
@@ -181,9 +182,10 @@ async def get_top_gainers(category: str = "allSec") -> list[dict[str, Any]]:
         return cached
 
     payload = await throttled_nse_call(
-        "mcp:market-variations-gainers",
+        "nse",
         partial(_active_client.get_market_variations, "gainers"),
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="mcp:market-variations-gainers",
     )
     rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
     if rows:
@@ -215,9 +217,10 @@ async def get_top_losers(category: str = "allSec") -> list[dict[str, Any]]:
         return cached
 
     payload = await throttled_nse_call(
-        "mcp:market-variations-loosers",
+        "nse",
         partial(_active_client.get_market_variations, "loosers"),
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="mcp:market-variations-loosers",
     )
     rows = payload.get(safe_cat, payload.get("allSec", {})).get("data", [])
     if rows:
@@ -336,9 +339,10 @@ async def get_largedeal_snapshot() -> dict[str, Any]:
         return cached
 
     data = await throttled_nse_call(
-        "largedeal-snapshot",
+        "nse",
         _active_client.get_largedeal_snapshot,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="largedeal-snapshot",
     )
     data = _clean_nan(data)
     data.pop("SHORT_DEALS_DATA", None)
@@ -376,10 +380,11 @@ async def get_change_ranges(
         if cached is not None:
             return cached
         data = await throttled_nse_call(
-            f"change-ranges:{sym}",
+            "nse",
             _active_client.get_change_ranges,
             sym,
             is_async_fn=USE_ASYNC_NSE,
+            coalesce_key=f"change-ranges:{sym}",
         )
         data = _clean_nan(data)
         _cache_set(cache_key, data)
@@ -426,10 +431,11 @@ async def get_symbol_data(
         if cached is not None:
             return cached
         data = await throttled_nse_call(
-            f"symbol-data:{sym}",
+            "nse",
             _active_client.get_symbol_data,
             sym,
             is_async_fn=USE_ASYNC_NSE,
+            coalesce_key=f"symbol-data:{sym}",
         )
         data = _clean_nan(data)
         if fields:
@@ -455,9 +461,10 @@ async def get_52week_low_stocks() -> dict[str, Any]:
         return cached
 
     data = await throttled_nse_call(
-        "52week-low",
+        "nse",
         _active_client.get_52week_low_stocks,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="52week-low",
     )
     data = _clean_nan(data)
     for rec in data.get("data", []):
@@ -476,9 +483,10 @@ async def get_52week_high_stocks() -> dict[str, Any]:
         return cached
 
     data = await throttled_nse_call(
-        "52week-high",
+        "nse",
         _active_client.get_52week_high_stocks,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="52week-high",
     )
     data = _clean_nan(data)
     for rec in data.get("data", []):
@@ -499,9 +507,10 @@ async def get_volume_gainers() -> dict[str, Any]:
         return cached
 
     data = await throttled_nse_call(
-        "volume-gainers",
+        "nse",
         _active_client.get_volume_gainers,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="volume-gainers",
     )
     data = _clean_nan(data)
     _cache_set(cache_key, data)
@@ -553,10 +562,11 @@ async def get_corporate_filings(
             if needs_refresh:
                 try:
                     csv_text: str = await throttled_nse_call(
-                        f"corporate-filing:{sym}",
+                        "nse",
                         _active_client.get_corporate_filing_comparison,
                         sym,
                         is_async_fn=USE_ASYNC_NSE,
+                        coalesce_key=f"corporate-filing:{sym}",
                     )
                 except Exception as exc:
                     logger.exception("NSE fetch failed for %s", sym)

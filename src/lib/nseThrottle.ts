@@ -18,8 +18,8 @@ export class NSEServiceUnavailableError extends Error {
   }
 }
 
-const NSE_CONCURRENCY: number = Number(process.env.NSE_CONCURRENCY ?? '2');
-const NSE_COURTESY_DELAY_SECONDS: number = Number(process.env.NSE_COURTESY_DELAY ?? '1.5');
+const NSE_CONCURRENCY: number = Number(process.env.NSE_CONCURRENCY ?? '20');
+const NSE_COURTESY_DELAY_SECONDS: number = Number(process.env.NSE_COURTESY_DELAY ?? '0.05');
 const CIRCUIT_FAIL_MAX: number = Number(process.env.NSE_CIRCUIT_FAIL_MAX ?? '5');
 const CIRCUIT_RESET_TIMEOUT: number = Number(process.env.NSE_CIRCUIT_RESET_TIMEOUT ?? '60.0');
 const NSE_MAX_RETRIES: number = Number(process.env.NSE_MAX_RETRIES ?? '2');

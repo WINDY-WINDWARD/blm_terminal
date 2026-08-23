@@ -256,6 +256,7 @@ class IinvestClient:
         try:
             return await throttled_nse_call(
                 endpoint_name, _do, is_async_fn=True,
+                coalesce_key=f"{endpoint_name}:{url}:{params}"
             )
         except _Unauthorized:
             if _retried:

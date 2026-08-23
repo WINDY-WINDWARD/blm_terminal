@@ -86,9 +86,10 @@ async def _get_largedeal_snapshot_shared() -> dict:
         return cached
 
     data = await throttled_nse_call(
-        "largedeal-snapshot",
+        "nse",
         _active_client.get_largedeal_snapshot,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="largedeal-snapshot",
     )
     nse_cache["largedeal-snapshot"] = data
     return data
@@ -114,9 +115,10 @@ async def _get_market_variations_shared(index: str) -> dict:
         return cached
 
     payload = await throttled_nse_call(
-        f"market-variations-{index}",
+        "nse",
         partial(_active_client.get_market_variations, index),
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key=f"market-variations-{index}",
     )
     nse_cache[cache_key] = payload
     return payload
@@ -424,9 +426,10 @@ async def change_ranges(symbol: str) -> JSONResponse:
         return _json_response(cached, _CHANGE_RANGES_TTL)
 
     data = await throttled_nse_call(
-        f"change-ranges:{symbol.upper()}",
+        "nse",
         partial(_active_client.get_change_ranges, symbol.upper()),
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key=f"change-ranges:{symbol.upper()}",
     )
     return _cache_response(_clean_nan(data), cache_key, _CHANGE_RANGES_TTL)
 
@@ -439,9 +442,10 @@ async def symbol_data(symbol: str) -> JSONResponse:
         return _json_response(cached, _SYMBOL_DATA_TTL)
 
     data = await throttled_nse_call(
-        f"symbol-data:{symbol.upper()}",
+        "nse",
         partial(_active_client.get_symbol_data, symbol.upper()),
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key=f"symbol-data:{symbol.upper()}",
     )
     return _cache_response(_clean_nan(data), cache_key, _SYMBOL_DATA_TTL)
 
@@ -453,9 +457,10 @@ async def fifty_two_week_low() -> JSONResponse:
         return _json_response(cached, _FIFTY_TWO_WEEK_TTL)
 
     data = await throttled_nse_call(
-        "52week-low",
+        "nse",
         _active_client.get_52week_low_stocks,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="52week-low",
     )
     return _cache_response(_clean_nan(data), "52week-low", _FIFTY_TWO_WEEK_TTL)
 
@@ -467,9 +472,10 @@ async def fifty_two_week_high() -> JSONResponse:
         return _json_response(cached, _FIFTY_TWO_WEEK_TTL)
 
     data = await throttled_nse_call(
-        "52week-high",
+        "nse",
         _active_client.get_52week_high_stocks,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="52week-high",
     )
     return _cache_response(_clean_nan(data), "52week-high", _FIFTY_TWO_WEEK_TTL)
 
@@ -481,8 +487,9 @@ async def volume_gainers() -> JSONResponse:
         return _json_response(cached, _VOLUME_GAINERS_TTL)
 
     data = await throttled_nse_call(
-        "volume-gainers",
+        "nse",
         _active_client.get_volume_gainers,
         is_async_fn=USE_ASYNC_NSE,
+        coalesce_key="volume-gainers",
     )
     return _cache_response(_clean_nan(data), "volume-gainers", _VOLUME_GAINERS_TTL)

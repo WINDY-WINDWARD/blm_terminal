@@ -354,6 +354,7 @@ class MorningstarClient:
                 self._get_fair_value_impl,
                 security_id,
                 is_async_fn=True,
+                coalesce_key=f"morningstar.fair_value:{security_id}",
             )
         except httpx.TimeoutException:
             logger.warning(f"Timeout fetching fair value for {security_id}")

@@ -60,9 +60,10 @@ async def _fetch_change_ranges_for_symbol(symbol: str) -> tuple[str, object]:
 
     try:
         data = await throttled_nse_call(
-            cache_key,
+            "nse",
             partial(_active_client.get_change_ranges, sym),
             is_async_fn=USE_ASYNC_NSE,
+            coalesce_key=cache_key,
         )
         cleaned = clean_nan(data)
         nse_cache[cache_key] = cleaned
@@ -85,9 +86,10 @@ async def _fetch_symbol_data_for_symbol(symbol: str) -> tuple[str, object]:
 
     try:
         data = await throttled_nse_call(
-            cache_key,
+            "nse",
             partial(_active_client.get_symbol_data, sym),
             is_async_fn=USE_ASYNC_NSE,
+            coalesce_key=cache_key,
         )
         cleaned = clean_nan(data)
         nse_cache[cache_key] = cleaned

@@ -573,7 +573,8 @@ class ScreenerClient:
         logger.debug("Screener GET %s q=%r", SEARCH_URL, query)
         t0 = time.perf_counter()
         resp = await throttled_nse_call(
-            "screener.search", _do_search, is_async_fn=True,
+            "screener", _do_search, is_async_fn=True,
+            coalesce_key=f"screener.search:{query}"
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -600,7 +601,8 @@ class ScreenerClient:
             logger.debug("Screener GET %s", url)
             t0 = time.perf_counter()
             resp = await throttled_nse_call(
-                "screener.quick_ratios", _do_get, is_async_fn=True,
+                "screener", _do_get, is_async_fn=True,
+                coalesce_key=f"screener.quick_ratios:{warehouse_id}"
             )
             elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -662,7 +664,8 @@ class ScreenerClient:
         logger.debug("Screener GET %s", url)
         t0 = time.perf_counter()
         resp = await throttled_nse_call(
-            "screener.company_html", _do_get, is_async_fn=True,
+            "screener", _do_get, is_async_fn=True,
+            coalesce_key=f"screener.company_html:{symbol_upper}:{mode}"
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -753,7 +756,8 @@ class ScreenerClient:
         logger.debug("Screener GET %s", url)
         t0 = time.perf_counter()
         resp = await throttled_nse_call(
-            "screener.trades", _do_get, is_async_fn=True,
+            "screener", _do_get, is_async_fn=True,
+            coalesce_key=f"screener.trades:{warehouse_id}"
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -803,7 +807,8 @@ class ScreenerClient:
         logger.debug("Screener GET %s", url)
         t0 = time.perf_counter()
         resp = await throttled_nse_call(
-            "screener.company", _do_get, is_async_fn=True,
+            "screener", _do_get, is_async_fn=True,
+            coalesce_key=f"screener.company:{symbol.upper()}:{mode}"
         )
         elapsed_ms = (time.perf_counter() - t0) * 1000
 

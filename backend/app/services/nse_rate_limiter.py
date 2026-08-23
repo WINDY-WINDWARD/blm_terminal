@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-NSE_CONCURRENCY_LIMIT: int = int(os.getenv("NSE_CONCURRENCY", "2"))
-NSE_COURTESY_DELAY_SECONDS: float = float(os.getenv("NSE_COURTESY_DELAY", "1.5"))
+NSE_CONCURRENCY_LIMIT: int = int(os.getenv("NSE_CONCURRENCY", "20"))
+NSE_COURTESY_DELAY_SECONDS: float = float(os.getenv("NSE_COURTESY_DELAY", "0.05"))
 CIRCUIT_FAIL_MAX: int = int(os.getenv("NSE_CIRCUIT_FAIL_MAX", "5"))
 CIRCUIT_RESET_TIMEOUT: float = float(os.getenv("NSE_CIRCUIT_RESET_TIMEOUT", "60.0"))
 NSE_MAX_RETRIES: int = int(os.getenv("NSE_MAX_RETRIES", "2"))
@@ -169,6 +169,7 @@ async def throttled_nse_call(
     fn,
     *args,
     is_async_fn: bool = False,
+    coalesce_key: str | None = None,
 ):
     """
     Execute an NSE API call with global concurrency limiting, per-endpoint
@@ -193,21 +194,23 @@ async def throttled_nse_call(
 
     running_loop = asyncio.get_running_loop()
 
-    if endpoint_name in _inflight:
-        inflight_future = _inflight[endpoint_name]
+    c_key = coalesce_key or endpoint_name
+
+    if c_key in _inflight:
+        inflight_future = _inflight[c_key]
         logger.debug(
             "Coalescing request for '%s' — waiting for in-flight result (id=%s)",
-            endpoint_name,
+            c_key,
             id(inflight_future),
         )
         try:
             return await inflight_future
         except Exception:
-            logger.debug("In-flight request for '%s' failed, will retry", endpoint_name)
-            del _inflight[endpoint_name]
+            logger.debug("In-flight request for '%s' failed, will retry", c_key)
+            del _inflight[c_key]
 
     inflight_future = running_loop.create_future()
-    _inflight[endpoint_name] = inflight_future
+    _inflight[c_key] = inflight_future
 
     try:
         async with _nse_semaphore:
@@ -257,5 +260,5 @@ async def throttled_nse_call(
                 raise last_exc  # type: ignore[misc]
 
     finally:
-        if endpoint_name in _inflight and _inflight[endpoint_name] is inflight_future:
-            del _inflight[endpoint_name]
+        if c_key in _inflight and _inflight[c_key] is inflight_future:
+            del _inflight[c_key]
