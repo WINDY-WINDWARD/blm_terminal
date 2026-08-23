@@ -468,18 +468,18 @@ async def run_loop_3():
                     logger.error(f"Failed to evaluate pick {pick_id}: {e}")
                     return pick_id, {"action": "HOLD", "note": f"Evaluation failed due to API error: {str(e)}"}
 
-            for p in active_picks:
-                p_data = {
-                    "symbol": p.symbol,
-                    "direction": p.direction.value,
-                    "entry": p.entry_price,
-                    "take_profit": p.take_profit,
-                    "stop_loss": p.stop_loss,
-                    "history": p.notes
-                }
-                tasks.append(evaluate_single(p.id, p.status, p.created_at, p_data))
-                
-            eval_results = await asyncio.gather(*tasks)
+        for p in active_picks:
+            p_data = {
+                "symbol": p.symbol,
+                "direction": p.direction.value,
+                "entry": p.entry_price,
+                "take_profit": p.take_profit,
+                "stop_loss": p.stop_loss,
+                "history": p.notes
+            }
+            tasks.append(evaluate_single(p.id, p.status, p.created_at, p_data))
+            
+        eval_results = await asyncio.gather(*tasks)
             
         # Sequentially apply results to DB objects
         pick_map = {p.id: p for p in active_picks}
