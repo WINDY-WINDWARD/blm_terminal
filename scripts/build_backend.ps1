@@ -15,9 +15,28 @@ $PathSep = if ($IsWindows -or $env:OS -like "*Windows*") { ";" } else { ":" }
 $AlembicData = "$BackendDir/alembic${PathSep}alembic"
 $AlembicIniData = "$BackendDir/alembic.ini${PathSep}."
 
-Write-Host "==> Running PyInstaller..."
+# Find Python/PyInstaller in .venv or system PATH
+$VenvPyInstaller = Join-Path $BackendDir ".venv\Scripts\pyinstaller.exe"
+$VenvPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
 
-& pyinstaller `
+$PyInstallerCmd = if (Test-Path $VenvPyInstaller) {
+    $VenvPyInstaller
+} elseif (Get-Command pyinstaller -ErrorAction SilentlyContinue) {
+    "pyinstaller"
+} else {
+    Write-Host "PyInstaller not found. Installing pyinstaller into backend .venv..."
+    if (Test-Path $VenvPython) {
+        & $VenvPython -m pip install pyinstaller
+        $VenvPyInstaller
+    } else {
+        python -m pip install pyinstaller
+        "pyinstaller"
+    }
+}
+
+Write-Host "==> Running PyInstaller via $PyInstallerCmd..."
+
+& $PyInstallerCmd `
     --name blm-backend `
     --onefile `
     --clean `

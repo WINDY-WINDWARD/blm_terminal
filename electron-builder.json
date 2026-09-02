@@ -4,28 +4,33 @@
   "directories": {
     "output": "dist-desktop"
   },
+  "npmRebuild": false,
+  "nodeGypRebuild": false,
   "files": [
     "electron/**/*",
     "server.js",
     "server/**/*",
     ".next/**/*",
     "public/**/*",
-    "node_modules/**/*",
     "package.json"
   ],
   "extraResources": [
     {
       "from": "dist-backend/blm-backend.exe",
       "to": "blm-backend/blm-backend.exe"
+    },
+    {
+      "from": "node_modules",
+      "to": "node_modules"
     }
   ],
   "asar": true,
-  "asarUnpack": [
-    "**/node_modules/sharp/**/*",
-    "**/node_modules/@img/**/*"
-  ],
   "win": {
     "target": [
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      },
       {
         "target": "nsis",
         "arch": ["x64"]

@@ -11,6 +11,7 @@
     "build:desktop": "npm run build:next && npm run build:backend && electron-builder",
     "start": "cross-env NODE_ENV=production node server.js",
     "electron": "electron .",
+    "pack:desktop": "electron-builder --win dir",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
