@@ -1,11 +1,50 @@
-const { app, BrowserWindow, shell, session } = require('electron');
+const { app, BrowserWindow, shell, session, dialog } = require('electron');
 const path = require('path');
 const { spawn, fork } = require('child_process');
 const http = require('http');
+const { autoUpdater } = require('electron-updater');
 
 let nextProcess = null;
 let pythonProcess = null;
 let mainWindow = null;
+
+// Configure Auto-Updater
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('[electron] Update available:', info.version);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('[electron] Update downloaded:', info.version);
+    dialog
+      .showMessageBox({
+        type: 'info',
+        title: 'Update Ready',
+        message: `Version ${info.version} has been downloaded. Restart the application now to apply the update?`,
+        buttons: ['Restart', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then((returnValue) => {
+        if (returnValue.response === 0) {
+          autoUpdater.quitAndInstall();
+        }
+      });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.warn('[electron] Auto-updater error:', err?.message || err);
+  });
+
+  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    console.warn('[electron] Check for updates failed:', err?.message || err);
+  });
+}
 
 // Determine environment
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
@@ -75,8 +114,12 @@ async function startPythonBackend(port) {
       }
     } else {
       const distBackend = path.join(__dirname, '..', 'dist-backend', 'blm-backend.exe');
+      const venvPython = path.join(__dirname, '..', 'backend', '.venv', 'Scripts', 'python.exe');
       if (require('fs').existsSync(distBackend)) {
         binaryPath = distBackend;
+      } else if (require('fs').existsSync(venvPython)) {
+        binaryPath = venvPython;
+        spawnArgs = [path.join(__dirname, '..', 'backend', 'main.py')];
       } else {
         binaryPath = 'python';
         spawnArgs = [path.join(__dirname, '..', 'backend', 'main.py')];
@@ -88,6 +131,8 @@ async function startPythonBackend(port) {
       PORT: String(port),
       DB_PATH: dbPath,
       LOG_DIR: logDir,
+      PYTHONUNBUFFERED: '1',
+      ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
     };
 
     console.log(`[electron] Spawning backend: ${binaryPath} with DB_PATH=${dbPath} LOG_DIR=${logDir}`);
@@ -122,8 +167,9 @@ async function startPythonBackend(port) {
         resolve(true);
       })
       .catch((err) => {
-        console.warn('[electron] Backend wait timeout, proceeding anyway...', err);
-        resolve(false);
+        console.error('[electron] Backend wait timeout:', err);
+        // Do not silently proceed with a broken backend; reject so Electron logs the reason
+        reject(err);
       });
   });
 }
@@ -133,9 +179,22 @@ async function startNextServer(nextPort, pythonPort) {
     console.log(`[electron] Starting Next.js server on port ${nextPort}...`);
 
     const serverScript = path.join(__dirname, '..', 'server.js');
+    // If NODE_ENV is explicitly provided in env (e.g. cross-env NODE_ENV=production), respect it.
+    // If not packaged and not set, check if .next production build exists; if so, default to production
+    // to avoid the Turbopack dev server hang.
+    let nodeEnv = process.env.NODE_ENV;
+    if (!nodeEnv) {
+      if (app.isPackaged) {
+        nodeEnv = 'production';
+      } else {
+        const dotNextExists = require('fs').existsSync(path.join(__dirname, '..', '.next'));
+        nodeEnv = dotNextExists ? 'production' : 'development';
+      }
+    }
+
     const env = {
       ...process.env,
-      NODE_ENV: app.isPackaged ? 'production' : (process.env.NODE_ENV || 'development'),
+      NODE_ENV: nodeEnv,
       PORT: String(nextPort),
       PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
     };
@@ -275,6 +334,7 @@ app.whenReady().then(async () => {
     await startNextServer(nextPort, pythonPort);
 
     createMainWindow(nextPort);
+    setupAutoUpdater();
   } catch (err) {
     console.error('[electron] Fatal startup error:', err);
     killProcesses();

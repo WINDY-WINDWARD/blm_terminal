@@ -30,7 +30,9 @@ export function LoginModal() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/py/auth/me');
+        const res = await fetch('/api/py/auth/me', {
+          signal: AbortSignal.timeout(5000),
+        });
         if (res.ok) {
           const userData = await res.json();
           setAuth({ user: userData });
@@ -71,13 +73,16 @@ export function LoginModal() {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: formData.toString(),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (!response.ok) {
         throw new Error('Invalid username or password');
       }
 
-      const userRes = await fetch('/api/py/auth/me');
+      const userRes = await fetch('/api/py/auth/me', {
+        signal: AbortSignal.timeout(5000),
+      });
       const userData = await userRes.json();
 
       setAuth({ user: userData });

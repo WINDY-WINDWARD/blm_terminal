@@ -23,6 +23,7 @@
 - Updated `backend/app/config.py` with `log_dir` setting.
 - Updated `backend/main.py` with OS-safe `LOG_DIR` directory creation and PyInstaller `_MEIPASS`-aware `_resolve_alembic_ini()`.
 - Created `scripts/build_backend.ps1` to compile FastAPI backend into a single `blm-backend.exe` bundle with Alembic and required hidden imports.
+- Built `dist-backend/blm-backend.exe` (~121.8 MB) using PyInstaller.
 
 ## Phase 3: Electron Orchestrator Setup
 - Installed `electron`, `electron-builder`, and `get-port` dev dependencies.
@@ -37,3 +38,16 @@
 - Configured `electron-builder.json` packaging `.next`, `server.js`, `server/`, `public/`, and `node_modules`.
 - Configured `asarUnpack` for `sharp` and `@img`.
 - Added `main: electron/main.js`, `build:next`, `build:backend`, `build:desktop`, and `electron` scripts to `package.json`.
+
+## Phase 5: Resilience, Release System & Upgrades
+- Resolved the "AUTHENTICATING..." hang:
+  - Added `AbortSignal.timeout(5000)` in `LoginModal.tsx` for `/api/py/auth/me` and `AbortSignal.timeout(8000)` for `/api/py/auth/login`.
+  - Added proxy timeout protection with `AbortSignal.timeout(15000)` in `src/app/api/py/[...path]/route.ts`.
+  - Configured `electron/main.js` to auto-detect existing `.next` production builds and allow `NODE_ENV=production` testing without Turbopack dev-server hangs.
+  - Added `ADMIN_PASSWORD` fallback to `admin` in Electron spawning to prevent backend bootstrap crash.
+- Installed `electron-updater` and integrated auto-update detection and restart prompts in `electron/main.js`.
+- Configured GitHub provider in `electron-builder.json` (`WINDY-WINDWARD/blm_terminal`).
+- Created `scripts/release.js` for SemVer-compliant `YYYY.M.B` version string bumping.
+- Added GitHub Actions workflow in `.github/workflows/release.yml` for automated multi-step desktop packaging and GitHub Releases publishing on `v*` tag pushes.
+- Documented release schedules, versioning rules, and workflows in `RELEASES.md`.
+- Successfully verified `npx next build`.

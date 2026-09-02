@@ -55,11 +55,15 @@ async function proxyRequest(
         ? await request.text()
         : undefined
 
+    const isSse = request.headers.get('accept')?.includes('text/event-stream')
+    const timeoutMs = isSse ? 60000 : 15000
+
     const upstream = await fetch(upstreamUrl, {
       method: request.method,
       headers: forwardHeaders,
       body,
       cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
     })
 
     const contentType = upstream.headers.get('content-type') ?? ''
@@ -127,6 +131,18 @@ async function proxyRequest(
     return res
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
+
+    if (
+      message.includes('Timeout') ||
+      message.includes('timeout') ||
+      message.includes('abort') ||
+      message.includes('AbortError')
+    ) {
+      return NextResponse.json(
+        { error: 'Python backend request timed out' },
+        { status: 504 },
+      )
+    }
 
     if (
       message.includes('ECONNREFUSED') ||

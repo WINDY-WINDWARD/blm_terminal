@@ -24,3 +24,12 @@
 - [x] Configure `electron-builder` to package `.next`, `server.js`, `public`, and `node_modules`.
 - [x] Add `asarUnpack` for `sharp`.
 - [x] Add `build:desktop` orchestration script to `package.json`.
+
+## Phase 5: Resilience, Release System & Upgrades
+- [x] Fix AUTHENTICATING hang in `LoginModal.tsx`, Next.js `/api/py/[...path]` proxy, and `electron/main.js` (support `NODE_ENV=production` in local Electron run).
+- [x] Add `electron:prod` script to run Electron against pre-built Next.js production build.
+- [x] Install `electron-updater` and configure auto-updates in `electron/main.js` & `electron-builder.json`.
+- [x] Implement `scripts/release.js` with `YYYY.M.B` version string bumping.
+- [x] Add `.github/workflows/release.yml` for automated CI/CD releases on tag pushes.
+- [x] Document release lifecycle, when to release, and release commands in `RELEASES.md`.
+- [x] Verify test and build passes, commit to git branch.

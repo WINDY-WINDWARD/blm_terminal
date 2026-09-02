@@ -28,15 +28,18 @@
   "win": {
     "target": [
       {
-        "target": "dir",
-        "arch": ["x64"]
-      },
-      {
         "target": "nsis",
         "arch": ["x64"]
       }
     ]
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "WINDY-WINDWARD",
+      "repo": "blm_terminal"
+    }
+  ],
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
