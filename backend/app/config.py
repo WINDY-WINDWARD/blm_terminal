@@ -11,6 +11,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
     db_path: str = "./data.db"
+    log_dir: str = ""
     port: int = 4455
 
     log_level: str = "INFO"

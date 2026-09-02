@@ -619,6 +619,20 @@ async def stream_chat_completion(
 
     api_key = settings.opencode_zen_api_key
     if not api_key or api_key == "none":
+        # Fallback to system_config table if configured at runtime
+        try:
+            from app.database import async_session_factory
+            from app.models.system_config import SystemConfig
+            from sqlalchemy import select
+            async with async_session_factory() as session:
+                res = await session.execute(select(SystemConfig.value).where(SystemConfig.key == "ai.opencode_zen_api_key"))
+                db_val = res.scalar_one_or_none()
+                if db_val and db_val.strip():
+                    api_key = db_val.strip()
+        except Exception:
+            pass
+
+    if not api_key or api_key == "none":
         yield json.dumps({"type": "error", "message": "OPENCODE_ZEN_API_KEY is not configured."})
         yield json.dumps({"type": "done"})
         return

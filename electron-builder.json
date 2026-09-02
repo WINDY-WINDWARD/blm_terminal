@@ -1,0 +1,41 @@
+{
+  "appId": "com.blm.terminal",
+  "productName": "BLM Terminal",
+  "directories": {
+    "output": "dist-desktop"
+  },
+  "files": [
+    "electron/**/*",
+    "server.js",
+    "server/**/*",
+    ".next/**/*",
+    "public/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "dist-backend/blm-backend.exe",
+      "to": "blm-backend/blm-backend.exe"
+    }
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/sharp/**/*",
+    "**/node_modules/@img/**/*"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

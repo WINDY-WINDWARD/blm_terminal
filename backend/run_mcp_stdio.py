@@ -1,4 +1,6 @@
-from app.mcp_server import mcp
+# Deprecated: MCP stdio runner is deprecated for desktop build.
+import sys
 
 if __name__ == "__main__":
-    mcp.run()
+    print("MCP stdio mode is deprecated and unsupported in the desktop distribution.", file=sys.stderr)
+    sys.exit(1)

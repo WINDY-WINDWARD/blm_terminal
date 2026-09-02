@@ -9,19 +9,16 @@ import {
   openAlgoAvailableAtom,
   panelCountAtom,
   panelSizesAtom,
-  wsConnectedAtom,
   selectedPanelsAtom,
   mergedGroupsAtom,
   getMergedGroupForPanel,
   validateMergeSelection,
-  cleanupOldLocalStorage,
   savedLayoutsAtom,
   layoutToastAtom,
   layoutConfirmAtom,
   authAtom,
 } from '@/store/terminalStore';
 import type { SavedLayout } from '@/store/terminalStore';
-import { marketDataService } from '@/lib/nseFetch';
 import {
   enqueueQueueOperation,
   updateAndPersistLayouts,
@@ -69,10 +66,8 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
   const setPanelSizes = useSetAtom(panelSizesAtom);
-  const setWsConnected = useSetAtom(wsConnectedAtom);
   const [selectedPanels, setSelectedPanels] = useAtom(selectedPanelsAtom);
   const [mergedGroups, setMergedGroups] = useAtom(mergedGroupsAtom);
-  const setOpenAlgoAvailable = useSetAtom(openAlgoAvailableAtom);
   const [savedLayouts, setSavedLayouts] = useAtom(savedLayoutsAtom);
   const setLayoutToast = useSetAtom(layoutToastAtom);
   const setLayoutConfirm = useSetAtom(layoutConfirmAtom);
@@ -80,31 +75,6 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [auth] = useAtom(authAtom);
 
   const { processPendingQueue } = useSavedLayoutsSync();
-
-  // Clean up legacy localStorage keys once on mount
-  useEffect(() => {
-    cleanupOldLocalStorage();
-  }, []);
-
-  // Track market WebSocket connection state
-  useEffect(() => {
-    const unsub = marketDataService.onConnectionChange((connected) => setWsConnected(connected));
-    // Eagerly open the WS so the first watchlist render has zero
-    // handshake latency. `connect()` is idempotent — no-op if the
-    // socket is already open or connecting.
-    marketDataService.connect();
-    return () => {
-      unsub();
-    };
-  }, [setWsConnected]);
-
-  // Check OpenAlgo health on mount
-  useEffect(() => {
-    fetch('/api/openalgo/health')
-      .then((r) => r.json())
-      .then((data: { available: boolean }) => setOpenAlgoAvailable(data.available))
-      .catch(() => setOpenAlgoAvailable(false));
-  }, [setOpenAlgoAvailable]);
 
   // Focus command bar on Escape or '/'.
   // For '/', if the input is not already focused, focus it and seed the '/'

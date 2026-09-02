@@ -10,7 +10,24 @@ import { NextRequest, NextResponse } from 'next/server';
  */
 export async function GET(_req: NextRequest) {
   try {
-    const apiKey = process.env.OPENALGO_API_KEY;
+    let apiKey = process.env.OPENALGO_API_KEY;
+
+    if (!apiKey) {
+      try {
+        const pythonUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
+        const cfgRes = await fetch(`${pythonUrl}/api/system-config`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (cfgRes.ok) {
+          const data = await cfgRes.json() as Record<string, unknown>;
+          if (typeof data['openalgo.api_key'] === 'string') {
+            apiKey = data['openalgo.api_key'];
+          }
+        }
+      } catch {
+        // Ignore backend lookup error
+      }
+    }
 
     if (!apiKey) {
       return NextResponse.json({ error: 'API key not configured' }, { status: 500 });

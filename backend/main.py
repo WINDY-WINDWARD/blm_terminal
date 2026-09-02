@@ -63,8 +63,17 @@ logger = logging.getLogger(__name__)
 
 # Revision ID of the first migration that captured the original schema.
 _INITIAL_REVISION = "aaf83c15d9f1"
-# Absolute path to alembic.ini so the helper works regardless of CWD.
-_ALEMBIC_INI = str(Path(__file__).resolve().parent / "alembic.ini")
+
+def _resolve_alembic_ini() -> str:
+    import sys
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base_dir = Path(sys._MEIPASS)
+    else:
+        base_dir = Path(__file__).resolve().parent
+    return str(base_dir / "alembic.ini")
+
+# Absolute path to alembic.ini so the helper works regardless of CWD or PyInstaller bundling.
+_ALEMBIC_INI = _resolve_alembic_ini()
 
 
 def _get_current_revision() -> str | None:
@@ -396,9 +405,13 @@ def _configure_logging() -> None:
     Safe to call multiple times — replaces any handlers set by Alembic's
     fileConfig() (called during migrations, which wipes our file handler).
     Uses settings.log_level so the LOG_LEVEL env-var is respected.
+    Respects LOG_DIR environment variable or settings.log_dir for OS-safe desktop logs.
     """
-    log_dir = Path(__file__).parent / "logs"
-    log_dir.mkdir(exist_ok=True)
+    if settings.log_dir:
+        log_dir = Path(settings.log_dir)
+    else:
+        log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "backend.log"
 
     formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)

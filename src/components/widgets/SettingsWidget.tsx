@@ -192,6 +192,13 @@ export function SettingsWidget() {
   const [renamingLayout, setRenamingLayout] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
+  // Runtime API Keys state
+  const [openAlgoUrlInput, setOpenAlgoUrlInput] = useState('');
+  const [openAlgoApiKeyInput, setOpenAlgoApiKeyInput] = useState('');
+  const [opencodeZenApiKeyInput, setOpencodeZenApiKeyInput] = useState('');
+  const [aiApiKeyInput, setAiApiKeyInput] = useState('');
+  const [apiKeySaveStatus, setApiKeySaveStatus] = useState<string | null>(null);
+
   const [configLoading, setConfigLoading] = useState(true);
 
   const configSaveTimerRef = useRef<Partial<Record<NotifConfigKey, NodeJS.Timeout>>>({});
@@ -211,7 +218,7 @@ export function SettingsWidget() {
   useEffect(() => {
     fetch('/api/py/system-config')
       .then((res) => res.json())
-      .then((data: Partial<Record<NotifConfigKey, number>> & { 'app.version'?: string }) => {
+      .then((data: Record<string, unknown>) => {
         setNotifConfig((current) => ({
           ...current,
           ...Object.fromEntries(
@@ -221,8 +228,20 @@ export function SettingsWidget() {
             ]),
           ),
         }));
-        if (data['app.version']) {
+        if (typeof data['app.version'] === 'string') {
           setAppVersion(data['app.version']);
+        }
+        if (typeof data['openalgo.url'] === 'string') {
+          setOpenAlgoUrlInput(data['openalgo.url']);
+        }
+        if (typeof data['openalgo.api_key'] === 'string') {
+          setOpenAlgoApiKeyInput(data['openalgo.api_key']);
+        }
+        if (typeof data['ai.opencode_zen_api_key'] === 'string') {
+          setOpencodeZenApiKeyInput(data['ai.opencode_zen_api_key']);
+        }
+        if (typeof data['ai.api_key'] === 'string') {
+          setAiApiKeyInput(data['ai.api_key']);
         }
       })
       .catch(console.error)
@@ -250,6 +269,33 @@ export function SettingsWidget() {
       });
     };
   }, []);
+
+  const handleSaveApiKeys = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setApiKeySaveStatus('Saving...');
+    try {
+      const updates = [
+        { key: 'openalgo.url', value: openAlgoUrlInput },
+        { key: 'openalgo.api_key', value: openAlgoApiKeyInput },
+        { key: 'ai.opencode_zen_api_key', value: opencodeZenApiKeyInput },
+        { key: 'ai.api_key', value: aiApiKeyInput },
+      ];
+
+      for (const item of updates) {
+        await fetch(`/api/py/system-config/${item.key}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: item.value }),
+        });
+      }
+
+      setApiKeySaveStatus('Saved successfully!');
+      setTimeout(() => setApiKeySaveStatus(null), 3000);
+    } catch {
+      setApiKeySaveStatus('Failed to save API keys');
+      setTimeout(() => setApiKeySaveStatus(null), 3000);
+    }
+  };
 
   const handleWatchlistChange = (key: string, checked: boolean) => {
     const newCols = checked
@@ -572,6 +618,77 @@ export function SettingsWidget() {
           onChange={handleMoversChange}
         />
       </div>
+
+      {/* Runtime API Keys & Integrations */}
+      {auth?.user?.is_admin && (
+        <form onSubmit={handleSaveApiKeys} className="flex flex-col gap-2 p-2 border border-terminal-border bg-terminal-panel">
+          <div className="flex items-center justify-between">
+            <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
+              API Keys & Runtime Configuration
+            </div>
+            {apiKeySaveStatus && (
+              <span className="text-[10px] text-terminal-green animate-pulse">
+                {apiKeySaveStatus}
+              </span>
+            )}
+          </div>
+          
+          <div className="flex flex-col gap-1.5 text-xs">
+            <label className="flex flex-col gap-0.5">
+              <span className="text-white/70 text-[10px]">OpenAlgo URL:</span>
+              <input
+                type="text"
+                value={openAlgoUrlInput}
+                onChange={(e) => setOpenAlgoUrlInput(e.target.value)}
+                placeholder="http://127.0.0.1:5000"
+                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+              />
+            </label>
+
+            <label className="flex flex-col gap-0.5">
+              <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
+              <input
+                type="password"
+                value={openAlgoApiKeyInput}
+                onChange={(e) => setOpenAlgoApiKeyInput(e.target.value)}
+                placeholder="Enter OpenAlgo API key"
+                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+              />
+            </label>
+
+            <label className="flex flex-col gap-0.5">
+              <span className="text-white/70 text-[10px]">OpenCode Zen / MiniMax API Key:</span>
+              <input
+                type="password"
+                value={opencodeZenApiKeyInput}
+                onChange={(e) => setOpencodeZenApiKeyInput(e.target.value)}
+                placeholder="Enter OpenCode Zen API key"
+                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+              />
+            </label>
+
+            <label className="flex flex-col gap-0.5">
+              <span className="text-white/70 text-[10px]">General AI API Key (OpenAI compatible):</span>
+              <input
+                type="password"
+                value={aiApiKeyInput}
+                onChange={(e) => setAiApiKeyInput(e.target.value)}
+                placeholder="Enter AI API key"
+                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+              />
+            </label>
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <button
+              type="submit"
+              className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors"
+            >
+              Save API Keys
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* Notification Thresholds (Admin Only) */}
       {auth?.user?.is_admin && (

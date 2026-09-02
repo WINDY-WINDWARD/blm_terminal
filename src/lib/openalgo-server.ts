@@ -102,30 +102,65 @@ export interface PlaceOrderResponse {
 
 // ─── Server API Client ─────────────────────────────────────────────────────
 
+// Runtime cached config fetched from SQLite system_config (with env fallback)
+let cachedOpenAlgoUrl: string | null = null;
+let cachedOpenAlgoApiKey: string | null = null;
+let lastConfigFetchTime = 0;
+
+async function resolveOpenAlgoCredentials(): Promise<{ url: string; apiKey: string }> {
+  const envUrl = process.env.OPENALGO_URL;
+  const envKey = process.env.OPENALGO_API_KEY;
+
+  if (envUrl && envKey) {
+    return { url: envUrl, apiKey: envKey };
+  }
+
+  // Refresh cache every 5 seconds if not in environment
+  const now = Date.now();
+  if (!cachedOpenAlgoUrl || !cachedOpenAlgoApiKey || now - lastConfigFetchTime > 5000) {
+    try {
+      const pythonUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
+      const res = await fetch(`${pythonUrl}/api/system-config`, {
+        // Internal server call - bypass auth or use internal timeout
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) {
+        const data = await res.json() as Record<string, unknown>;
+        if (typeof data['openalgo.url'] === 'string' && data['openalgo.url']) {
+          cachedOpenAlgoUrl = data['openalgo.url'];
+        }
+        if (typeof data['openalgo.api_key'] === 'string' && data['openalgo.api_key']) {
+          cachedOpenAlgoApiKey = data['openalgo.api_key'];
+        }
+        lastConfigFetchTime = now;
+      }
+    } catch {
+      // Ignore backend fetch error, fallback to env or cache
+    }
+  }
+
+  const finalUrl = envUrl || cachedOpenAlgoUrl;
+  const finalKey = envKey || cachedOpenAlgoApiKey;
+
+  if (!finalUrl) {
+    throw new Error('OPENALGO_URL is not set via environment variable or Settings');
+  }
+  if (!finalKey) {
+    throw new Error('OPENALGO_API_KEY is not set via environment variable or Settings');
+  }
+
+  return { url: finalUrl, apiKey: finalKey };
+}
+
 export class OpenAlgoServerClient {
-  private static get baseURL(): string {
-    const url = process.env.OPENALGO_URL;
-    if (!url) {
-      throw new Error('OPENALGO_URL environment variable is not set');
-    }
-    return url;
-  }
-
-  private static get apiKey(): string {
-    const key = process.env.OPENALGO_API_KEY;
-    if (!key) {
-      throw new Error('OPENALGO_API_KEY environment variable is not set');
-    }
-    return key;
-  }
-
   private static async request<T>(
     endpoint: string,
     body: Record<string, unknown> = {},
     timeoutMs = API_CONFIG.timeout
   ): Promise<T> {
-    const url = `${this.baseURL}${endpoint}`;
-    const payload = { apikey: this.apiKey, ...body };
+    const creds = await resolveOpenAlgoCredentials();
+    const url = `${creds.url}${endpoint}`;
+    const payload = { apikey: creds.apiKey, ...body };
 
     const startTime = Date.now();
 
@@ -181,7 +216,7 @@ export class OpenAlgoServerClient {
       const elapsedMs = Date.now() - startTime;
 
       if (error instanceof TypeError && error.message === 'Failed to fetch') {
-        const msg = `Network error: Could not reach OpenAlgo API at ${this.baseURL}`;
+        const msg = `Network error: Could not reach OpenAlgo API at ${creds.url}`;
         logger.error(msg, { endpoint, elapsedMs });
         throw new Error(msg);
       }

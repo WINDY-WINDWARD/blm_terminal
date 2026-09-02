@@ -30,16 +30,26 @@ DEFAULT_NOTIF_CONFIG: dict[str, float] = {
     "notif.deal_absolute_threshold_cr": 2.0,
 }
 
+ALLOWED_STRING_KEYS: set[str] = {
+    "openalgo.url",
+    "openalgo.api_key",
+    "ai.opencode_zen_api_key",
+    "ai.api_key",
+}
+
 
 class SystemConfigUpdate(BaseModel):
-    value: float = Field(..., description="Numeric configuration value")
+    value: Any = Field(..., description="Configuration value (numeric or string)")
 
 
 @router.get("/system-config")
 async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    """Return editable notification thresholds and read-only app metadata."""
+    """Return editable configuration thresholds, runtime API keys, and read-only app metadata."""
     stmt = select(SystemConfig.key, SystemConfig.value).where(
-        (SystemConfig.key.like("notif.%")) | (SystemConfig.key == "app.version")
+        (SystemConfig.key.like("notif.%"))
+        | (SystemConfig.key == "app.version")
+        | (SystemConfig.key.like("openalgo.%"))
+        | (SystemConfig.key.like("ai.%"))
     )
     result = await db.execute(stmt)
     rows = result.fetchall()
@@ -61,6 +71,11 @@ async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, Any
     version_row = next((row[1] for row in rows if row[0] == "app.version"), None)
     values["app.version"] = version_row if version_row is not None else "1.0.0"
 
+    # Runtime string configs (OpenAlgo, AI keys)
+    for key in ALLOWED_STRING_KEYS:
+        str_row = next((row[1] for row in rows if row[0] == key), None)
+        values[key] = str_row if str_row is not None else ""
+
     return values
 
 
@@ -71,12 +86,13 @@ async def update_system_config(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Upsert a single system configuration value."""
-    if key not in DEFAULT_NOTIF_CONFIG:
+    if key not in DEFAULT_NOTIF_CONFIG and key not in ALLOWED_STRING_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown system config key: {key}")
 
+    val_str = str(payload.value).strip() if payload.value is not None else ""
     stmt = sqlite_insert(SystemConfig).values(
         key=key,
-        value=str(payload.value),
+        value=val_str,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["key"],

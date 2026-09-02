@@ -7,6 +7,9 @@ import {
   notifPanelHighlightAtom,
   openAlgoAvailableAtom,
   selectedPanelsAtom,
+  activeSymbolAtom,
+  activeWatchlistIdAtom,
+  moversCategoryAtom,
 } from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
@@ -70,6 +73,20 @@ export function Panel({ id, title }: PanelProps) {
   };
 
   const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
+  const activeSymbol = useAtomValue(activeSymbolAtom);
+  const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
+  const moversCategory = useAtomValue(moversCategoryAtom);
+
+  const handlePopOut = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const query = new URLSearchParams({
+      symbol: activeSymbol || '',
+      watchlistId: String(activeWatchlistId || 1),
+      category: moversCategory || 'allSec',
+    });
+    const url = `/widget/${encodeURIComponent(title)}?${query.toString()}`;
+    window.open(url, `blm_widget_${title}_${id}`, 'width=1000,height=700');
+  };
 
   const renderWidget = () => {
     if (!openAlgoAvailable && (title === 'ORDER' || title === 'POS')) {
@@ -125,7 +142,7 @@ export function Panel({ id, title }: PanelProps) {
       onClick={handleClick}
     >
       <div
-        className={`h-6 px-2 flex items-center font-bold text-xs uppercase transition-colors duration-200 ${
+        className={`h-6 px-2 flex items-center justify-between font-bold text-xs uppercase transition-colors duration-200 ${
           isFlashing
             ? 'bg-yellow-500/40 text-white'
             : isFocused
@@ -134,6 +151,14 @@ export function Panel({ id, title }: PanelProps) {
         }`}
       >
         <span className="truncate">{title}</span>
+        <button
+          type="button"
+          onClick={handlePopOut}
+          title={`Pop out ${title} widget`}
+          className="ml-2 px-1 text-[10px] tracking-wider text-terminal-amber/70 hover:text-white hover:bg-terminal-amber/20 rounded transition-colors"
+        >
+          [POP]
+        </button>
       </div>
       <div className="flex-1 relative overflow-hidden">
         <ErrorBoundary>

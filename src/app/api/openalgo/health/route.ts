@@ -4,8 +4,28 @@ import { logger } from '@/lib/logger';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const url = process.env.OPENALGO_URL;
-  const key = process.env.OPENALGO_API_KEY;
+  let url = process.env.OPENALGO_URL;
+  let key = process.env.OPENALGO_API_KEY;
+
+  if (!url || !key) {
+    try {
+      const pythonUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
+      const cfgRes = await fetch(`${pythonUrl}/api/system-config`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (cfgRes.ok) {
+        const data = await cfgRes.json() as Record<string, unknown>;
+        if (!url && typeof data['openalgo.url'] === 'string') {
+          url = data['openalgo.url'];
+        }
+        if (!key && typeof data['openalgo.api_key'] === 'string') {
+          key = data['openalgo.api_key'];
+        }
+      }
+    } catch {
+      // Ignore backend lookup error
+    }
+  }
 
   if (!url || !key) {
     return NextResponse.json({ available: false, reason: 'OPENALGO_URL or OPENALGO_API_KEY not set' });
