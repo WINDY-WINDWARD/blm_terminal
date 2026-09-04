@@ -56,7 +56,9 @@ async function proxyRequest(
         : undefined
 
     const isSse = request.headers.get('accept')?.includes('text/event-stream')
-    const timeoutMs = isSse ? 60000 : 15000
+    
+    // Give streams a very long timeout (10 mins) so reasoning models aren't cut off
+    const timeoutMs = isSse ? 600000 : 15000
 
     const upstream = await fetch(upstreamUrl, {
       method: request.method,

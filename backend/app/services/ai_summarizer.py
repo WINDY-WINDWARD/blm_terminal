@@ -14,30 +14,48 @@ logger.setLevel(logging.DEBUG)
 _MAX_INPUT_CHARS = 24000
 
 
-def _make_client() -> AsyncOpenAI:
-    """Construct an AsyncOpenAI client from current settings."""
-    return AsyncOpenAI(
-        base_url=settings.ai_api_base_url,
-        api_key=settings.ai_api_key,
-    )
+async def _get_api_key() -> str:
+    """Fetch AI API key from settings or fallback to dynamic system_config."""
+    api_key = settings.ai_api_key
+    if not api_key or api_key == "none":
+        try:
+            from app.database import async_session_factory
+            from app.models.system_config import SystemConfig
+            from sqlalchemy import select
+            async with async_session_factory() as session:
+                res = await session.execute(
+                    select(SystemConfig.value).where(SystemConfig.key == "ai.api_key")
+                )
+                db_val = res.scalar_one_or_none()
+                if db_val and db_val.strip():
+                    api_key = db_val.strip()
+        except Exception as e:
+            logger.warning("Failed to read ai.api_key from db: %s", e)
+    return api_key
 
 
 class AISummarizer:
     """Financial statement summarizer backed by any OpenAI-compatible API."""
 
     def __init__(self) -> None:
-        self._client: AsyncOpenAI = _make_client()
         # Last-known health status — updated by ping_provider().
         self._provider_reachable: bool | None = None
+
+    async def _get_client(self) -> AsyncOpenAI:
+        """Construct an AsyncOpenAI client from current settings dynamically."""
+        return AsyncOpenAI(
+            base_url=settings.ai_api_base_url,
+            api_key=await _get_api_key(),
+        )
 
     # ------------------------------------------------------------------
     # Health / connectivity
     # ------------------------------------------------------------------
 
-    @property
-    def is_configured(self) -> bool:
+    async def is_configured(self) -> bool:
         """Return True if API base URL and key are set to non-default values."""
-        return bool(settings.ai_api_key and settings.ai_api_key != "none")
+        api_key = await _get_api_key()
+        return bool(api_key and api_key != "none")
 
     async def ping_provider(self) -> bool:
         """Send a minimal completion request to verify connectivity and auth.
@@ -46,7 +64,8 @@ class AISummarizer:
         Updates the internal ``_provider_reachable`` flag.
         """
         try:
-            await self._client.chat.completions.create(
+            client = await self._get_client()
+            await client.chat.completions.create(
                 model=settings.ai_model,
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
@@ -82,7 +101,8 @@ class AISummarizer:
             raise ValueError(f"Input text too long (max {_MAX_INPUT_CHARS} characters)")
 
         try:
-            response = await self._client.chat.completions.create(
+            client = await self._get_client()
+            response = await client.chat.completions.create(
                 model=settings.ai_model,
                 messages=[
                     {"role": "system", "content": FINANCIAL_SUMMARIZER_SYSTEM_PROMPT},
@@ -113,8 +133,7 @@ class AISummarizer:
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
-        await self._client.close()
-        logger.info("AI summarizer HTTP client closed")
+        pass
 
 
 ai_summarizer = AISummarizer()

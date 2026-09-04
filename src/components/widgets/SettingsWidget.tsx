@@ -192,12 +192,22 @@ export function SettingsWidget() {
   const [renamingLayout, setRenamingLayout] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
+
   // Runtime API Keys state
   const [openAlgoUrlInput, setOpenAlgoUrlInput] = useState('');
   const [openAlgoApiKeyInput, setOpenAlgoApiKeyInput] = useState('');
-  const [opencodeZenApiKeyInput, setOpencodeZenApiKeyInput] = useState('');
-  const [aiApiKeyInput, setAiApiKeyInput] = useState('');
+  
+  // AI Settings
+  const [aiProvider, setAiProvider] = useState('zen');
+  const [aiZenApiKeyInput, setAiZenApiKeyInput] = useState('');
+  const [aiGoApiKeyInput, setAiGoApiKeyInput] = useState('');
+  const [aiHunterModel, setAiHunterModel] = useState('');
+  const [aiVerifierModel, setAiVerifierModel] = useState('');
+  const [aiAvailableModels, setAiAvailableModels] = useState<{id: string, label: string}[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  
   const [apiKeySaveStatus, setApiKeySaveStatus] = useState<string | null>(null);
+
 
   const [configLoading, setConfigLoading] = useState(true);
 
@@ -237,12 +247,11 @@ export function SettingsWidget() {
         if (typeof data['openalgo.api_key'] === 'string') {
           setOpenAlgoApiKeyInput(data['openalgo.api_key']);
         }
-        if (typeof data['ai.opencode_zen_api_key'] === 'string') {
-          setOpencodeZenApiKeyInput(data['ai.opencode_zen_api_key']);
-        }
-        if (typeof data['ai.api_key'] === 'string') {
-          setAiApiKeyInput(data['ai.api_key']);
-        }
+        if (typeof data['ai.provider'] === 'string') setAiProvider(data['ai.provider']);
+        if (typeof data['ai.zen_api_key'] === 'string') setAiZenApiKeyInput(data['ai.zen_api_key']);
+        if (typeof data['ai.go_api_key'] === 'string') setAiGoApiKeyInput(data['ai.go_api_key']);
+        if (typeof data['ai.hunter_model'] === 'string') setAiHunterModel(data['ai.hunter_model']);
+        if (typeof data['ai.verifier_model'] === 'string') setAiVerifierModel(data['ai.verifier_model']);
       })
       .catch(console.error)
       .finally(() => setConfigLoading(false));
@@ -270,16 +279,41 @@ export function SettingsWidget() {
     };
   }, []);
 
+
+  useEffect(() => {
+    let key = '';
+    if (aiProvider === 'zen') key = aiZenApiKeyInput;
+    if (aiProvider === 'go') key = aiGoApiKeyInput;
+    
+    if (aiProvider !== 'gemini' && !key) {
+      setAiAvailableModels([{ id: '', label: `Enter ${aiProvider} API key to fetch models` }]);
+      return;
+    }
+
+    setFetchingModels(true);
+    fetch(`/api/py/ai/provider-models?provider=${aiProvider}&api_key=${encodeURIComponent(key)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setAiAvailableModels(data);
+      })
+      .catch(console.error)
+      .finally(() => setFetchingModels(false));
+  }, [aiProvider, aiZenApiKeyInput, aiGoApiKeyInput]);
+
   const handleSaveApiKeys = async (e: React.FormEvent) => {
+
     e.preventDefault();
     setApiKeySaveStatus('Saving...');
     try {
-      const updates = [
-        { key: 'openalgo.url', value: openAlgoUrlInput },
-        { key: 'openalgo.api_key', value: openAlgoApiKeyInput },
-        { key: 'ai.opencode_zen_api_key', value: opencodeZenApiKeyInput },
-        { key: 'ai.api_key', value: aiApiKeyInput },
-      ];
+        const updates = [
+          { key: 'openalgo.url', value: openAlgoUrlInput },
+          { key: 'openalgo.api_key', value: openAlgoApiKeyInput },
+          { key: 'ai.provider', value: aiProvider },
+          { key: 'ai.zen_api_key', value: aiZenApiKeyInput },
+          { key: 'ai.go_api_key', value: aiGoApiKeyInput },
+          { key: 'ai.hunter_model', value: aiHunterModel },
+          { key: 'ai.verifier_model', value: aiVerifierModel },
+        ];
 
       for (const item of updates) {
         await fetch(`/api/py/system-config/${item.key}`, {
@@ -656,27 +690,83 @@ export function SettingsWidget() {
               />
             </label>
 
+            <div className="mt-2 mb-1 border-b border-terminal-border" />
+
             <label className="flex flex-col gap-0.5">
-              <span className="text-white/70 text-[10px]">OpenCode Zen / MiniMax API Key:</span>
-              <input
-                type="password"
-                value={opencodeZenApiKeyInput}
-                onChange={(e) => setOpencodeZenApiKeyInput(e.target.value)}
-                placeholder="Enter OpenCode Zen API key"
+              <span className="text-white/70 text-[10px]">AI Provider:</span>
+              <select
+                value={aiProvider}
+                onChange={(e) => setAiProvider(e.target.value)}
                 className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              />
+              >
+                <option value="zen">OpenCode Zen</option>
+                <option value="go">OpenCode Go</option>
+                <option value="gemini">Google Gemini (Antigravity)</option>
+              </select>
+            </label>
+
+              {aiProvider === 'gemini' ? (
+                <div className="flex flex-col gap-1 mt-1">
+                  <span className="text-white/70 text-[10px]">Gemini Authentication:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetch('/api/py/auth/gemini/login')
+                        .then(r => r.json())
+                        .then(d => {
+                          if (d.auth_url) {
+                            window.open(d.auth_url, '_blank');
+                            setApiKeySaveStatus('Awaiting Google OAuth... Check your browser.');
+                          }
+                        })
+                        .catch(err => setApiKeySaveStatus('Failed to initiate login: ' + err));
+                    }}
+                    className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors"
+                  >
+                    Login to Gemini
+                  </button>
+                </div>
+              ) : (
+              <label className="flex flex-col gap-0.5">
+                <span className="text-white/70 text-[10px]">{aiProvider === 'zen' ? 'Zen' : 'Go'} API Key:</span>
+                <input
+                  type="password"
+                  value={aiProvider === 'zen' ? aiZenApiKeyInput : aiGoApiKeyInput}
+                  onChange={(e) => aiProvider === 'zen' ? setAiZenApiKeyInput(e.target.value) : setAiGoApiKeyInput(e.target.value)}
+                  placeholder={`Enter ${aiProvider === 'zen' ? 'Zen' : 'Go'} API key`}
+                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                />
+              </label>
+            )}
+
+            <label className="flex flex-col gap-0.5 mt-2">
+              <span className="text-white/70 text-[10px]">Hunter Model:</span>
+              <select
+                value={aiHunterModel}
+                onChange={(e) => setAiHunterModel(e.target.value)}
+                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+              >
+                <option value="">-- Select Hunter Model --</option>
+                {aiAvailableModels.map(m => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
             </label>
 
             <label className="flex flex-col gap-0.5">
-              <span className="text-white/70 text-[10px]">General AI API Key (OpenAI compatible):</span>
-              <input
-                type="password"
-                value={aiApiKeyInput}
-                onChange={(e) => setAiApiKeyInput(e.target.value)}
-                placeholder="Enter AI API key"
+              <span className="text-white/70 text-[10px]">Verifier Model:</span>
+              <select
+                value={aiVerifierModel}
+                onChange={(e) => setAiVerifierModel(e.target.value)}
                 className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              />
+              >
+                <option value="">-- Select Verifier Model --</option>
+                {aiAvailableModels.map(m => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
             </label>
+
           </div>
 
           <div className="flex justify-end pt-1">

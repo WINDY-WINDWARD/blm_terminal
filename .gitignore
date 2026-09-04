@@ -67,3 +67,11 @@ cookies/manifest.json
 # network captures
 *.har
 *credentials.json
+# Electron & PyInstaller build outputs
+/dist/
+/backend/dist/
+/backend/build/
+/backend/*.spec
+
+dist-*/
+

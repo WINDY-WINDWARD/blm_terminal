@@ -23,6 +23,7 @@ from app.routers.watchlist import router as watchlist_router
 from app.routers.layout import router as layout_router
 
 from app.routers.auth import router as auth_router
+from app.routers.gemini_auth import router as gemini_auth_router
 from app.routers.users import router as users_router
 
 __all__ = [
@@ -49,5 +50,6 @@ __all__ = [
     "watchlist_router",
     "layout_router",
     "auth_router",
+    "gemini_auth_router",
     "users_router",
 ]

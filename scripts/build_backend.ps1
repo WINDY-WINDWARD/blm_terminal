@@ -1,70 +1,31 @@
-# BLM Terminal - PyInstaller Backend Build Script
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = (Get-Item -Path $PSScriptRoot\..).FullName
-$BackendDir = Join-Path $ProjectRoot "backend"
-$DistDir = Join-Path $ProjectRoot "dist-backend"
+Write-Host "Building BLM Backend using PyInstaller..."
 
-Write-Host "==> Project Root: $ProjectRoot"
-Write-Host "==> Backend Dir:  $BackendDir"
-Write-Host "==> Output Dir:   $DistDir"
+# Move into backend directory
+Set-Location -Path "$PSScriptRoot\..\backend"
 
-# Determine path separator for --add-data (Windows uses ';', Linux/Mac uses ':')
-$PathSep = if ($IsWindows -or $env:OS -like "*Windows*") { ";" } else { ":" }
-
-$AlembicData = "$BackendDir/alembic${PathSep}alembic"
-$AlembicIniData = "$BackendDir/alembic.ini${PathSep}."
-
-# Find Python/PyInstaller in .venv or system PATH
-$VenvPyInstaller = Join-Path $BackendDir ".venv\Scripts\pyinstaller.exe"
-$VenvPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
-
-$PyInstallerCmd = if (Test-Path $VenvPyInstaller) {
-    $VenvPyInstaller
-} elseif (Get-Command pyinstaller -ErrorAction SilentlyContinue) {
-    "pyinstaller"
-} else {
-    Write-Host "PyInstaller not found. Installing pyinstaller into backend .venv..."
-    if (Test-Path $VenvPython) {
-        & $VenvPython -m pip install pyinstaller
-        $VenvPyInstaller
-    } else {
-        python -m pip install pyinstaller
-        "pyinstaller"
-    }
+# Ensure venv exists and is activated (assumes it's installed there)
+if (-not (Test-Path ".venv\Scripts\python.exe")) {
+    Write-Host "Virtual environment not found. Please install requirements first."
+    exit 1
 }
 
-Write-Host "==> Running PyInstaller via $PyInstallerCmd..."
+# Install PyInstaller if missing
+& .venv\Scripts\python.exe -m pip install pyinstaller
 
-& $PyInstallerCmd `
+# Build the executable
+& .venv\Scripts\pyinstaller.exe `
     --name blm-backend `
     --onefile `
-    --clean `
-    --distpath $DistDir `
-    --workpath "$DistDir/build" `
-    --specpath "$DistDir" `
-    --add-data $AlembicData `
-    --add-data $AlembicIniData `
-    --hidden-import aiosqlite `
-    --hidden-import rookiepy `
-    --hidden-import sqlalchemy.dialects.sqlite `
-    --hidden-import uvicorn.logging `
-    --hidden-import uvicorn.loops `
-    --hidden-import uvicorn.loops.auto `
-    --hidden-import uvicorn.protocols `
-    --hidden-import uvicorn.protocols.http `
-    --hidden-import uvicorn.protocols.http.auto `
-    --hidden-import uvicorn.protocols.websockets `
-    --hidden-import uvicorn.protocols.websockets.auto `
-    --hidden-import uvicorn.lifespan `
-    --hidden-import uvicorn.lifespan.on `
-    --hidden-import alembic.context `
-    --hidden-import app.models.system_config `
-    "$BackendDir/main.py"
+    --add-data "alembic;alembic" `
+    --add-data "alembic.ini;." `
+    --hidden-import "aiosqlite" `
+    --hidden-import "sqlalchemy.dialects.sqlite" `
+    --hidden-import "rookiepy" `
+    --hidden-import "newspaper" `
+    --hidden-import "newspaper.extractors" `
+    --hidden-import "passlib.handlers.bcrypt" `
+    main.py
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "PyInstaller build failed with exit code $LASTEXITCODE"
-    exit $LASTEXITCODE
-}
-
-Write-Host "==> Backend build completed successfully: $DistDir/blm-backend.exe"
+Write-Host "Build complete! Executable is at backend\dist\blm-backend.exe"

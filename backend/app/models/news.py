@@ -39,7 +39,7 @@ class NewsArticle(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
-        server_default=func.now(),
+        default=func.now(),
     )
     company_symbol: Mapped[str | None] = mapped_column(
         String(32),

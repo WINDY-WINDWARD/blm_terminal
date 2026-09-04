@@ -19,7 +19,7 @@ class Watchlist(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
-        server_default=func.now(),
+        default=func.now(),
     )
 
     items: Mapped[list["WatchlistItem"]] = relationship(
@@ -42,7 +42,7 @@ class WatchlistItem(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
-        server_default=func.now(),
+        default=func.now(),
     )
 
     watchlist: Mapped["Watchlist"] = relationship("Watchlist", back_populates="items")

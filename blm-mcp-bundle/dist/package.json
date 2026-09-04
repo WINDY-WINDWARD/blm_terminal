@@ -1,9 +1,0 @@
-{
-  "name": "blm-mcp-proxy",
-  "version": "1.0.0",
-  "description": "BLM MCP Proxy for Claude Desktop",
-  "main": "server/index.js",
-  "engines": {
-    "node": ">=14"
-  }
-}

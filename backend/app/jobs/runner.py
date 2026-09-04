@@ -159,6 +159,7 @@ async def sync_job_to_db(job_key: str) -> None:
                 name=job_def.name,
                 description=job_def.description,
                 category=job_def.category,
+                schedule_type="cron",
                 cron_expression=job_def.cron_expression,
                 is_manual_only=job_def.is_manual_only,
                 status="idle",
@@ -171,6 +172,7 @@ async def sync_job_to_db(job_key: str) -> None:
             job.name = job_def.name
             job.description = job_def.description
             job.category = job_def.category
+            job.schedule_type = "cron"
             job.cron_expression = job_def.cron_expression
             job.is_manual_only = job_def.is_manual_only
 

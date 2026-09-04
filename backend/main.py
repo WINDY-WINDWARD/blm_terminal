@@ -44,6 +44,7 @@ from app.routers import (
     layout_router,
     jobs_router,
     auth_router,
+    gemini_auth_router,
     users_router,
 )
 from app.workers.lifecycle import start_cache_cleanup
@@ -53,7 +54,6 @@ from app.services.screener_client import screener_client
 from app.services.news_fetcher import news_fetcher
 from app.services.nse_rate_limiter import NSEServiceUnavailableError
 from app.orchestrator import orchestrator
-from app import mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,7 @@ def _ensure_watchlist_data() -> None:
             result = conn.execute(sa_text("SELECT COUNT(*) FROM watchlists WHERE id = 1"))
             if result.scalar() == 0:
                 logger.info("Creating Default watchlist")
-                conn.execute(sa_text("INSERT INTO watchlists (id, name) VALUES (1, 'Default')"))
+                conn.execute(sa_text("INSERT INTO watchlists (id, name, user_id, created_at) VALUES (1, 'Default', 1, CURRENT_TIMESTAMP)"))
                 conn.commit()
 
             result = conn.execute(sa_text("SELECT COUNT(*) FROM watchlist_items WHERE watchlist_id IS NULL"))
@@ -551,10 +551,10 @@ from app.services.antigravity_auth import get_antigravity_token
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Antigravity Auth check
-    if settings.ai_provider == "antigravity":
+    if settings.ai_provider == "antigravity" or settings.ai_provider == "gemini":
         token = await get_antigravity_token()
         if not token:
-            raise RuntimeError("Antigravity Auth Failed. Please run 'python backend/scripts/ag_login.py' to authenticate.")
+            logger.warning("Antigravity (Gemini) Auth Failed. Please authenticate via the Settings UI.")
 
     # Re-configure logging: restores our handlers after uvicorn's own startup
     # logging setup (which runs after module import in reload mode).
@@ -600,28 +600,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
     else:
         logger.warning(
-            "AI_API_KEY not set — AI summarizer endpoints will return 503. "
+            "AI Summarizer is not configured. News and Announcement summaries will not work. "
             "Set AI_API_KEY (and optionally AI_API_BASE_URL, AI_MODEL) in .env."
         )
 
-    # The MCP streamable-HTTP session manager requires its task group to be
-    # running for the duration of the application.  streamable_http_app() is
-    # called at mount time (module scope), so _session_manager is already
-    # created; we just need to start it here inside the lifespan.
-    assert mcp_server.mcp._session_manager is not None, (
-        "MCP session manager not initialised — ensure app.mount() runs before lifespan"
-    )
-    async with mcp_server.mcp._session_manager.run():
-        yield
+    yield
 
-        logger.info("Shutting down — cancelling background tasks...")
-        cleanup_task.cancel()
+    logger.info("Shutting down — cancelling background tasks...")
+    cleanup_task.cancel()
 
-        logger.info("Shutting down — stopping workers and closing clients...")
-        await orchestrator.stop()
+    logger.info("Shutting down — stopping workers and closing clients...")
+    await orchestrator.stop()
 
-        from app.services.llm_provider import cleanup_shared_clients
-        await cleanup_shared_clients()
+    from app.services.llm_provider import cleanup_shared_clients
+    await cleanup_shared_clients()
 
 
 # ---------------------------------------------------------------------------
@@ -714,14 +706,12 @@ app.include_router(jobs_router, prefix="/api")
 from app.routers.ticker import router as ticker_router
 app.include_router(ticker_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(gemini_auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 
 if settings.is_development:
     from app.routers.notifications import _dev_router
     app.include_router(_dev_router, prefix="/api")
-
-# Mount MCP server under /api/mcp
-app.mount("/api/mcp", mcp_server.mcp.streamable_http_app())
 
 
 @app.get("/health", tags=["meta"])

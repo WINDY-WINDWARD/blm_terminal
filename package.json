@@ -10,7 +10,7 @@
     "build:backend": "powershell -ExecutionPolicy Bypass -File ./scripts/build_backend.ps1",
     "build:desktop": "npm run build:next && npm run build:backend && electron-builder",
     "start": "cross-env NODE_ENV=production node server.js",
-    "electron": "electron .",
+    "electron": "npm run build:next && cross-env NODE_ENV=production electron .",
     "electron:prod": "cross-env NODE_ENV=production electron .",
     "release": "node scripts/release.js",
     "pack:desktop": "electron-builder --win dir",
@@ -67,5 +67,33 @@
   "overrides": {
     "postcss": "^8.5.25",
     "sharp": "^0.35.0"
+  },
+  "build": {
+    "appId": "com.opencode.blmterminal",
+    "productName": "BLM Terminal",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      ".next/**/*",
+      "server.js",
+      "server/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/blm-backend.exe",
+        "to": "backend.exe"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/sharp/**/*",
+      "**/node_modules/@img/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
   }
 }

@@ -211,19 +211,20 @@ def _set_first_run_complete(worker: str) -> None:
         return
 
     key = f"first_run.{worker}"
-    try:
-        with _SyncSessionLocal() as db:
-            stmt = select(SystemConfig).where(SystemConfig.key == key)
-            config = db.execute(stmt).scalar_one_or_none()
-            if config:
-                config.value = "False"
-            else:
-                db.add(SystemConfig(key=key, value="False"))
-            db.commit()
-            _first_run_completed_cache[worker] = True
-            logger.info(f"first_run flag set to False for worker: {worker}")
-    except Exception as e:
-        logger.warning(f"Failed to set first_run to False for {worker}: {e}")
+    with _first_run_lock:
+        try:
+            with _SyncSessionLocal() as db:
+                stmt = select(SystemConfig).where(SystemConfig.key == key)
+                config = db.execute(stmt).scalar_one_or_none()
+                if config:
+                    config.value = "False"
+                else:
+                    db.add(SystemConfig(key=key, value="False"))
+                db.commit()
+                _first_run_completed_cache[worker] = True
+                logger.info(f"first_run flag set to False for worker: {worker}")
+        except Exception as e:
+            logger.warning(f"Failed to set first_run to False for {worker}: {e}")
 
 
 def _sleep_interruptible(seconds: float) -> bool:

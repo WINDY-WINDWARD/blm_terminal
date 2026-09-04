@@ -1,343 +1,222 @@
-const { app, BrowserWindow, shell, session, dialog } = require('electron');
+const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 const { spawn, fork } = require('child_process');
-const http = require('http');
-const { autoUpdater } = require('electron-updater');
+const net = require('net');
 
-let nextProcess = null;
+let mainWindow;
 let pythonProcess = null;
-let mainWindow = null;
+let nextProcess = null;
 
-// Configure Auto-Updater
-function setupAutoUpdater() {
-  if (!app.isPackaged) return;
-
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  autoUpdater.on('update-available', (info) => {
-    console.log('[electron] Update available:', info.version);
+// Ensure single instance
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
 
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log('[electron] Update downloaded:', info.version);
-    dialog
-      .showMessageBox({
-        type: 'info',
-        title: 'Update Ready',
-        message: `Version ${info.version} has been downloaded. Restart the application now to apply the update?`,
-        buttons: ['Restart', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-      })
-      .then((returnValue) => {
-        if (returnValue.response === 0) {
-          autoUpdater.quitAndInstall();
-        }
-      });
-  });
+  app.whenReady().then(startApp);
 
-  autoUpdater.on('error', (err) => {
-    console.warn('[electron] Auto-updater error:', err?.message || err);
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
   });
-
-  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-    console.warn('[electron] Check for updates failed:', err?.message || err);
-  });
+  
+  app.on('before-quit', cleanupProcesses);
 }
 
-// Determine environment
-const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
-const appDataPath = app.getPath('userData');
-const dbPath = path.join(appDataPath, 'data.db');
-const logDir = path.join(appDataPath, 'logs');
-
-async function getAvailablePort(defaultPort) {
-  try {
-    const getPortModule = await import('get-port');
-    const getPort = getPortModule.default;
-    return await getPort({ port: getPortModule.portNumbers(defaultPort, defaultPort + 100) });
-  } catch (err) {
-    console.warn(`[electron] get-port failed, falling back to ${defaultPort}:`, err);
-    return defaultPort;
+function cleanupProcesses() {
+  if (pythonProcess) {
+    pythonProcess.kill();
+    pythonProcess = null;
+  }
+  if (nextProcess) {
+    nextProcess.kill();
+    nextProcess = null;
   }
 }
 
-function waitForHttp(url, timeoutMs = 60000) {
+function findFreePort() {
   return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    const interval = 500;
-
-    const check = () => {
-      const req = http.get(url, (res) => {
-        if (res.statusCode && res.statusCode < 500) {
-          resolve(true);
-        } else {
-          retry();
-        }
+    const srv = net.createServer((sock) => {
+      sock.end();
+    });
+    srv.listen(0, () => {
+      const port = srv.address().port;
+      srv.close((err) => {
+        if (err) reject(err);
+        else resolve(port);
       });
-
-      req.on('error', () => {
-        retry();
-      });
-
-      req.setTimeout(2000, () => {
-        req.destroy();
-        retry();
-      });
-    };
-
-    const retry = () => {
-      if (Date.now() - startTime > timeoutMs) {
-        reject(new Error(`Timeout waiting for ${url}`));
-      } else {
-        setTimeout(check, interval);
-      }
-    };
-
-    check();
+    });
+    srv.on('error', reject);
   });
 }
 
-async function startPythonBackend(port) {
-  return new Promise((resolve, reject) => {
-    console.log(`[electron] Starting Python backend on port ${port}...`);
+async function startApp() {
+  try {
+    const isDev = !app.isPackaged;
+    
+    // Find free ports
+    const pythonPort = await findFreePort();
+    const nextPort = await findFreePort();
+    
+    // Determine paths
+    const userDataPath = app.getPath('userData');
+    
+    // In dev mode, use the repository's massive data.db so you don't lose data.
+    // In production, use the OS-safe AppData folder so installations don't crash from read-only permissions.
+    const dbPath = isDev 
+      ? path.join(app.getAppPath(), 'backend', 'data.db') 
+      : path.join(userDataPath, 'data.db');
+      
+    const logDir = isDev
+      ? path.join(app.getAppPath(), 'backend', 'logs')
+      : path.join(userDataPath, 'logs');
+    
+    // 1. Start Python Backend
+    let pythonCmd;
+    let pythonArgs = [];
 
-    let binaryPath;
-    let spawnArgs = [];
-
-    if (app.isPackaged) {
-      // In production packaged app, blm-backend.exe is placed in extraResources / dist
-      binaryPath = path.join(process.resourcesPath, 'blm-backend', 'blm-backend.exe');
-      if (!require('fs').existsSync(binaryPath)) {
-        binaryPath = path.join(process.resourcesPath, 'blm-backend.exe');
-      }
+    if (isDev) {
+      // In dev, run directly via the local virtual environment
+      const isWindows = process.platform === 'win32';
+      pythonCmd = path.join(
+        app.getAppPath(), 
+        'backend', 
+        '.venv', 
+        isWindows ? 'Scripts' : 'bin', 
+        isWindows ? 'python.exe' : 'python'
+      );
+      pythonArgs = [path.join(app.getAppPath(), 'backend', 'main.py')];
     } else {
-      const distBackend = path.join(__dirname, '..', 'dist-backend', 'blm-backend.exe');
-      const venvPython = path.join(__dirname, '..', 'backend', '.venv', 'Scripts', 'python.exe');
-      if (require('fs').existsSync(distBackend)) {
-        binaryPath = distBackend;
-      } else if (require('fs').existsSync(venvPython)) {
-        binaryPath = venvPython;
-        spawnArgs = [path.join(__dirname, '..', 'backend', 'main.py')];
-      } else {
-        binaryPath = 'python';
-        spawnArgs = [path.join(__dirname, '..', 'backend', 'main.py')];
-      }
+      // Packaged app path
+      pythonCmd = path.join(process.resourcesPath, 'backend.exe');
     }
 
-    const env = {
-      ...process.env,
-      PORT: String(port),
-      DB_PATH: dbPath,
-      LOG_DIR: logDir,
-      PYTHONUNBUFFERED: '1',
-      ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
-    };
-
-    console.log(`[electron] Spawning backend: ${binaryPath} with DB_PATH=${dbPath} LOG_DIR=${logDir}`);
-
-    pythonProcess = spawn(binaryPath, spawnArgs, {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-
-    pythonProcess.stdout.on('data', (data) => {
-      console.log(`[python] ${data.toString().trim()}`);
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      console.error(`[python-err] ${data.toString().trim()}`);
+    console.log(`Starting Python backend on port ${pythonPort}...`);
+    pythonProcess = spawn(pythonCmd, pythonArgs, {
+      env: {
+        ...process.env,
+        PORT: pythonPort.toString(),
+        DB_PATH: dbPath,
+        LOG_DIR: logDir,
+        ENV: isDev ? 'development' : 'production',
+        ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin'
+      },
+      stdio: 'inherit'
     });
 
     pythonProcess.on('error', (err) => {
-      console.error('[electron] Python backend failed to spawn:', err);
-      reject(err);
+      console.error('Failed to start python backend:', err);
     });
 
-    pythonProcess.on('exit', (code, signal) => {
-      console.log(`[electron] Python backend exited with code ${code}, signal ${signal}`);
-    });
+    // 2. Start Next.js Frontend
+    const serverJsPath = isDev 
+      ? path.join(__dirname, '..', 'server.js')
+      : path.join(process.resourcesPath, 'app.asar', 'server.js');
 
-    // Wait for backend /api/system-config or health check
-    waitForHttp(`http://127.0.0.1:${port}/api/system-config`, 30000)
-      .then(() => {
-        console.log('[electron] Python backend is ready.');
-        resolve(true);
-      })
-      .catch((err) => {
-        console.error('[electron] Backend wait timeout:', err);
-        // Do not silently proceed with a broken backend; reject so Electron logs the reason
-        reject(err);
-      });
-  });
-}
-
-async function startNextServer(nextPort, pythonPort) {
-  return new Promise((resolve, reject) => {
-    console.log(`[electron] Starting Next.js server on port ${nextPort}...`);
-
-    const serverScript = path.join(__dirname, '..', 'server.js');
-    // If NODE_ENV is explicitly provided in env (e.g. cross-env NODE_ENV=production), respect it.
-    // If not packaged and not set, check if .next production build exists; if so, default to production
-    // to avoid the Turbopack dev server hang.
-    let nodeEnv = process.env.NODE_ENV;
-    if (!nodeEnv) {
-      if (app.isPackaged) {
-        nodeEnv = 'production';
-      } else {
-        const dotNextExists = require('fs').existsSync(path.join(__dirname, '..', '.next'));
-        nodeEnv = dotNextExists ? 'production' : 'development';
-      }
-    }
-
-    const env = {
-      ...process.env,
-      NODE_ENV: nodeEnv,
-      PORT: String(nextPort),
-      PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
-    };
-
-    nextProcess = fork(serverScript, [], {
-      env,
-      silent: false,
-      cwd: path.join(__dirname, '..'),
+    console.log(`Starting Next.js frontend on port ${nextPort}...`);
+    nextProcess = fork(serverJsPath, [], {
+      env: {
+        ...process.env,
+        PORT: nextPort.toString(),
+        PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
+        NODE_ENV: 'production' // Force production mode since Next.js dev server has issues
+      },
+      stdio: 'inherit'
     });
 
     nextProcess.on('error', (err) => {
-      console.error('[electron] Next.js server failed to fork:', err);
-      reject(err);
+      console.error('Failed to start Next.js process:', err);
     });
 
-    nextProcess.on('exit', (code, signal) => {
-      console.log(`[electron] Next.js server exited with code ${code}, signal ${signal}`);
+    // 3. Wait for Next.js to be ready (poll)
+    await waitForServer(`http://127.0.0.1:${nextPort}/api/openalgo/health`, 30000);
+
+    // 4. Create Main Window
+    mainWindow = new BrowserWindow({
+      width: 1400,
+      height: 900,
+      title: "BLM Terminal",
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
     });
 
-    waitForHttp(`http://127.0.0.1:${nextPort}/`, 60000)
-      .then(() => {
-        console.log('[electron] Next.js server is ready.');
-        resolve(true);
-      })
-      .catch((err) => {
-        console.error('[electron] Next.js server startup failed:', err);
-        reject(err);
+    // Multi-Window Pop-out Interceptor
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      // If the frontend calls window.open (e.g. for popped out widgets or OAuth)
+      if (url.includes('/widget/')) {
+        const widgetWindow = new BrowserWindow({
+          width: 800,
+          height: 600,
+          frame: false, // Optional: make widget windows frameless
+          titleBarStyle: 'hidden',
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true
+          }
+        });
+
+        // Add DevTools support for widget windows too
+        widgetWindow.webContents.on('before-input-event', (event, input) => {
+          if (input.key === 'F12') {
+            widgetWindow.webContents.toggleDevTools();
+            event.preventDefault();
+          }
+        });
+
+        widgetWindow.loadURL(url);
+        return { action: 'deny' }; // Prevent default pop-up
+      }
+      
+      if (url.includes('accounts.google.com/o/oauth2')) {
+        // Open OAuth in default system browser
+        shell.openExternal(url);
+        return { action: 'deny' };
+      }
+
+      return { action: 'allow' };
+    });
+
+    // Add F12 DevTools toggle for main window
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'F12') {
+        mainWindow.webContents.toggleDevTools();
+        event.preventDefault();
+      }
+    });
+
+    mainWindow.loadURL(`http://127.0.0.1:${nextPort}`);
+
+  } catch (error) {
+    console.error('App failed to start:', error);
+    app.quit();
+  }
+}
+
+function waitForServer(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      const http = url.startsWith('https') ? require('https') : require('http');
+      const req = http.get(url, (res) => {
+        clearInterval(interval);
+        resolve();
+      }).on('error', (err) => {
+        if (Date.now() - start > timeoutMs) {
+          clearInterval(interval);
+          reject(new Error(`Server at ${url} did not respond within ${timeoutMs}ms`));
+        }
       });
+      req.end();
+    }, 1000);
   });
 }
-
-function createMainWindow(nextPort) {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 700,
-    title: 'BLM Terminal',
-    backgroundColor: '#0a0a0a',
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
-
-  // Intercept window.open calls from frontend (pop-out widgets)
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const parsedUrl = new URL(url);
-      const isInternal =
-        parsedUrl.hostname === '127.0.0.1' ||
-        parsedUrl.hostname === 'localhost' ||
-        parsedUrl.origin === `http://127.0.0.1:${nextPort}`;
-
-      if (isInternal) {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            width: 1000,
-            height: 700,
-            backgroundColor: '#0a0a0a',
-            autoHideMenuBar: true,
-            title: 'BLM Widget',
-            webPreferences: {
-              nodeIntegration: false,
-              contextIsolation: true,
-              sandbox: true,
-            },
-          },
-        };
-      }
-
-      // External link: open in OS default browser
-      shell.openExternal(url);
-      return { action: 'deny' };
-    } catch {
-      return { action: 'deny' };
-    }
-  });
-
-  mainWindow.loadURL(`http://127.0.0.1:${nextPort}/`);
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-}
-
-function killProcesses() {
-  console.log('[electron] Tearing down child processes...');
-  if (nextProcess) {
-    try {
-      nextProcess.kill('SIGTERM');
-    } catch (e) {
-      console.error('[electron] Error killing Next.js process:', e);
-    }
-    nextProcess = null;
-  }
-
-  if (pythonProcess) {
-    try {
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(pythonProcess.pid), '/f', '/t']);
-      } else {
-        pythonProcess.kill('SIGTERM');
-      }
-    } catch (e) {
-      console.error('[electron] Error killing Python process:', e);
-    }
-    pythonProcess = null;
-  }
-}
-
-app.on('before-quit', () => {
-  killProcesses();
-});
-
-app.on('will-quit', () => {
-  killProcesses();
-});
-
-app.on('window-all-closed', () => {
-  killProcesses();
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.whenReady().then(async () => {
-  try {
-    const pythonPort = await getAvailablePort(4455);
-    const nextPort = await getAvailablePort(3000);
-
-    console.log(`[electron] Ports allocated -> Next.js: ${nextPort}, Python: ${pythonPort}`);
-
-    await startPythonBackend(pythonPort);
-    await startNextServer(nextPort, pythonPort);
-
-    createMainWindow(nextPort);
-    setupAutoUpdater();
-  } catch (err) {
-    console.error('[electron] Fatal startup error:', err);
-    killProcesses();
-    app.quit();
-  }
-});

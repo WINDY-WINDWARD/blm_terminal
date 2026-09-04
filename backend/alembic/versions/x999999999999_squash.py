@@ -21,29 +21,29 @@ def upgrade() -> None:
         'chat_sessions',
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('user_id', sa.INTEGER, nullable=False, server_default=sa.text('1')),
-        sa.Column('title', sa.VARCHAR(120), nullable=False, server_default=sa.text('New Chat')),
-        sa.Column('model', sa.VARCHAR(64), nullable=False, server_default=sa.text('minimax-m2-5-free')),
-        sa.Column('symbol', sa.VARCHAR(32), nullable=False, server_default=sa.text('')),
-        sa.Column('exchange', sa.VARCHAR(16), nullable=False, server_default=sa.text('NSE')),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
-        sa.Column('updated_at', sa.DATETIME, nullable=False)
+        sa.Column('title', sa.VARCHAR(120), nullable=False, server_default=sa.text("'New Chat'")),
+        sa.Column('model', sa.VARCHAR(64), nullable=False, server_default=sa.text("'minimax-m2-5-free'")),
+        sa.Column('symbol', sa.VARCHAR(32), nullable=False, server_default=sa.text("''")),
+        sa.Column('exchange', sa.VARCHAR(16), nullable=False, server_default=sa.text("'NSE'")),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'chat_messages',
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('session_id', sa.INTEGER, nullable=False),
         sa.Column('role', sa.VARCHAR(16), nullable=False),
-        sa.Column('content', sa.TEXT, nullable=False, server_default=sa.text('')),
+        sa.Column('content', sa.TEXT, nullable=False, server_default=sa.text("''")),
         sa.Column('tool_calls_json', sa.TEXT, nullable=True),
-        sa.Column('created_at', sa.DATETIME, nullable=False)
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'corporate_filings',
         sa.Column('symbol', sa.VARCHAR(32), nullable=False, primary_key=True),
         sa.Column('csv_data', sa.TEXT, nullable=False),
-        sa.Column('last_fetched_at', sa.DATETIME, nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
-        sa.Column('updated_at', sa.DATETIME, nullable=False)
+        sa.Column('last_fetched_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'market_categories',
@@ -57,8 +57,8 @@ def upgrade() -> None:
         sa.Column('decline', sa.INTEGER, nullable=True),
         sa.Column('sentiment', sa.VARCHAR(32), nullable=True),
         sa.Column('earnings_yoy', sa.FLOAT, nullable=True),
-        sa.Column('last_updated', sa.DATETIME, nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False)
+        sa.Column('last_updated', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'market_category_stocks',
@@ -75,8 +75,8 @@ def upgrade() -> None:
         sa.Column('tech_trend', sa.VARCHAR(32), nullable=True),
         sa.Column('mc_url', sa.VARCHAR(512), nullable=True),
         sa.Column('categories', sa.JSON, nullable=False),
-        sa.Column('last_updated', sa.DATETIME, nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False)
+        sa.Column('last_updated', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'news_articles',
@@ -87,8 +87,8 @@ def upgrade() -> None:
         sa.Column('authors', sa.JSON, nullable=True),
         sa.Column('top_image', sa.VARCHAR(2048), nullable=True),
         sa.Column('publish_date', sa.DATETIME, nullable=True),
-        sa.Column('fetched_at', sa.DATETIME, nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
+        sa.Column('fetched_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('company_symbol', sa.VARCHAR(32), nullable=True),
         sa.Column('sentiment', sa.VARCHAR(16), nullable=True),
         sa.Column('sentiment_score', sa.FLOAT, nullable=True),
@@ -104,23 +104,23 @@ def upgrade() -> None:
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('watchlist_id', sa.INTEGER, nullable=False),
         sa.Column('symbol', sa.VARCHAR(32), nullable=False),
-        sa.Column('exchange', sa.VARCHAR(16), nullable=False, server_default=sa.text('NSE')),
+        sa.Column('exchange', sa.VARCHAR(16), nullable=False, server_default=sa.text("'NSE'")),
         sa.Column('trigger_type', sa.VARCHAR(32), nullable=False),
         sa.Column('message', sa.VARCHAR(256), nullable=False),
-        sa.Column('triggered_at', sa.DATETIME, nullable=False),
+        sa.Column('triggered_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('triggered_date', sa.DATE, nullable=False),
-        sa.Column('is_read', sa.BOOLEAN, nullable=False, server_default=sa.text('False'))
+        sa.Column('is_read', sa.BOOLEAN, nullable=False, server_default=sa.text('0'))
     )
     op.create_table(
         'global_notifications',
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('symbol', sa.VARCHAR(32), nullable=False),
-        sa.Column('exchange', sa.VARCHAR(16), nullable=False, server_default=sa.text('NSE')),
+        sa.Column('exchange', sa.VARCHAR(16), nullable=False, server_default=sa.text("'NSE'")),
         sa.Column('trigger_type', sa.VARCHAR(32), nullable=False),
         sa.Column('message', sa.VARCHAR(256), nullable=False),
-        sa.Column('triggered_at', sa.DATETIME, nullable=False),
+        sa.Column('triggered_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('triggered_date', sa.DATE, nullable=False),
-        sa.Column('is_read', sa.BOOLEAN, nullable=False, server_default=sa.text('False'))
+        sa.Column('is_read', sa.BOOLEAN, nullable=False, server_default=sa.text('0'))
     )
     op.create_table(
         'stock_universe',
@@ -148,8 +148,8 @@ def upgrade() -> None:
         sa.Column('low_52w_date', sa.DATETIME, nullable=True),
         sa.Column('high_52w_updated_at', sa.DATETIME, nullable=True),
         sa.Column('ticker_failure_count', sa.INTEGER, nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
-        sa.Column('updated_at', sa.DATETIME, nullable=False)
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'ticker_daily',
@@ -164,7 +164,7 @@ def upgrade() -> None:
         sa.Column('volume', sa.BIGINT, nullable=False),
         sa.Column('value', sa.FLOAT, nullable=False),
         sa.Column('source', sa.VARCHAR(32), nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('rsi_14', sa.FLOAT, nullable=True),
         sa.Column('macd', sa.FLOAT, nullable=True),
         sa.Column('macd_signal', sa.FLOAT, nullable=True),
@@ -188,7 +188,7 @@ def upgrade() -> None:
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('symbol', sa.VARCHAR(32), nullable=False),
         sa.Column('compute_date', sa.DATE, nullable=False),
-        sa.Column('computed_at', sa.DATETIME, nullable=False),
+        sa.Column('computed_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('return_1d', sa.FLOAT, nullable=True),
         sa.Column('return_1w', sa.FLOAT, nullable=True),
         sa.Column('return_1m', sa.FLOAT, nullable=True),
@@ -205,7 +205,7 @@ def upgrade() -> None:
         sa.Column('symbol', sa.VARCHAR(32), nullable=False, primary_key=True),
         sa.Column('last_date', sa.DATE, nullable=False),
         sa.Column('compute_date', sa.DATE, nullable=False),
-        sa.Column('computed_at', sa.DATETIME, nullable=False),
+        sa.Column('computed_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('last_close', sa.FLOAT, nullable=False),
         sa.Column('last_volume', sa.BIGINT, nullable=False),
         sa.Column('last_open', sa.FLOAT, nullable=False),
@@ -300,7 +300,7 @@ def upgrade() -> None:
         sa.Column('close', sa.FLOAT, nullable=False),
         sa.Column('volume', sa.BIGINT, nullable=False),
         sa.Column('source', sa.VARCHAR(32), nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
         sa.Column('rsi_14', sa.FLOAT, nullable=True),
         sa.Column('macd', sa.FLOAT, nullable=True),
         sa.Column('macd_signal', sa.FLOAT, nullable=True),
@@ -324,15 +324,15 @@ def upgrade() -> None:
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('username', sa.VARCHAR(64), nullable=False),
         sa.Column('hashed_password', sa.VARCHAR(128), nullable=False),
-        sa.Column('is_admin', sa.BOOLEAN, nullable=False, server_default=sa.text('False')),
-        sa.Column('created_at', sa.DATETIME, nullable=False)
+        sa.Column('is_admin', sa.BOOLEAN, nullable=False, server_default=sa.text('0')),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'watchlists',
         sa.Column('id', sa.INTEGER, nullable=False, primary_key=True),
         sa.Column('user_id', sa.INTEGER, nullable=False, server_default=sa.text('1')),
         sa.Column('name', sa.VARCHAR(32), nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False)
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'watchlist_items',
@@ -340,7 +340,7 @@ def upgrade() -> None:
         sa.Column('watchlist_id', sa.INTEGER, nullable=False),
         sa.Column('symbol', sa.VARCHAR(32), nullable=False),
         sa.Column('exchange', sa.VARCHAR(16), nullable=False),
-        sa.Column('created_at', sa.DATETIME, nullable=False)
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'jobs',
@@ -356,19 +356,19 @@ def upgrade() -> None:
         sa.Column('last_completed_at', sa.DATETIME, nullable=True),
         sa.Column('next_trigger_at', sa.DATETIME, nullable=True),
         sa.Column('last_error', sa.VARCHAR(512), nullable=True),
-        sa.Column('status', sa.VARCHAR(32), nullable=False, server_default=sa.text('idle')),
+        sa.Column('status', sa.VARCHAR(32), nullable=False, server_default=sa.text("'idle'")),
         sa.Column('progress_percent', sa.INTEGER, nullable=False, server_default=sa.text('0')),
         sa.Column('progress_message', sa.VARCHAR(128), nullable=True),
-        sa.Column('is_enabled', sa.BOOLEAN, nullable=False, server_default=sa.text('True')),
-        sa.Column('is_manual_only', sa.BOOLEAN, nullable=False, server_default=sa.text('False')),
-        sa.Column('created_at', sa.DATETIME, nullable=False),
-        sa.Column('updated_at', sa.DATETIME, nullable=False)
+        sa.Column('is_enabled', sa.BOOLEAN, nullable=False, server_default=sa.text('1')),
+        sa.Column('is_manual_only', sa.BOOLEAN, nullable=False, server_default=sa.text('0')),
+        sa.Column('created_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
     op.create_table(
         'system_config',
         sa.Column('key', sa.VARCHAR(64), nullable=False, primary_key=True),
         sa.Column('value', sa.VARCHAR(512), nullable=True),
-        sa.Column('updated_at', sa.DATETIME, nullable=False)
+        sa.Column('updated_at', sa.DATETIME, nullable=False, server_default=sa.text('CURRENT_TIMESTAMP'))
     )
 
 

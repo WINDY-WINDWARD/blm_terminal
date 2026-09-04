@@ -10,6 +10,8 @@ from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Literal
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -99,6 +101,50 @@ def _make_title(first_user_content: str) -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
+
+@router.get("/provider-models")
+async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
+    """Fetch models dynamically from the provider API."""
+    if provider.lower() == "gemini":
+        return [
+            {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
+            {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
+            {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
+            {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
+            {"id": "gemini-3.1-pro-high",     "label": "Gemini 3.1 Pro (Reasoning / High)"},
+        ]
+    
+    if provider.lower() in ("zen", "go"):
+        if not api_key:
+            return [{"id": "", "label": f"Enter {provider.title()} API Key to fetch models"}]
+        
+        # Zen and Go use the same base URL structure
+        base_url = "https://opencode.ai/zen/go/v1"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{base_url}/models",
+                    headers={"Authorization": f"Bearer {api_key}"}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                models = data.get("data", [])
+                
+                # Format for dropdown
+                result = []
+                for m in models:
+                    model_id = m.get("id")
+                    # Emphasize potentially free models or just list them all
+                    result.append({"id": model_id, "label": model_id})
+                
+                # Sort alphabetically
+                result.sort(key=lambda x: x["id"])
+                return result
+        except Exception as e:
+            logger.warning("Failed to fetch dynamic models for %s: %s", provider, e)
+            return [{"id": "", "label": f"Failed to fetch models: {str(e)[:50]}"}]
+            
+    return []
 
 @router.get("/chat/models")
 async def get_chat_models() -> list[dict]:

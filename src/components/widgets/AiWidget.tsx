@@ -630,13 +630,16 @@ export function AiWidget() {
       });
     };
 
-    try {
-      const res = await fetch('/api/py/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abort.signal,
-        body: JSON.stringify({
-          messages: historyWithUser.map((m) => ({ role: m.role, content: m.content })),
+      try {
+        const res = await fetch('/api/py/ai/chat', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream'
+          },
+          signal: abort.signal,
+          body: JSON.stringify({
+            messages: historyWithUser.map((m) => ({ role: m.role, content: m.content })),
           symbol: symbol.toUpperCase(),
           exchange: exchange.toUpperCase(),
           model: sessionState.model || defaultModel,

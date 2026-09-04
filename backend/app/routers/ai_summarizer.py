@@ -12,10 +12,11 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 @router.post("/summarize", response_model=SummaryResult)
 async def summarize(request: SummarizeRequest) -> SummaryResult:
     """Summarize a financial statement using the configured LLM API."""
-    if not ai_summarizer.is_configured:
+    is_configured = await ai_summarizer.is_configured()
+    if not is_configured:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI API key is not configured. Set AI_API_KEY in .env.",
+            detail="AI API key is not configured.",
         )
 
     try:

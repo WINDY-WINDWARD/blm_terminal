@@ -1,12 +1,18 @@
 import json
 import logging
+import os
 from pathlib import Path
 import httpx
 from datetime import datetime, timedelta, timezone
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
-CREDENTIALS_FILE = Path(__file__).parent.parent.parent / ".ag_credentials.json"
+if os.environ.get("DB_PATH"):
+    CREDENTIALS_FILE = Path(os.environ["DB_PATH"]).parent / ".ag_credentials.json"
+else:
+    CREDENTIALS_FILE = Path(__file__).resolve().parents[3] / ".ag_credentials.json"
 
 AG_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 AG_CLIENT_SECRET = "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"

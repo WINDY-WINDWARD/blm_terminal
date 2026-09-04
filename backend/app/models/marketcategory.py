@@ -38,7 +38,7 @@ class MarketCategory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
-        server_default=func.now(),
+        default=func.now(),
     )
 
     __table_args__ = (Index("ix_market_categories_type_slug", "category_type", "slug"),)
@@ -72,7 +72,7 @@ class MarketCategoryStock(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
-        server_default=func.now(),
+        default=func.now(),
     )
 
     __table_args__ = (

@@ -20,11 +20,11 @@ class ChatSession(Base):
     symbol: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     exchange: Mapped[str] = mapped_column(String(16), nullable=False, default="NSE")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), server_default=func.now(), nullable=False
+        DateTime(timezone=False), default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
-        server_default=func.now(),
+        default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
@@ -52,7 +52,7 @@ class ChatMessageRecord(Base):
     # JSON-serialised list of tool call names for display (assistant only, optional)
     tool_calls_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), server_default=func.now(), nullable=False
+        DateTime(timezone=False), default=func.now(), nullable=False
     )
 
     session: Mapped[ChatSession] = relationship("ChatSession", back_populates="messages")

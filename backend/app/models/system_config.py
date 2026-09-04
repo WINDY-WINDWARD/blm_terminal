@@ -23,6 +23,7 @@ class SystemConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
-        server_default=func.now(),
+        default=func.now(),
+        
         onupdate=func.now(),
     )
