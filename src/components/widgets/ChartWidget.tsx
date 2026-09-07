@@ -335,24 +335,25 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           GO
         </button>
 
-          <div className="flex gap-0.5 ml-1">
-            {ALL_INTERVALS.map((iv) => {
-              return (
-                <button
-                  key={iv}
-                  type="button"
-                  onClick={() => handleIntervalChange(iv)}
-                  className={`px-1.5 py-0.5 text-[10px] border ${
-                    interval === iv
-                      ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
-                      : 'border-terminal-border/50 text-white/50 hover:border-terminal-border hover:text-white/80'
-                  }`}
-                >
-                  {iv}
-                </button>
-              );
-            })}
-          </div>
+            <div className="flex gap-0.5 ml-1">
+              {ALL_INTERVALS.map((iv) => {
+                const isActive = interval === iv;
+                return (
+                  <button
+                    key={iv}
+                    type="button"
+                    onClick={() => handleIntervalChange(iv)}
+                    className={`px-1.5 py-0.5 text-[10px] font-mono border transition-all ${
+                      isActive
+                        ? 'bg-terminal-green text-black border-terminal-green font-bold shadow-[0_0_6px_rgba(0,255,0,0.4)]'
+                        : 'border-terminal-gray/80 text-white/50 hover:border-white/40 hover:text-white bg-black/40'
+                    }`}
+                  >
+                    {iv}
+                  </button>
+                );
+              })}
+            </div>
 
         {isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
         {isError && <span className="text-terminal-red text-[10px] ml-1">FETCH ERR</span>}
