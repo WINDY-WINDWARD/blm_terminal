@@ -352,6 +352,24 @@ export function AiWidget() {
   const queryClient = useQueryClient();
 
   const [showDisclaimer, setShowDisclaimer] = useState(true);
+  const [aiAuthStatus, setAiAuthStatus] = useState<{provider: string, is_configured: boolean} | null>(null);
+
+  useEffect(() => {
+    fetch('/api/py/ai/status')
+      .then(r => r.json())
+      .then(d => setAiAuthStatus(d))
+      .catch(console.error);
+      
+    // Poll it occasionally
+    const intv = setInterval(() => {
+      fetch('/api/py/ai/status')
+        .then(r => r.json())
+        .then(d => setAiAuthStatus(d))
+        .catch(console.error);
+    }, 10000);
+    return () => clearInterval(intv);
+  }, []);
+
 
   useEffect(() => {
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
@@ -820,6 +838,22 @@ export function AiWidget() {
             <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
             <div className="text-[10px] leading-relaxed">
               AI can make mistakes and the user takes all responsibility for any actions taken using the AI's advice/recommendations.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Provider Configuration Banner */}
+      {aiAuthStatus && !aiAuthStatus.is_configured && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="border border-terminal-red/50 bg-black p-6 text-center text-terminal-red shadow-xl max-w-sm flex flex-col items-center gap-3">
+            <div className="font-bold uppercase text-lg">⚠️ Configuration Required</div>
+            <div className="text-xs text-white/70 leading-relaxed font-mono">
+              The AI Provider ({aiAuthStatus.provider}) is not fully configured.
+              Please complete the setup in the <span className="text-terminal-amber font-bold">Settings widget</span>.
+            </div>
+            <div className="text-[10px] text-terminal-red/50 mt-2">
+              (This widget is locked until a valid provider is set)
             </div>
           </div>
         </div>

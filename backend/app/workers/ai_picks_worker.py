@@ -16,16 +16,37 @@ from app.workers.lifecycle import _startup_pipeline_done
 from app.services.llm_provider import stream_chat_completion
 from app.services.ai_chat_service import BLM_TOOLS, _run_tools_parallel
 
+from app.services.ai_config import get_dynamic_ai_provider
+
 logger = logging.getLogger(__name__)
 
-if settings.ai_provider == "antigravity":
-    HUNTER_MODEL = "gemini-3.1-pro-high"
-    VERIFIER_MODEL = "gemini-3.7-flash-medium"
-    EVALUATOR_MODEL = "gemini-3.7-flash-medium"
-else:
-    HUNTER_MODEL = "kimi-k2.6"
-    VERIFIER_MODEL = "minimax-m2.5"
-    EVALUATOR_MODEL = "minimax-m2.5"
+async def get_dynamic_models():
+    """Fetch hunter and verifier models dynamically."""
+    provider = await get_dynamic_ai_provider()
+    
+    hunter = "kimi-k2.6"
+    verifier = "minimax-m2.5"
+    if provider == "gemini":
+        hunter = "gemini-3.1-pro-high"
+        verifier = "gemini-3.7-flash-medium"
+        
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.system_config import SystemConfig
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as session:
+            res = await session.execute(select(SystemConfig).where(SystemConfig.key.in_(["ai.hunter_model", "ai.verifier_model"])))
+            configs = {c.key: c.value for c in res.scalars().all()}
+            if configs.get("ai.hunter_model"):
+                hunter = configs["ai.hunter_model"]
+            if configs.get("ai.verifier_model"):
+                verifier = configs["ai.verifier_model"]
+    except Exception as e:
+        logger.warning("Failed to fetch dynamic AI models: %s", e)
+        
+    return hunter, verifier
+
+
 
 
 
@@ -261,10 +282,11 @@ async def _call_hunter(db: AsyncSession, market_context: str = "") -> list[dict]
     sys_prompt = HUNTER_PROMPT + "\n\n" + market_context
     messages = [{"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."}]
     
+    hunter_model, verifier_model = await get_dynamic_models()
     try:
         text = await _run_agent_loop(
             messages=messages,
-            model=HUNTER_MODEL,
+            model=hunter_model,
             system_prompt=sys_prompt
         )
     except Exception as e:
@@ -290,10 +312,11 @@ async def _call_verifier(db: AsyncSession, proposed_picks: list[dict], market_co
     user_msg = f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"
     messages = [{"role": "user", "content": user_msg}]
     
+    hunter_model, verifier_model = await get_dynamic_models()
     try:
         text = await _run_agent_loop(
             messages=messages,
-            model=VERIFIER_MODEL,
+            model=verifier_model,
             system_prompt=sys_prompt
         )
     except Exception as e:
@@ -318,10 +341,11 @@ async def _call_evaluator(db: AsyncSession, pick_data: dict, market_context: str
     user_msg = f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"
     messages = [{"role": "user", "content": user_msg}]
     
+    hunter_model, verifier_model = await get_dynamic_models()
     try:
         text = await _run_agent_loop(
             messages=messages,
-            model=EVALUATOR_MODEL,
+            model=verifier_model,
             system_prompt=sys_prompt
         )
     except Exception as e:
@@ -387,6 +411,7 @@ async def _fetch_market_context() -> str:
 
 async def run_loop_1_and_2():
     """Execute Hunter (8am) and Verifier pipelines."""
+    _, verifier_model = await get_dynamic_models()
     market_context = await _fetch_market_context()
     
     async with AsyncSessionLocal() as db:
@@ -418,8 +443,8 @@ async def run_loop_1_and_2():
                         },
                         {
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "note": f"WHY THIS STOCK WAS PICKED:\n{pick.get('note', pick.get('thesis', f'Verified by {VERIFIER_MODEL}'))}",
-                            "model": VERIFIER_MODEL,
+                            "note": f"WHY THIS STOCK WAS PICKED:\n{pick.get('note', pick.get('thesis', f'Verified by {verifier_model}'))}",
+                            "model": verifier_model,
                             "verdict": pick.get("verdict"),
                             "technical": pick.get("technical"),
                             "fundamental": pick.get("fundamental"),
@@ -438,6 +463,7 @@ async def run_loop_1_and_2():
 
 async def run_loop_3():
     """Execute Evaluator (5pm) pipeline."""
+    _, verifier_model = await get_dynamic_models()
     market_context = await _fetch_market_context()
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -504,7 +530,7 @@ async def run_loop_3():
                 notes.append({
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "note": eval_data.get("note", "Re-evaluated."),
-                    "model": EVALUATOR_MODEL,
+                    "model": verifier_model,
                     "verdict": eval_data.get("verdict"),
                     "technical": eval_data.get("technical"),
                     "fundamental": eval_data.get("fundamental"),

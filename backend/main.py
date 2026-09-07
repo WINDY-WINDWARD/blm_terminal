@@ -551,7 +551,9 @@ from app.services.antigravity_auth import get_antigravity_token
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Antigravity Auth check
-    if settings.ai_provider == "antigravity" or settings.ai_provider == "gemini":
+    from app.services.ai_config import get_dynamic_ai_provider
+    provider = await get_dynamic_ai_provider()
+    if provider == "gemini":
         token = await get_antigravity_token()
         if not token:
             logger.warning("Antigravity (Gemini) Auth Failed. Please authenticate via the Settings UI.")

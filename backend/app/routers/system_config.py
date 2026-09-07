@@ -33,8 +33,11 @@ DEFAULT_NOTIF_CONFIG: dict[str, float] = {
 ALLOWED_STRING_KEYS: set[str] = {
     "openalgo.url",
     "openalgo.api_key",
-    "ai.opencode_zen_api_key",
-    "ai.api_key",
+    "ai.provider",
+    "ai.zen_api_key",
+    "ai.go_api_key",
+    "ai.hunter_model",
+    "ai.verifier_model",
 }
 
 

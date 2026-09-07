@@ -10,6 +10,7 @@ from typing import Any
 
 from app.config import settings
 from app.services.antigravity_auth import get_antigravity_token
+from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
 
 import weakref
 
@@ -608,7 +609,8 @@ async def stream_chat_completion(
     system_prompt: str | None = None,
     max_iter: int = 10,
 ) -> AsyncGenerator[str, None]:
-    if settings.ai_provider == "antigravity":
+    provider = await get_dynamic_ai_provider()
+    if provider == "gemini":
         full_messages = []
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
@@ -617,23 +619,10 @@ async def stream_chat_completion(
             yield chunk
         return
 
-    api_key = settings.opencode_zen_api_key
+    api_key = await get_dynamic_ai_api_key(provider)
+    
     if not api_key or api_key == "none":
-        # Fallback to system_config table if configured at runtime
-        try:
-            from app.database import async_session_factory
-            from app.models.system_config import SystemConfig
-            from sqlalchemy import select
-            async with async_session_factory() as session:
-                res = await session.execute(select(SystemConfig.value).where(SystemConfig.key == "ai.opencode_zen_api_key"))
-                db_val = res.scalar_one_or_none()
-                if db_val and db_val.strip():
-                    api_key = db_val.strip()
-        except Exception:
-            pass
-
-    if not api_key or api_key == "none":
-        yield json.dumps({"type": "error", "message": "OPENCODE_ZEN_API_KEY is not configured."})
+        yield json.dumps({"type": "error", "message": f"{provider.upper()} API Key is not configured."})
         yield json.dumps({"type": "done"})
         return
 

@@ -206,10 +206,42 @@ export function SettingsWidget() {
   const [aiAvailableModels, setAiAvailableModels] = useState<{id: string, label: string}[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   
+
   const [apiKeySaveStatus, setApiKeySaveStatus] = useState<string | null>(null);
+  const [aiAuthStatus, setAiAuthStatus] = useState<{provider: string, is_configured: boolean} | null>(null);
+
+  useEffect(() => {
+    fetch('/api/py/ai/status')
+      .then(r => r.json())
+      .then(d => setAiAuthStatus(d))
+      .catch(console.error);
+  }, []);
+
 
 
   const [configLoading, setConfigLoading] = useState(true);
+
+
+  const systemConfigSaveTimerRef = useRef<Record<string, NodeJS.Timeout>>({});
+
+  const scheduleSystemConfigSave = (key: string, value: string) => {
+    const existingTimer = systemConfigSaveTimerRef.current[key];
+    if (existingTimer) clearTimeout(existingTimer);
+    systemConfigSaveTimerRef.current[key] = setTimeout(() => {
+      fetch(`/api/py/system-config/${key}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      }).then(() => {
+        setApiKeySaveStatus('Saved');
+        setTimeout(() => setApiKeySaveStatus(null), 2000);
+        // Specifically for AI provider settings, refresh status
+        if (key.startsWith('ai.')) {
+          fetch('/api/py/ai/status').then(r => r.json()).then(d => setAiAuthStatus(d));
+        }
+      }).catch(console.error);
+    }, 500);
+  };
 
   const configSaveTimerRef = useRef<Partial<Record<NotifConfigKey, NodeJS.Timeout>>>({});
 
@@ -655,55 +687,76 @@ export function SettingsWidget() {
 
       {/* Runtime API Keys & Integrations */}
       {auth?.user?.is_admin && (
-        <form onSubmit={handleSaveApiKeys} className="flex flex-col gap-2 p-2 border border-terminal-border bg-terminal-panel">
-          <div className="flex items-center justify-between">
-            <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
-              API Keys & Runtime Configuration
+        <div className="flex flex-col gap-4 p-2 border border-terminal-border bg-terminal-panel">
+          {/* OpenAlgo Section */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
+                OpenAlgo Configuration
+              </div>
             </div>
-            {apiKeySaveStatus && (
-              <span className="text-[10px] text-terminal-green animate-pulse">
-                {apiKeySaveStatus}
-              </span>
-            )}
+            <div className="flex flex-col gap-1.5 text-xs">
+              <label className="flex flex-col gap-0.5">
+                <span className="text-white/70 text-[10px]">OpenAlgo URL:</span>
+                <input
+                  type="text"
+                  value={openAlgoUrlInput}
+                  onChange={(e) => {
+                  setOpenAlgoUrlInput(e.target.value);
+                  scheduleSystemConfigSave('openalgo.url', e.target.value);
+                }}
+                  placeholder="http://127.0.0.1:5000"
+                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
+                <input
+                  type="password"
+                  value={openAlgoApiKeyInput}
+                  onChange={(e) => {
+                  setOpenAlgoApiKeyInput(e.target.value);
+                  scheduleSystemConfigSave('openalgo.api_key', e.target.value);
+                }}
+                  placeholder="Enter OpenAlgo API key"
+                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                />
+              </label>
+              
+            </div>
           </div>
-          
-          <div className="flex flex-col gap-1.5 text-xs">
-            <label className="flex flex-col gap-0.5">
-              <span className="text-white/70 text-[10px]">OpenAlgo URL:</span>
-              <input
-                type="text"
-                value={openAlgoUrlInput}
-                onChange={(e) => setOpenAlgoUrlInput(e.target.value)}
-                placeholder="http://127.0.0.1:5000"
-                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              />
-            </label>
 
-            <label className="flex flex-col gap-0.5">
-              <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
-              <input
-                type="password"
-                value={openAlgoApiKeyInput}
-                onChange={(e) => setOpenAlgoApiKeyInput(e.target.value)}
-                placeholder="Enter OpenAlgo API key"
-                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              />
-            </label>
+          <div className="border-b border-terminal-border" />
 
-            <div className="mt-2 mb-1 border-b border-terminal-border" />
-
-            <label className="flex flex-col gap-0.5">
-              <span className="text-white/70 text-[10px]">AI Provider:</span>
-              <select
-                value={aiProvider}
-                onChange={(e) => setAiProvider(e.target.value)}
-                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              >
-                <option value="zen">OpenCode Zen</option>
-                <option value="go">OpenCode Go</option>
-                <option value="gemini">Google Gemini (Antigravity)</option>
-              </select>
-            </label>
+          {/* AI Provider Section */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
+                AI Provider Configuration
+              </div>
+              {aiAuthStatus && (
+                <span className={aiAuthStatus.is_configured ? "text-[10px] text-terminal-green" : "text-[10px] text-terminal-red"}>
+                  {aiAuthStatus.is_configured ? "✅ Connected" : "❌ Not Connected"}
+                </span>
+              )}
+            </div>
+            
+            <div className="flex flex-col gap-1.5 text-xs">
+              <label className="flex flex-col gap-0.5">
+                <span className="text-white/70 text-[10px]">Provider:</span>
+                <select
+                  value={aiProvider}
+                  onChange={(e) => {
+                  setAiProvider(e.target.value);
+                  scheduleSystemConfigSave('ai.provider', e.target.value);
+                }}
+                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                >
+                  <option value="zen">OpenCode Zen</option>
+                  <option value="go">OpenCode Go</option>
+                  <option value="gemini">Google Gemini (Antigravity)</option>
+                </select>
+              </label>
 
               {aiProvider === 'gemini' ? (
                 <div className="flex flex-col gap-1 mt-1">
@@ -717,69 +770,108 @@ export function SettingsWidget() {
                           if (d.auth_url) {
                             window.open(d.auth_url, '_blank');
                             setApiKeySaveStatus('Awaiting Google OAuth... Check your browser.');
+                            const interval = setInterval(() => {
+                              fetch('/api/py/auth/gemini/status').then(r => r.json()).then(st => {
+                                if (st.configured && st.has_refresh_token) {
+                                  clearInterval(interval);
+                                  setApiKeySaveStatus('Gemini Auth Successful!');
+                                  setTimeout(() => setApiKeySaveStatus(null), 3000);
+                                  fetch('/api/py/system-config/ai.provider', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'gemini' }) }).then(() => {
+                                      fetch('/api/py/ai/status').then(r => r.json()).then(d => setAiAuthStatus(d));
+                                  });
+                                }
+                              });
+                            }, 3000);
                           }
                         })
                         .catch(err => setApiKeySaveStatus('Failed to initiate login: ' + err));
                     }}
-                    className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors"
+                    className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
                   >
                     Login to Gemini
                   </button>
                 </div>
               ) : (
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-white/70 text-[10px]">{aiProvider === 'zen' ? 'Zen' : 'Go'} API Key:</span>
+                  <input
+                    type="password"
+                    value={aiProvider === 'zen' ? aiZenApiKeyInput : aiGoApiKeyInput}
+                    onChange={(e) => {
+                      if (aiProvider === 'zen') {
+                        setAiZenApiKeyInput(e.target.value);
+                        scheduleSystemConfigSave('ai.zen_api_key', e.target.value);
+                      } else {
+                        setAiGoApiKeyInput(e.target.value);
+                        scheduleSystemConfigSave('ai.go_api_key', e.target.value);
+                      }
+                    }}
+                    placeholder={`Enter ${aiProvider === 'zen' ? 'Zen' : 'Go'} API key`}
+                    className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                  />
+                </label>
+              )}
+
+              
+            </div>
+          </div>
+
+          <div className="border-b border-terminal-border" />
+
+          {/* AI Models Section */}
+          <div className={`flex flex-col gap-2 ${!aiAuthStatus?.is_configured ? 'opacity-50 pointer-events-none' : ''}`}>
+            <div className="flex items-center justify-between">
+              <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
+                Background Worker Models
+              </div>
+            </div>
+            
+            <div className="flex flex-col gap-1.5 text-xs">
               <label className="flex flex-col gap-0.5">
-                <span className="text-white/70 text-[10px]">{aiProvider === 'zen' ? 'Zen' : 'Go'} API Key:</span>
-                <input
-                  type="password"
-                  value={aiProvider === 'zen' ? aiZenApiKeyInput : aiGoApiKeyInput}
-                  onChange={(e) => aiProvider === 'zen' ? setAiZenApiKeyInput(e.target.value) : setAiGoApiKeyInput(e.target.value)}
-                  placeholder={`Enter ${aiProvider === 'zen' ? 'Zen' : 'Go'} API key`}
+                <span className="text-white/70 text-[10px]">Hunter Model:</span>
+                <select
+                  value={aiHunterModel}
+                  onChange={(e) => {
+                  setAiHunterModel(e.target.value);
+                  scheduleSystemConfigSave('ai.hunter_model', e.target.value);
+                }}
                   className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-                />
+                >
+                  <option value="">Default</option>
+                  {aiAvailableModels.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
               </label>
-            )}
 
-            <label className="flex flex-col gap-0.5 mt-2">
-              <span className="text-white/70 text-[10px]">Hunter Model:</span>
-              <select
-                value={aiHunterModel}
-                onChange={(e) => setAiHunterModel(e.target.value)}
-                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              >
-                <option value="">-- Select Hunter Model --</option>
-                {aiAvailableModels.map(m => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
-              </select>
-            </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-white/70 text-[10px]">Verifier Model:</span>
+                <select
+                  value={aiVerifierModel}
+                  onChange={(e) => {
+                  setAiVerifierModel(e.target.value);
+                  scheduleSystemConfigSave('ai.verifier_model', e.target.value);
+                }}
+                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                >
+                  <option value="">Default</option>
+                  {aiAvailableModels.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </label>
 
-            <label className="flex flex-col gap-0.5">
-              <span className="text-white/70 text-[10px]">Verifier Model:</span>
-              <select
-                value={aiVerifierModel}
-                onChange={(e) => setAiVerifierModel(e.target.value)}
-                className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-              >
-                <option value="">-- Select Verifier Model --</option>
-                {aiAvailableModels.map(m => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
-              </select>
-            </label>
-
+              
+            </div>
           </div>
-
-          <div className="flex justify-end pt-1">
-            <button
-              type="submit"
-              className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors"
-            >
-              Save API Keys
-            </button>
-          </div>
-        </form>
+          
+          {apiKeySaveStatus && (
+            <div className="text-[10px] text-terminal-green animate-pulse mt-2">
+              {apiKeySaveStatus}
+            </div>
+          )}
+        </div>
       )}
-
       {/* Notification Thresholds (Admin Only) */}
       {auth?.user?.is_admin && (
         <div className="flex flex-col gap-1">

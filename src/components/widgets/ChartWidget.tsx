@@ -11,11 +11,9 @@ import { activeSymbolAtom, activeExchangeAtom, focusedPanelAtom } from '@/store/
 // Types
 // ---------------------------------------------------------------------------
 
-type Interval = '1m' | '5m' | '15m' | '1h' | 'D' | 'W' | 'M';
+type Interval = '1m' | '5m' | '15m' | '30m' | '1h' | 'D' | 'W' | 'M';
 
-const COMING_SOON_INTERVALS: Interval[] = ['1m', '5m', '15m'];
-const INTRADAY_STORED_INTERVALS: Interval[] = ['1h', 'W', 'M'];
-const ALL_INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', 'D', 'W', 'M'];
+const ALL_INTERVALS: Interval[] = ['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M'];
 
 // Backend daily OHLCV candle
 interface BackendCandle {
@@ -120,12 +118,11 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const [focusedPanel] = useAtom(focusedPanelAtom);
 
   const [inputSymbol, setInputSymbol] = useState(symbol);
-  const [inputExchange, setInputExchange] = useState(exchange);
-  const [interval, setInterval] = useState<Interval>('D');
-
-  const isComingSoon = (COMING_SOON_INTERVALS as Interval[]).includes(interval);
-  const isIntradayStored = (INTRADAY_STORED_INTERVALS as Interval[]).includes(interval);
-  const isDaily = interval === 'D';
+    const [inputExchange, setInputExchange] = useState(exchange);
+    const [interval, setInterval] = useState<Interval>('D');
+  
+    const isIntraday = interval !== 'D';
+    const isDaily = interval === 'D';
 
   // Sync input fields when global symbol changes
   useEffect(() => {
@@ -157,22 +154,22 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     data: intradayData,
     isLoading: intradayLoading,
     isError: intradayError,
-  } = useQuery({
-    queryKey: ['intraday-ohlcv', symbol, interval],
-    queryFn: () => fetchIntradayOHLCV(symbol, interval),
-    enabled: isIntradayStored,
-    staleTime: 30_000,
-    refetchInterval: isIntradayStored
-      ? interval === '1h' && isMarketHours()
-        ? 60_000
-        : 5 * 60_000
-      : false,
-    retry: 1,
-    select: (data) => ({ ...data, _symbol: symbol }),
-  });
-
-  const isLoading = (isDaily && dailyLoading) || (isIntradayStored && intradayLoading);
-  const isError = (isDaily && dailyError) || (isIntradayStored && intradayError);
+    } = useQuery({
+      queryKey: ['intraday-ohlcv', symbol, interval],
+      queryFn: () => fetchIntradayOHLCV(symbol, interval),
+      enabled: isIntraday,
+      staleTime: 30_000,
+      refetchInterval: isIntraday
+        ? (interval === '1h' || interval === '1m' || interval === '5m' || interval === '15m' || interval === '30m') && isMarketHours()
+          ? 60_000
+          : 5 * 60_000
+        : false,
+      retry: 1,
+      select: (data) => ({ ...data, _symbol: symbol }),
+    });
+  
+    const isLoading = (isDaily && dailyLoading) || (isIntraday && intradayLoading);
+    const isError = (isDaily && dailyError) || (isIntraday && intradayError);
 
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['backend-ohlcv', symbol] });
@@ -269,29 +266,29 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   }, [histData, symbol, isDaily]);
 
   // ---------- Render intraday / W / M bars ----------
-  useEffect(() => {
-    if (!seriesRef.current) return;
-    if (!isIntradayStored) return;
-    if (!intradayData?.candles?.length) {
-      seriesRef.current.setData([]);
-      return;
-    }
-    if (intradayData._symbol !== symbol) return;
-
-    const bars = intradayData.candles
-      .map((candle) => ({
-        // NSE charting timestamps are Unix ms — divide by 1000 for lightweight-charts
-        time: Math.floor(candle.timestamp / 1000) as Time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }))
-      .sort((a, b) => (a.time as number) - (b.time as number));
-
-    seriesRef.current.setData(bars);
-    chartRef.current?.timeScale().fitContent();
-  }, [intradayData, symbol, isIntradayStored]);
+    useEffect(() => {
+      if (!seriesRef.current) return;
+      if (!isIntraday) return;
+      if (!intradayData?.candles?.length) {
+        seriesRef.current.setData([]);
+        return;
+      }
+      if (intradayData._symbol !== symbol) return;
+  
+      const bars = intradayData.candles
+        .map((candle) => ({
+          // NSE charting timestamps are Unix ms – divide by 1000 for lightweight-charts
+          time: Math.floor(candle.timestamp / 1000) as Time,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+        }))
+        .sort((a, b) => (a.time as number) - (b.time as number));
+  
+      seriesRef.current.setData(bars);
+      chartRef.current?.timeScale().fitContent();
+    }, [intradayData, symbol, isIntraday]);
 
   // ---------- Toolbar / form handlers ----------
   const handleSymbolSubmit = (e: React.FormEvent) => {
@@ -338,30 +335,24 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           GO
         </button>
 
-        <div className="flex gap-0.5 ml-1">
-          {ALL_INTERVALS.map((iv) => {
-            const soon = (COMING_SOON_INTERVALS as Interval[]).includes(iv);
-            return (
-              <button
-                key={iv}
-                type="button"
-                onClick={() => !soon && handleIntervalChange(iv)}
-                disabled={soon}
-                title={soon ? 'Coming soon' : undefined}
-                className={`px-1.5 py-0.5 text-[10px] border ${
-                  interval === iv
-                    ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
-                    : soon
-                    ? 'bg-black text-white/20 border-terminal-gray cursor-not-allowed'
-                    : 'bg-black text-white/60 border-terminal-gray hover:text-terminal-amber'
-                }`}
-              >
-                {iv}
-                {soon && <span className="text-[8px] align-super ml-0.5">*</span>}
-              </button>
-            );
-          })}
-        </div>
+          <div className="flex gap-0.5 ml-1">
+            {ALL_INTERVALS.map((iv) => {
+              return (
+                <button
+                  key={iv}
+                  type="button"
+                  onClick={() => handleIntervalChange(iv)}
+                  className={`px-1.5 py-0.5 text-[10px] border ${
+                    interval === iv
+                      ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
+                      : 'border-terminal-border/50 text-white/50 hover:border-terminal-border hover:text-white/80'
+                  }`}
+                >
+                  {iv}
+                </button>
+              );
+            })}
+          </div>
 
         {isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
         {isError && <span className="text-terminal-red text-[10px] ml-1">FETCH ERR</span>}
@@ -395,16 +386,9 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
         )}
       </form>
 
-      {/* Chart canvas */}
-      <div ref={chartContainerRef} className="flex-1 w-full min-h-0 relative">
-        {isComingSoon && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-10">
-            <p className="text-terminal-amber font-mono text-xs text-center px-4">
-              {interval} charts are scoped for future development.
-            </p>
-          </div>
-        )}
+        {/* Chart canvas */}
+        <div ref={chartContainerRef} className="flex-1 w-full min-h-0 relative">
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }

@@ -85,6 +85,23 @@ async def get_ohlcv(
                 detail="Invalid to_date format. Use DD-MM-YYYY",
             )
 
+    # 1. On-Demand Staleness Check
+    try:
+        latest_candle = await asyncio.to_thread(ticker_warehouse.get_latest_candle, symbol)
+        latest_date = latest_candle["date"] if latest_candle else None
+        last_trading_day = await asyncio.to_thread(ticker_warehouse.get_last_trading_day)
+
+        if not latest_date or latest_date < last_trading_day:
+            days_to_fetch = (last_trading_day - latest_date).days + 5 if latest_date else 365
+            logging.getLogger(__name__).info(
+                f"[get_ohlcv] Daily cache stale for {symbol} (latest: {latest_date}, target: {last_trading_day}). "
+                f"Triggering on-demand backfill for {days_to_fetch} days."
+            )
+            await asyncio.to_thread(ticker_warehouse.backfill_symbol, symbol, days_to_fetch)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("[get_ohlcv] On-demand check/backfill failed for %s: %s", symbol, exc)
+
+    # 2. Serve from Database
     candles = await asyncio.to_thread(
         ticker_warehouse.get_ohlcv, symbol, from_date_obj, to_date_obj
     )
@@ -495,8 +512,8 @@ async def get_screener(
 # ---------------------------------------------------------------------------
 
 _IST = ZoneInfo("Asia/Kolkata")
-_VALID_INTRADAY_INTERVALS = {"1h", "W", "M"}
-
+_VALID_INTRADAY_INTERVALS = {"1m", "5m", "15m", "30m", "1h", "W", "M"}
+_PASS_THROUGH_INTERVALS = {"1m", "5m", "15m", "30m"}
 
 def _is_market_hours() -> bool:
     """Return True if current IST time is within NSE trading hours (09:15–15:30 Mon–Fri)."""
@@ -511,15 +528,14 @@ def _is_market_hours() -> bool:
 @router.get("/intraday/{symbol}", response_model=IntradayOHLCVResponse)
 async def get_intraday_ohlcv(
     symbol: str,
-    interval: str = Query(..., description="Interval: 1h, W, or M"),
+    interval: str = Query(..., description="Interval: 1m, 5m, 15m, 30m, 1h, W, or M"),
     from_ts: Optional[int] = Query(None, description="Start time (Unix ms)"),
     to_ts: Optional[int] = Query(None, description="End time (Unix ms)"),
 ) -> IntradayOHLCVResponse:
     """Get intraday/weekly/monthly OHLCV candles for a symbol.
 
-    During market hours (IST 09:15–15:30 Mon–Fri) the NSE charting API is
-    queried live and the result is upserted into ticker_intraday before being
-    returned. Outside market hours the stored data is returned directly.
+    Pass-through mode (1m, 5m, 15m, 30m): Fetches directly from NSE Charting without saving to DB.
+    Cached mode (1h, W, M): Fetches delta from NSE Charting, upserts to local DB, and returns stitched history.
     """
     symbol = symbol.upper()
 
@@ -529,37 +545,72 @@ async def get_intraday_ohlcv(
             detail=f"Invalid interval '{interval}'. Must be one of: {sorted(_VALID_INTRADAY_INTERVALS)}",
         )
 
-    # During market hours: fetch fresh data from NSE and upsert
-    if _is_market_hours():
-        now_ts = int(datetime.now(timezone.utc).timestamp())
-        if interval == "1h":
-            fetch_from = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    req_to_ts = int(to_ts / 1000) if to_ts else now_ts
+
+    if interval in _PASS_THROUGH_INTERVALS:
+        # Pass-through logic: do not use local SQLite DB
+        if from_ts:
+            fetch_from = int(from_ts / 1000)
         else:
-            fetch_from = 0  # all history
+            # Default sensible lookbacks if not provided
+            days = 5 if interval == "1m" else 15 if interval == "5m" else 30
+            fetch_from = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
 
         try:
-            rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=now_ts)
-            await asyncio.to_thread(ticker_warehouse.upsert_intraday, symbol, interval, rows)
+            raw_rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=req_to_ts)
         except ValueError as exc:
-            # Log but don't fail — fall through to cached data
-            logging.getLogger(__name__).warning(
-                "[intraday] live fetch failed for %s/%s: %s — serving from cache", symbol, interval, exc
-            )
+            logging.getLogger(__name__).warning("[intraday] Pass-through live fetch failed for %s/%s: %s", symbol, interval, exc)
+            raw_rows = []
 
-    candles = await asyncio.to_thread(
-        ticker_warehouse.get_intraday, symbol, interval, from_ts=from_ts, to_ts=to_ts
-    )
-    candle_rows = [
-        IntradayCandleRow(
-            timestamp=c["timestamp"],
-            open=c["open"],
-            high=c["high"],
-            low=c["low"],
-            close=c["close"],
-            volume=c["volume"],
+        candle_rows = [
+            IntradayCandleRow(
+                timestamp=datetime.fromtimestamp(c["time_ms"] / 1000, tz=timezone.utc).replace(tzinfo=None),
+                open=c["open"], high=c["high"], low=c["low"], close=c["close"], volume=c["volume"]
+            ) for c in raw_rows
+        ]
+        return IntradayOHLCVResponse(symbol=symbol, interval=interval, candles=candle_rows, count=len(candle_rows))
+
+    else:
+        # Cached mode: 1h, W, M
+        latest_rows_map = await asyncio.to_thread(ticker_warehouse.get_intraday_latest, [symbol], [interval], 1)
+        latest_candle_list = latest_rows_map.get((symbol, interval), [])
+        
+        latest_ts = 0
+        if latest_candle_list:
+            dt_utc = latest_candle_list[0].timestamp.replace(tzinfo=timezone.utc)
+            latest_ts = int(dt_utc.timestamp())
+
+        fetch_from = 0
+        if latest_ts > 0:
+            fetch_from = latest_ts
+        elif interval == "1h":
+            fetch_from = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+        else:
+            fetch_from = 0
+
+        # Always attempt delta fetch to ensure latest data on demand
+        try:
+            raw_rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=now_ts)
+            if raw_rows:
+                await asyncio.to_thread(ticker_warehouse.upsert_intraday, symbol, interval, raw_rows)
+        except ValueError as exc:
+            logging.getLogger(__name__).warning("[intraday] Delta live fetch failed for %s/%s: %s - serving from cache", symbol, interval, exc)
+
+        candles = await asyncio.to_thread(
+            ticker_warehouse.get_intraday, symbol, interval, from_ts=from_ts, to_ts=to_ts
         )
-        for c in candles
-    ]
+        candle_rows = [
+            IntradayCandleRow(
+                timestamp=c["timestamp"],
+                open=c["open"],
+                high=c["high"],
+                low=c["low"],
+                close=c["close"],
+                volume=c["volume"],
+            )
+            for c in candles
+        ]
 
     return IntradayOHLCVResponse(
         symbol=symbol,

@@ -24,6 +24,8 @@ from app.database import AsyncSessionLocal, get_db
 from app.models.ai_chat import ChatMessageRecord, ChatSession
 from app.models.user import User
 from app.services.ai_chat_service import AVAILABLE_MODELS, run_chat_agent
+from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
+from app.services.antigravity_auth import get_antigravity_token
 
 from app.config import settings
 
@@ -31,6 +33,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai-chat"])
 
+@router.get("/status")
+async def get_ai_status():
+    """Return the current provider configuration status."""
+    provider = await get_dynamic_ai_provider()
+    is_configured = False
+    
+    if provider == "gemini":
+        token = await get_antigravity_token()
+        is_configured = token is not None
+    else:
+        api_key = await get_dynamic_ai_api_key(provider)
+        is_configured = bool(api_key and api_key != "none")
+        
+    return {
+        "provider": provider,
+        "is_configured": is_configured
+    }
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
@@ -149,7 +168,8 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
 @router.get("/chat/models")
 async def get_chat_models() -> list[dict]:
     """Return available model options dynamically based on the active provider."""
-    if settings.ai_provider == "antigravity":
+    provider = await get_dynamic_ai_provider()
+    if provider == "gemini":
         return [
             {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
             {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
