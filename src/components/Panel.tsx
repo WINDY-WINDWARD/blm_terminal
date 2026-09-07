@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   focusedPanelAtom,
   notifPanelHighlightAtom,
@@ -10,6 +10,7 @@ import {
   activeSymbolAtom,
   activeWatchlistIdAtom,
   moversCategoryAtom,
+  activePanelsAtom,
 } from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
@@ -76,19 +77,33 @@ export function Panel({ id, title }: PanelProps) {
   const activeSymbol = useAtomValue(activeSymbolAtom);
   const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
   const moversCategory = useAtomValue(moversCategoryAtom);
+  const setActivePanels = useSetAtom(activePanelsAtom);
 
   const handlePopOut = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (title === 'EMPTY') return;
     const query = new URLSearchParams({
       symbol: activeSymbol || '',
       watchlistId: String(activeWatchlistId || 1),
       category: moversCategory || 'allSec',
+      originPanelId: id,
     });
     const url = `/widget/${encodeURIComponent(title)}?${query.toString()}`;
     window.open(url, `blm_widget_${title}_${id}`, 'width=1000,height=700');
+    // Instantly undock widget and free the slot for other widgets
+    setActivePanels((prev) => ({ ...prev, [id]: 'EMPTY' }));
   };
 
   const renderWidget = () => {
+    if (title === 'EMPTY') {
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-center text-white/30 font-mono text-xs gap-1 border border-dashed border-terminal-border/30 m-0.5">
+          <span className="text-terminal-amber/50 font-bold uppercase tracking-wider">[ EMPTY SLOT ]</span>
+          <span className="text-[10px] text-white/40">Select this slot and type a command (e.g. /CHART)</span>
+        </div>
+      );
+    }
+
     if (!openAlgoAvailable && (title === 'ORDER' || title === 'POS')) {
       return (
         <div className="h-full w-full flex flex-col items-center justify-center text-terminal-amber/50 font-mono text-xs gap-2">
@@ -151,14 +166,16 @@ export function Panel({ id, title }: PanelProps) {
         }`}
       >
         <span className="truncate">{title}</span>
-        <button
-          type="button"
-          onClick={handlePopOut}
-          title={`Pop out ${title} widget`}
-          className="ml-2 px-1 text-[10px] tracking-wider text-terminal-amber/70 hover:text-white hover:bg-terminal-amber/20 rounded transition-colors"
-        >
-          [POP]
-        </button>
+        {title !== 'EMPTY' && (
+          <button
+            type="button"
+            onClick={handlePopOut}
+            title={`Pop out ${title} widget`}
+            className="ml-2 px-1 text-[10px] tracking-wider text-terminal-amber/70 hover:text-white hover:bg-terminal-amber/20 rounded transition-colors"
+          >
+            [POP]
+          </button>
+        )}
       </div>
       <div className="flex-1 relative overflow-hidden">
         <ErrorBoundary>

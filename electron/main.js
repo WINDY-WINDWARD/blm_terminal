@@ -155,10 +155,14 @@ async function startApp() {
       // If the frontend calls window.open (e.g. for popped out widgets or OAuth)
       if (url.includes('/widget/')) {
         const widgetWindow = new BrowserWindow({
-          width: 800,
-          height: 600,
-          frame: false, // Optional: make widget windows frameless
+          width: 900,
+          height: 650,
           titleBarStyle: 'hidden',
+          titleBarOverlay: {
+            color: '#121212',
+            symbolColor: '#ffb000',
+            height: 32
+          },
           webPreferences: {
             nodeIntegration: false,
             contextIsolation: true

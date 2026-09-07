@@ -45,6 +45,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'PORTFOLIO', desc: 'Portfolio optimizer (MPT)' },
   { cmd: 'ADMIN', desc: 'Admin Dashboard' },
   { cmd: 'PICKS', desc: 'AI Swing Trade Picks' },
+  { cmd: 'CLEAR', desc: 'Clear focused slot (empty slot)' },
   { cmd: 'LOGOUT', desc: 'End session and log out' },
 ];
 

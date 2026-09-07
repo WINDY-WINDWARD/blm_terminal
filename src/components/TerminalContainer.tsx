@@ -172,6 +172,12 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    if (activeCommand === 'CLEAR') {
+      setActivePanels((prev) => ({ ...prev, [focusedPanel]: 'EMPTY' }));
+      setActiveCommand('');
+      return;
+    }
+
     // ── Layout save ──────────────────────────────────────────────────────
     if (activeCommand.startsWith('__SAVE_LAYOUT:')) {
       const rawName = activeCommand.slice('__SAVE_LAYOUT:'.length);
@@ -257,6 +263,46 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     }
     setActiveCommand('');
   }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue]);
+
+  // Handle popup widget restore requests from detached windows
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === '__REQUEST_RESTORE' && e.newValue) {
+        const parts = e.newValue.split(':');
+        if (parts.length < 3) return;
+        const originPanelId = parts[0];
+        const widgetTitle = parts[1];
+
+        // Check if originPanelId is currently EMPTY
+        if (!activePanels[originPanelId] || activePanels[originPanelId] === 'EMPTY') {
+          setActivePanels((prev) => ({ ...prev, [originPanelId]: widgetTitle }));
+          window.localStorage.setItem('__RESTORE_ACCEPTED', e.newValue);
+          return;
+        }
+
+        // Otherwise find first slot from panel-1 to panel-<panelCount> that is 'EMPTY'
+        let availablePanelId: string | null = null;
+        for (let i = 1; i <= panelCount; i++) {
+          const pid = `panel-${i}`;
+          if (!activePanels[pid] || activePanels[pid] === 'EMPTY') {
+            availablePanelId = pid;
+            break;
+          }
+        }
+
+        if (availablePanelId) {
+          setActivePanels((prev) => ({ ...prev, [availablePanelId]: widgetTitle }));
+          window.localStorage.setItem('__RESTORE_ACCEPTED', e.newValue);
+        } else {
+          // No empty slot available
+          window.localStorage.setItem('__RESTORE_REJECTED', e.newValue);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [activePanels, panelCount, setActivePanels]);
 
   return (
     <main className="flex flex-col h-screen w-screen bg-terminal-bg text-terminal-amber overflow-hidden">

@@ -61,7 +61,6 @@ export const OLD_LOCAL_STORAGE_KEYS = [
   'notif.streakMinDays',
   'scan.subFilters',
   'scan.streakMinDays',
-  'terminal.auth',
 ];
 
 /** Remove stale localStorage keys that have migrated to sessionStorage. */
