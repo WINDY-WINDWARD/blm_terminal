@@ -545,13 +545,16 @@ async def get_intraday_ohlcv(
             detail=f"Invalid interval '{interval}'. Must be one of: {sorted(_VALID_INTRADAY_INTERVALS)}",
         )
 
+    valid_from_ts: Optional[int] = from_ts if isinstance(from_ts, (int, float)) else None
+    valid_to_ts: Optional[int] = to_ts if isinstance(to_ts, (int, float)) else None
+
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    req_to_ts = int(to_ts / 1000) if to_ts else now_ts
+    req_to_ts = int(valid_to_ts / 1000) if valid_to_ts else now_ts
 
     if interval in _PASS_THROUGH_INTERVALS:
         # Pass-through logic: do not use local SQLite DB
-        if from_ts:
-            fetch_from = int(from_ts / 1000)
+        if valid_from_ts:
+            fetch_from = int(valid_from_ts / 1000)
         else:
             # Default sensible lookbacks if not provided
             days = 5 if interval == "1m" else 15 if interval == "5m" else 30
@@ -565,9 +568,14 @@ async def get_intraday_ohlcv(
 
         candle_rows = [
             IntradayCandleRow(
-                timestamp=datetime.fromtimestamp(c["time_ms"] / 1000, tz=timezone.utc).replace(tzinfo=None),
-                open=c["open"], high=c["high"], low=c["low"], close=c["close"], volume=c["volume"]
-            ) for c in raw_rows
+                timestamp=c["time_ms"],
+                open=c["open"],
+                high=c["high"],
+                low=c["low"],
+                close=c["close"],
+                volume=c["volume"],
+            )
+            for c in raw_rows
         ]
         return IntradayOHLCVResponse(symbol=symbol, interval=interval, candles=candle_rows, count=len(candle_rows))
 
@@ -598,7 +606,7 @@ async def get_intraday_ohlcv(
             logging.getLogger(__name__).warning("[intraday] Delta live fetch failed for %s/%s: %s - serving from cache", symbol, interval, exc)
 
         candles = await asyncio.to_thread(
-            ticker_warehouse.get_intraday, symbol, interval, from_ts=from_ts, to_ts=to_ts
+            ticker_warehouse.get_intraday, symbol, interval, from_ts=valid_from_ts, to_ts=valid_to_ts
         )
         candle_rows = [
             IntradayCandleRow(
