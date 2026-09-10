@@ -19,7 +19,7 @@
   ],
   "extraResources": [
     {
-      "from": "dist-backend/blm-backend.exe",
+      "from": "backend/dist/blm-backend.exe",
       "to": "blm-backend/blm-backend.exe"
     }
   ],
