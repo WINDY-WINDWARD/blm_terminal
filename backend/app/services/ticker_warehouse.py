@@ -243,21 +243,24 @@ def _backfill_symbol_charting(symbol: str, days: int) -> int:
         return 0
 
     with _get_session() as db:
-        stmt = sqlite_insert(TickerDaily).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "date", "series"],
-            set_={
-                "open": stmt.excluded.open,
-                "high": stmt.excluded.high,
-                "low": stmt.excluded.low,
-                "close": stmt.excluded.close,
-                "volume": stmt.excluded.volume,
-                "value": stmt.excluded.value,
-                "source": stmt.excluded.source,
-                "created_at": stmt.excluded.created_at,
-            },
-        )
-        db.execute(stmt)
+        batch_size = 500
+        for i in range(0, len(rows), batch_size):
+            chunk = rows[i : i + batch_size]
+            stmt = sqlite_insert(TickerDaily).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "date", "series"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "value": stmt.excluded.value,
+                    "source": stmt.excluded.source,
+                    "created_at": stmt.excluded.created_at,
+                },
+            )
+            db.execute(stmt)
         db.commit()
 
     logger.info(f"backfill_symbol_charting: upserted {len(rows)} rows for {symbol}")
@@ -338,21 +341,24 @@ def _backfill_symbol_equity_history(symbol: str, days: int) -> int:
     ].to_dict("records")
 
     with _get_session() as db:
-        stmt = sqlite_insert(TickerDaily).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "date", "series"],
-            set_={
-                "open": stmt.excluded.open,
-                "high": stmt.excluded.high,
-                "low": stmt.excluded.low,
-                "close": stmt.excluded.close,
-                "volume": stmt.excluded.volume,
-                "value": stmt.excluded.value,
-                "source": stmt.excluded.source,
-                "created_at": stmt.excluded.created_at,
-            },
-        )
-        db.execute(stmt)
+        batch_size = 500
+        for i in range(0, len(rows), batch_size):
+            chunk = rows[i : i + batch_size]
+            stmt = sqlite_insert(TickerDaily).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "date", "series"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "value": stmt.excluded.value,
+                    "source": stmt.excluded.source,
+                    "created_at": stmt.excluded.created_at,
+                },
+            )
+            db.execute(stmt)
         db.commit()
 
     logger.info(f"backfill_symbol_equity: upserted {len(rows)} rows for {symbol}")
@@ -442,21 +448,24 @@ def bulk_update_via_bhavcopy(date_str: str) -> int:
     ].to_dict("records")
 
     with _get_session() as db:
-        stmt = sqlite_insert(TickerDaily).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "date", "series"],
-            set_={
-                "open": stmt.excluded.open,
-                "high": stmt.excluded.high,
-                "low": stmt.excluded.low,
-                "close": stmt.excluded.close,
-                "volume": stmt.excluded.volume,
-                "value": stmt.excluded.value,
-                "source": stmt.excluded.source,
-                "created_at": stmt.excluded.created_at,
-            },
-        )
-        db.execute(stmt)
+        batch_size = 500
+        for i in range(0, len(rows), batch_size):
+            chunk = rows[i : i + batch_size]
+            stmt = sqlite_insert(TickerDaily).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "date", "series"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "value": stmt.excluded.value,
+                    "source": stmt.excluded.source,
+                    "created_at": stmt.excluded.created_at,
+                },
+            )
+            db.execute(stmt)
         db.commit()
 
     logger.info(f"bulk_update_via_bhavcopy: upserted {len(rows)} rows for {date_str}")
@@ -1299,19 +1308,22 @@ def upsert_intraday(
                 "source":    "nse_charting",
             })
 
-        stmt = sqlite_insert(TickerIntraday).values(records)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "timestamp", "interval"],
-            set_={
-                "open":   stmt.excluded.open,
-                "high":   stmt.excluded.high,
-                "low":    stmt.excluded.low,
-                "close":  stmt.excluded.close,
-                "volume": stmt.excluded.volume,
-                "source": stmt.excluded.source,
-            },
-        )
-        session.execute(stmt)
+        batch_size = 500
+        for i in range(0, len(records), batch_size):
+            chunk = records[i : i + batch_size]
+            stmt = sqlite_insert(TickerIntraday).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "timestamp", "interval"],
+                set_={
+                    "open":   stmt.excluded.open,
+                    "high":   stmt.excluded.high,
+                    "low":    stmt.excluded.low,
+                    "close":  stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "source": stmt.excluded.source,
+                },
+            )
+            session.execute(stmt)
         session.commit()
         return len(records)
 

@@ -7,6 +7,7 @@ Guidelines for AI coding agents working in this repository.
 ## Project Overview
 
 Financial terminal UI: **Next.js 16 (App Router)**, **React 19**, **TypeScript**, **Tailwind CSS v4**, **Jotai** (with `atomWithStorage`), native **WebSocket** for real-time data.
+**Hybrid Desktop Architecture**: The application is being converted into a multi-window **Electron** desktop application, wrapping the Next.js frontend and a standalone **PyInstaller-packaged FastAPI backend**.
 Widgets: Chart, Watch, Movers, Order, Pos, Settings, Deals, Largedeals, Breakouts, Fundamentals, News, Analysis, Notif, Ai, Announcements, Portfolio, Scan, Screener, Docs.
 Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy; manages its own SQLite DB via Alembic.
 
@@ -19,15 +20,26 @@ Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy;
 
 ---
 
+## Desktop Architecture & Constraints
+
+- **Execution Context:** The app runs as a desktop application where Electron spawns two child processes: 
+  - `server.js` (Next.js custom server)
+  - `blm-backend.exe` (PyInstaller executable for FastAPI)
+- **Rules of Engagement:** Any modifications related to window management, state, packaging, or the desktop transition **MUST** adhere to `DESKTOP_CONVERSION_PLAN.md`.
+- **Skill Usage:** Use the built-in `desktop-conversion` skill for strict guidelines on building Electron features and avoiding hacky workarounds (like standalone Next.js exports).
+
+---
+
 ## Commands
 
-### Frontend (repo root)
+### Frontend & Desktop (repo root)
 ```bash
-npm run dev       # custom dev server (node server.js)
-npm run build     # production build + TypeScript check
-npm start         # serve production build
-npm run lint      # ESLint v9 flat config
-npm run test      # vitest run
+npm run dev           # custom web dev server (node server.js)
+npm run build         # production Next.js build + TypeScript check
+npm run electron      # run desktop app in development
+npm run electron:prod # run desktop app in production mode
+npm run build:desktop # complete build (Next.js + Backend + Electron Builder)
+npm run pack:desktop  # local dir packaging via electron-builder
 ```
 
 ### Python backend (`backend/`)
@@ -50,6 +62,8 @@ BLM_BASE_URL=http://host:port pytest  # override base URL
 ## Directory Structure
 
 ```
+electron/       # Electron main process & orchestration scripts
+electron-builder.json # Packaging configurations for the desktop app
 src/
 ├── app/api/
 │   ├── openalgo/    # proxy routes → rate-limit → cache → OpenAlgoServerClient

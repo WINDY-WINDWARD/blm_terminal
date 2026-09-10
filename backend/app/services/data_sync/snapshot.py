@@ -249,12 +249,15 @@ def _screener_snapshot_sync(
         "vwma_20_M", "hv_20_M", "hv_60_M", "sharpe_60_M", "sharpe_126_M",
     ]}
     with _SyncSessionLocal() as db:
-        ins = sqlite_insert(TickerScreenerSnapshot).values(snapshot_rows)
-        ins = ins.on_conflict_do_update(
-            index_elements=["symbol"],
-            set_=set_dict,
-        )
-        db.execute(ins)
+        batch_size = 100
+        for i in range(0, len(snapshot_rows), batch_size):
+            chunk = snapshot_rows[i : i + batch_size]
+            ins = sqlite_insert(TickerScreenerSnapshot).values(chunk)
+            ins = ins.on_conflict_do_update(
+                index_elements=["symbol"],
+                set_=set_dict,
+            )
+            db.execute(ins)
         db.commit()
     logger.info(
         "screener_snapshot_sync: wrote %d rows to ticker_screener_snapshot",

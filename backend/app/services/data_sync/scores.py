@@ -129,25 +129,28 @@ def _ticker_scores_sync() -> None:
         update_job_status_sync("job.ticker_scores", "running", progress=90, message=f"Upserting {len(results)} scores to DB...")
 
         with _SyncSessionLocal() as db:
-            insert_stmt = sqlite_insert(TickerScore).values(results)
-            insert_stmt = insert_stmt.on_conflict_do_update(
-                index_elements=["symbol"],
-                set_={
-                    "compute_date": insert_stmt.excluded.compute_date,
-                    "computed_at": insert_stmt.excluded.computed_at,
-                    "return_1d": insert_stmt.excluded.return_1d,
-                    "return_1w": insert_stmt.excluded.return_1w,
-                    "return_1m": insert_stmt.excluded.return_1m,
-                    "return_3m": insert_stmt.excluded.return_3m,
-                    "return_6m": insert_stmt.excluded.return_6m,
-                    "return_1y": insert_stmt.excluded.return_1y,
-                    "momentum_score": insert_stmt.excluded.momentum_score,
-                    "momentum_rank": insert_stmt.excluded.momentum_rank,
-                    "universe_size": insert_stmt.excluded.universe_size,
-                    "volume_ratio_20d": insert_stmt.excluded.volume_ratio_20d,
-                },
-            )
-            db.execute(insert_stmt)
+            batch_size = 500
+            for i in range(0, len(results), batch_size):
+                chunk = results[i : i + batch_size]
+                insert_stmt = sqlite_insert(TickerScore).values(chunk)
+                insert_stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=["symbol"],
+                    set_={
+                        "compute_date": insert_stmt.excluded.compute_date,
+                        "computed_at": insert_stmt.excluded.computed_at,
+                        "return_1d": insert_stmt.excluded.return_1d,
+                        "return_1w": insert_stmt.excluded.return_1w,
+                        "return_1m": insert_stmt.excluded.return_1m,
+                        "return_3m": insert_stmt.excluded.return_3m,
+                        "return_6m": insert_stmt.excluded.return_6m,
+                        "return_1y": insert_stmt.excluded.return_1y,
+                        "momentum_score": insert_stmt.excluded.momentum_score,
+                        "momentum_rank": insert_stmt.excluded.momentum_rank,
+                        "universe_size": insert_stmt.excluded.universe_size,
+                        "volume_ratio_20d": insert_stmt.excluded.volume_ratio_20d,
+                    },
+                )
+                db.execute(insert_stmt)
             db.commit()
             gc.collect()
 
