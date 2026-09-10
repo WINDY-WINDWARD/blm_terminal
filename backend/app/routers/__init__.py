@@ -12,6 +12,7 @@ from app.routers.morningstar import router as morningstar_router
 from app.routers.nonpersistence import router as market_router
 from app.routers.news import router as news_router
 from app.routers.news_ws import router as news_ws_router
+from app.routers.market_ws import router as market_ws_router
 from app.routers.notifications import router as notifications_router
 from app.routers.screener import router as screener_router
 from app.routers.iinvest import router as iinvest_router
@@ -39,6 +40,7 @@ __all__ = [
     "market_router",
     "news_router",
     "news_ws_router",
+    "market_ws_router",
     "notifications_router",
     "screener_router",
     "iinvest_router",

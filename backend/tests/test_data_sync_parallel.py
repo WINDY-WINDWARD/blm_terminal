@@ -128,7 +128,7 @@ class TestParallelCoreExtraction:
             "pipeline_progress_end": None,
             "num_compute_workers": 3,
             "queue_maxsize": 100,
-            "writer_batch_size": 50,
+            "writer_batch_size": 10,
             "heartbeat_every_s": 10.0,
             "progress_every": 10,
             "slow_threshold_s": 5.0,

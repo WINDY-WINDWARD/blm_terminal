@@ -10,6 +10,7 @@ from app.models import (  # noqa: F401
     news,
     notification,
     stockuniverse,
+    sync_state,
     ticker,
     user,
     watchlist,

@@ -260,14 +260,19 @@ class Orchestrator:
                 await update_job_status(job_key, "running", progress=0,
                                         message=f"{stage_name} (orchestrator)...")
                 loop = asyncio.get_running_loop()
-                if requires_lock:
-                    await loop.run_in_executor(
-                        None, _run_pipeline_stage, sync_fn, _pipeline_lock, _pipeline_idle,
-                    )
-                else:
-                    await loop.run_in_executor(None, sync_fn)
-                await update_job_status(job_key, "idle", progress=100,
-                                        message=f"{stage_name} complete")
+                try:
+                    if requires_lock:
+                        await loop.run_in_executor(
+                            None, _run_pipeline_stage, sync_fn, _pipeline_lock, _pipeline_idle,
+                        )
+                    else:
+                        await loop.run_in_executor(None, sync_fn)
+                    await update_job_status(job_key, "idle", progress=100,
+                                            message=f"{stage_name} complete")
+                except Exception as e:
+                    logger.warning("Orchestrator [%s] Stage %s error (proceeding with local cached data): %s", mode.value, stage_name, e)
+                    await update_job_status(job_key, "idle", progress=100,
+                                            message=f"{stage_name} skipped due to network/sync error")
             else:
                 await update_job_status(job_key, "idle", progress=100,
                                         message=f"Disabled — skipped by orchestrator")
@@ -350,36 +355,9 @@ class Orchestrator:
             )):
                 return
 
-            # ── Stage 1b: W/M candle backfill (startup only) ──────────────
-            if not await _run_or_bail(dict(
-                stage_name="ticker_weekly_monthly_update (universe scope)",
-                sub_jobs=[(
-                    "job.ticker_weekly_monthly_update",
-                    lambda: _ticker_intraday_update_sync(
-                        ["W", "M"], scope="universe", smart=True,
-                        job_key="job.ticker_weekly_monthly_update",
-                    ),
-                    True,
-                )],
-                progress_start=16, progress_end=17, stage_label="1b/8",
-                requires_mode={PipelineMode.STARTUP},
-            )):
-                return
-
-            # ── Stage 1c: W/M indicator compute (startup only) ────────────
-            if not await _run_or_bail(dict(
-                stage_name="ticker_weekly_monthly_indicators (universe scope)",
-                sub_jobs=[(
-                    "job.ticker_weekly_monthly_indicators",
-                    lambda: _ticker_intraday_indicators_sync(["W", "M"]),
-                    True,
-                )],
-                progress_start=17, progress_end=18, stage_label="1c/8",
-                requires_mode={PipelineMode.STARTUP},
-            )):
-                return
-
-            # ── Stage 2a: daily update / bhavcopy (nightly only) ──────────
+            # ── Stage 1b & 1c: W/M candle backfill and indicator compute
+            # Pruned from STARTUP pipeline in Desktop Mode (run nightly or on-demand only)
+            # Stage 2a: daily update / bhavcopy (nightly only) ──────────
             if not await _run_or_bail(dict(
                 stage_name="ticker_daily_update",
                 sub_jobs=[("job.ticker_daily_update", _ticker_daily_update_sync, True)],
@@ -561,6 +539,32 @@ class Orchestrator:
         """Run the startup pipeline once, then exit."""
         try:
             await self.run_pipeline(PipelineMode.STARTUP)
+
+            # Opportunistic Nightly Trigger (Desktop Architecture):
+            # If the terminal was closed when the 23:00 IST nightly pipeline was supposed to run,
+            # and the market is currently closed, check if > 24 hours have elapsed since the last nightly run.
+            # Only fire post-market (after 15:30 IST) or on weekends to avoid triggering the heavy
+            # nightly pipeline on weekday mornings before the market has even opened.
+            from app.services.data_sync.market import _is_market_open
+            from app.jobs.runner import get_job_status
+            from zoneinfo import ZoneInfo
+            if not _is_market_open():
+                now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+                is_post_market = now_ist.weekday() >= 5 or now_ist.hour > 15 or (now_ist.hour == 15 and now_ist.minute >= 30)
+                if is_post_market:
+                    nightly_job = await get_job_status("job.pipeline.nightly")
+                    last_completed = nightly_job.last_completed if nightly_job else None
+                    should_run_nightly = False
+                    now_utc = datetime.now(timezone.utc)
+                    if not last_completed:
+                        should_run_nightly = True
+                    else:
+                        if (now_utc - last_completed).total_seconds() > 24 * 3600:
+                            should_run_nightly = True
+
+                    if should_run_nightly:
+                        logger.info("Orchestrator: missed nightly pipeline run detected (>24h or first run). Triggering opportunistic catch-up...")
+                        asyncio.create_task(self.run_pipeline(PipelineMode.NIGHTLY))
         except Exception:
             logger.exception("Orchestrator: startup pipeline task raised an unhandled exception")
 
@@ -576,6 +580,7 @@ class Orchestrator:
             _is_job_enabled,
             _seconds_until_next_cron,
             _startup_market_data_done,
+            is_app_active,
             get_async_shutdown_event,
         )
         from app.jobs.runner import update_job_status
@@ -587,16 +592,9 @@ class Orchestrator:
 
         shutdown_event = get_async_shutdown_event()
 
-        # Wait for startup pipeline Stage 7 to complete before entering loop
-        logger.info("market_data_scheduler: waiting for startup pipeline Stage 7")
-        while not _startup_market_data_done.is_set():
-            try:
-                await asyncio.wait_for(
-                    _wait_for_shutdown(shutdown_event), timeout=1.0
-                )
-                return  # shutdown requested while waiting
-            except asyncio.TimeoutError:
-                pass
+        # Desktop architecture: live market data scheduler starts immediately without gating
+        # on startup pipeline completion.
+        _startup_market_data_done.set()
 
         if not _is_job_enabled("job.market_data"):
             logger.info("market_data_scheduler: disabled")
@@ -626,8 +624,8 @@ class Orchestrator:
                 if shutdown_event.is_set():
                     break
 
-                # Re-check market is still open before fetching
-                if _is_market_open():
+                # Re-check market is still open and app is active (not unfocused/idle >15m) before fetching
+                if _is_market_open() and is_app_active():
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, _market_data_sync)
             else:

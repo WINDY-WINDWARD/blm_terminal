@@ -65,7 +65,7 @@ def _run_cleanup_if_due() -> None:
         return
 
     # Lazy import to break the circular dep with the shim.
-    from app.database import _SyncSessionLocal
+    from app.database import _SyncSessionLocal, _sync_engine
 
     # 1) notifications
     try:
@@ -163,6 +163,35 @@ def _run_cleanup_if_due() -> None:
     except Exception:
         logger.exception("intraday_W_cleanup: failed (non-fatal)")
 
+    # 4b) intraday 1m, 5m, 15m older than 30 days (Desktop Storage Hygiene)
+    try:
+        cutoff_sub1h = now - timedelta(days=30)
+        total_sub1h = 0
+        for _ in range(50):
+            with _SyncSessionLocal() as session:
+                deleted = session.execute(
+                    text(
+                        "DELETE FROM ticker_intraday WHERE rowid IN ("
+                        "  SELECT rowid FROM ticker_intraday "
+                        "  WHERE interval IN ('1m', '5m', '15m', '30m') AND timestamp < :cutoff "
+                        "  LIMIT 50000"
+                        ")"
+                    ),
+                    {"cutoff": cutoff_sub1h},
+                )
+                session.commit()
+                count = deleted.rowcount
+            total_sub1h += count
+            if count < 50000:
+                break
+        if total_sub1h > 0:
+            logger.info(
+                "intraday_cleanup: deleted %d intraday sub-hour candles older than %s",
+                total_sub1h, cutoff_sub1h,
+            )
+    except Exception:
+        logger.exception("intraday_sub1h_cleanup: failed (non-fatal)")
+
     # 5) breakout_snapshots — retain ~14 calendar days (~10 trading days)
     try:
         cutoff_bs = now - timedelta(days=14)
@@ -185,5 +214,13 @@ def _run_cleanup_if_due() -> None:
                 )
     except Exception:
         logger.exception("breakout_snapshot_cleanup: failed (non-fatal)")
+
+    # 6) Vacuum database to reclaim physical disk space (SQLite only)
+    try:
+        with _sync_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM"))
+            logger.info("database_vacuum: completed successfully")
+    except Exception:
+        logger.exception("database_vacuum: failed (non-fatal)")
 
     _cleanup_last_run = now

@@ -71,18 +71,21 @@ Once the tag `v*` is pushed:
     *   `latest.yml` (checksum and update metadata)
     directly to a new GitHub Release at `https://github.com/WINDY-WINDWARD/blm_terminal/releases`.
 
+*Note:* For `electron-builder` to publish successfully, GitHub Actions uses the built-in `GITHUB_TOKEN`. Make sure the Actions settings for the repository allow "Read and write permissions".
+
 ---
 
 ## 4. How Users Receive Upgrades (Client Auto-Update)
 
-BLM Terminal includes client-side auto-update integration via `electron-updater`:
+BLM Terminal includes client-side OTA (Over-The-Air) update integration via `electron-updater`:
 
-1.  **Silent Update Detection**: When a user launches the installed BLM Terminal desktop app, `electron/main.js` checks the GitHub repository for new releases via `latest.yml`.
-2.  **Background Download**: If a newer version is found, the application downloads the update package in the background without interrupting the user's current session.
-3.  **Prompt & Installation**: Once the download completes, a prompt asks the user:
-    > *"Version YYYY.M.B has been downloaded. Restart the application now to apply the update?"*
-    *   Selecting **Restart** cleanly terminates child processes (`server.js` and `blm-backend.exe`) and applies the installer.
-    *   Selecting **Later** applies the update automatically when the user next quits the application.
+1.  **Silent Update Detection**: When a user launches the installed BLM Terminal desktop app, `electron/main.js` waits 5 seconds and then silently checks the GitHub repository for new releases via `latest.yml`.
+2.  **Background Download**: If a newer version is found, the application downloads the update package in the background.
+3.  **Manual Checks & Prompting**: Users can open the **Settings** widget and click **"CHECK FOR UPDATES"** to manually initiate a check. The UI will reflect the current updater status (Checking, Downloading, Ready).
+4.  **Installation**: 
+    *   Once the download completes, a glowing **"INSTALL & RESTART"** button will appear in the Settings widget.
+    *   Clicking this button cleanly terminates child processes (`server.js` and `blm-backend.exe`) and launches the NSIS installer to apply the update.
+    *   If the user quits the application normally while an update is staged, the update will automatically apply on quit (`autoInstallOnAppQuit: true`).
 
 ---
 

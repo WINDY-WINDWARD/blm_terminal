@@ -39,6 +39,7 @@ from app.services.nse_charting_client import fetch_candles_async
 from app.jobs.runner import trigger_job
 
 router = APIRouter(prefix="/ticker", tags=["ticker"])
+_background_tasks = set()
 
 
 def _row_to_schema(row: dict) -> TickerDailyRow:
@@ -85,23 +86,38 @@ async def get_ohlcv(
                 detail="Invalid to_date format. Use DD-MM-YYYY",
             )
 
-    # 1. On-Demand Staleness Check
+    # 1. On-Demand Staleness Check & Coalesced Lazy Fetch
+    is_stale = False
     try:
+        from app.services.coalesce import coalesce
         latest_candle = await asyncio.to_thread(ticker_warehouse.get_latest_candle, symbol)
         latest_date = latest_candle["date"] if latest_candle else None
         last_trading_day = await asyncio.to_thread(ticker_warehouse.get_last_trading_day)
 
         if not latest_date or latest_date < last_trading_day:
+            is_stale = True
             days_to_fetch = (last_trading_day - latest_date).days + 5 if latest_date else 365
             logging.getLogger(__name__).info(
                 f"[get_ohlcv] Daily cache stale for {symbol} (latest: {latest_date}, target: {last_trading_day}). "
-                f"Triggering on-demand backfill for {days_to_fetch} days."
+                f"Scheduling coalesced on-demand backfill for {days_to_fetch} days."
             )
-            await asyncio.to_thread(ticker_warehouse.backfill_symbol, symbol, days_to_fetch)
+            # Trigger coalesced background fetch so initial request does not hang if data is already available
+            async def _do_fetch():
+                await asyncio.to_thread(ticker_warehouse.backfill_symbol, symbol, days_to_fetch)
+                try:
+                    from app.routers.market_ws import broadcast_market_update
+                    await broadcast_market_update(symbol)
+                except Exception as e:
+                    logging.getLogger(__name__).error(f"[get_ohlcv] WS broadcast failed for {symbol}: {e}")
+
+            task = asyncio.create_task(coalesce(f"ohlcv_{symbol}", _do_fetch))
+            # Store strong reference to task to avoid garbage collection mid-execution
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
     except Exception as exc:
         logging.getLogger(__name__).warning("[get_ohlcv] On-demand check/backfill failed for %s: %s", symbol, exc)
 
-    # 2. Serve from Database
+    # 2. Serve from Database immediately (Stale-While-Revalidate)
     candles = await asyncio.to_thread(
         ticker_warehouse.get_ohlcv, symbol, from_date_obj, to_date_obj
     )
@@ -113,6 +129,7 @@ async def get_ohlcv(
         to_date=candles[-1]["date"] if candles else date.today(),
         candles=candle_rows,
         count=len(candle_rows),
+        is_stale=is_stale,
     )
 
 

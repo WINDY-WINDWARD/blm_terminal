@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.models.ticker import TickerDaily, TickerIntraday
 from app.models.stockuniverse import StockUniverse
 from app.models.watchlist import WatchlistItem
+from app.models.marketcategory import MarketCategoryStock
 from app.database import _SyncSessionLocal
 from app.services.indicators import compute_indicators_for_latest_candle
 
@@ -1141,6 +1142,39 @@ def get_symbols_needing_backfill() -> list[str]:
         )
 
     return priority_symbols + other_symbols
+
+
+def get_priority_or_nifty500_symbols() -> list[str]:
+    """Get active watchlist symbols and top/mid-cap Nifty 500 symbols.
+
+    Prioritizes active user interests first, followed by liquid high-cap symbols,
+    limiting full universe scans during desktop trickle updates.
+    """
+    with _get_session() as db:
+        watchlist_symbols = list(
+            db.execute(select(func.distinct(WatchlistItem.symbol))).scalars().all()
+        )
+        # Fetch symbols from market_category_stocks (Nifty indices) or top screener snapshot symbols
+        cat_symbols = list(
+            db.execute(
+                select(func.distinct(MarketCategoryStock.symbol))
+            ).scalars().all()
+        )
+        if not cat_symbols:
+            # Fallback to top 500 universe symbols by market cap or id
+            cat_symbols = list(
+                db.execute(
+                    select(StockUniverse.symbol)
+                    .where(
+                        StockUniverse.review_status.is_(None)
+                        | StockUniverse.review_status.notin_(["removed", "ticker_error"])
+                    )
+                    .limit(500)
+                ).scalars().all()
+            )
+
+        combined = list(dict.fromkeys(watchlist_symbols + cat_symbols))
+        return combined
 
 
 def get_watchlist_symbols() -> list[str]:

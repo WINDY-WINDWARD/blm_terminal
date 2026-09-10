@@ -29,7 +29,7 @@ def parallel_indicator_sync(
     pipeline_progress_end: Optional[int] = None,
     num_compute_workers: int = 3,
     queue_maxsize: int = 100,
-    writer_batch_size: int = 50,
+    writer_batch_size: int = 10,
     heartbeat_every_s: float = 10.0,
     progress_every: int = 10,
     slow_threshold_s: float = 5.0,
@@ -145,6 +145,8 @@ def parallel_indicator_sync(
                             state["writer_failed"] = True
                             state["writer_error"] = e
                     pending.clear()
+                    # Explicit lock yielding for desktop concurrency:
+                    time.sleep(0.05)
                 writer_q.task_done()
         except Exception as e:
             logger.exception("parallel_indicator_sync writer: unhandled exception")

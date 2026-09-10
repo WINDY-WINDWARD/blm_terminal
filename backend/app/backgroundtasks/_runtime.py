@@ -83,9 +83,21 @@ _pipeline_idle = threading.Event()
 _pipeline_idle.set()   # initially idle
 
 
-# ---------------------------------------------------------------------------
-# Async task shutdown event — for asyncio tasks
-# ---------------------------------------------------------------------------
+# Desktop App Idle State Tracking (Pause polling if UI unfocused > 15 mins)
+_app_idle_event = threading.Event()
+_app_idle_event.set()  # set means ACTIVE (not idle)
+
+
+def set_app_active_state(is_active: bool) -> None:
+    if is_active:
+        _app_idle_event.set()
+    else:
+        _app_idle_event.clear()
+
+
+def is_app_active() -> bool:
+    return _app_idle_event.is_set()
+
 _async_shutdown_event: asyncio.Event | None = None
 
 

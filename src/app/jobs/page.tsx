@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useAtom } from 'jotai';
 import { authAtom } from '@/store/terminalStore';
@@ -169,9 +169,50 @@ export default function JobsPage() {
   const [changingSymbol, setChangingSymbol] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
 
+  // Backend log viewer state
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [logConnected, setLogConnected] = useState(false);
+  const logBottomRef = useRef<HTMLDivElement>(null);
+  const logEventSourceRef = useRef<EventSource | null>(null);
+
   const [auth] = useAtom(authAtom);
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+
+  // Auto-scroll log viewer to bottom when new lines arrive
+  useEffect(() => {
+    if (logsOpen) {
+      logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logLines, logsOpen]);
+
+  const openLogs = useCallback(() => {
+    setLogLines([]);
+    setLogsOpen(true);
+    setLogConnected(false);
+    const es = new EventSource('/api/jobs/logs/stream?lines=200');
+    logEventSourceRef.current = es;
+    es.onopen = () => setLogConnected(true);
+    es.onmessage = (ev: MessageEvent) => {
+      const line = ev.data as string;
+      setLogLines(prev => {
+        const next = [...prev, line];
+        return next.length > 2000 ? next.slice(next.length - 2000) : next;
+      });
+    };
+    es.onerror = () => {
+      setLogConnected(false);
+    };
+  }, []);
+
+  const closeLogs = useCallback(() => {
+    logEventSourceRef.current?.close();
+    logEventSourceRef.current = null;
+    setLogsOpen(false);
+    setLogLines([]);
+    setLogConnected(false);
+  }, []);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -860,7 +901,7 @@ export default function JobsPage() {
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-2 flex-wrap">
                   <button
                     onClick={handleTriggerBackfill}
                     className="px-4 py-2 text-xs bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg transition-colors"
@@ -872,6 +913,12 @@ export default function JobsPage() {
                     className="px-4 py-2 text-xs bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg transition-colors"
                   >
                     Trigger Daily Update
+                  </button>
+                  <button
+                    onClick={openLogs}
+                    className="px-4 py-2 text-xs bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition-colors ml-auto"
+                  >
+                    Backend Logs
                   </button>
                 </div>
 
@@ -975,6 +1022,67 @@ export default function JobsPage() {
           <p className="mt-1">Use the RUN button to manually trigger a job. Use ENABLE/DISABLE to control scheduled runs.</p>
         </div>
       </div>
+
+      {/* Backend Log Viewer Popout */}
+      {logsOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-end p-4 pointer-events-none">
+          <div
+            className="pointer-events-auto flex flex-col bg-[#0d0d0d] border border-terminal-gray/50 shadow-2xl"
+            style={{ width: 'min(900px, calc(100vw - 2rem))', height: 'min(520px, calc(100vh - 2rem))' }}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-3 px-3 py-2 border-b border-terminal-gray/40 flex-shrink-0">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Backend Logs</span>
+              <span className={`flex items-center gap-1 text-[10px] ${logConnected ? 'text-terminal-green' : 'text-terminal-amber'}`}>
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${logConnected ? 'bg-terminal-green animate-pulse' : 'bg-terminal-amber'}`} />
+                {logConnected ? 'Live' : 'Connecting…'}
+              </span>
+              <span className="ml-auto text-[10px] text-white/30">{logLines.length} lines</span>
+              <button
+                onClick={() => setLogLines([])}
+                className="text-[10px] text-white/40 hover:text-white/70 transition-colors px-2 py-0.5 hover:bg-white/10"
+                title="Clear log display"
+              >
+                Clear
+              </button>
+              <button
+                onClick={closeLogs}
+                className="text-[10px] text-white/40 hover:text-terminal-red transition-colors px-2 py-0.5 hover:bg-white/10"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Log lines */}
+            <div className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed p-3 space-y-0.5">
+              {logLines.length === 0 ? (
+                <div className="text-white/30 text-center pt-8">Waiting for log output…</div>
+              ) : (
+                logLines.map((line, i) => {
+                  const isError = /\bERROR\b|\bCRITICAL\b/.test(line);
+                  const isWarn = /\bWARNING\b|\bWARN\b/.test(line);
+                  const isInfo = /\bINFO\b/.test(line);
+                  return (
+                    <div
+                      key={i}
+                      className={`whitespace-pre-wrap break-all ${
+                        isError ? 'text-terminal-red' :
+                        isWarn ? 'text-terminal-amber' :
+                        isInfo ? 'text-white/80' :
+                        'text-white/50'
+                      }`}
+                    >
+                      {line}
+                    </div>
+                  );
+                })
+              )}
+              <div ref={logBottomRef} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

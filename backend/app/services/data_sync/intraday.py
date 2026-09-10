@@ -59,14 +59,15 @@ def _ticker_intraday_update_sync(
     from app.services.ticker_warehouse import (
         backfill_intraday_symbol,
         get_all_universe_symbols,
+        get_priority_or_nifty500_symbols,
         get_symbols_needing_intraday_backfill,
         get_watchlist_symbols,
     )
 
     intervals = intervals or ["1h", "W", "M"]
     if scope == "universe":
-        symbols = get_all_universe_symbols()
-        scope_label = "universe"
+        symbols = get_priority_or_nifty500_symbols()
+        scope_label = "universe (priority subset)"
     else:
         symbols = get_watchlist_symbols()
         scope_label = "watchlist"

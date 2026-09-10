@@ -6,11 +6,14 @@
   },
   "npmRebuild": false,
   "nodeGypRebuild": false,
+  "buildDependenciesFromSource": false,
   "files": [
     "electron/**/*",
     "server.js",
     "server/**/*",
     ".next/**/*",
+    "!.next/cache/**/*",
+    "!.next/dev/**/*",
     "public/**/*",
     "package.json"
   ],
@@ -18,14 +21,15 @@
     {
       "from": "dist-backend/blm-backend.exe",
       "to": "blm-backend/blm-backend.exe"
-    },
-    {
-      "from": "node_modules",
-      "to": "node_modules"
     }
   ],
   "asar": true,
+  "asarUnpack": [
+    "**/node_modules/sharp/**/*",
+    "**/node_modules/@img/**/*"
+  ],
   "win": {
+    "icon": "electron/icon.ico",
     "target": [
       {
         "target": "nsis",
@@ -44,6 +48,8 @@
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,
-    "createStartMenuShortcut": true
+    "createStartMenuShortcut": true,
+    "installerIcon": "electron/icon.ico",
+    "uninstallerIcon": "electron/icon.ico"
   }
 }

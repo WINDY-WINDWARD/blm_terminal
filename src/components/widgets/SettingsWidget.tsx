@@ -31,6 +31,18 @@ import {
 } from '@/lib/layouts';
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 
+interface ElectronAPI {
+  checkForUpdates: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+  onUpdaterMessage: (callback: (msg: { status: string; data?: unknown }) => void) => void;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: ElectronAPI;
+  }
+}
+
 const NOTIF_CONFIG_KEYS = [
   'notif.rsi_oversold_threshold',
   'notif.rsi_overbought_threshold',
@@ -206,6 +218,36 @@ export function SettingsWidget() {
   const [aiAvailableModels, setAiAvailableModels] = useState<{id: string, label: string}[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   
+  // OTA Updater state
+  const [updaterStatus, setUpdaterStatus] = useState<string>('');
+  const [updaterProgress, setUpdaterProgress] = useState<{ percent: number } | null>(null);
+  const [updateReady, setUpdateReady] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      window.electronAPI.onUpdaterMessage((msg) => {
+        setUpdaterStatus(msg.status);
+        if (msg.status === 'progress' && msg.data) {
+          setUpdaterProgress(msg.data as { percent: number });
+        } else if (msg.status === 'downloaded') {
+          setUpdateReady(true);
+        }
+      });
+    }
+  }, []);
+
+  const handleCheckForUpdates = () => {
+    if (window.electronAPI) {
+      setUpdaterStatus('checking');
+      window.electronAPI.checkForUpdates();
+    }
+  };
+
+  const handleInstallUpdate = () => {
+    if (window.electronAPI) {
+      window.electronAPI.installUpdate();
+    }
+  };
 
   const [apiKeySaveStatus, setApiKeySaveStatus] = useState<string | null>(null);
   const [aiAuthStatus, setAiAuthStatus] = useState<{provider: string, is_configured: boolean} | null>(null);
@@ -938,6 +980,38 @@ export function SettingsWidget() {
 
       {/* Tips */}
       <div className="flex flex-col gap-0.5 mt-auto">
+        
+        {typeof window !== 'undefined' && window.electronAPI && (
+          <div className="border-t border-terminal-gray pt-2 mt-2 mb-2 flex flex-col items-start gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleCheckForUpdates}
+                className="px-2 py-1 text-[10px] bg-terminal-amber text-terminal-bg font-bold"
+              >
+                CHECK FOR UPDATES
+              </button>
+              {updaterStatus && (
+                <span className="text-[10px] text-white/60">
+                  {updaterStatus === 'checking' && 'Checking...'}
+                  {updaterStatus === 'available' && 'Update found, downloading...'}
+                  {updaterStatus === 'not-available' && 'App is up to date'}
+                  {updaterStatus === 'error' && 'Update failed'}
+                  {updaterStatus === 'progress' && updaterProgress && `Downloading: ${Math.round(updaterProgress.percent)}%`}
+                  {updaterStatus === 'downloaded' && 'Update ready'}
+                </span>
+              )}
+            </div>
+            {updateReady && (
+              <button
+                onClick={handleInstallUpdate}
+                className="px-2 py-1 text-[10px] bg-terminal-green text-terminal-bg font-bold animate-pulse"
+              >
+                INSTALL & RESTART
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="text-white text-[10px] border-t border-terminal-gray pt-2">
           Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS · PORTFOLIO
         </div>

@@ -1,9 +1,17 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn, fork } = require('child_process');
 const net = require('net');
 
+// Setup auto-updater logger
+autoUpdater.logger = console;
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
 let mainWindow;
+let tray = null;
+let isQuitting = false;
 let pythonProcess = null;
 let nextProcess = null;
 
@@ -14,29 +22,48 @@ if (!gotTheLock) {
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
+      if (!mainWindow.isVisible()) mainWindow.show();
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
   });
 
-  app.whenReady().then(startApp);
+  app.whenReady().then(() => {
+    // Opt-in OS Auto-start support
+    app.setLoginItemSettings({
+      openAtLogin: false, // Default to false per plan, can be toggled via user settings later
+      openAsHidden: true
+    });
+    startApp();
+  });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
+    // In desktop daemon mode, keep backend alive in system tray
   });
   
-  app.on('before-quit', cleanupProcesses);
+  app.on('before-quit', () => {
+    isQuitting = true;
+    cleanupProcesses();
+  });
 }
 
 function cleanupProcesses() {
   if (pythonProcess) {
-    pythonProcess.kill();
+    try {
+      // On Windows, SIGTERM maps to TerminateProcess — force-kill immediately.
+      // Graceful shutdown is handled via the HTTP shutdown endpoint if available.
+      pythonProcess.kill();
+    } catch (e) {
+      // already dead
+    }
     pythonProcess = null;
   }
   if (nextProcess) {
-    nextProcess.kill();
+    try {
+      nextProcess.kill();
+    } catch (e) {
+      // already dead
+    }
     nextProcess = null;
   }
 }
@@ -94,8 +121,8 @@ async function startApp() {
       );
       pythonArgs = [path.join(app.getAppPath(), 'backend', 'main.py')];
     } else {
-      // Packaged app path
-      pythonCmd = path.join(process.resourcesPath, 'backend.exe');
+      // Packaged app path — electron-builder.json places exe at blm-backend/blm-backend.exe
+      pythonCmd = path.join(process.resourcesPath, 'blm-backend', 'blm-backend.exe');
     }
 
     console.log(`Starting Python backend on port ${pythonPort}...`);
@@ -144,9 +171,11 @@ async function startApp() {
       height: 900,
       title: "BLM Terminal",
       autoHideMenuBar: true,
+      icon: path.join(__dirname, 'icon.ico'),
       webPreferences: {
         nodeIntegration: false,
-        contextIsolation: true
+        contextIsolation: true,
+        preload: path.join(__dirname, 'preload.js')
       }
     });
 
@@ -198,7 +227,88 @@ async function startApp() {
       }
     });
 
+    // Intercept window close to minimize to System Tray instead of quitting.
+    // If tray creation failed (e.g. icon missing on Windows), fall back to quitting.
+    mainWindow.on('close', (event) => {
+      if (!isQuitting) {
+        if (tray) {
+          event.preventDefault();
+          mainWindow.hide();
+        }
+        // else: no tray, allow normal quit
+      }
+    });
+
+    // 5. System Tray Integration
+    try {
+      let icon;
+      const iconPath = path.join(__dirname, 'icon.ico');
+      try {
+        icon = nativeImage.createFromPath(iconPath);
+        if (icon.isEmpty()) throw new Error('empty icon');
+      } catch {
+        icon = nativeImage.createEmpty();
+      }
+      tray = new Tray(icon);
+      const contextMenu = Menu.buildFromTemplate([
+        {
+          label: 'Show BLM Terminal',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.show();
+              mainWindow.focus();
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Quit',
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          }
+        }
+      ]);
+      tray.setToolTip('BLM Terminal');
+      tray.setContextMenu(contextMenu);
+      tray.on('double-click', () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      });
+    } catch (err) {
+      console.warn('System tray initialization warning:', err);
+    }
+
     mainWindow.loadURL(`http://127.0.0.1:${nextPort}`);
+
+    // Auto Updater Setup
+    function sendStatusToWindow(status, data) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('updater-message', { status, data });
+      }
+    }
+
+    autoUpdater.on('checking-for-update', () => sendStatusToWindow('checking'));
+    autoUpdater.on('update-available', (info) => sendStatusToWindow('available', info));
+    autoUpdater.on('update-not-available', (info) => sendStatusToWindow('not-available', info));
+    autoUpdater.on('error', (err) => sendStatusToWindow('error', err?.message || String(err)));
+    autoUpdater.on('download-progress', (progressObj) => sendStatusToWindow('progress', progressObj));
+    autoUpdater.on('update-downloaded', (info) => sendStatusToWindow('downloaded', info));
+
+    ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
+    ipcMain.handle('install-update', () => {
+      isQuitting = true;
+      cleanupProcesses();
+      autoUpdater.quitAndInstall(true, true);
+    });
+
+    if (!isDev) {
+      setTimeout(() => {
+        autoUpdater.checkForUpdatesAndNotify().catch(console.error);
+      }, 5000);
+    }
 
   } catch (error) {
     console.error('App failed to start:', error);
@@ -209,18 +319,19 @@ async function startApp() {
 function waitForServer(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
+    const http = url.startsWith('https') ? require('https') : require('http');
     const interval = setInterval(() => {
-      const http = url.startsWith('https') ? require('https') : require('http');
       const req = http.get(url, (res) => {
+        res.resume(); // consume response to release socket
         clearInterval(interval);
         resolve();
-      }).on('error', (err) => {
+      }).on('error', () => {
         if (Date.now() - start > timeoutMs) {
           clearInterval(interval);
           reject(new Error(`Server at ${url} did not respond within ${timeoutMs}ms`));
         }
       });
-      req.end();
+      req.on('error', () => {}); // ignore per-tick errors
     }, 1000);
   });
 }

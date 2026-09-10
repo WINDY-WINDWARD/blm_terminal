@@ -81,6 +81,9 @@ def ticker_daily_update_worker() -> None:
 
     logger.info("ticker_daily_update_worker: started")
 
+    # 30-second delay at startup on cold boot for desktop responsiveness
+    _sleep_interruptible(30.0)
+
     if not _is_job_enabled("job.ticker_daily_update"):
         logger.info("ticker_daily_update_worker: disabled, waiting...")
         update_job_status_sync("job.ticker_daily_update", "waiting", progress=0, message="Disabled")

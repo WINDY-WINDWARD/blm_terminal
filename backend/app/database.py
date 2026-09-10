@@ -9,7 +9,6 @@ from app.config import settings
 
 DATABASE_URL = f"sqlite+aiosqlite:///{settings.db_path}"
 
-
 def _apply_sqlite_pragmas(cursor) -> None:
     """Enable WAL mode and tune SQLite for concurrent multi-writer workloads.
 
@@ -48,7 +47,7 @@ def _set_sqlite_pragma(dbapi_conn, connection_record):
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 15},
     poolclass=_AsyncNullPool,
 )
 event.listen(engine.sync_engine, "connect", _set_sqlite_pragma)
@@ -88,7 +87,7 @@ from sqlalchemy.pool import QueuePool as _SyncQueuePool
 # benefit from NullPool's simpler lifecycle.
 _sync_engine = create_engine(
     f"sqlite:///{settings.db_path}",
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 15},
     poolclass=_SyncQueuePool,
     pool_size=5,
     max_overflow=10,

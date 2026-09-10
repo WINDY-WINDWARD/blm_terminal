@@ -45,6 +45,18 @@ class SystemConfigUpdate(BaseModel):
     value: Any = Field(..., description="Configuration value (numeric or string)")
 
 
+class AppStateRequest(BaseModel):
+    is_active: bool
+
+
+@router.post("/system-config/app-state")
+async def update_app_state(body: AppStateRequest, user: User = Depends(get_current_user)) -> dict[str, str]:
+    """Electron pushes active/idle state here."""
+    from app.backgroundtasks._runtime import set_app_active_state
+    set_app_active_state(body.is_active)
+    return {"status": "ok"}
+
+
 @router.get("/system-config")
 async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Return editable configuration thresholds, runtime API keys, and read-only app metadata."""

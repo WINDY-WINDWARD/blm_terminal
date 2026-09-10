@@ -37,6 +37,7 @@ class TickerOHLCVResponse(BaseModel):
     to_date: date
     candles: list[TickerDailyRow]
     count: int
+    is_stale: bool = False
 
 
 class TickerLatestResponse(BaseModel):

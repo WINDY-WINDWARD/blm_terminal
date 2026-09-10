@@ -1,12 +1,17 @@
 """FastAPI router for jobs API."""
 
-from typing import Optional
+import asyncio
+import os
+from pathlib import Path
+from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_admin_user
+from app.config import settings
 from app.database import get_db
 from app.models.job import Job
 from app.schemas.job import (
@@ -114,3 +119,73 @@ async def sync_jobs() -> dict:
     """Manually sync jobs to database."""
     await sync_all_jobs_to_db()
     return {"ok": True, "message": "Jobs synced"}
+
+
+def _resolve_log_file() -> Path:
+    """Resolve the backend log file path using the same logic as _configure_logging()."""
+    if settings.log_dir:
+        log_dir = Path(settings.log_dir)
+    else:
+        log_dir = Path(__file__).resolve().parent.parent.parent / "logs"
+    return log_dir / "backend.log"
+
+
+@router.get("/jobs/logs/stream", tags=["jobs"])
+async def stream_logs(
+    request: Request,
+    lines: int = Query(200, description="Number of tail lines to send on connect", ge=1, le=2000),
+) -> StreamingResponse:
+    """Stream backend log file as Server-Sent Events.
+
+    Sends the last `lines` lines on connect, then tails the file live.
+    Each SSE event is a single log line: ``data: <line>\\n\\n``.
+    The stream ends when the client disconnects.
+    """
+    log_file = _resolve_log_file()
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        # Send initial tail lines if the file exists
+        if log_file.exists():
+            try:
+                with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                    all_lines = f.readlines()
+                for line in all_lines[-lines:]:
+                    stripped = line.rstrip("\n\r")
+                    if stripped:
+                        yield f"data: {stripped}\n\n"
+                # Seek to end for live tail
+                file_pos = log_file.stat().st_size
+            except OSError:
+                file_pos = 0
+        else:
+            yield "data: [log file not found — backend may not have written any logs yet]\n\n"
+            file_pos = 0
+
+        # Live tail: poll for new content every 0.5 s
+        while not await request.is_disconnected():
+            try:
+                current_size = log_file.stat().st_size if log_file.exists() else 0
+                if current_size > file_pos:
+                    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(file_pos)
+                        new_content = f.read()
+                    file_pos = current_size
+                    for line in new_content.splitlines():
+                        if line.strip():
+                            yield f"data: {line}\n\n"
+                elif current_size < file_pos:
+                    # File was rotated — reset to start of new file
+                    file_pos = 0
+                    yield "data: [log rotated]\n\n"
+            except OSError:
+                pass
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

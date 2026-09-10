@@ -45,6 +45,9 @@ def ticker_scores_worker() -> None:
     logger = logging.getLogger(__name__)
     logger.info("ticker_scores_worker: started")
 
+    # 30-second delay at startup on cold boot for desktop responsiveness
+    _sleep_interruptible(30.0)
+
     if not _is_job_enabled("job.ticker_scores"):
         logger.info("ticker_scores_worker: disabled, waiting...")
         update_job_status_sync("job.ticker_scores", "waiting", progress=0, message="Disabled")
@@ -94,6 +97,9 @@ def ticker_indicators_worker() -> None:
 
     logger = logging.getLogger(__name__)
     logger.info("ticker_indicators_worker: started")
+
+    # 30-second delay at startup on cold boot for desktop responsiveness
+    _sleep_interruptible(30.0)
 
     if not _is_job_enabled("job.ticker_indicators"):
         logger.info("ticker_indicators_worker: disabled, waiting...")
