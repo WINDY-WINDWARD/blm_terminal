@@ -61,17 +61,24 @@ Push your commits and the new tag upstream:
 git push origin HEAD --follow-tags
 ```
 
-### Step 3: Automated CI/CD Compilation & Publishing
-Once the tag `v*` is pushed:
-1.  GitHub Actions automatically triggers the workflow defined in `.github/workflows/release.yml`.
-2.  The runner installs Python, sets up PyInstaller, and compiles `blm-backend.exe`.
-3.  The runner builds the Next.js production bundle.
-4.  `electron-builder` packages the Windows NSIS installer and publishes:
-    *   `BLM Terminal Setup <version>.exe`
-    *   `latest.yml` (checksum and update metadata)
-    directly to a new GitHub Release at `https://github.com/WINDY-WINDWARD/blm_terminal/releases`.
+### Step 3: Local Compilation & Direct GitHub Publishing
+To avoid expensive GitHub Actions cloud minutes, the build and release process runs locally on your machine.
 
-*Note:* For `electron-builder` to publish successfully, GitHub Actions uses the built-in `GITHUB_TOKEN`. Make sure the Actions settings for the repository allow "Read and write permissions".
+First, ensure you have set your GitHub Personal Access Token (PAT) as an environment variable in your terminal. This token needs `repo` (write) permissions so `electron-builder` can upload the files:
+```powershell
+$env:GH_TOKEN="ghp_your_personal_access_token_here"
+```
+
+Then, run the automated build and publish script:
+```bash
+npm run publish:desktop
+```
+
+This command will:
+1.  Compile the Python backend via PyInstaller.
+2.  Build the Next.js production bundle.
+3.  Package the Windows NSIS installer using `electron-builder`.
+4.  Directly upload the `.exe`, `latest.yml`, and `.blockmap` to a new Release on your GitHub repository.
 
 ---
 
