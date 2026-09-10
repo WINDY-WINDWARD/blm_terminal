@@ -29,11 +29,6 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
-    // Opt-in OS Auto-start support
-    app.setLoginItemSettings({
-      openAtLogin: false, // Default to false per plan, can be toggled via user settings later
-      openAsHidden: true
-    });
     startApp();
   });
 
@@ -174,6 +169,7 @@ async function startApp() {
       height: 900,
       title: "BLM Terminal",
       autoHideMenuBar: true,
+      show: true,
       icon: path.join(__dirname, 'icon.ico'),
       webPreferences: {
         nodeIntegration: false,
@@ -307,7 +303,7 @@ async function startApp() {
       autoUpdater.quitAndInstall(true, true);
     });
 
-    if (!isDev) {
+    if (!isDev && process.env.GH_TOKEN) {
       setTimeout(() => {
         autoUpdater.checkForUpdatesAndNotify().catch(console.error);
       }, 5000);
