@@ -64,21 +64,32 @@ git push origin HEAD --follow-tags
 ### Step 3: Local Compilation & Direct GitHub Publishing
 To avoid expensive GitHub Actions cloud minutes, the build and release process runs locally on your machine.
 
-First, ensure you have set your GitHub Personal Access Token (PAT) as an environment variable in your terminal. This token needs `repo` (write) permissions so `electron-builder` can upload the files:
+We use the GitHub CLI (`gh`) to authenticate and prepare the release, while `electron-builder` performs the packaging and upload. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
+
+Run the automated build and publish script. You must pass your GitHub CLI token to the environment so `electron-builder` can authenticate the upload:
+
+**Windows PowerShell:**
 ```powershell
-$env:GH_TOKEN="ghp_your_personal_access_token_here"
+$env:GH_TOKEN = $(gh auth token); npm run publish:desktop
 ```
 
-Then, run the automated build and publish script:
+**Git Bash / macOS / Linux:**
 ```bash
-npm run publish:desktop
+export GH_TOKEN=$(gh auth token) && npm run publish:desktop
 ```
 
 This command will:
 1.  Compile the Python backend via PyInstaller.
 2.  Build the Next.js production bundle.
-3.  Package the Windows NSIS installer using `electron-builder`.
-4.  Directly upload the `.exe`, `latest.yml`, and `.blockmap` to a new Release on your GitHub repository.
+3.  Use the `gh` CLI to pre-create a draft release on GitHub.
+4.  Package the Windows NSIS installer using `electron-builder`.
+5.  Upload the `.exe`, `latest.yml`, and `.blockmap` to the draft Release on your GitHub repository.
+
+### Step 4: Publish the Draft Release
+1.  Go to the **Releases** page of your GitHub repository.
+2.  Locate the newly created Draft release for your version (e.g., `v2026.9.1`).
+3.  Review the uploaded assets (`.exe` installer, etc.) and auto-generated release notes.
+4.  Click **Edit** and then **Publish release** to make it live for users. The desktop app's auto-updater will immediately detect the new release.
 
 ---
 
