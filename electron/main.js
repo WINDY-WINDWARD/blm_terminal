@@ -133,9 +133,11 @@ async function startApp() {
         DB_PATH: dbPath,
         LOG_DIR: logDir,
         ENV: isDev ? 'development' : 'production',
-        ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin'
+        ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
+        SECRET_KEY: 'desktop_terminal_local_secret_key_123456789'
       },
-      stdio: 'inherit'
+      stdio: 'ignore',
+      windowsHide: true
     });
 
     pythonProcess.on('error', (err) => {
@@ -155,7 +157,8 @@ async function startApp() {
         PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
         NODE_ENV: 'production' // Force production mode since Next.js dev server has issues
       },
-      stdio: 'inherit'
+      stdio: 'ignore',
+      windowsHide: true
     });
 
     nextProcess.on('error', (err) => {
