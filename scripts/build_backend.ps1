@@ -5,17 +5,23 @@ Write-Host "Building BLM Backend using PyInstaller..."
 # Move into backend directory
 Set-Location -Path "$PSScriptRoot\..\backend"
 
-# Ensure venv exists and is activated (assumes it's installed there)
-if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    Write-Host "Virtual environment not found. Please install requirements first."
-    exit 1
+# Determine python and pyinstaller executable paths
+$PythonCmd = "python"
+$PyInstallerCmd = "pyinstaller"
+
+if (Test-Path ".venv\Scripts\python.exe") {
+    Write-Host "Local virtual environment found. Using .venv"
+    $PythonCmd = ".venv\Scripts\python.exe"
+    $PyInstallerCmd = ".venv\Scripts\pyinstaller.exe"
+} else {
+    Write-Host "No local .venv found. Assuming global environment (e.g., GitHub Actions runner)."
 }
 
 # Install PyInstaller if missing
-& .venv\Scripts\python.exe -m pip install pyinstaller
+& $PythonCmd -m pip install pyinstaller
 
 # Build the executable
-& .venv\Scripts\pyinstaller.exe `
+& $PyInstallerCmd `
     --name blm-backend `
     --onefile `
     --add-data "alembic;alembic" `
