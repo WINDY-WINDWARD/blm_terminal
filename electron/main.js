@@ -152,16 +152,23 @@ async function startApp() {
         PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
         NODE_ENV: 'production' // Force production mode since Next.js dev server has issues
       },
-      stdio: 'ignore',
+      stdio: 'pipe',
       windowsHide: true
     });
+
+    if (nextProcess.stdout) {
+      nextProcess.stdout.on('data', (d) => console.log(`[Next.js stdout]: ${d}`));
+    }
+    if (nextProcess.stderr) {
+      nextProcess.stderr.on('data', (d) => console.error(`[Next.js stderr]: ${d}`));
+    }
 
     nextProcess.on('error', (err) => {
       console.error('Failed to start Next.js process:', err);
     });
 
     // 3. Wait for Next.js to be ready (poll)
-    await waitForServer(`http://127.0.0.1:${nextPort}/api/openalgo/health`, 30000);
+    await waitForServer(`http://127.0.0.1:${nextPort}`, 30000);
 
     // 4. Create Main Window
     mainWindow = new BrowserWindow({
@@ -176,6 +183,10 @@ async function startApp() {
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.js')
       }
+    });
+
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error(`Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
     });
 
     // Multi-Window Pop-out Interceptor
