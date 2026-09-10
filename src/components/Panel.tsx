@@ -99,7 +99,7 @@ export function Panel({ id, title }: PanelProps) {
       return (
         <div className="h-full w-full flex flex-col items-center justify-center text-white/30 font-mono text-xs gap-1 border border-dashed border-terminal-border/30 m-0.5">
           <span className="text-terminal-amber/50 font-bold uppercase tracking-wider">[ EMPTY SLOT ]</span>
-          <span className="text-[10px] text-white/40">Select this slot and type a command (e.g. /CHART)</span>
+          <span className="text-[10px] text-white/40">Select this slot and type a command (e.g. CHART)</span>
         </div>
       );
     }
