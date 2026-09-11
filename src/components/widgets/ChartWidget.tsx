@@ -48,6 +48,11 @@ interface IntradayOHLCVResponse {
   count: number;
 }
 
+interface SymbolSearchResult {
+  symbol: string;
+  companyName: string;
+}
+
 interface ChartWidgetProps {
   panelId: string;
 }
@@ -118,10 +123,17 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const [focusedPanel] = useAtom(focusedPanelAtom);
 
   const [inputSymbol, setInputSymbol] = useState(symbol);
-    const [inputExchange, setInputExchange] = useState(exchange);
-    const [interval, setInterval] = useState<Interval>('D');
-  
-    const isIntraday = interval !== 'D';
+  const [inputExchange, setInputExchange] = useState(exchange);
+  const [interval, setInterval] = useState<Interval>('D');
+
+  // Autocomplete state
+  const [autocompleteResults, setAutocompleteResults] = useState<SymbolSearchResult[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  const isIntraday = interval !== 'D';
     const isDaily = interval === 'D';
 
   // Sync input fields when global symbol changes
@@ -130,6 +142,25 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     setInputSymbol(symbol);
     setInputExchange(exchange);
   }, [symbol, exchange]);
+
+  // Handle outside clicks to close autocomplete dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(e.target as Node)
+      ) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
 
   const { fromDate, toDate } = getDailyDateRange();
   const queryClient = useQueryClient();
@@ -291,8 +322,70 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     }, [intradayData, symbol, isIntraday]);
 
   // ---------- Toolbar / form handlers ----------
+  const handleSymbolChange = (value: string) => {
+    setInputSymbol(value);
+    setActiveIndex(-1);
+
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    const query = value.trim().toUpperCase();
+    if (!query) {
+      setAutocompleteResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/py/stockuniverse/search/${encodeURIComponent(query)}`);
+        if (!res.ok) {
+          setAutocompleteResults([]);
+          setShowDropdown(false);
+          return;
+        }
+        const results = (await res.json()) as SymbolSearchResult[];
+        setAutocompleteResults(results);
+        setShowDropdown(results.length > 0);
+      } catch {
+        setAutocompleteResults([]);
+        setShowDropdown(false);
+      }
+    }, 300);
+  };
+
+  const handleSelectResult = (result: SymbolSearchResult) => {
+    setInputSymbol(result.symbol);
+    setShowDropdown(false);
+    setAutocompleteResults([]);
+    const ex = inputExchange.trim().toUpperCase() || 'NSE';
+    setSymbol(result.symbol);
+    setExchange(ex);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showDropdown || autocompleteResults.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIndex((prev) => Math.min(prev + 1, autocompleteResults.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIndex((prev) => Math.max(prev - 1, -1));
+    } else if (e.key === 'Enter') {
+      if (activeIndex >= 0 && autocompleteResults[activeIndex]) {
+        e.preventDefault();
+        handleSelectResult(autocompleteResults[activeIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      setShowDropdown(false);
+    }
+  };
+
   const handleSymbolSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setShowDropdown(false);
     const s = inputSymbol.trim().toUpperCase();
     const ex = inputExchange.trim().toUpperCase();
     if (!s || !ex) return;
@@ -321,13 +414,35 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
           className="w-14 bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase text-center"
         />
         <span className="text-white/60">:</span>
-        <input
-          type="text"
-          value={inputSymbol}
-          onChange={(e) => setInputSymbol(e.target.value.toUpperCase())}
-          placeholder="RELIANCE"
-          className="flex-1 bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase"
-        />
+        <div ref={searchContainerRef} className="flex-1 relative">
+          <input
+            type="text"
+            value={inputSymbol}
+            onChange={(e) => handleSymbolChange(e.target.value.toUpperCase())}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              if (autocompleteResults.length > 0) setShowDropdown(true);
+            }}
+            placeholder="RELIANCE"
+            className="w-full bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase"
+          />
+          {showDropdown && autocompleteResults.length > 0 && (
+            <div className="absolute z-50 left-0 right-0 top-full mt-0.5 bg-black border border-terminal-gray max-h-48 overflow-y-auto shadow-lg">
+              {autocompleteResults.slice(0, 10).map((result, index) => (
+                <div
+                  key={result.symbol}
+                  onClick={() => handleSelectResult(result)}
+                  className={`px-1.5 py-1 cursor-pointer flex items-center justify-between text-xs hover:bg-zinc-800 ${
+                    index === activeIndex ? 'bg-zinc-800 text-terminal-amber' : 'text-white/70'
+                  }`}
+                >
+                  <span className="text-terminal-amber font-bold font-mono">{result.symbol}</span>
+                  <span className="ml-2 truncate text-white/70 text-[11px] font-sans text-right">{result.companyName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           type="submit"
           className="px-2 py-0.5 bg-blue-800 hover:bg-blue-700 text-white border border-blue-500 text-xs"
