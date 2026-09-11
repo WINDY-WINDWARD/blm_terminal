@@ -25,7 +25,12 @@ log(`cwd=${process.cwd()}`);
 log(`userData=${app.getPath('userData')}`);
 
 // Setup auto-updater logger
-autoUpdater.logger = console;
+autoUpdater.logger = {
+  info: (msg) => log(`[autoUpdater INFO] ${typeof msg === 'object' ? JSON.stringify(msg) : msg}`),
+  warn: (msg) => log(`[autoUpdater WARN] ${typeof msg === 'object' ? JSON.stringify(msg) : msg}`),
+  error: (msg) => log(`[autoUpdater ERROR] ${typeof msg === 'object' ? JSON.stringify(msg) : msg}`),
+  debug: (msg) => log(`[autoUpdater DEBUG] ${typeof msg === 'object' ? JSON.stringify(msg) : msg}`)
+};
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
@@ -370,13 +375,32 @@ async function startApp() {
     autoUpdater.on('checking-for-update', () => sendStatusToWindow('checking'));
     autoUpdater.on('update-available', (info) => sendStatusToWindow('available', info));
     autoUpdater.on('update-not-available', (info) => sendStatusToWindow('not-available', info));
-    autoUpdater.on('error', (err) => sendStatusToWindow('error', err?.message || String(err)));
+    autoUpdater.on('error', (err) => {
+      log(`[autoUpdater Event Error]: ${err?.stack || err?.message || err}`);
+      sendStatusToWindow('error', err?.message || String(err));
+    });
     autoUpdater.on('download-progress', (progressObj) => sendStatusToWindow('progress', progressObj));
     autoUpdater.on('update-downloaded', (info) => sendStatusToWindow('downloaded', info));
 
     ipcMain.handle('get-app-version', () => app.getVersion());
-    ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
-    ipcMain.handle('download-update', () => autoUpdater.downloadUpdate());
+    ipcMain.handle('check-for-updates', async () => {
+      log('IPC check-for-updates triggered');
+      try {
+        return await autoUpdater.checkForUpdates();
+      } catch (err) {
+        log(`IPC check-for-updates error: ${err?.message || err}`);
+        throw err;
+      }
+    });
+    ipcMain.handle('download-update', async () => {
+      log('IPC download-update triggered');
+      try {
+        return await autoUpdater.downloadUpdate();
+      } catch (err) {
+        log(`IPC download-update error: ${err?.message || err}`);
+        throw err;
+      }
+    });
     ipcMain.handle('install-update', () => {
       isQuitting = true;
       cleanupProcesses();

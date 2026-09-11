@@ -14,6 +14,7 @@ export function UpdateModal() {
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [updateReady, setUpdateReady] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
@@ -23,16 +24,22 @@ export function UpdateModal() {
       if (msg.status === 'available' && msg.data) {
         setUpdateInfo(msg.data as UpdateInfo);
         setUpdateAvailable(true);
+        setErrorMessage(null);
         setDismissed(false);
       } else if (msg.status === 'progress' && msg.data) {
         const progress = msg.data as { percent?: number };
         setDownloading(true);
+        setErrorMessage(null);
         if (progress.percent !== undefined) {
           setDownloadProgress(Math.round(progress.percent));
         }
       } else if (msg.status === 'downloaded') {
         setDownloading(false);
         setUpdateReady(true);
+        setErrorMessage(null);
+      } else if (msg.status === 'error') {
+        setDownloading(false);
+        setErrorMessage(typeof msg.data === 'string' ? msg.data : 'Download failed');
       }
     });
   }, []);
@@ -45,7 +52,11 @@ export function UpdateModal() {
     if (window.electronAPI) {
       setDownloading(true);
       setDownloadProgress(0);
-      window.electronAPI.downloadUpdate();
+      setErrorMessage(null);
+      window.electronAPI.downloadUpdate().catch((err: unknown) => {
+        setDownloading(false);
+        setErrorMessage(err instanceof Error ? err.message : String(err));
+      });
     }
   };
 
@@ -84,6 +95,12 @@ export function UpdateModal() {
             </div>
           )}
 
+          {errorMessage && (
+            <div className="bg-red-950/60 border border-red-500/60 p-2.5 text-red-200 text-[11px]">
+              <span className="font-bold">Error: </span>{errorMessage}
+            </div>
+          )}
+
           {downloading && (
             <div className="mt-3 space-y-1">
               <div className="flex justify-between text-[10px] text-terminal-muted">
@@ -117,7 +134,7 @@ export function UpdateModal() {
                 onClick={handleUpdateNow}
                 className="px-4 py-1.5 text-xs font-bold bg-terminal-amber text-terminal-bg hover:bg-yellow-500 transition-colors disabled:opacity-50 flex items-center gap-1.5"
               >
-                {downloading ? 'Downloading...' : 'Update Now'}
+                {downloading ? 'Downloading...' : errorMessage ? 'Retry Download' : 'Update Now'}
               </button>
             </>
           ) : (
