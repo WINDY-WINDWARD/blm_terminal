@@ -39,9 +39,8 @@
   },
   "publish": [
     {
-      "provider": "github",
-      "owner": "WINDY-WINDWARD",
-      "repo": "blm_terminal"
+      "provider": "generic",
+      "url": "http://127.0.0.1:8080"
     }
   ],
   "nsis": {

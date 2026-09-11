@@ -26,8 +26,8 @@ log(`userData=${app.getPath('userData')}`);
 
 // Setup auto-updater logger
 autoUpdater.logger = console;
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
 
 let mainWindow;
 let tray = null;
@@ -374,17 +374,22 @@ async function startApp() {
     autoUpdater.on('download-progress', (progressObj) => sendStatusToWindow('progress', progressObj));
     autoUpdater.on('update-downloaded', (info) => sendStatusToWindow('downloaded', info));
 
+    ipcMain.handle('get-app-version', () => app.getVersion());
     ipcMain.handle('check-for-updates', () => autoUpdater.checkForUpdates());
+    ipcMain.handle('download-update', () => autoUpdater.downloadUpdate());
     ipcMain.handle('install-update', () => {
       isQuitting = true;
       cleanupProcesses();
       autoUpdater.quitAndInstall(true, true);
     });
 
-    if (!isDev && process.env.GH_TOKEN) {
+    if (!isDev) {
       setTimeout(() => {
-        autoUpdater.checkForUpdatesAndNotify().catch(console.error);
-      }, 5000);
+        log('Running launch auto-check for updates...');
+        autoUpdater.checkForUpdates().catch((err) => {
+          log(`Launch auto-check failed: ${err?.message || err}`);
+        });
+      }, 7000);
     }
 
   } catch (error) {

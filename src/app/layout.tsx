@@ -4,6 +4,7 @@ import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { NotifAlertModal } from "@/components/NotifAlertModal";
 import { LayoutToast } from "@/components/LayoutToast";
+import { UpdateModal } from "@/components/UpdateModal";
 
 const jetBrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
@@ -27,6 +28,7 @@ export default function RootLayout({
           {children}
           <NotifAlertModal />
           <LayoutToast />
+          <UpdateModal />
         </Providers>
       </body>
     </html>

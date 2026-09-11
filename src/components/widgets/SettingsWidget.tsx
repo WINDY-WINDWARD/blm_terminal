@@ -31,18 +31,6 @@ import {
 } from '@/lib/layouts';
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 
-interface ElectronAPI {
-  checkForUpdates: () => Promise<void>;
-  installUpdate: () => Promise<void>;
-  onUpdaterMessage: (callback: (msg: { status: string; data?: unknown }) => void) => void;
-}
-
-declare global {
-  interface Window {
-    electronAPI?: ElectronAPI;
-  }
-}
-
 const NOTIF_CONFIG_KEYS = [
   'notif.rsi_oversold_threshold',
   'notif.rsi_overbought_threshold',
@@ -225,6 +213,10 @@ export function SettingsWidget() {
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electronAPI) {
+      window.electronAPI.getAppVersion?.().then((ver) => {
+        if (ver) setAppVersion(ver);
+      }).catch(() => {});
+
       window.electronAPI.onUpdaterMessage((msg) => {
         setUpdaterStatus(msg.status);
         if (msg.status === 'progress' && msg.data) {
@@ -313,7 +305,7 @@ export function SettingsWidget() {
           ),
         }));
         if (typeof data['app.version'] === 'string') {
-          setAppVersion(data['app.version']);
+          setAppVersion((prev) => prev || (data['app.version'] as string));
         }
         if (typeof data['openalgo.url'] === 'string') {
           setOpenAlgoUrlInput(data['openalgo.url']);
@@ -993,11 +985,11 @@ export function SettingsWidget() {
               {updaterStatus && (
                 <span className="text-[10px] text-white/60">
                   {updaterStatus === 'checking' && 'Checking...'}
-                  {updaterStatus === 'available' && 'Update found, downloading...'}
+                  {updaterStatus === 'available' && 'Update available! Prompt shown.'}
                   {updaterStatus === 'not-available' && 'App is up to date'}
-                  {updaterStatus === 'error' && 'Update failed'}
+                  {updaterStatus === 'error' && 'Update check failed'}
                   {updaterStatus === 'progress' && updaterProgress && `Downloading: ${Math.round(updaterProgress.percent)}%`}
-                  {updaterStatus === 'downloaded' && 'Update ready'}
+                  {updaterStatus === 'downloaded' && 'Update downloaded & ready'}
                 </span>
               )}
             </div>
