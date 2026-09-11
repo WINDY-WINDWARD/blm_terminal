@@ -11,7 +11,10 @@ const dev = process.env.NODE_ENV !== 'production';
 const port = parseInt(process.env.PORT || '3000', 10);
 const backendUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
 
-const app = next({ dev });
+// In packaged Electron builds, .next/ is unpacked outside the ASAR archive.
+// NEXT_DIR tells Next.js where to find the production build on the real filesystem.
+const dir = process.env.NEXT_DIR || undefined;
+const app = next({ dev, dir });
 const handle = app.getRequestHandler();
 
 const proxy = httpProxy.createProxyServer({

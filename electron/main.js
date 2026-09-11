@@ -1,8 +1,28 @@
 const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
+const fs = require('fs');
 const { spawn, fork } = require('child_process');
 const net = require('net');
+
+// ── File-based logger (writes to %APPDATA%/blm_terminal/logs/electron.log) ──
+const logDir = path.join(app.getPath('userData'), 'logs');
+try { fs.mkdirSync(logDir, { recursive: true }); } catch {}
+const logFile = path.join(logDir, 'electron.log');
+// Truncate on every fresh launch so the log stays small & relevant
+try { fs.writeFileSync(logFile, `=== BLM Terminal electron main.js started at ${new Date().toISOString()} ===\n`); } catch {}
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  try { fs.appendFileSync(logFile, line); } catch {}
+  console.log(msg);
+}
+
+log(`app.isPackaged=${app.isPackaged}  argv=${JSON.stringify(process.argv)}`);
+log(`process.resourcesPath=${process.resourcesPath}`);
+log(`__dirname=${__dirname}`);
+log(`cwd=${process.cwd()}`);
+log(`userData=${app.getPath('userData')}`);
 
 // Setup auto-updater logger
 autoUpdater.logger = console;
@@ -18,9 +38,12 @@ let nextProcess = null;
 // Ensure single instance
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
+  log('Another instance already running — quitting.');
   app.quit();
 } else {
+  log('Got single-instance lock.');
   app.on('second-instance', () => {
+    log('second-instance event fired — focusing existing window.');
     if (mainWindow) {
       if (!mainWindow.isVisible()) mainWindow.show();
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -29,6 +52,7 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    log('app.whenReady resolved — calling startApp()');
     startApp();
   });
 
@@ -82,10 +106,12 @@ function findFreePort() {
 async function startApp() {
   try {
     const isDev = !app.isPackaged;
+    log(`startApp() called — isDev=${isDev}`);
     
     // Find free ports
     const pythonPort = await findFreePort();
     const nextPort = await findFreePort();
+    log(`Ports allocated — python=${pythonPort}, next=${nextPort}`);
     
     // Determine paths
     const userDataPath = app.getPath('userData');
@@ -96,7 +122,7 @@ async function startApp() {
       ? path.join(app.getAppPath(), 'backend', 'data.db') 
       : path.join(userDataPath, 'data.db');
       
-    const logDir = isDev
+    const backendLogDir = isDev
       ? path.join(app.getAppPath(), 'backend', 'logs')
       : path.join(userDataPath, 'logs');
     
@@ -120,13 +146,16 @@ async function startApp() {
       pythonCmd = path.join(process.resourcesPath, 'blm-backend', 'blm-backend.exe');
     }
 
-    console.log(`Starting Python backend on port ${pythonPort}...`);
+    log(`Python cmd: ${pythonCmd}  exists=${fs.existsSync(pythonCmd)}`);
+    log(`DB path: ${dbPath}`);
+    log(`Backend log dir: ${backendLogDir}`);
+
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
         PORT: pythonPort.toString(),
         DB_PATH: dbPath,
-        LOG_DIR: logDir,
+        LOG_DIR: backendLogDir,
         ENV: isDev ? 'development' : 'production',
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
         SECRET_KEY: 'desktop_terminal_local_secret_key_123456789'
@@ -135,8 +164,13 @@ async function startApp() {
       windowsHide: true
     });
 
+    log(`Python process spawned — pid=${pythonProcess.pid}`);
+
     pythonProcess.on('error', (err) => {
-      console.error('Failed to start python backend:', err);
+      log(`PYTHON PROCESS ERROR: ${err.message}`);
+    });
+    pythonProcess.on('exit', (code, signal) => {
+      log(`PYTHON PROCESS EXITED: code=${code} signal=${signal}`);
     });
 
     // 2. Start Next.js Frontend
@@ -144,31 +178,64 @@ async function startApp() {
       ? path.join(__dirname, '..', 'server.js')
       : path.join(process.resourcesPath, 'app.asar', 'server.js');
 
-    console.log(`Starting Next.js frontend on port ${nextPort}...`);
+    // Tell Next.js to look for .next and public in the ASAR archive
+    const nextDir = isDev
+      ? path.join(__dirname, '..')
+      : path.join(process.resourcesPath, 'app.asar');
+
+    log(`Next.js server.js path: ${serverJsPath}`);
+    log(`Next.js NEXT_DIR: ${nextDir}`);
+    try {
+      // For ASAR paths, fs.existsSync is monkey-patched by Electron to look inside
+      const exists = fs.existsSync(serverJsPath);
+      log(`server.js exists (via patched fs): ${exists}`);
+      // Also check .next/BUILD_ID which Next.js needs (on real fs or patched fs)
+      const buildIdPath = path.join(nextDir, '.next', 'BUILD_ID');
+      const buildIdExists = fs.existsSync(buildIdPath);
+      log(`.next/BUILD_ID exists in NEXT_DIR: ${buildIdExists}`);
+    } catch (e) {
+      log(`existence check error: ${e.message}`);
+    }
+
+    log(`Forking Next.js process...`);
     nextProcess = fork(serverJsPath, [], {
       env: {
         ...process.env,
         PORT: nextPort.toString(),
         PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
-        NODE_ENV: 'production' // Force production mode since Next.js dev server has issues
+        NODE_ENV: 'production',
+        NEXT_DIR: nextDir
       },
       stdio: 'pipe',
       windowsHide: true
     });
 
+    log(`Next.js process forked — pid=${nextProcess.pid}`);
+
     if (nextProcess.stdout) {
-      nextProcess.stdout.on('data', (d) => console.log(`[Next.js stdout]: ${d}`));
+      nextProcess.stdout.on('data', (d) => {
+        const msg = d.toString().trim();
+        log(`[Next.js stdout]: ${msg}`);
+      });
     }
     if (nextProcess.stderr) {
-      nextProcess.stderr.on('data', (d) => console.error(`[Next.js stderr]: ${d}`));
+      nextProcess.stderr.on('data', (d) => {
+        const msg = d.toString().trim();
+        log(`[Next.js stderr]: ${msg}`);
+      });
     }
 
     nextProcess.on('error', (err) => {
-      console.error('Failed to start Next.js process:', err);
+      log(`NEXT.JS PROCESS ERROR: ${err.message}`);
+    });
+    nextProcess.on('exit', (code, signal) => {
+      log(`NEXT.JS PROCESS EXITED: code=${code} signal=${signal}`);
     });
 
     // 3. Wait for Next.js to be ready (poll)
+    log(`Waiting for Next.js at http://127.0.0.1:${nextPort} (timeout 30s)...`);
     await waitForServer(`http://127.0.0.1:${nextPort}`, 30000);
+    log(`Next.js is ready!`);
 
     // 4. Create Main Window
     mainWindow = new BrowserWindow({
