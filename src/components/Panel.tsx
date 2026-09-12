@@ -147,7 +147,7 @@ export function Panel({ id, title }: PanelProps) {
 
   return (
     <div
-      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-200 h-full w-full ${
+      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-150 h-full w-full ${
         isSelected
           ? 'border-yellow-500'
           : isFocused
@@ -157,7 +157,7 @@ export function Panel({ id, title }: PanelProps) {
       onClick={handleClick}
     >
       <div
-        className={`h-6 px-2 flex items-center justify-between font-bold text-xs uppercase transition-colors duration-200 ${
+        className={`h-6 px-2 flex items-center justify-between font-bold text-xs uppercase transition-colors duration-150 ${
           isFlashing
             ? 'bg-yellow-500/40 text-white'
             : isFocused

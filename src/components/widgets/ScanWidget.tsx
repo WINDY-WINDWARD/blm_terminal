@@ -300,7 +300,7 @@ function SubFilterBar({
           onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
           onKeyDown={handleKeyDown}
           placeholder="+ filter..."
-          className="bg-transparent text-white/60 text-[9px] border border-transparent focus:border-terminal-gray/60 outline-none px-1 py-px w-16 focus:w-28 transition-all placeholder:text-white/30"
+          className="bg-transparent text-white/60 text-[9px] border border-transparent focus:border-terminal-gray/60 outline-none px-1 py-px w-16 focus:w-28 transition-[width,border-color] placeholder:text-white/30"
         />
         {showDropdown && candidates.length > 0 && (
           <div className="absolute top-full left-0 mt-0.5 w-48 bg-zinc-800 border border-terminal-gray/60 rounded shadow-xl z-50 max-h-40 overflow-auto">
@@ -525,7 +525,7 @@ export function ScanWidget() {
             onFocus={() => searchQuery.trim() && setShowSuggestions(true)}
             onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
             placeholder="Filter symbol..."
-            className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px w-24 focus:w-32 transition-all outline-none"
+            className="bg-terminal-bg text-white text-[10px] border border-terminal-gray px-1 py-px w-24 focus:w-32 transition-[width,border-color] outline-none"
           />
           {showSuggestions && suggestions.length > 0 && (
             <div className="absolute top-full left-0 mt-1 w-40 bg-zinc-800 border border-terminal-gray rounded shadow-xl z-50 max-h-48 overflow-auto">

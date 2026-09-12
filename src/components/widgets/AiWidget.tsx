@@ -318,7 +318,7 @@ function SessionSidebar({
                         e.stopPropagation();
                         onDeleteSession(s.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 text-[9px] px-1 transition-all"
+                      className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 text-[9px] px-1 transition-[opacity,color]"
                       title="Delete session"
                     >
                       ✕

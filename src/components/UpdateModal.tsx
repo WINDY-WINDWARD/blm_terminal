@@ -109,7 +109,7 @@ export function UpdateModal() {
               </div>
               <div className="w-full h-1.5 bg-terminal-bg border border-terminal-border overflow-hidden">
                 <div
-                  className="h-full bg-terminal-amber transition-all duration-300"
+                  className="h-full bg-terminal-amber transition-[width,background-color] duration-150"
                   style={{ width: `${downloadProgress}%` }}
                 />
               </div>

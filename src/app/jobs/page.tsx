@@ -505,7 +505,7 @@ export default function JobsPage() {
                         <div className="flex items-center justify-end gap-2">
                           <div className="w-24 h-1.5 bg-terminal-gray rounded overflow-hidden">
                             <div
-                              className={`h-full transition-all ${
+                              className={`h-full transition-[width,background-color,color,transform] ${
                                 job.status === 'failed'
                                   ? 'bg-terminal-red'
                                   : job.status === 'running'
@@ -534,14 +534,14 @@ export default function JobsPage() {
                           <button
                             onClick={() => handleTrigger(job.job_key)}
                             disabled={triggering === job.job_key || job.status === 'running'}
-                            className="px-2 py-1 text-[10px] bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                            className="px-2 py-1 text-[10px] bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg active:scale-[0.96] disabled:opacity-30 disabled:cursor-not-allowed transition-[width,background-color,color,transform]"
                           >
                             {triggering === job.job_key ? 'STARTING...' : 'RUN'}
                           </button>
                           <button
                             onClick={() => handleToggle(job.job_key, !job.is_enabled)}
                             disabled={toggling === job.job_key}
-                            className={`px-2 py-1 text-[10px] transition-all active:scale-95 ${
+                            className={`px-2 py-1 text-[10px] transition-[width,background-color,color,transform] active:scale-[0.96] ${
                               job.is_enabled
                                 ? 'bg-terminal-red/10 text-terminal-red hover:bg-terminal-red hover:text-white disabled:opacity-30 disabled:cursor-wait'
                                 : 'bg-terminal-green/10 text-terminal-green hover:bg-terminal-green hover:text-terminal-bg disabled:opacity-30 disabled:cursor-wait'
@@ -678,7 +678,7 @@ export default function JobsPage() {
                           </div>
                           <div className="text-[10px] text-white/50 mt-0.5">{label}</div>
                           <div className="mt-2 h-1.5 bg-terminal-gray/30 rounded overflow-hidden">
-                            <div className={`h-full ${bar} transition-all`} style={{ width: `${pct}%` }} />
+                            <div className={`h-full ${bar} transition-[width,background-color,color,transform]`} style={{ width: `${pct}%` }} />
                           </div>
                           <div className="text-[10px] text-white/30 mt-0.5">{pct.toFixed(1)}%</div>
                         </div>
@@ -695,7 +695,7 @@ export default function JobsPage() {
                   <div className="flex items-center gap-3 mb-1.5">
                     <div className="flex-1 h-2 bg-terminal-gray rounded overflow-hidden">
                       <div
-                        className="h-full bg-terminal-green transition-all"
+                        className="h-full bg-terminal-green transition-[width,background-color,color,transform]"
                         style={{
                           width: `${tickerStatus.watchlist_symbols_total > 0
                             ? (tickerStatus.watchlist_symbols_current / tickerStatus.watchlist_symbols_total) * 100
@@ -710,7 +710,7 @@ export default function JobsPage() {
                   <div className="flex items-center gap-3">
                     <div className="flex-1 h-1.5 bg-terminal-gray rounded overflow-hidden">
                       <div
-                        className="h-full bg-blue-400 transition-all"
+                        className="h-full bg-blue-400 transition-[width,background-color,color,transform]"
                         style={{
                           width: `${tickerStatus.watchlist_symbols_total > 0
                             ? (tickerStatus.watchlist_symbols_covered / tickerStatus.watchlist_symbols_total) * 100
@@ -790,7 +790,7 @@ export default function JobsPage() {
                                   </div>
                                   <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
                                     <div
-                                      className="h-full bg-terminal-green transition-all"
+                                      className="h-full bg-terminal-green transition-[width,background-color,color,transform]"
                                       style={{ width: `${universeCoveredPct}%` }}
                                     />
                                   </div>
@@ -802,7 +802,7 @@ export default function JobsPage() {
                                   </div>
                                   <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
                                     <div
-                                      className="h-full bg-terminal-green/60 transition-all"
+                                      className="h-full bg-terminal-green/60 transition-[width,background-color,color,transform]"
                                       style={{ width: `${universeIndicatorsPct}%` }}
                                     />
                                   </div>
@@ -817,7 +817,7 @@ export default function JobsPage() {
                               </div>
                               <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
                                 <div
-                                  className="h-full bg-blue-400 transition-all"
+                                  className="h-full bg-blue-400 transition-[width,background-color,color,transform]"
                                   style={{ width: `${coveredPct}%` }}
                                 />
                               </div>
@@ -837,7 +837,7 @@ export default function JobsPage() {
                               </div>
                               <div className="h-1 bg-terminal-gray/30 rounded overflow-hidden">
                                 <div
-                                  className="h-full bg-blue-400/60 transition-all"
+                                  className="h-full bg-blue-400/60 transition-[width,background-color,color,transform]"
                                   style={{ width: `${indicatorsPct}%` }}
                                 />
                               </div>
@@ -882,7 +882,7 @@ export default function JobsPage() {
                   <div className="flex items-center gap-3">
                     <div className="flex-1 h-2 bg-terminal-gray rounded overflow-hidden">
                       <div
-                        className={`h-full transition-all ${
+                        className={`h-full transition-[width,background-color,color,transform] ${
                           tickerStatus.backfill_progress_percent === 100
                             ? 'bg-terminal-green'
                             : tickerStatus.backfill_progress_percent >= 95
@@ -1086,3 +1086,5 @@ export default function JobsPage() {
     </div>
   );
 }
+
+

@@ -458,7 +458,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
                     key={iv}
                     type="button"
                     onClick={() => handleIntervalChange(iv)}
-                    className={`px-1.5 py-0.5 text-[10px] font-mono border transition-all ${
+                    className={`px-1.5 py-0.5 text-[10px] font-mono border transition-colors ${
                       isActive
                         ? 'bg-terminal-green text-black border-terminal-green font-bold shadow-[0_0_6px_rgba(0,255,0,0.4)]'
                         : 'border-terminal-gray/80 text-white/50 hover:border-white/40 hover:text-white bg-black/40'
