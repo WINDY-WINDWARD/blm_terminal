@@ -26,7 +26,9 @@ Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy;
   - `server.js` (Next.js custom server)
   - `blm-backend.exe` (PyInstaller executable for FastAPI)
 - **Rules of Engagement:** Any modifications related to window management, state, packaging, or the desktop transition **MUST** adhere to `DESKTOP_CONVERSION_PLAN.md`.
-- **Skill Usage:** Use the built-in `desktop-conversion` skill for strict guidelines on building Electron features and avoiding hacky workarounds (like standalone Next.js exports).
+- **Skill Usage:** 
+  - Use the `desktop-conversion` skill for strict guidelines on building Electron features and avoiding hacky workarounds (like standalone Next.js exports).
+  - Use the `desktop-packaging` skill (`.opencode/skills/desktop-packaging/SKILL.md`) for compiling from source, generating NSIS installers, performing local silent installations, and managing release artifacts.
 
 ---
 
