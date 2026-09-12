@@ -366,6 +366,7 @@ def _ensure_admin_user() -> None:
         if count > 0:
             return
         
+        # TODO: eliminate admin:admin default password fallback
         admin_pass = os.environ.get("ADMIN_PASSWORD")
         if not admin_pass:
             admin_pass = "admin"
@@ -726,7 +727,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=settings.port,
         reload=False,
         log_config=None,

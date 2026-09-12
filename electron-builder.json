@@ -39,9 +39,7 @@
   },
   "publish": [
     {
-      "provider": "github",
-      "owner": "WINDY-WINDWARD",
-      "repo": "blm_terminal"
+      "provider": "github"
     }
   ],
   "nsis": {

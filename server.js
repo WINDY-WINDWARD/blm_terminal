@@ -57,9 +57,9 @@ app.prepare().then(() => {
     }
   });
 
-  server.listen(port, '0.0.0.0', (err) => {
+  server.listen(port, '127.0.0.1', (err) => {
     if (err) throw err;
-    console.log(`[server] Ready on http://0.0.0.0:${port} (${dev ? 'dev' : 'prod'})`);
+    console.log(`[server] Ready on http://127.0.0.1:${port} (${dev ? 'dev' : 'prod'})`);
     console.log(`[server] /ws/market → in-process Next.js handler`);
     console.log(`[server] /ws/news → ${backendUrl}`);
   });

@@ -14,12 +14,35 @@ from app.database import get_db
 from app.models.user import User
 from app.config import settings
 import os
+import secrets
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 current_user_id = contextvars.ContextVar("current_user_id", default=None)
 
-SECRET_KEY = settings.secret_key
-if not SECRET_KEY or len(SECRET_KEY) < 16:
-    SECRET_KEY = "desktop_terminal_local_secret_key_123456789"
+def _get_or_create_secret_key() -> str:
+    key = settings.secret_key
+    if key and key != "dev_secret_key_change_in_production" and len(key) >= 16:
+        return key
+    
+    env_file = Path(".env.local")
+    if env_file.exists():
+        content = env_file.read_text(encoding="utf-8")
+        for line in content.splitlines():
+            if line.startswith("SECRET_KEY="):
+                val = line.split("=", 1)[1].strip().strip('"\'')
+                if len(val) >= 16:
+                    return val
+
+    new_key = secrets.token_urlsafe(32)
+    with open(env_file, "a", encoding="utf-8") as f:
+        f.write(f"\nSECRET_KEY={new_key}\n")
+    logger.info("Auto-generated new SECRET_KEY and saved to .env.local")
+    return new_key
+
+SECRET_KEY = _get_or_create_secret_key()
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
