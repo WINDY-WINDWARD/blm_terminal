@@ -68,7 +68,7 @@ describe('terminalStore', () => {
       expect(DEFAULT_ACTIVE_PANELS['panel-5']).toBe('NEWS');
       expect(DEFAULT_ACTIVE_PANELS['panel-6']).toBe('ANALYSIS');
       expect(DEFAULT_ACTIVE_PANELS['panel-7']).toBe('DEALS');
-      expect(DEFAULT_ACTIVE_PANELS['panel-8']).toBe('ORDER');
+      expect(DEFAULT_ACTIVE_PANELS['panel-8']).toBe('PORTFOLIO');
     });
   });
 

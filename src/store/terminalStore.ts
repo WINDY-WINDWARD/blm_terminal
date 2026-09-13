@@ -125,7 +125,7 @@ export const DEFAULT_ACTIVE_PANELS: Record<string, string> = {
   'panel-5': 'NEWS',
   'panel-6': 'ANALYSIS',
   'panel-7': 'DEALS',
-  'panel-8': 'ORDER',
+  'panel-8': 'PORTFOLIO',
 };
 
 export const activePanelsAtom = atomWithStorage<Record<string, string>>(

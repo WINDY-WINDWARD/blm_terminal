@@ -26,7 +26,6 @@ interface SymbolSuggestion {
 const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'CHART', desc: 'Candlestick chart' },
   { cmd: 'WATCH', desc: 'Watchlist' },
-  { cmd: 'ORDER', desc: 'Order entry & book' },
   { cmd: 'POS', desc: 'Positions & P&L' },
   { cmd: 'TOP', desc: 'Top movers' },
   { cmd: 'SETTINGS', desc: 'App settings' },
