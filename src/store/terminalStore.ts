@@ -13,14 +13,30 @@ export interface TickData {
   yearLow?: number;
 }
 
-// ─── Per-Tab Storage (sessionStorage) ─────────────────────────────────────────
+// ─── Dual Storage (Syncs between window.localStorage and Electron appData) ───
 
-const getSessionStorage = () =>
-  typeof window !== 'undefined' ? window.sessionStorage : undefined;
+declare global {
+  interface Window {
+    electronAPI?: {
+      getAppVersion: () => Promise<string>;
+      checkForUpdates: () => Promise<unknown>;
+      downloadUpdate: () => Promise<unknown>;
+      installUpdate: () => Promise<void>;
+      onUpdaterMessage: (callback: (msg: { status: string; data?: unknown }) => void) => void;
+      getStoredItem?: (key: string) => Promise<unknown>;
+      setStoredItem?: (key: string, value: unknown) => Promise<boolean>;
+      removeStoredItem?: (key: string) => Promise<boolean>;
+      getAllStoredItems?: () => Promise<Record<string, unknown>>;
+    };
+  }
+}
 
-export const tabStorage = {
+const getLocalStorage = () =>
+  typeof window !== 'undefined' ? window.localStorage : undefined;
+
+export const persistentStorage = {
   getItem: <V>(key: string, initialValue: V): V => {
-    const storage = getSessionStorage();
+    const storage = getLocalStorage();
     if (!storage) return initialValue;
     const stored = storage.getItem(key);
     if (stored === null) return initialValue;
@@ -31,44 +47,35 @@ export const tabStorage = {
     }
   },
   setItem: <V>(key: string, newValue: V): void => {
-    const storage = getSessionStorage();
+    const storage = getLocalStorage();
     if (storage) {
       storage.setItem(key, JSON.stringify(newValue));
     }
+    // Eagerly backup to Electron's disk-based store if in desktop environment
+    if (typeof window !== 'undefined' && window.electronAPI?.setStoredItem) {
+      window.electronAPI.setStoredItem(key, newValue).catch(() => {});
+    }
   },
   removeItem: (key: string): void => {
-    const storage = getSessionStorage();
+    const storage = getLocalStorage();
     if (storage) {
       storage.removeItem(key);
+    }
+    if (typeof window !== 'undefined' && window.electronAPI?.removeStoredItem) {
+      window.electronAPI.removeStoredItem(key).catch(() => {});
     }
   },
 };
 
-// ─── Legacy LocalStorage Keys (to be cleaned up) ──────────────────────────────
+export const tabStorage = persistentStorage;
 
-export const OLD_LOCAL_STORAGE_KEYS = [
-  'terminal.activePanels',
-  'terminal.panelCount',
-  'terminal.panelSizes',
-  'terminal.focusedPanel',
-  'terminal.activeSymbol',
-  'terminal.activeExchange',
-  'terminal.watchlistColumns',
-  'terminal.moversColumns',
-  'terminal.moversCategory',
-  'terminal.activeWatchlistId',
-  'notif.subFilters',
-  'notif.streakMinDays',
-  'scan.subFilters',
-  'scan.streakMinDays',
-];
+// ─── Legacy LocalStorage Keys ──────────────────────────────────────────────────
 
-/** Remove stale localStorage keys that have migrated to sessionStorage. */
+export const OLD_LOCAL_STORAGE_KEYS: string[] = [];
+
+/** No-op cleanup maintained for backward compatibility. */
 export function cleanupOldLocalStorage(): void {
-  if (typeof window === 'undefined') return;
-  OLD_LOCAL_STORAGE_KEYS.forEach((key) => {
-    window.localStorage.removeItem(key);
-  });
+  // Retained as a safe no-op so persistent layout keys are not deleted.
 }
 
 // ─── Auth State ───────────────────────────────────────────────────────────────
@@ -131,14 +138,13 @@ export const DEFAULT_ACTIVE_PANELS: Record<string, string> = {
 export const activePanelsAtom = atomWithStorage<Record<string, string>>(
   'terminal.activePanels',
   DEFAULT_ACTIVE_PANELS,
-  tabStorage,
 );
 
-export const panelCountAtom = atomWithStorage<PanelCount>('terminal.panelCount', 4, tabStorage);
+export const panelCountAtom = atomWithStorage<PanelCount>('terminal.panelCount', 4);
 
-export const panelSizesAtom = atomWithStorage<PanelSplitSizes | null>('terminal.panelSizes', null, tabStorage);
+export const panelSizesAtom = atomWithStorage<PanelSplitSizes | null>('terminal.panelSizes', null);
 
-export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1', tabStorage);
+export const focusedPanelAtom = atomWithStorage<string>('terminal.focusedPanel', 'panel-1');
 
 // ─── Panel Selection & Merging ────────────────────────────────────────────────
 
@@ -150,11 +156,10 @@ export interface MergedGroup {
   primary: string;
 }
 
-/** Map from primary panel ID to its merge group (persisted per tab) */
+/** Map from primary panel ID to its merge group (persisted across sessions) */
 export const mergedGroupsAtom = atomWithStorage<Record<string, MergedGroup>>(
   'terminal.mergedGroups',
   {},
-  tabStorage,
 );
 
 /**
@@ -273,16 +278,16 @@ export const fundsAtom = atom<FundsData | null>(null);
 export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', 'msfv', '1w', '1m', '3m', '6m', '1y', 'results', 'alerts'];
 export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '1y'];
 
-export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS, tabStorage);
-export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS, tabStorage);
+export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
+export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS);
 
 /** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
-export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec', tabStorage);
+export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec');
 
 // ─── Ticker Bar ──────────────────────────────────────────────────────────────
 
 /** Ticker source preference. Values: 'default' | 'top' | 'watchlist:<id>' */
-export const tickerSourceAtom = atomWithStorage<string>('terminal.tickerSource', 'default', tabStorage);
+export const tickerSourceAtom = atomWithStorage<string>('terminal.tickerSource', 'default');
 
 // ─── Watchlists ─────────────────────────────────────────────────────────────
 
@@ -295,12 +300,12 @@ export interface Watchlist {
 
 export const watchlistsAtom = atom<Watchlist[]>([]);
 
-export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1, tabStorage);
+export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1);
 
 // ─── Notif / Scan Sub-Filters ─────────────────────────────────────────────────
 
 /**
- * Per-tab sub-filter state for NotifWidget and ScanWidget.
+ * Sub-filter state for NotifWidget and ScanWidget.
  * Keys are tab ids (e.g. "technical", "streaks"), values are arrays of
  * selected trigger_type strings (e.g. ["rsi_oversold", "macd_bullish_cross"]).
  * An empty array means no sub-filter active for that tab (show all).
@@ -308,16 +313,16 @@ export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWat
 export type SubFilterMap = Partial<Record<string, string[]>>;
 
 /** NotifWidget — selected trigger_type bubbles per tab */
-export const notifSubFiltersAtom = atomWithStorage<SubFilterMap>('notif.subFilters', {}, tabStorage);
+export const notifSubFiltersAtom = atomWithStorage<SubFilterMap>('notif.subFilters', {});
 
 /** NotifWidget — minimum streak day count for the streaks tab (floor = 5) */
-export const notifStreakMinDaysAtom = atomWithStorage<number>('notif.streakMinDays', 5, tabStorage);
+export const notifStreakMinDaysAtom = atomWithStorage<number>('notif.streakMinDays', 5);
 
 /** ScanWidget — selected trigger_type bubbles per tab */
-export const scanSubFiltersAtom = atomWithStorage<SubFilterMap>('scan.subFilters', {}, tabStorage);
+export const scanSubFiltersAtom = atomWithStorage<SubFilterMap>('scan.subFilters', {});
 
 /** ScanWidget — minimum streak day count for the streaks tab (floor = 5) */
-export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays', 5, tabStorage);
+export const scanStreakMinDaysAtom = atomWithStorage<number>('scan.streakMinDays', 5);
 
 // ─── Notif Symbol Filter ──────────────────────────────────────────────────────
 

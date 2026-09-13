@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, screen } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -39,6 +39,124 @@ let tray = null;
 let isQuitting = false;
 let pythonProcess = null;
 let nextProcess = null;
+
+// ── Persistent Window State & Popouts Registry ──
+const stateDir = app.getPath('userData');
+const mainBoundsFile = path.join(stateDir, 'main-bounds.json');
+const popoutsFile = path.join(stateDir, 'popouts.json');
+const terminalStorageFile = path.join(stateDir, 'terminal-storage.json');
+
+function loadTerminalStorage() {
+  try {
+    if (fs.existsSync(terminalStorageFile)) {
+      const data = JSON.parse(fs.readFileSync(terminalStorageFile, 'utf8'));
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        return data;
+      }
+    }
+  } catch (e) {
+    log(`Failed to load terminal-storage.json: ${e.message}`);
+  }
+  return {};
+}
+
+let terminalStorageData = loadTerminalStorage();
+let saveTerminalStorageTimer = null;
+function saveTerminalStorage() {
+  if (saveTerminalStorageTimer) clearTimeout(saveTerminalStorageTimer);
+  saveTerminalStorageTimer = setTimeout(() => {
+    try {
+      fs.writeFileSync(terminalStorageFile, JSON.stringify(terminalStorageData, null, 2));
+    } catch (e) {
+      log(`Failed to save terminal-storage.json: ${e.message}`);
+    }
+  }, 200);
+}
+
+function loadMainBounds() {
+  try {
+    if (fs.existsSync(mainBoundsFile)) {
+      const data = JSON.parse(fs.readFileSync(mainBoundsFile, 'utf8'));
+      if (typeof data.width === 'number' && typeof data.height === 'number') {
+        return { width: data.width, height: data.height };
+      }
+    }
+  } catch (e) {
+    log(`Failed to load main window bounds: ${e.message}`);
+  }
+  return { width: 1400, height: 900 };
+}
+
+let saveMainBoundsTimer = null;
+function saveMainBounds(width, height) {
+  if (saveMainBoundsTimer) clearTimeout(saveMainBoundsTimer);
+  saveMainBoundsTimer = setTimeout(() => {
+    try {
+      fs.writeFileSync(mainBoundsFile, JSON.stringify({ width, height }, null, 2));
+    } catch (e) {
+      log(`Failed to save main window bounds: ${e.message}`);
+    }
+  }, 300);
+}
+
+function isPositionOnAnyDisplay(x, y, width = 100, height = 100) {
+  try {
+    const displays = screen.getAllDisplays();
+    return displays.some((d) => {
+      const { x: dx, y: dy, width: dw, height: dh } = d.bounds;
+      // Check if at least an identifiable part (e.g. top banner) of the window is within this display
+      return (
+        x + width > dx + 50 &&
+        x < dx + dw - 50 &&
+        y + height > dy + 30 &&
+        y < dy + dh - 30
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function loadPopoutsRegistry() {
+  try {
+    if (fs.existsSync(popoutsFile)) {
+      const data = JSON.parse(fs.readFileSync(popoutsFile, 'utf8'));
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        return data;
+      }
+    }
+  } catch (e) {
+    log(`Failed to load popouts registry: ${e.message}`);
+  }
+  return {};
+}
+
+let savePopoutsTimer = null;
+let popoutsRegistry = {};
+
+function savePopoutsRegistry() {
+  if (savePopoutsTimer) clearTimeout(savePopoutsTimer);
+  savePopoutsTimer = setTimeout(() => {
+    try {
+      fs.writeFileSync(popoutsFile, JSON.stringify(popoutsRegistry, null, 2));
+    } catch (e) {
+      log(`Failed to save popouts registry: ${e.message}`);
+    }
+  }, 300);
+}
+
+function updateWidgetBoundsInRegistry(routeKey, bounds) {
+  popoutsRegistry[routeKey] = bounds;
+  savePopoutsRegistry();
+}
+
+function removeWidgetFromRegistry(routeKey) {
+  if (isQuitting) return; // Do not delete saved popouts during app shutdown
+  if (popoutsRegistry[routeKey]) {
+    delete popoutsRegistry[routeKey];
+    savePopoutsRegistry();
+  }
+}
 
 // Ensure single instance
 const gotTheLock = app.requestSingleInstanceLock();
@@ -113,9 +231,26 @@ async function startApp() {
     const isDev = !app.isPackaged;
     log(`startApp() called — isDev=${isDev}`);
     
-    // Find free ports
+    // Dynamic port for Python backend, fixed default port (with fallback) for Next.js
+    // IMPORTANT: Next.js frontend origin MUST remain consistent (e.g. http://127.0.0.1:4400)
+    // across restarts so that the browser's localStorage (containing layout, watchlists,
+    // active widgets, auth, filters) persists across cold boots!
     const pythonPort = await findFreePort();
-    const nextPort = await findFreePort();
+    let nextPort = 4400;
+    try {
+      // Test if 4400 is free
+      await new Promise((resolve, reject) => {
+        const testSrv = net.createServer();
+        testSrv.once('error', reject);
+        testSrv.once('listening', () => {
+          testSrv.close(resolve);
+        });
+        testSrv.listen(nextPort, '127.0.0.1');
+      });
+    } catch (e) {
+      log(`Default port 4400 busy, finding dynamic free port: ${e.message}`);
+      nextPort = await findFreePort();
+    }
     log(`Ports allocated — python=${pythonPort}, next=${nextPort}`);
     
     // Determine paths
@@ -245,9 +380,10 @@ async function startApp() {
     log(`Next.js is ready!`);
 
     // 4. Create Main Window
+    const savedBounds = loadMainBounds();
     mainWindow = new BrowserWindow({
-      width: 1400,
-      height: 900,
+      width: savedBounds.width,
+      height: savedBounds.height,
       title: "BLM Terminal",
       autoHideMenuBar: true,
       show: true,
@@ -259,38 +395,92 @@ async function startApp() {
       }
     });
 
+    // Track and persist main window size (only size, not position)
+    mainWindow.on('resize', () => {
+      if (!mainWindow.isDestroyed() && !mainWindow.isMaximized() && !mainWindow.isMinimized()) {
+        const [width, height] = mainWindow.getSize();
+        saveMainBounds(width, height);
+      }
+    });
+
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
       console.error(`Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
     });
+
+    // Helper: Create native popped-out widget window with persistent size and position
+    function createWidgetWindow(targetUrl, initialBounds = null) {
+      // Parse relative route path to use as registry key
+      let routeKey;
+      try {
+        const parsed = new URL(targetUrl);
+        routeKey = parsed.pathname + parsed.search;
+      } catch {
+        routeKey = targetUrl;
+      }
+
+      const bounds = initialBounds || { width: 900, height: 650 };
+      const winOptions = {
+        width: bounds.width || 900,
+        height: bounds.height || 650,
+        titleBarStyle: 'hidden',
+        titleBarOverlay: {
+          color: '#121212',
+          symbolColor: '#ffb000',
+          height: 32
+        },
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: path.join(__dirname, 'preload.js')
+        }
+      };
+
+      if (
+        typeof bounds.x === 'number' &&
+        typeof bounds.y === 'number' &&
+        isPositionOnAnyDisplay(bounds.x, bounds.y, winOptions.width, winOptions.height)
+      ) {
+        winOptions.x = bounds.x;
+        winOptions.y = bounds.y;
+      }
+
+      const widgetWindow = new BrowserWindow(winOptions);
+
+      // Save initial bounds
+      updateWidgetBoundsInRegistry(routeKey, widgetWindow.getBounds());
+
+      // Track size and position changes
+      const syncBounds = () => {
+        if (!widgetWindow.isDestroyed() && !widgetWindow.isMinimized()) {
+          updateWidgetBoundsInRegistry(routeKey, widgetWindow.getBounds());
+        }
+      };
+
+      widgetWindow.on('resize', syncBounds);
+      widgetWindow.on('move', syncBounds);
+
+      // When closed by user, remove from registry (only if not closing during app quit)
+      widgetWindow.on('closed', () => {
+        removeWidgetFromRegistry(routeKey);
+      });
+
+      // Add DevTools support for widget windows too
+      widgetWindow.webContents.on('before-input-event', (event, input) => {
+        if (input.key === 'F12') {
+          widgetWindow.webContents.toggleDevTools();
+          event.preventDefault();
+        }
+      });
+
+      widgetWindow.loadURL(targetUrl);
+      return widgetWindow;
+    }
 
     // Multi-Window Pop-out Interceptor
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       // If the frontend calls window.open (e.g. for popped out widgets or OAuth)
       if (url.includes('/widget/')) {
-        const widgetWindow = new BrowserWindow({
-          width: 900,
-          height: 650,
-          titleBarStyle: 'hidden',
-          titleBarOverlay: {
-            color: '#121212',
-            symbolColor: '#ffb000',
-            height: 32
-          },
-          webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true
-          }
-        });
-
-        // Add DevTools support for widget windows too
-        widgetWindow.webContents.on('before-input-event', (event, input) => {
-          if (input.key === 'F12') {
-            widgetWindow.webContents.toggleDevTools();
-            event.preventDefault();
-          }
-        });
-
-        widgetWindow.loadURL(url);
+        createWidgetWindow(url);
         return { action: 'deny' }; // Prevent default pop-up
       }
       
@@ -367,6 +557,23 @@ async function startApp() {
 
     mainWindow.loadURL(`http://127.0.0.1:${nextPort}`);
 
+    // Restore previously open popped-out widgets
+    popoutsRegistry = loadPopoutsRegistry();
+    const savedRoutes = Object.keys(popoutsRegistry);
+    if (savedRoutes.length > 0) {
+      log(`Restoring ${savedRoutes.length} popped-out widgets from registry...`);
+      for (const route of savedRoutes) {
+        const bounds = popoutsRegistry[route];
+        const fullUrl = `http://127.0.0.1:${nextPort}${route}`;
+        log(`Restoring widget pop-out: ${route}`);
+        try {
+          createWidgetWindow(fullUrl, bounds);
+        } catch (err) {
+          log(`Failed to restore pop-out widget ${route}: ${err.message}`);
+        }
+      }
+    }
+
     // Auto Updater Setup
     function sendStatusToWindow(status, data) {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -385,6 +592,18 @@ async function startApp() {
     autoUpdater.on('update-downloaded', (info) => sendStatusToWindow('downloaded', info));
 
     ipcMain.handle('get-app-version', () => app.getVersion());
+    ipcMain.handle('storage-get', (_event, key) => terminalStorageData[key] ?? null);
+    ipcMain.handle('storage-set', (_event, key, value) => {
+      terminalStorageData[key] = value;
+      saveTerminalStorage();
+      return true;
+    });
+    ipcMain.handle('storage-remove', (_event, key) => {
+      delete terminalStorageData[key];
+      saveTerminalStorage();
+      return true;
+    });
+    ipcMain.handle('storage-get-all', () => terminalStorageData);
     ipcMain.handle('check-for-updates', async () => {
       log('IPC check-for-updates triggered');
       try {

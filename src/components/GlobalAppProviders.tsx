@@ -13,9 +13,27 @@ export function GlobalAppProviders({ children }: { children: React.ReactNode }) 
   const setWsConnected = useSetAtom(wsConnectedAtom);
   const setOpenAlgoAvailable = useSetAtom(openAlgoAvailableAtom);
 
-  // Clean up legacy localStorage keys once on mount
+  // Restore Electron disk-backed storage into localStorage on cold boot
   useEffect(() => {
     cleanupOldLocalStorage();
+    if (typeof window !== 'undefined' && window.electronAPI?.getAllStoredItems) {
+      window.electronAPI.getAllStoredItems().then((items) => {
+        if (items && typeof items === 'object') {
+          let updated = false;
+          for (const [key, value] of Object.entries(items)) {
+            // If localStorage is empty for this key (e.g. fresh random port origin), restore it
+            if (window.localStorage.getItem(key) === null && value !== undefined) {
+              window.localStorage.setItem(key, JSON.stringify(value));
+              updated = true;
+            }
+          }
+          // If we restored keys to an empty origin, trigger a storage event or state reload
+          if (updated) {
+            window.dispatchEvent(new Event('storage'));
+          }
+        }
+      }).catch(() => {});
+    }
   }, []);
 
   // Track market WebSocket connection state and eagerly connect
