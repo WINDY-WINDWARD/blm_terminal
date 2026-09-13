@@ -6,7 +6,6 @@ import {
   activeCommandAtom,
   activePanelsAtom,
   focusedPanelAtom,
-  openAlgoAvailableAtom,
   panelCountAtom,
   panelSizesAtom,
   selectedPanelsAtom,
@@ -159,8 +158,6 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     }
   }, [focusedPanel, panelCount, setFocusedPanel]);
 
-  const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
-
   // Command processor: apply widget command to focused panel
   useEffect(() => {
     if (!activeCommand) return;
@@ -252,17 +249,12 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       targetCommand = 'BREAKOUTS';
     }
 
-    const openAlgoWidgets = new Set(['ORDER', 'POS']);
-    const validWidgets = openAlgoAvailable
-      ? VALID_WIDGETS
-      : VALID_WIDGETS.filter((w) => !openAlgoWidgets.has(w));
-
-    const isValid = validWidgets.includes(targetCommand);
+    const isValid = VALID_WIDGETS.includes(targetCommand);
     if (isValid) {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: targetCommand }));
     }
     setActiveCommand('');
-  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, openAlgoAvailable, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue]);
+  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue]);
 
   // Handle popup widget restore requests from detached windows
   useEffect(() => {
