@@ -291,6 +291,123 @@ def _ensure_watchlist_data() -> None:
         sync_engine.dispose()
 
 
+def _ensure_stock_universe() -> None:
+    """Pre-seed stock universe on fresh install from bundled assets if table is empty."""
+    import json
+    import sys
+    from datetime import datetime
+
+    sync_url = f"sqlite:///{settings.db_path}"
+    sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+
+    @sa_event.listens_for(sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
+    try:
+        with sync_engine.connect() as conn:
+            inspector = sa_inspect(conn)
+            tables = set(inspector.get_table_names())
+
+            if "stock_universe" not in tables:
+                return
+
+            count = conn.execute(sa_text("SELECT COUNT(*) FROM stock_universe")).scalar()
+            if count > 0:
+                return
+
+            # Determine path to stockuniverse.json
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                asset_path = Path(sys._MEIPASS) / "app" / "assets" / "stockuniverse.json"
+            else:
+                asset_path = Path(__file__).resolve().parent / "app" / "assets" / "stockuniverse.json"
+
+            if not asset_path.exists():
+                logger.warning("_ensure_stock_universe: bundled seed file not found at %s", asset_path)
+                return
+
+            logger.info("_ensure_stock_universe: pre-seeding stock universe from %s", asset_path)
+            with open(asset_path, "r", encoding="utf-8") as f:
+                stocks = json.load(f)
+
+            if not stocks:
+                return
+
+            now_str = datetime.now().isoformat()
+            # Insert records in batches
+            insert_sql = sa_text(
+                """
+                INSERT OR IGNORE INTO stock_universe (
+                    symbol, series, company_name, segment, industry,
+                    sector_pe, symbol_pe, industry_info, last_update_time,
+                    screener_trades_id, mc_url, review_status, match_confidence,
+                    mc_match_source, mc_company_name, morningstar_id, fair_value,
+                    fair_value_updated_at, high_52w, low_52w, high_52w_date,
+                    low_52w_date, high_52w_updated_at, ticker_failure_count,
+                    created_at, updated_at, isin, iinvest_path, iinvest_path_resolved_at
+                ) VALUES (
+                    :symbol, :series, :company_name, :segment, :industry,
+                    :sector_pe, :symbol_pe, :industry_info, :last_update_time,
+                    :screener_trades_id, :mc_url, :review_status, :match_confidence,
+                    :mc_match_source, :mc_company_name, :morningstar_id, :fair_value,
+                    :fair_value_updated_at, :high_52w, :low_52w, :high_52w_date,
+                    :low_52w_date, :high_52w_updated_at, :ticker_failure_count,
+                    :created_at, :updated_at, :isin, :iinvest_path, :iinvest_path_resolved_at
+                )
+                """
+            )
+
+            # Ensure all keys exist and types are sanitized
+            prepared = []
+            for s in stocks:
+                row = {
+                    "symbol": s.get("symbol"),
+                    "series": s.get("series"),
+                    "company_name": s.get("company_name") or "",
+                    "segment": s.get("segment") or "EQUITIES",
+                    "industry": s.get("industry") or "",
+                    "sector_pe": s.get("sector_pe"),
+                    "symbol_pe": s.get("symbol_pe"),
+                    "industry_info": s.get("industry_info") if isinstance(s.get("industry_info"), str) else json.dumps(s.get("industry_info") or {}),
+                    "last_update_time": s.get("last_update_time") or now_str,
+                    "screener_trades_id": s.get("screener_trades_id"),
+                    "mc_url": s.get("mc_url"),
+                    "review_status": s.get("review_status"),
+                    "match_confidence": s.get("match_confidence"),
+                    "mc_match_source": s.get("mc_match_source"),
+                    "mc_company_name": s.get("mc_company_name"),
+                    "morningstar_id": s.get("morningstar_id"),
+                    "fair_value": s.get("fair_value"),
+                    "fair_value_updated_at": s.get("fair_value_updated_at"),
+                    "high_52w": s.get("high_52w"),
+                    "low_52w": s.get("low_52w"),
+                    "high_52w_date": s.get("high_52w_date"),
+                    "low_52w_date": s.get("low_52w_date"),
+                    "high_52w_updated_at": s.get("high_52w_updated_at"),
+                    "ticker_failure_count": s.get("ticker_failure_count") or 0,
+                    "created_at": s.get("created_at") or now_str,
+                    "updated_at": s.get("updated_at") or now_str,
+                    "isin": s.get("isin"),
+                    "iinvest_path": s.get("iinvest_path"),
+                    "iinvest_path_resolved_at": s.get("iinvest_path_resolved_at"),
+                }
+                prepared.append(row)
+
+            # Batch execution
+            batch_size = 500
+            for i in range(0, len(prepared), batch_size):
+                conn.execute(insert_sql, prepared[i:i + batch_size])
+            conn.commit()
+            logger.info("_ensure_stock_universe: successfully seeded %d stocks", len(prepared))
+    except Exception:
+        logger.exception("_ensure_stock_universe: failed to pre-seed stock universe")
+    finally:
+        sync_engine.dispose()
+
+
 def _ensure_user_columns() -> None:
     """Add missing user_id columns to watchlists and chat_sessions.
 
@@ -568,6 +685,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await asyncio.to_thread(_ensure_user_layouts_columns)
     await asyncio.to_thread(_ensure_admin_user)
     await asyncio.to_thread(_ensure_watchlist_data)
+    await asyncio.to_thread(_ensure_stock_universe)
     await asyncio.to_thread(_backfill_entities_double_encoding)
 
     # alembic/env.py calls fileConfig(alembic.ini) during migrations which

@@ -26,6 +26,7 @@ if (Test-Path ".venv\Scripts\python.exe") {
     --onefile `
     --add-data "alembic;alembic" `
     --add-data "alembic.ini;." `
+    --add-data "app/assets;app/assets" `
     --hidden-import "aiosqlite" `
     --hidden-import "sqlalchemy.dialects.sqlite" `
     --hidden-import "rookiepy" `
