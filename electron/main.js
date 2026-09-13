@@ -202,8 +202,10 @@ async function startApp() {
       log(`existence check error: ${e.message}`);
     }
 
-    log(`Forking Next.js process...`);
+    const nextCwd = isDev ? path.join(__dirname, '..') : path.dirname(app.getPath('exe'));
+    log(`Forking Next.js process with cwd=${nextCwd}...`);
     nextProcess = fork(serverJsPath, [], {
+      cwd: nextCwd,
       env: {
         ...process.env,
         PORT: nextPort.toString(),

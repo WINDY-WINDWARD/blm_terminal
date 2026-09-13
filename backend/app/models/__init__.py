@@ -9,6 +9,7 @@ from app.models import (  # noqa: F401
     marketcategory,
     news,
     notification,
+    paper_trade,
     stockuniverse,
     sync_state,
     ticker,

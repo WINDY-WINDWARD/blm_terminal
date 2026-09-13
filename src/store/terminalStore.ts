@@ -279,6 +279,11 @@ export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColum
 /** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
 export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec', tabStorage);
 
+// ─── Ticker Bar ──────────────────────────────────────────────────────────────
+
+/** Ticker source preference. Values: 'default' | 'top' | 'watchlist:<id>' */
+export const tickerSourceAtom = atomWithStorage<string>('terminal.tickerSource', 'default', tabStorage);
+
 // ─── Watchlists ─────────────────────────────────────────────────────────────
 
 export interface Watchlist {

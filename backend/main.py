@@ -33,6 +33,7 @@ from app.routers import (
     news_router,
     news_ws_router,
     notifications_router,
+    paper_trades_router,
     screener_router,
     iinvest_router,
     tradingview as tradingview_router,
@@ -703,6 +704,7 @@ app.include_router(watchlist_router, prefix="/api")
 app.include_router(layout_router, prefix="/api")
 app.include_router(valuation_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
+app.include_router(paper_trades_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
 from app.routers.ticker import router as ticker_router

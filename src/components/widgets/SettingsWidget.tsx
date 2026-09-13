@@ -12,6 +12,7 @@ import {
   moversColumnsAtom,
   watchlistsAtom,
   activeWatchlistIdAtom,
+  tickerSourceAtom,
   panelCountAtom,
   panelSizesAtom,
   selectedPanelsAtom,
@@ -178,6 +179,7 @@ export function SettingsWidget() {
   const [moversCols, setMoversCols] = useAtom(moversColumnsAtom);
   const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
+  const [tickerSource, setTickerSource] = useAtom(tickerSourceAtom);
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
   const [, setPanelSizes] = useAtom(panelSizesAtom);
   const [, setSelectedPanels] = useAtom(selectedPanelsAtom);
@@ -562,6 +564,26 @@ export function SettingsWidget() {
         <div className="text-white text-[10px]">
           Layout changes reset panel sizes and merges.
         </div>
+      </div>
+
+      {/* Ticker Source */}
+      <div className="flex flex-col gap-1">
+        <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
+          Ticker Source
+        </div>
+        <select
+          value={tickerSource}
+          onChange={(e) => setTickerSource(e.target.value)}
+          className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+        >
+          <option value="default">Default (First Watchlist)</option>
+          <option value="top">Top Movers (Gainers + Losers)</option>
+          {watchlists.map((wl) => (
+            <option key={wl.id} value={`watchlist:${wl.id}`}>
+              Watchlist: {wl.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Saved Layouts */}

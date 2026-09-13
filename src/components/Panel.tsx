@@ -104,7 +104,7 @@ export function Panel({ id, title }: PanelProps) {
       );
     }
 
-    if (!openAlgoAvailable && (title === 'ORDER' || title === 'POS')) {
+    if (!openAlgoAvailable && title === 'ORDER') {
       return (
         <div className="h-full w-full flex flex-col items-center justify-center text-terminal-amber/50 font-mono text-xs gap-2">
           <span className="text-terminal-amber/30 text-lg font-bold">--</span>
