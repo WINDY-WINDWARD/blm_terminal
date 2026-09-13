@@ -2219,3 +2219,177 @@ async def iinvest_all(symbol: str) -> dict[str, Any]:
     if not isin or not path:
         return {"error": f"iinvest path not found for {symbol}"}
     return await client.get_all(path, isin)
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Positions
+# ---------------------------------------------------------------------------
+
+
+from typing import Literal
+
+
+@mcp.tool()
+async def get_positions(
+    status: Literal["OPEN", "CLOSED"] | None = None,
+) -> list[dict[str, Any]] | dict[str, Any]:
+    """Fetches all portfolio positions.
+
+    Returns aggregated execution history, average pricing, P&L, and real-time technical momentum state. This is a read-only operation.
+    """
+    from fastapi import HTTPException
+    from app.database import AsyncSessionLocal
+    from app.routers.paper_trades import list_paper_trades
+
+    try:
+        async with AsyncSessionLocal() as session:
+            trades = await list_paper_trades(status_filter=status, db=session)
+            return [t.model_dump(mode="json") for t in trades]
+    except HTTPException as e:
+        return {"error": e.detail}
+    except Exception as e:
+        logger.exception("Failed to fetch positions")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def open_position(
+    symbol: str,
+    quantity: int,
+    price: float,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Opens a new base trading position for a stock symbol.
+
+    Initializes a new master position record and executes the first buy transaction. This operation writes to the database. Cannot be used to add shares to an already existing open position.
+    """
+    from fastapi import HTTPException
+    from app.database import AsyncSessionLocal
+    from app.routers.paper_trades import create_paper_trade as _create, PaperTradeCreate
+
+    try:
+        body = PaperTradeCreate(
+            symbol=symbol.strip().upper(),
+            quantity=quantity,
+            price=price,
+            notes=notes,
+        )
+        async with AsyncSessionLocal() as session:
+            trade = await _create(body, db=session)
+            return trade.model_dump(mode="json")
+    except HTTPException as e:
+        return {"error": e.detail}
+    except Exception as e:
+        logger.exception(f"Failed to open position for {symbol}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def add_position_leg(
+    trade_id: int,
+    action: Literal["BUY", "SELL"],
+    quantity: int,
+    price: float,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Executes an additional trade leg on an existing open position.
+
+    Appends a new buy or sell transaction to the master position, recalculating average price and remaining quantity. A sell action that exhausts the remaining quantity will automatically mark the master position as closed. This is a destructive write operation.
+    """
+    from fastapi import HTTPException
+    from app.database import AsyncSessionLocal
+    from app.routers.paper_trades import add_trade_leg as _add_leg, PaperTradeLegCreate
+
+    try:
+        body = PaperTradeLegCreate(
+            action=action,
+            quantity=quantity,
+            price=price,
+            notes=notes,
+        )
+        async with AsyncSessionLocal() as session:
+            trade = await _add_leg(trade_id, body, db=session)
+            return trade.model_dump(mode="json")
+    except HTTPException as e:
+        return {"error": e.detail}
+    except Exception as e:
+        logger.exception(f"Failed to add leg to position {trade_id}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def update_position_leg(
+    leg_id: int,
+    action: Literal["BUY", "SELL"] | None = None,
+    quantity: int | None = None,
+    price: float | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Modifies an existing position transaction leg.
+
+    Overwrites the specific attributes of a historical execution leg to correct mislogged entries. The system will automatically recalculate the master position averages and status. This alters historical trade data.
+    """
+    from fastapi import HTTPException
+    from app.database import AsyncSessionLocal
+    from app.routers.paper_trades import update_trade_leg as _update_leg, PaperTradeLegUpdate
+
+    try:
+        body = PaperTradeLegUpdate(
+            action=action,
+            quantity=quantity,
+            price=price,
+            notes=notes,
+        )
+        async with AsyncSessionLocal() as session:
+            trade = await _update_leg(leg_id, body, db=session)
+            return trade.model_dump(mode="json")
+    except HTTPException as e:
+        return {"error": e.detail}
+    except Exception as e:
+        logger.exception(f"Failed to update leg {leg_id}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def delete_position_leg(leg_id: int) -> dict[str, Any]:
+    """Deletes an individual transaction leg from a position.
+
+    Removes a specific historical execution. If the deleted leg is the only leg remaining, the entire master position is permanently deleted. This is a destructive operation.
+    """
+    from fastapi import HTTPException
+    from app.database import AsyncSessionLocal
+    from app.routers.paper_trades import delete_trade_leg as _delete_leg
+
+    try:
+        async with AsyncSessionLocal() as session:
+            trade = await _delete_leg(leg_id, db=session)
+            return trade.model_dump(mode="json")
+    except HTTPException as e:
+        if e.status_code == 200:
+            return {"status": "success", "message": e.detail}
+        return {"error": e.detail}
+    except Exception as e:
+        logger.exception(f"Failed to delete leg {leg_id}")
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def delete_position(trade_id: int) -> dict[str, Any]:
+    """Deletes an entire portfolio position and all associated transaction history.
+
+    Completely purges the master position and cascades deletion to all execution legs. This is a permanent, destructive operation.
+    """
+    from fastapi import HTTPException
+    from app.database import AsyncSessionLocal
+    from app.routers.paper_trades import delete_paper_trade as _delete_trade
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await _delete_trade(trade_id, db=session)
+            return {"status": "success", "message": f"Position {trade_id} deleted successfully."}
+    except HTTPException as e:
+        return {"error": e.detail}
+    except Exception as e:
+        logger.exception(f"Failed to delete position {trade_id}")
+        return {"error": str(e)}
+
