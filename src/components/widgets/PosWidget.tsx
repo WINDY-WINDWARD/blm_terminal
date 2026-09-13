@@ -31,6 +31,9 @@ export function PosWidget() {
   const [viewMode, setViewMode] = useState<'live' | 'paper'>('paper');
   const effectiveMode = openAlgoAvailable ? viewMode : 'paper';
 
+  // Sub-tab for Paper Trades: 'open' or 'closed'
+  const [paperTab, setPaperTab] = useState<'open' | 'closed'>('open');
+
   // --- Modals State ---
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [symbolInput, setSymbolInput] = useState('');
@@ -128,10 +131,14 @@ export function PosWidget() {
 
   const deleteLegMutation = useMutation({
     mutationFn: (legId: number) => deletePaperTradeLeg(legId),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['paper-trades'] });
-      // If position was deleted or updated, refresh managing trade
-      setManagingTrade(null);
+      // If the entire position was deleted because all legs were removed, close modal
+      if (!result || 'detail' in result || (result as PaperTrade).legs?.length === 0) {
+        setManagingTrade(null);
+      } else {
+        setManagingTrade(result as PaperTrade);
+      }
       setEditingLegId(null);
     },
   });
@@ -141,6 +148,7 @@ export function PosWidget() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['paper-trades'] });
       setManagingTrade(null);
+      setEditingLegId(null);
     },
   });
 
@@ -199,6 +207,19 @@ export function PosWidget() {
   const positions: PositionData[] = posData?.data ?? [];
   const openLivePositions = positions.filter((p) => Number(p.quantity) !== 0);
   const liveTotalPnl = openLivePositions.reduce((acc, p) => acc + parseFloat(p.pnl ?? '0'), 0);
+
+  // Split paper trades into open and closed
+  const openPaperTrades = useMemo(
+    () => paperTrades.filter((t) => t.remaining_quantity > 0 && t.status !== 'CLOSED'),
+    [paperTrades],
+  );
+
+  const closedPaperTrades = useMemo(
+    () => paperTrades.filter((t) => t.remaining_quantity <= 0 || t.status === 'CLOSED'),
+    [paperTrades],
+  );
+
+  const displayedPaperTrades = paperTab === 'open' ? openPaperTrades : closedPaperTrades;
 
   // Paper trades total PnL
   const paperTotalUnrealized = useMemo(() => {
@@ -279,6 +300,34 @@ export function PosWidget() {
           <div className="text-[11px] font-bold tracking-wide text-zinc-300">
             {effectiveMode === 'live' ? 'OPENALGO POSITIONS' : 'PAPER TRADES TRACKER'}
           </div>
+
+          {/* Sub-tabs for Paper Trades (OPEN vs CLOSED) */}
+          {effectiveMode === 'paper' && (
+            <div className="flex rounded bg-[#161b26] p-0.5 border border-[#2a3142] ml-2">
+              <button
+                type="button"
+                onClick={() => setPaperTab('open')}
+                className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
+                  paperTab === 'open'
+                    ? 'bg-zinc-700 text-white shadow'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                OPEN ({openPaperTrades.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaperTab('closed')}
+                className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors ${
+                  paperTab === 'closed'
+                    ? 'bg-zinc-700 text-white shadow'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                CLOSED ({closedPaperTrades.length})
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -427,20 +476,25 @@ export function PosWidget() {
                 {paperError instanceof Error ? paperError.message : 'Unknown error'}
               </span>
             </div>
-          ) : paperTrades.length === 0 ? (
+          ) : displayedPaperTrades.length === 0 ? (
             <div className="h-full w-full flex flex-col items-center justify-center font-mono gap-3 p-4 text-center">
-              <div className="text-zinc-400 text-xs">No paper trades active</div>
-              <div className="text-zinc-500 text-[11px] max-w-sm">
-                Create simulated dummy positions to practice risk management, track buy/sell legs,
-                and analyze technical states without OpenAlgo broker setup.
+              <div className="text-zinc-400 text-xs">
+                {paperTab === 'open' ? 'No open paper trades' : 'No closed paper trades'}
               </div>
-              <button
-                type="button"
-                onClick={openNewTradeModal}
-                className="mt-2 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold uppercase tracking-wider"
-              >
-                + Create First Paper Trade
-              </button>
+              <div className="text-zinc-500 text-[11px] max-w-sm">
+                {paperTab === 'open'
+                  ? 'Create simulated dummy positions to practice risk management, track buy/sell legs, and analyze technical states.'
+                  : 'Positions that have been completely sold out will appear here with their realized profit/loss.'}
+              </div>
+              {paperTab === 'open' && (
+                <button
+                  type="button"
+                  onClick={openNewTradeModal}
+                  className="mt-2 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold uppercase tracking-wider"
+                >
+                  + Create First Paper Trade
+                </button>
+              )}
             </div>
           ) : (
             <table className="w-full text-left border-collapse">
@@ -455,7 +509,7 @@ export function PosWidget() {
                 </tr>
               </thead>
               <tbody>
-                {paperTrades.map((trade) => {
+                {displayedPaperTrades.map((trade) => {
                   const isClosed = trade.remaining_quantity <= 0;
                   const tickKey = `${trade.symbol}.NSE`;
                   const ltp = tickData[tickKey]?.ltp ?? trade.last_close ?? trade.average_buy_price;
