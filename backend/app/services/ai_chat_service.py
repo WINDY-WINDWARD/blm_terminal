@@ -715,6 +715,113 @@ BLM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_positions",
+            "description": _desc("get_positions"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["OPEN", "CLOSED"],
+                        "description": "Optional status filter ('OPEN' or 'CLOSED'). Defaults to returning all positions.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_position",
+            "description": _desc("open_position"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE stock symbol, e.g. 'RELIANCE', 'TCS'."},
+                    "quantity": {"type": "integer", "description": "Initial number of shares to buy."},
+                    "price": {"type": "number", "description": "Execution buy price per share."},
+                    "notes": {"type": "string", "description": "Optional trading strategy or setup notes."},
+                },
+                "required": ["symbol", "quantity", "price"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_position_leg",
+            "description": _desc("add_position_leg"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trade_id": {"type": "integer", "description": "ID of the position to execute the leg on."},
+                    "action": {
+                        "type": "string",
+                        "enum": ["BUY", "SELL"],
+                        "description": "Execution action: 'BUY' (adds shares & recalculates avg buy price) or 'SELL' (scales out/realizes P&L).",
+                    },
+                    "quantity": {"type": "integer", "description": "Number of shares to execute."},
+                    "price": {"type": "number", "description": "Execution price per share."},
+                    "notes": {"type": "string", "description": "Optional notes for this execution leg."},
+                },
+                "required": ["trade_id", "action", "quantity", "price"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_position_leg",
+            "description": _desc("update_position_leg"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "leg_id": {"type": "integer", "description": "ID of the position leg to modify."},
+                    "action": {
+                        "type": "string",
+                        "enum": ["BUY", "SELL"],
+                        "description": "Updated action.",
+                    },
+                    "quantity": {"type": "integer", "description": "Updated number of shares."},
+                    "price": {"type": "number", "description": "Updated execution price per share."},
+                    "notes": {"type": "string", "description": "Updated notes."},
+                },
+                "required": ["leg_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_position_leg",
+            "description": _desc("delete_position_leg"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "leg_id": {"type": "integer", "description": "ID of the execution leg to delete."},
+                },
+                "required": ["leg_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_position",
+            "description": _desc("delete_position"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trade_id": {"type": "integer", "description": "ID of the position to delete."},
+                },
+                "required": ["trade_id"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -770,6 +877,12 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         list_watchlists,
         optimize_portfolio,
         remove_watchlist_item,
+        get_positions,
+        open_position,
+        add_position_leg,
+        update_position_leg,
+        delete_position_leg,
+        delete_position,
         run_tql_screener,
         company_fdm,
         screener_search,
@@ -818,6 +931,12 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "get_sector_stocks": get_sector_stocks,
         "optimize_portfolio": optimize_portfolio,
         "remove_watchlist_item": remove_watchlist_item,
+        "get_positions": get_positions,
+        "open_position": open_position,
+        "add_position_leg": add_position_leg,
+        "update_position_leg": update_position_leg,
+        "delete_position_leg": delete_position_leg,
+        "delete_position": delete_position,
     }
 
     fn = dispatch.get(name)
@@ -867,6 +986,7 @@ You help traders and investors cut through large volumes of market data to ident
 - **Sector rotation**: Industry and sector PE, advance/decline, sentiment, top stocks by market cap
 - **News & catalysts**: Company-specific news, earnings announcements, macro events affecting the market
 - **Watchlist analysis**: Review held positions, flag signals across watched stocks
+- **Portfolio & positions management**: Track, open, and manage portfolio holdings and executions using `get_positions`, `open_position`, `add_position_leg`, `update_position_leg`, `delete_position_leg`, and `delete_position`. Inspect current quantity, average buy price, P/E, realized/unrealized P&L, and technical momentum state across holdings. Execute trade entries and scale-outs as requested by the user.
 - **Portfolio optimization**: Build and optimize portfolios using mean-variance (max Sharpe, min volatility) or hierarchical risk parity. Fetch a watchlist's symbols, run `optimize_portfolio`, interpret the weights and risk metrics, and save the result as a new or existing watchlist using `create_watchlist` and `bulk_replace_watchlist`.
 
 ## Output Format
