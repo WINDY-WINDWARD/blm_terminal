@@ -161,19 +161,19 @@ def _wait_for_pipeline(job_key: str, job_name: str) -> bool:
 
 
 def get_async_shutdown_event() -> asyncio.Event:
-    """Get or create the async shutdown event."""
+    """Get or create the async shutdown event (fresh events start CLEARED)."""
     global _async_shutdown_event
     if _async_shutdown_event is None:
         _async_shutdown_event = asyncio.Event()
-        _async_shutdown_event.set()
     return _async_shutdown_event
 
 
 def reset_async_shutdown_event() -> None:
     """Reset the async shutdown event (clear it) to allow async tasks to run."""
     global _async_shutdown_event
-    if _async_shutdown_event is not None:
-        _async_shutdown_event.clear()
+    if _async_shutdown_event is None:
+        _async_shutdown_event = asyncio.Event()
+    _async_shutdown_event.clear()
 
 
 def set_async_shutdown_event() -> None:

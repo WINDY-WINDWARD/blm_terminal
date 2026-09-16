@@ -1,8 +1,4 @@
-"""Cookie loader utility for loading pickle files instead of calling rookiepy directly.
-
-This module provides functions to load pre-extracted cookies from pickle files,
-which is useful when the backend runs in WSL but cookies need to be extracted on Windows
-(where rookiepy works due to DPAPI access).
+"""Cookie loader utility for loading pre-extracted cookies from pickle files.
 
 Usage:
     cookies = load_cookies_from_pickle("screener")  # Returns list[dict] or None
@@ -103,7 +99,7 @@ def load_cookies_from_pickle(service: str) -> list[dict[str, Any]] | None:
 
 
 def _extract_name_value(cookies: list[dict[str, Any]]) -> dict[str, str]:
-    """Flatten a rookiepy-style cookie list to ``{name: value}``."""
+    """Flatten cookie list to ``{name: value}``."""
     out: dict[str, str] = {}
     for c in cookies:
         name = c.get("name")
@@ -118,74 +114,17 @@ def load_browser_cookies(
     allowed_names: list[str] | None = None,
     browsers: tuple[str, ...] = ("chrome", "firefox"),
 ) -> dict[str, str]:
-    """Load cookies for ``service`` from pickle, falling back to rookiepy.
-
-    The two-step strategy exists because:
-      - The pickle path is fast (no browser DB lock), and works on every
-        platform (notably WSL/Linux where rookiepy cannot read native
-        browser DBs).
-      - The rookiepy fallback is for development on macOS / native Linux
-        where the user can grant access to Chrome/Firefox's encrypted
-        cookie DB.
-
-    Args:
-        service: Pickle service name (``"screener"``, ``"morningstar"``,
-            ``"moneycontrol"``).
-        domain: Domain passed to ``rookiepy.<browser>([domain])`` when
-            falling back to browser extraction.
-        allowed_names: If set, only return cookies with these names
-            (``{"sessionid", "csrftoken"}`` for screener).  If ``None``,
-            return every cookie.
-        browsers: Ordered tuple of browser names to try on fallback.
-            Default ``("chrome", "firefox")``.
-
-    Returns:
-        ``{name: value}`` dict.  Empty if nothing was found.  Never
-        raises — exceptions from rookiepy are logged and skipped so
-        one broken browser does not poison the other.
-    """
-    # 1. Try pickle first
+    """Load cookies for ``service`` from pickle if present."""
+    # 1. Try pickle
     pickle_cookies = load_cookies_from_pickle(service)
     if pickle_cookies:
         extracted = _extract_name_value(pickle_cookies)
         if allowed_names is not None:
             extracted = {k: v for k, v in extracted.items() if k in allowed_names}
-        # screener requires a sessionid specifically; for other filters
-        # we accept the dict as-is.
         if allowed_names is None or "sessionid" not in allowed_names or extracted.get("sessionid"):
             if extracted:
                 logger.info("Using %s cookies from pickle file", service)
                 return extracted
-        logger.debug("Pickle for %s has no usable cookies, trying browsers", service)
-
-    # 2. Fall back to browser extraction
-    try:
-        import rookiepy
-    except ImportError:
-        logger.debug("rookiepy not installed; cannot extract cookies from browser")
-        return {}
-
-    for browser_name in browsers:
-        try:
-            func = getattr(rookiepy, browser_name, None)
-            if func is None:
-                continue
-            raw: list[dict[str, Any]] = func([domain])
-            if not raw:
-                continue
-            cookies = _extract_name_value(raw)
-            if allowed_names is not None:
-                cookies = {k: v for k, v in cookies.items() if k in allowed_names}
-            if cookies:
-                logger.info("Found %s cookies in %s", service, browser_name)
-                return cookies
-            logger.debug(
-                "No %s cookies in %s (after filter), trying next browser",
-                service, browser_name,
-            )
-        except Exception as exc:
-            logger.debug("Failed to read cookies from %s: %s", browser_name, exc)
-            continue
 
     logger.debug("No %s cookies found in any source", service)
     return {}

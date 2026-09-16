@@ -65,7 +65,13 @@ def _sleep_interruptible(seconds: float) -> bool:
 
 
 def _stock_universe_sync() -> None:
-    """Populate or refresh the stock universe table. Runs synchronously in a worker thread."""
+    """Populate or refresh the stock universe table. Runs synchronously in a worker thread.
+
+    NOTE: there is intentionally NO first-run skip here — nightly cron, manual
+    triggers and the worker daemon must always run the real sync. The startup
+    pipeline skip lives in ``Orchestrator._execute_pipeline`` (Stage 1) so it
+    only applies to app-launch runs.
+    """
     try:
         logger.info("stock_universe_sync: starting")
         stock_list: list[str] = nse_client.get_stock_list()
@@ -76,76 +82,101 @@ def _stock_universe_sync() -> None:
         batch_size = 50
         shutdown = _shutdown_event()
 
-        with _SyncSessionLocal() as session:
-            batch: list = []
-            for i, symbol in enumerate(stock_list, 1):
-                if shutdown.is_set():
-                    logger.info("stock_universe_sync: shutdown requested mid-run, aborting")
+        # Phase 1: batched staleness read — short transaction, no network
+        stale_symbols: set[str] = set()
+        try:
+            with _SyncSessionLocal() as r:
+                from sqlalchemy import select as _select
+                rows = r.execute(
+                    _select(stockuniverse.StockUniverse.symbol, stockuniverse.StockUniverse.last_update_time)
+                ).fetchall()
+                now = datetime.now()
+                for sym, lt in rows:
+                    if lt is not None:
+                        try:
+                            if (now - lt) < stale_delta:
+                                stale_symbols.add(sym)
+                        except Exception:
+                            pass
+        except Exception:
+            logger.debug("stock_universe_sync: staleness read failed, will fetch all")
+
+        batch: list = []
+        for i, symbol in enumerate(stock_list, 1):
+            if shutdown.is_set():
+                logger.info("stock_universe_sync: shutdown requested mid-run, aborting")
+                if batch:
+                    with _SyncSessionLocal() as _s:
+                        _bulk_insert_stock_universe(_s, batch)
+                        _s.commit()
+                return
+
+            if i % 100 == 0:
+                progress = int((i / total) * 100)
+                update_job_status_sync(
+                    "job.stock_universe", "running", progress=progress,
+                    message=f"Processing {i}/{total} symbols",
+                )
+
+            if symbol in stale_symbols:
+                logger.debug(
+                    "Skipping %s — within %.0f hours staleness window",
+                    symbol,
+                    stale_delta.total_seconds() / 3600,
+                )
+                continue
+
+            # Phase 2: network fetch — zero DB connection held
+            try:
+                metadata = nse_client.get_stock_metadata(symbol)
+            except SymbolNotFoundError:
+                try:
+                    with _SyncSessionLocal() as _s:
+                        _update_symbol_error_status(_s, symbol, "unknown")
+                        _s.commit()
+                except _SAOperationalError as e:
+                    logger.warning("DB write failed for %s (will retry next cycle): %s", symbol, e)
+                logger.warning("Symbol %s: no tradeable series found, marked as unknown", symbol)
+                if _sleep_interruptible(0.5):
+                    if batch:
+                        with _SyncSessionLocal() as _s:
+                            _bulk_insert_stock_universe(_s, batch)
+                            _s.commit()
+                    return
+                continue
+            except _SAOperationalError as e:
+                logger.warning("DB write failed for %s (will retry next cycle): %s", symbol, e)
+                if _sleep_interruptible(1.0):
+                    if batch:
+                        with _SyncSessionLocal() as _s:
+                            _bulk_insert_stock_universe(_s, batch)
+                            _s.commit()
+                    return
+                continue
+            except Exception:
+                logger.warning("Failed to fetch NSE metadata for %s, skipping", symbol)
+                if _sleep_interruptible(1.0):
+                    if batch:
+                        with _SyncSessionLocal() as _s:
+                            _bulk_insert_stock_universe(_s, batch)
+                            _s.commit()
+                    return
+                continue
+
+            batch.append(metadata)
+            if len(batch) >= batch_size:
+                # Phase 3: short write transaction only
+                with _SyncSessionLocal() as _s:
+                    _bulk_insert_stock_universe(_s, batch)
+                    _s.commit()
+                batch.clear()
+                if _sleep_interruptible(0.5):
                     return
 
-                if i % 100 == 0:
-                    progress = int((i / total) * 100)
-                    update_job_status_sync(
-                        "job.stock_universe", "running", progress=progress,
-                        message=f"Processing {i}/{total} symbols",
-                    )
-
-                existing = session.get(stockuniverse.StockUniverse, symbol)
-                last_time = None
-                if existing is not None:
-                    last_time = getattr(existing, "last_update_time", None) or getattr(
-                        existing, "last_fetched_at", None
-                    )
-                if last_time is not None:
-                    try:
-                        now = datetime.now()
-                        if (now - last_time) < stale_delta:
-                            logger.debug(
-                                "Skipping %s — last update was %s (within %.0f hours)",
-                                symbol,
-                                last_time,
-                                stale_delta.total_seconds() / 3600,
-                            )
-                            continue
-                    except Exception:
-                        logger.debug(
-                            "Unable to compare last update time for %s; refreshing",
-                            symbol,
-                        )
-
-                try:
-                    metadata = nse_client.get_stock_metadata(symbol)
-                    batch.append(metadata)
-                    if len(batch) >= batch_size:
-                        _bulk_insert_stock_universe(session, batch)
-                        session.commit()
-                        batch.clear()
-                        if _sleep_interruptible(0.5):
-                            return
-                except SymbolNotFoundError:
-                    _update_symbol_error_status(session, symbol, "unknown")
-                    session.commit()
-                    logger.warning("Symbol %s: no tradeable series found, marked as unknown", symbol)
-                    if _sleep_interruptible(0.5):
-                        return
-                    continue
-                except _SAOperationalError as e:
-                    logger.warning(
-                        "DB write failed for %s (will retry next cycle): %s", symbol, e
-                    )
-                    session.rollback()
-                    if _sleep_interruptible(1.0):
-                        return
-                    continue
-                except Exception:
-                    logger.warning("Failed to fetch NSE metadata for %s, skipping", symbol)
-                    if _sleep_interruptible(1.0):
-                        return
-                    continue
-
-            if batch:
-                _bulk_insert_stock_universe(session, batch)
-                session.commit()
+        if batch:
+            with _SyncSessionLocal() as _s:
+                _bulk_insert_stock_universe(_s, batch)
+                _s.commit()
 
         update_job_status_sync(
             "job.stock_universe",
@@ -178,6 +209,32 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
     if not batch:
         return
     for metadata in batch:
+        isin_val = getattr(metadata, "isin", None)
+        mcap_val = getattr(metadata, "market_cap_cr", None)
+        update_set: dict = {
+            "company_name": metadata.companyName,
+            "segment": metadata.segment,
+            "industry": metadata.industry,
+            "sector_pe": metadata.sectorPE,
+            "symbol_pe": metadata.symbolPE,
+            "industry_info": metadata.industryInfo,
+            "last_update_time": metadata.lastUpdateTime,
+            "high_52w": metadata.high_52w,
+            "low_52w": metadata.low_52w,
+            "high_52w_date": metadata.high_52w_date,
+            "low_52w_date": metadata.low_52w_date,
+            "series": metadata.series if hasattr(metadata, "series") else None,
+            "review_status": None,  # clear error status on re-fetch
+            "high_52w_updated_at": func.now(),
+            "updated_at": func.now(),
+        }
+        # Only overwrite ISIN when we actually have one — never clobber
+        # a previously resolved ISIN with NULL.
+        if isin_val:
+            update_set["isin"] = isin_val
+        # Same guard for market cap (NSE tradeInfo.totalMarketCap, Rs Cr).
+        if mcap_val:
+            update_set["market_cap_cr"] = mcap_val
         stmt = (
             sqlite_insert(stockuniverse.StockUniverse)
             .values(
@@ -194,28 +251,14 @@ def _bulk_insert_stock_universe(session, batch: list) -> None:
                 high_52w_date=metadata.high_52w_date,
                 low_52w_date=metadata.low_52w_date,
                 series=metadata.series if hasattr(metadata, "series") else None,
+                isin=isin_val,
+                market_cap_cr=mcap_val,
                 review_status=None,
                 ticker_failure_count=0,
             )
             .on_conflict_do_update(
                 index_elements=["symbol"],
-                set_={
-                    "company_name": metadata.companyName,
-                    "segment": metadata.segment,
-                    "industry": metadata.industry,
-                    "sector_pe": metadata.sectorPE,
-                    "symbol_pe": metadata.symbolPE,
-                    "industry_info": metadata.industryInfo,
-                    "last_update_time": metadata.lastUpdateTime,
-                    "high_52w": metadata.high_52w,
-                    "low_52w": metadata.low_52w,
-                    "high_52w_date": metadata.high_52w_date,
-                    "low_52w_date": metadata.low_52w_date,
-                    "series": metadata.series if hasattr(metadata, "series") else None,
-                    "review_status": None,  # clear error status on re-fetch
-                    "high_52w_updated_at": func.now(),
-                    "updated_at": func.now(),
-                },
+                set_=update_set,
             )
         )
         session.execute(stmt)

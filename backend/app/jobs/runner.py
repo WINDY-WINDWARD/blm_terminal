@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -12,8 +13,43 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal, _SyncSessionLocal
 from app.models.job import Job
 from app.jobs.registry import JobRegistry
+from app.services.write_queue import _write_queue_enabled
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Debounce state for update_job_status_sync
+# ---------------------------------------------------------------------------
+# { job_key: (last_emit_epoch, last_progress_percent) }
+_last_emit: dict[str, tuple[float, int]] = {}
+_last_emit_lock = threading.Lock()
+_DEBOUNCE_MIN_INTERVAL = 0.8  # seconds
+_DEBOUNCE_MIN_DELTA_PCT = 5   # percent
+
+
+def _execute_job_update(job_key: str, values: dict) -> None:
+    """Execute a single job UPDATE directly via _SyncSessionLocal."""
+    from app.database import _SyncSessionLocal
+    from app.models.job import Job
+    from sqlalchemy import update as sa_update
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with _SyncSessionLocal() as db:
+                stmt = sa_update(Job).where(Job.job_key == job_key).values(**values)
+                db.execute(stmt)
+                db.commit()
+            return
+        except Exception as e:
+            if attempt < max_attempts:
+                wait = 0.5 * attempt
+                logger.debug(
+                    "update_job_status_sync: DB busy for %s (attempt %d/%d), retrying in %.1fs: %s",
+                    job_key, attempt, max_attempts, wait, e,
+                )
+                time.sleep(wait)
+            else:
+                logger.warning("Failed to update job status for %s: %s", job_key, e)
 
 
 async def get_job_status(job_key: str) -> Job | None:
@@ -85,7 +121,7 @@ def update_job_status_sync(
     next_trigger: datetime | None = None,
 ) -> None:
     """Synchronous version of update_job_status for use in worker threads.
-    
+
     Automatically sets last_triggered_at when status is 'running'
     and last_completed_at when status is 'idle' or 'waiting'.
     Automatically calculates next_trigger_at for interval-based jobs.
@@ -93,49 +129,67 @@ def update_job_status_sync(
     Retries up to 3 times with brief exponential back-off on SQLite
     "database is locked" errors that can occur during the startup write-storm
     when many workers try to persist their initial status simultaneously.
+
+    Debounce: redundant progress updates (same key, <0.8s interval, <5% delta)
+    are skipped to reduce DB write volume during bulk operations.  Terminal
+    states (failed, idle, 100%) always flush immediately.
     """
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
+    # --- Debounce logic (thread-safe) ---
+    now_epoch = time.time()
+    is_terminal = status in ("failed", "idle") or progress == 100
+    if not is_terminal and progress is not None:
+        with _last_emit_lock:
+            prev = _last_emit.get(job_key)
+            if prev is not None:
+                last_t, last_pct = prev
+                delta_pct = abs(progress - last_pct)
+                if (now_epoch - last_t) < _DEBOUNCE_MIN_INTERVAL and delta_pct < _DEBOUNCE_MIN_DELTA_PCT:
+                    return  # skip redundant update
+
+    # Build the values dict
+    values: dict = {
+        "status": status,
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+    now = datetime.now(timezone.utc)
+    if status == "running" or last_triggered:
+        values["last_triggered_at"] = last_triggered if last_triggered else now
+    if status in ("idle", "waiting") or last_completed:
+        values["last_completed_at"] = last_completed if last_completed else now
+
+    if status in ("running", "idle", "waiting"):
+        if error is None:
+            values["last_error"] = None
+    if progress is not None:
+        values["progress_percent"] = progress
+    if message is not None:
+        values["progress_message"] = message
+    if error is not None:
+        values["last_error"] = error
+    if next_trigger is not None:
+        values["next_trigger_at"] = next_trigger
+
+    # Route ALL job updates through the write queue to eliminate EXCLUSIVE-lock contention.
+    # Previously terminal (idle/failed/100%) wrote directly, but that still contended
+    # with api_cache and stock_universe single-row updates at startup (see 2026-09-16 logs).
+    # Coalescing keeps only latest per job_key, so UI delay is <0.2s.
+    enqueued = True
+    if not _write_queue_enabled():
+        _execute_job_update(job_key, values)
+    else:
         try:
-            with _SyncSessionLocal() as db:
-                values: dict = {
-                    "status": status,
-                    "updated_at": datetime.now(timezone.utc),
-                }
+            from app.services.write_queue import enqueue_write, PRIO_JOBS
+            enqueued = enqueue_write(PRIO_JOBS, _execute_job_update, job_key, values)
+        except Exception:
+            # Fallback: direct write if queue import fails
+            _execute_job_update(job_key, values)
+            enqueued = True
 
-                # Auto-set timestamps based on status
-                now = datetime.now(timezone.utc)
-                if status == "running" or last_triggered:
-                    values["last_triggered_at"] = last_triggered if last_triggered else now
-                if status in ("idle", "waiting") or last_completed:
-                    values["last_completed_at"] = last_completed if last_completed else now
-
-                if status in ("running", "idle", "waiting"):
-                    if error is None:
-                        values["last_error"] = None
-                if progress is not None:
-                    values["progress_percent"] = progress
-                if message is not None:
-                    values["progress_message"] = message
-                if error is not None:
-                    values["last_error"] = error
-                if next_trigger is not None:
-                    values["next_trigger_at"] = next_trigger
-
-                stmt = update(Job).where(Job.job_key == job_key).values(**values)
-                db.execute(stmt)
-                db.commit()
-            return  # success — exit the retry loop
-        except Exception as e:
-            if attempt < max_attempts:
-                wait = 0.5 * attempt  # 0.5 s, 1.0 s back-off
-                logger.debug(
-                    "update_job_status_sync: DB busy for %s (attempt %d/%d), retrying in %.1fs: %s",
-                    job_key, attempt, max_attempts, wait, e,
-                )
-                time.sleep(wait)
-            else:
-                logger.warning("Failed to update job status for %s: %s", job_key, e)
+    # Record emit for debounce only if actually enqueued/written
+    if progress is not None and enqueued:
+        with _last_emit_lock:
+            _last_emit[job_key] = (now_epoch, progress)
 
 
 async def sync_job_to_db(job_key: str) -> None:

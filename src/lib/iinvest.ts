@@ -93,7 +93,7 @@ export interface IinvestTimeseriesResponse {
   };
 }
 
-async function _get<T>(path: string, timeoutMs = 8000): Promise<T> {
+async function _get<T>(path: string, timeoutMs = 60000): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -114,7 +114,7 @@ export async function fetchIinvestHealth(): Promise<IinvestHealth> {
 }
 
 export async function fetchIinvestPath(symbol: string): Promise<IinvestPath> {
-  return _get<IinvestPath>(`/iinvest/path/${encodeURIComponent(symbol)}`, 8000);
+  return _get<IinvestPath>(`/iinvest/path/${encodeURIComponent(symbol)}`, 60000);
 }
 
 export async function fetchIinvestAnnouncements(symbol: string): Promise<IinvestResponse<IinvestAnnouncementRow>> {
@@ -188,3 +188,33 @@ export interface NseMarketRatios {
 export async function fetchNseMarketRatios(symbol: string): Promise<NseMarketRatios> {
   return _get<NseMarketRatios>(`/stockuniverse/${encodeURIComponent(symbol)}/ratios`, 8000);
 }
+
+// ── All-in-one aggregator ────────────────────────────────────────────────────
+
+export interface IinvestAllResponse {
+  announcements?: IinvestResponse<IinvestAnnouncementRow>;
+  auditors?: IinvestResponse;
+  block_deals?: IinvestResponse<Record<string, unknown>>;
+  bulk_deals?: IinvestResponse<Record<string, unknown>>;
+  board_meetings?: IinvestResponse;
+  capital_history?: IinvestResponse;
+  corporate_actions_dividend?: IinvestResponse;
+  corporate_actions_split?: IinvestResponse;
+  corporate_actions_bonus?: IinvestResponse;
+  corporate_actions_others?: IinvestResponse;
+  financial_peer_filters?: IinvestResponse;
+  index_of_charges?: IinvestResponse;
+  insider_trading?: IinvestResponse<IinvestInsiderRow>;
+  key_shareholders?: { status: boolean; response: { data?: IinvestShareholderRow[] } };
+  legal_cases?: IinvestResponse;
+  pledged_shares?: IinvestResponse<Record<string, unknown>>;
+  sast?: IinvestResponse;
+  tribunals?: IinvestResponse;
+  news?: IinvestResponse;
+  [key: string]: unknown;
+}
+
+export async function fetchIinvestAll(symbol: string): Promise<IinvestAllResponse> {
+  return _get<IinvestAllResponse>(`/iinvest/all/${encodeURIComponent(symbol)}`, 60000);
+}
+

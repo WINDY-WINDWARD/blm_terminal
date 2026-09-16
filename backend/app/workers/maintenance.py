@@ -37,6 +37,16 @@ def _purge_ai_traces(con: sqlite3.Connection) -> None:
         logger.warning(f"vacuum: failed to purge ai_pick_traces: {e}")
 
 
+def _purge_api_cache(con: sqlite3.Connection) -> None:
+    """Delete expired api_cache rows."""
+    try:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        con.execute("DELETE FROM api_cache WHERE expires_at < ?", (now,))
+        logger.info("vacuum: purged expired api_cache rows")
+    except sqlite3.OperationalError as e:
+        logger.warning(f"vacuum: failed to purge api_cache: {e}")
+
+
 def _run_vacuum() -> None:
     """Run VACUUM on the SQLite warehouse to reclaim space from deleted rows.
 
@@ -54,9 +64,13 @@ def _run_vacuum() -> None:
         # VACUUM cannot be executed inside a transaction.  Use a fresh
         # connection with isolation_level=None (autocommit) so each
         # statement is its own transaction.
-        with sqlite3.connect(db_path, timeout=600, isolation_level=None) as con:
-            
+        with sqlite3.connect(db_path, timeout=15, check_same_thread=False, isolation_level=None) as con:
+            from app.database import _apply_sqlite_pragmas
+            _cur = con.cursor()
+            _apply_sqlite_pragmas(_cur)
+            _cur.close()
             _purge_ai_traces(con)
+            _purge_api_cache(con)
 
             # 1. checkpoint WAL to fold pending writes into the main DB
             update_job_status_sync("job.vacuum", "running", progress=20,

@@ -6,39 +6,13 @@ import { cn } from '@/lib/utils';
 import { useAtom, useAtomValue } from 'jotai';
 import { activeSymbolAtom, tickDataAtom, authAtom } from '@/store/terminalStore';
 import { marketWsService } from '@/lib/marketWs';
-
-interface PickNote {
-  timestamp: string;
-  note: string;
-  model: string;
-  verdict?: string;
-  technical?: string;
-  fundamental?: string;
-  catalyst?: string;
-  risk?: string;
-  action?: string;
-}
-
-interface AIPick {
-  id: number;
-  symbol: string;
-  direction: 'LONG' | 'SHORT';
-  entry_price: number;
-  take_profit: number;
-  stop_loss: number;
-  exit_price?: number | null;
-  status: 'NEW' | 'ACTED_ON' | 'CLOSED' | 'ABANDONED';
-  notes: PickNote[];
-  created_at: string;
-  updated_at: string;
-  status_updated_at: string;
-}
+import { AiPickModal, type AIPick } from './AiPickModal';
 
 function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 ${
+      className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 active:scale-[0.96] ${
         active
           ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
           : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900 border-transparent'
@@ -48,7 +22,6 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
     </button>
   );
 }
-
 
 function getActionPill(pick: AIPick) {
   if (!pick.notes || pick.notes.length === 0) return null;
@@ -71,7 +44,7 @@ function getActionPill(pick: AIPick) {
 export function AiPicksWidget({ panelId }: { panelId: string }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY' | 'ABANDONED'>('PICKS');
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [selectedPickId, setSelectedPickId] = useState<number | null>(null);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [tickData, setTickData] = useAtom(tickDataAtom);
@@ -103,8 +76,8 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
 
   const activeSymbolsStr = filteredPicks.map(p => p.symbol).sort().join(',');
 
-// Safe real-time data subscription with stable dependency
-React.useEffect(() => {
+  // Safe real-time data subscription with stable dependency
+  React.useEffect(() => {
     if (!activeSymbolsStr) return;
     const symbols = activeSymbolsStr.split(',');
     
@@ -136,7 +109,7 @@ React.useEffect(() => {
       clearInterval(interval);
       unsub();
     };
-}, [activeSymbolsStr, setTickData]);
+  }, [activeSymbolsStr, setTickData]);
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status, exit_price }: { id: number; status: string; exit_price?: number }) => {
@@ -150,6 +123,8 @@ React.useEffect(() => {
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ai-picks'] }),
   });
+
+  const selectedPick = picks?.find((p) => p.id === selectedPickId) || null;
 
   if (isLoading) {
     return (
@@ -180,50 +155,48 @@ React.useEffect(() => {
         </div>
       )}
 
-       {/* Header Tabs */}
-       <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
-         <TabButton
-           active={activeTab === 'PICKS'}
-           onClick={() => {
-             setActiveTab('PICKS');
-             setExpandedId(null);
-           }}
-           label="PICKS"
-         />
-         <TabButton
-           active={activeTab === 'ACTIVE'}
-           onClick={() => {
-             setActiveTab('ACTIVE');
-             setExpandedId(null);
-           }}
-           label="ACTIVE"
-         />
-         <TabButton
-           active={activeTab === 'HISTORY'}
-           onClick={() => {
-             setActiveTab('HISTORY');
-             setExpandedId(null);
-           }}
-           label="HISTORY"
-         />
-         <TabButton
-           active={activeTab === 'ABANDONED'}
-           onClick={() => {
-             setActiveTab('ABANDONED');
-             setExpandedId(null);
-           }}
-           label="ABANDONED"
-         />
-       </div>
+      {/* Header Tabs */}
+      <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
+        <TabButton
+          active={activeTab === 'PICKS'}
+          onClick={() => {
+            setActiveTab('PICKS');
+            setSelectedPickId(null);
+          }}
+          label="PICKS"
+        />
+        <TabButton
+          active={activeTab === 'ACTIVE'}
+          onClick={() => {
+            setActiveTab('ACTIVE');
+            setSelectedPickId(null);
+          }}
+          label="ACTIVE"
+        />
+        <TabButton
+          active={activeTab === 'HISTORY'}
+          onClick={() => {
+            setActiveTab('HISTORY');
+            setSelectedPickId(null);
+          }}
+          label="HISTORY"
+        />
+        <TabButton
+          active={activeTab === 'ABANDONED'}
+          onClick={() => {
+            setActiveTab('ABANDONED');
+            setSelectedPickId(null);
+          }}
+          label="ABANDONED"
+        />
+      </div>
 
       {/* Picks List */}
-      <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-2">
+      <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-1.5">
         {filteredPicks.length === 0 ? (
-          <div className="text-center text-white/50 py-4 font-bold">NO {activeTab} PICKS</div>
+          <div className="text-center text-white/50 py-8 font-bold">NO {activeTab} PICKS</div>
         ) : (
           filteredPicks.map((pick) => {
-            const isExpanded = expandedId === pick.id;
-            
             // Calculate PnL (Live vs Closed)
             const currentLivePrice = tickData[`${pick.symbol}.NSE`]?.ltp;
             const isClosed = pick.status === 'CLOSED';
@@ -250,130 +223,61 @@ React.useEffect(() => {
             return (
               <div 
                 key={pick.id} 
+                onClick={() => setSelectedPickId(pick.id)}
                 className={cn(
-                  "flex flex-col border p-2 hover:bg-zinc-900/40 transition-colors",
+                  "group flex items-center justify-between border px-3 py-2 cursor-pointer transition-all duration-150 rounded-sm active:scale-[0.99]",
                   pick.status === 'ABANDONED' 
-                    ? "border-zinc-700 bg-zinc-950/50 hover:bg-zinc-900/20" 
-                    : "border-terminal-gray bg-black"
+                    ? "border-zinc-800 bg-zinc-950/40 hover:bg-zinc-900/40 hover:border-zinc-700" 
+                    : "border-terminal-gray/70 bg-black/60 hover:bg-zinc-900/60 hover:border-terminal-amber/60 hover:shadow-[0_0_8px_rgba(255,182,0,0.08)]"
                 )}
               >
-                
-                {/* Header Row */}
-                <div 
-                  className="flex items-center justify-between cursor-pointer"
-                  onClick={() => setExpandedId(isExpanded ? null : pick.id)}
-                >
-                  <div className="flex items-center gap-3">
-                    <span 
-                      className={cn(
-                        "text-[13px] cursor-pointer hover:text-white hover:underline transition-colors font-bold",
-                        pick.status === 'ABANDONED' ? "text-white/40" : "text-terminal-amber"
-                      )}
-                      onClick={(e) => { e.stopPropagation(); setActiveSymbol(pick.symbol); }}
-                    >
-                      {pick.symbol}
-                    </span>
-                    <span className={cn(
-                      'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border border-transparent',
-                      pick.direction === 'LONG' ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'
-                    )}>
-                      {pick.direction}
-                    </span>
-                    {getActionPill(pick)}
-                    <span className="text-[10px] uppercase text-white/50 border border-terminal-gray px-1">
-                      {pick.status}
-                    </span>
-                    {formattedDate && (
-                      <span className="text-[10px] text-white/40 font-mono">
-                        {formattedDate}
-                      </span>
+                {/* Left side info */}
+                <div className="flex items-center gap-2.5 flex-wrap min-w-0">
+                  <span 
+                    className={cn(
+                      "text-[13px] font-bold tracking-wide transition-colors group-hover:text-white",
+                      pick.status === 'ABANDONED' ? "text-white/40" : "text-terminal-amber"
                     )}
-                  </div>
-                  
-                   <div className="flex items-center gap-3 text-[10px] text-white/60 font-mono">
-                    <span className={`font-bold ${pnlColor}`}>PnL: {pnlDisplay}</span>
-                    <span>E:<span className="text-white ml-1">{pick.entry_price}</span></span>
-                    <span>TP:<span className="text-terminal-green ml-1">{pick.take_profit}</span></span>
-                    <span>SL:<span className="text-terminal-red ml-1">{pick.stop_loss}</span></span>
-                    <span className="text-white/50 text-[10px] w-4 text-right">
-                      {isExpanded ? '▾' : '▸'}
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      setActiveSymbol(pick.symbol); 
+                    }}
+                    title="Set as active symbol"
+                  >
+                    {pick.symbol}
+                  </span>
+
+                  <span className={cn(
+                    'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border',
+                    pick.direction === 'LONG' ? 'bg-green-900/30 text-green-400 border-green-800/60' : 'bg-red-900/30 text-red-400 border-red-800/60'
+                  )}>
+                    {pick.direction}
+                  </span>
+
+                  {getActionPill(pick)}
+
+                  <span className="text-[10px] uppercase text-white/50 border border-terminal-gray/50 px-1 py-0.2 rounded-sm">
+                    {pick.status}
+                  </span>
+
+                  {formattedDate && (
+                    <span className="text-[10px] text-white/40 font-mono hidden sm:inline">
+                      {formattedDate}
                     </span>
-                   </div>
+                  )}
                 </div>
-
-                {/* Expanded Content */}
-                {isExpanded && (
-                  <div className="mt-3 pt-3 border-t border-terminal-gray flex flex-col gap-2">
-                    <div className="text-terminal-amber mb-1 font-bold text-[10px] uppercase">TIMELINE</div>
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                      {pick.notes.map((n, i) => {
-                        if (n.model === 'market-context') {
-                          return (
-                            <details key={i} className="group bg-zinc-900/50 rounded-sm border border-terminal-gray/50">
-                              <summary className="flex cursor-pointer list-none items-center justify-between p-2 text-[10px] text-white/50 hover:text-white/80 transition-colors">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-terminal-amber/60">🌐 MARKET CONTEXT</span>
-                                  <span>{new Date(n.timestamp).toLocaleString()}</span>
-                                </div>
-                                <span className="group-open:rotate-180 transition-transform">▾</span>
-                              </summary>
-                              <div className="p-2 pt-0 text-white/70 text-[11px] leading-relaxed whitespace-pre-wrap border-t border-terminal-gray/30 mt-1">
-                                {n.note}
-                              </div>
-                            </details>
-                          );
-                        }
-
-                        return (
-                          <div key={i} className="flex flex-col gap-1 bg-zinc-900 p-2 rounded-sm border border-terminal-gray">
-                            <div className="flex justify-between text-[10px] text-white/40">
-                              <span>{new Date(n.timestamp).toLocaleString()}</span>
-                              <span className="text-terminal-amber/60">{n.model}</span>
-                            </div>
-                            <div className="text-white/90 text-[11px] leading-relaxed whitespace-pre-wrap">
-                              {n.note}
-                            </div>
-                            {(n.technical || n.fundamental || n.catalyst || n.risk) && (
-                              <div className="mt-1 pt-1 border-t border-zinc-800 flex flex-col gap-1 text-[11px]">
-                                {n.technical && <div><span className="text-terminal-blue font-bold uppercase">TECH:</span> <span className="text-white/80">{n.technical}</span></div>}
-                                {n.fundamental && <div><span className="text-terminal-purple font-bold uppercase">FUND:</span> <span className="text-white/80">{n.fundamental}</span></div>}
-                                {n.catalyst && <div><span className="text-terminal-amber font-bold uppercase">CAT:</span> <span className="text-white/80">{n.catalyst}</span></div>}
-                                {n.risk && <div><span className="text-red-400 font-bold uppercase">RISK:</span> <span className="text-white/80">{n.risk}</span></div>}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    
-                     {/* Actions */}
-                     {activeTab === 'PICKS' && pick.status === 'NEW' && auth?.user?.is_admin && (
-                       <div className="flex mt-2">
-                         <button
-                           onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'ACTED_ON' }); }}
-                           className="bg-terminal-amber/10 border border-terminal-amber text-terminal-amber px-3 py-1 text-[10px] hover:bg-terminal-amber/20 transition-colors font-bold uppercase tracking-wider"
-                         >
-                           [ MARK ACTED ON ]
-                         </button>
-                       </div>
-                     )}
-                     {activeTab === 'ACTIVE' && pick.status === 'ACTED_ON' && auth?.user?.is_admin && (
-                       <div className="flex mt-2">
-                         <button
-                           onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: pick.id, status: 'CLOSED', exit_price: currentLivePrice }); }}
-                           className="bg-red-900/20 border border-red-500/50 text-red-400 px-3 py-1 text-[10px] hover:bg-red-900/40 transition-colors font-bold uppercase tracking-wider"
-                         >
-                           [ CLOSE POSITION ]
-                         </button>
-                       </div>
-                     )}
-                     {activeTab === 'ABANDONED' && pick.status === 'ABANDONED' && (
-                       <div className="text-white/40 mt-2 text-[10px] italic">
-                         Position was automatically abandoned due to no action taken.
-                       </div>
-                     )}
-                  </div>
-                )}
+                
+                {/* Right side stats & view action */}
+                <div className="flex items-center gap-3 text-[10px] font-mono shrink-0 ml-2">
+                  <span className={`font-bold ${pnlColor}`}>{pnlDisplay}</span>
+                  <span className="text-white/40 hidden md:inline">E:<span className="text-white ml-0.5">{pick.entry_price}</span></span>
+                  <span className="text-white/40 hidden md:inline">TP:<span className="text-terminal-green ml-0.5">{pick.take_profit}</span></span>
+                  <span className="text-white/40 hidden md:inline">SL:<span className="text-terminal-red ml-0.5">{pick.stop_loss}</span></span>
+                  
+                  <span className="text-terminal-amber/70 group-hover:text-terminal-amber group-hover:translate-x-0.5 transition-all text-xs font-bold pl-1">
+                    DETAILS ↗
+                  </span>
+                </div>
               </div>
             );
           })
@@ -381,9 +285,21 @@ React.useEffect(() => {
       </div>
 
       {/* Persistent Bottom Banner */}
-      <div className="shrink-0 bg-terminal-amber/10 border-t border-terminal-amber/30 p-2 text-center text-[10px] text-terminal-amber/80 font-bold tracking-wide">
-        AI CAN MAKE MISTAKES AND THE USER TAKES ALL RESPONSIBILITY FOR ANY ACTIONS TAKEN USING THE AI'S ADVICE/RECOMMENDATIONS.
+      <div className="shrink-0 bg-terminal-amber/10 border-t border-terminal-amber/30 p-1.5 text-center text-[9px] text-terminal-amber/80 font-bold tracking-wide uppercase">
+        AI can make mistakes. Verify before taking action.
       </div>
+
+      {/* Modern Cyberpunk AI Modal */}
+      {selectedPick && (
+        <AiPickModal
+          pick={selectedPick}
+          onClose={() => setSelectedPickId(null)}
+          currentLivePrice={tickData[`${selectedPick.symbol}.NSE`]?.ltp}
+          onSelectSymbol={(sym) => setActiveSymbol(sym)}
+          isAdmin={auth?.user?.is_admin}
+          onUpdateStatus={updateStatusMutation.mutate}
+        />
+      )}
     </div>
   );
 }

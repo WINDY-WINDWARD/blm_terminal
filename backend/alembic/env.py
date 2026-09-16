@@ -72,11 +72,22 @@ def run_migrations_offline() -> None:
 # Online mode: connect to a live DB and apply migrations.
 # ---------------------------------------------------------------------------
 def run_migrations_online() -> None:
+    from sqlalchemy import event as _sa_event
+    from app.database import _apply_sqlite_pragmas
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"check_same_thread": False, "timeout": 15},
     )
+
+    @_sa_event.listens_for(connectable, "connect")
+    def _set_pragmas(dbapi_conn, connection_record):
+        cur = dbapi_conn.cursor()
+        _apply_sqlite_pragmas(cur)
+        cur.close()
+
     with connectable.connect() as connection:
         context.configure(connection=connection, **_CONTEXT_OPTS)
         with context.begin_transaction():

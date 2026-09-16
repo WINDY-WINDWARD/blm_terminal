@@ -32,6 +32,7 @@ class StockUniverse(BaseModel):
     isin: str | None = None
     iinvestPath: str | None = None
     iinvestPathResolvedAt: datetime | None = None
+    market_cap_cr: float | None = None
 
     @field_validator("sectorPE", "symbolPE", mode="before")
     @classmethod

@@ -34,6 +34,42 @@ PROD_DB_PATH = BACKEND_ROOT / "data.db"
 
 # Markers ────────────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def clean_api_cache_each_test():
+    """Ensure tests start with an empty api_cache so cache hits don't leak across tests.
+
+    Clears both the persistent SQLite table and the in-memory L1 dict.
+    Uses a short timeout and ignores lock errors to avoid racing with the
+    write-queue's raw sqlite3 writer during startup storms.
+    """
+    from app.config import settings
+    import logging
+    import sqlite3
+    from app.database import _apply_sqlite_pragmas
+    from app.services.persistent_cache import _L1_CACHE
+    _L1_CACHE.clear()
+    db_path = getattr(settings, "db_path", "./data.db")
+    try:
+        with sqlite3.connect(db_path, timeout=15, check_same_thread=False, isolation_level=None) as conn:
+            _cs = conn.cursor()
+            _apply_sqlite_pragmas(_cs)
+            _cs.close()
+            conn.execute("DELETE FROM api_cache")
+            conn.commit()
+    except Exception as e:
+        logging.getLogger(__name__).debug("conftest api_cache cleanup pre-test failed (likely no table yet): %s", e)
+    yield
+    _L1_CACHE.clear()
+    try:
+        with sqlite3.connect(db_path, timeout=15, check_same_thread=False, isolation_level=None) as conn:
+            _cs = conn.cursor()
+            _apply_sqlite_pragmas(_cs)
+            _cs.close()
+            conn.execute("DELETE FROM api_cache")
+            conn.commit()
+    except Exception as e:
+        logging.getLogger(__name__).debug("conftest api_cache cleanup post-test failed: %s", e)
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register custom markers (idempotent; respects existing markers)."""
     config.addinivalue_line(
@@ -92,7 +128,11 @@ def in_memory_db() -> sqlite3.Connection:
     Suitable for pure-function tests that need a DB but not real data.
     The connection lives only as long as the test.
     """
-    con = sqlite3.connect(":memory:")
+    from app.database import _apply_sqlite_pragmas as _apply_pragmas_mem
+    con = sqlite3.connect(":memory:", timeout=15, check_same_thread=False, isolation_level=None)
+    _mc = con.cursor()
+    _apply_pragmas_mem(_mc)
+    _mc.close()
     con.row_factory = sqlite3.Row
 
     from app.database import Base, _set_sqlite_pragma

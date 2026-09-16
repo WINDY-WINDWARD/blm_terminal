@@ -443,7 +443,7 @@ export function WatchWidget() {
         const exchange = watchlist.find((i) => i.symbol === symbol)?.exchange ?? 'NSE';
         setTickData((prev) => ({
           ...prev,
-          [`${symbol}.${exchange}`]: { symbol, exchange, ltp: data.ltp, pChange: data.pChange, yearHigh: data.yearHigh, yearLow: data.yearLow },
+          [`${symbol}.${exchange}`]: { symbol, exchange, ltp: data.ltp, pChange: data.pChange, yearHigh: data.yearHigh, yearLow: data.yearLow, updatedAt: Date.now() },
         }));
 
         setSymbolDataMap((prev) => {

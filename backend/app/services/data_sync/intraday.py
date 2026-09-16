@@ -128,7 +128,9 @@ def _ticker_intraday_update_sync(
                 return {}
             return backfill_intraday_symbol(sym, needed, from_ts_overrides=from_ts_overrides)
 
-        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
+        # Cap workers to DB QueuePool size to avoid pool_timeout contention
+        _workers = min(_BATCH_SIZE, 3)
+        with ThreadPoolExecutor(max_workers=_workers) as pool:
             future_to_sym = {pool.submit(_run_intraday, sym): sym for sym in batch}
             for future in as_completed(future_to_sym):
                 sym = future_to_sym[future]

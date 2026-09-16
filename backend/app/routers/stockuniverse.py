@@ -54,6 +54,17 @@ def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
         matchConfidence=obj.match_confidence,
         mcMatchSource=obj.mc_match_source,
         mcCompanyName=obj.mc_company_name,
+        morningstarId=obj.morningstar_id,
+        fairValue=obj.fair_value,
+        fairValueUpdatedAt=obj.fair_value_updated_at,
+        high_52w=obj.high_52w,
+        low_52w=obj.low_52w,
+        high_52w_date=obj.high_52w_date,
+        low_52w_date=obj.low_52w_date,
+        isin=obj.isin,
+        iinvestPath=obj.iinvest_path,
+        iinvestPathResolvedAt=obj.iinvest_path_resolved_at,
+        market_cap_cr=obj.market_cap_cr,
     )
 
 

@@ -138,23 +138,29 @@ def _news_rss_sync() -> None:
                 logger.debug("Failed to process article %s: %s", article.url, e)
 
         if processed:
-            with _SyncSessionLocal() as session:
-                stored = 0
-                for article_dict in processed:
-                    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-                    stmt = sqlite_insert(NewsArticle).values(article_dict)
-                    stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
-                    session.execute(stmt)
-                    stored += 1
-                session.commit()
-                logger.info("news_rss_sync: stored %d articles", stored)
+            from app.services.write_queue import enqueue_write_sync, PRIO_BULK_DATA
 
-                # Broadcast new articles via WebSocket (sync path — dead code, async path is active)
-                for article_dict in processed[:10]:
-                    try:
-                        _run_async(broadcast_news_update(article_dict))
-                    except Exception as e:
-                        logger.debug("Failed to broadcast article: %s", e)
+            def _store_rss(items: list[dict]) -> int:
+                s = 0
+                with _SyncSessionLocal() as session:
+                    for article_dict in items:
+                        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+                        stmt = sqlite_insert(NewsArticle).values(article_dict)
+                        stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
+                        session.execute(stmt)
+                        s += 1
+                    session.commit()
+                return s
+
+            stored = enqueue_write_sync(PRIO_BULK_DATA, _store_rss, processed)
+            logger.info("news_rss_sync: stored %d articles via write_queue", stored)
+
+            # Broadcast new articles via WebSocket (sync path — dead code, async path is active)
+            for article_dict in processed[:10]:
+                try:
+                    _run_async(broadcast_news_update(article_dict))
+                except Exception as e:
+                    logger.debug("Failed to broadcast article: %s", e)
 
         for r in results:
             if r.error:
@@ -203,7 +209,7 @@ async def _news_rss_sync_async() -> None:
 
 
 async def _fetch_company_news_async(symbol: str) -> int:
-    """Async helper: fetch company news using AsyncSession.
+    """Async helper: fetch company news using AsyncSession from both MoneyControl and iinvest.
 
     Uses AsyncSessionLocal (NullPool) — called via _run_async() which
     creates a new event loop per worker thread. NullPool is already
@@ -213,12 +219,23 @@ async def _fetch_company_news_async(symbol: str) -> int:
     Note: We can't easily cancel HTTP requests mid-flight, but we can at least
     check for shutdown between symbols in the caller.
     """
+    import asyncio
     from app.database import AsyncSessionLocal
-    from app.services.news_fetcher import news_fetcher
+    from app.services.news_fetcher import news_fetcher, fetch_iinvest_company_news
 
     try:
         async with AsyncSessionLocal() as session:
-            return await news_fetcher.fetch_company_news(symbol=symbol, db=session)
+            mc_res, ii_res = await asyncio.gather(
+                news_fetcher.fetch_company_news(symbol=symbol, db=session),
+                fetch_iinvest_company_news(symbol=symbol, db=session),
+                return_exceptions=True,
+            )
+            count = 0
+            if isinstance(mc_res, int):
+                count += mc_res
+            if isinstance(ii_res, int):
+                count += ii_res
+            return count
     finally:
         await news_fetcher.close()
 

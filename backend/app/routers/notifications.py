@@ -15,6 +15,8 @@ from app.models.notification import Notification, GlobalNotification
 from app.models.user import User
 from app.models.watchlist import Watchlist as WatchlistModel
 from app.schemas.notification import NotificationOut, GlobalNotificationOut
+from app.services.write_queue import enqueue_write_async, PRIO_UI_ACTION
+from app.database import _SyncSessionLocal
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -83,8 +85,14 @@ async def dismiss_notification(
             status_code=403,
             detail=f"Notification {notif_id} does not belong to watchlist {watchlist_id}",
         )
-    notif.is_read = True
-    await db.commit()
+    def _read_sync():
+        with _SyncSessionLocal() as session:
+            n = session.get(Notification, notif_id)
+            if n:
+                n.is_read = True
+                session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _read_sync)
     return {"ok": True}
 
 
@@ -118,9 +126,19 @@ async def dismiss_all_notifications(
         user_watchlists = select(WatchlistModel.id).where(WatchlistModel.user_id == current_user.id)
         stmt = stmt.where(Notification.watchlist_id.in_(user_watchlists))
 
-    stmt = stmt.values(is_read=True)
-    await db.execute(stmt)
-    await db.commit()
+    def _dismiss_all_sync():
+        with _SyncSessionLocal() as session:
+            s = update(Notification).where(Notification.is_read == False)
+            if watchlist_id is not None:
+                s = s.where(Notification.watchlist_id == watchlist_id)
+            else:
+                user_wl = select(WatchlistModel.id).where(WatchlistModel.user_id == current_user.id)
+                s = s.where(Notification.watchlist_id.in_(user_wl))
+            s = s.values(is_read=True)
+            session.execute(s)
+            session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _dismiss_all_sync)
     return {"ok": True}
 
 
@@ -171,8 +189,14 @@ async def dismiss_global_notification(
     notif = await db.get(GlobalNotification, notif_id)
     if notif is None:
         raise HTTPException(status_code=404, detail=f"Global notification {notif_id} not found")
-    notif.is_read = True
-    await db.commit()
+    def _read_global_sync():
+        with _SyncSessionLocal() as session:
+            gn = session.get(GlobalNotification, notif_id)
+            if gn:
+                gn.is_read = True
+                session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _read_global_sync)
     return {"ok": True}
 
 
@@ -191,13 +215,17 @@ async def dismiss_all_global_notifications(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing ?all=true query param",
         )
-    stmt = (
-        update(GlobalNotification)
-        .where(GlobalNotification.is_read == False)
-        .values(is_read=True)
-    )
-    await db.execute(stmt)
-    await db.commit()
+    def _dismiss_all_global_sync():
+        with _SyncSessionLocal() as session:
+            s = (
+                update(GlobalNotification)
+                .where(GlobalNotification.is_read == False)
+                .values(is_read=True)
+            )
+            session.execute(s)
+            session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _dismiss_all_global_sync)
     return {"ok": True}
 
 

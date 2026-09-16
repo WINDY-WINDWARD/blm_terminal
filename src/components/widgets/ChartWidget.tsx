@@ -1,11 +1,39 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
-import { createChart, ColorType, CandlestickSeries } from 'lightweight-charts';
-import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createChart,
+  ColorType,
+  CandlestickSeries,
+  LineSeries,
+  HistogramSeries,
+  LineStyle,
+} from 'lightweight-charts';
+import type { IChartApi, IPriceLine, ISeriesApi, Time } from 'lightweight-charts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
-import { activeSymbolAtom, activeExchangeAtom, focusedPanelAtom } from '@/store/terminalStore';
+import {
+  activeSymbolAtom,
+  activeExchangeAtom,
+  focusedPanelAtom,
+  tickDataAtom,
+  chartIndicatorsAtom,
+} from '@/store/terminalStore';
+import { marketDataService } from '@/lib/nseFetch';
+import { ChartIndicatorMenu } from './ChartIndicatorMenu';
+import type { ActiveIndicator, IndicatorCandle } from '@/lib/indicators/types';
+import { clampIndicators } from '@/lib/indicators/presets';
+import {
+  atr,
+  bollinger,
+  ema,
+  macd,
+  obv,
+  rsi,
+  sessionVWAP,
+  sma,
+  stochastic,
+} from '@/lib/indicators/calculations';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,6 +57,8 @@ interface BackendOHLCVResponse {
   symbol: string;
   candles: BackendCandle[];
   count: number;
+  /** Stale-while-revalidate flag from the backend ticker pipeline. */
+  is_stale?: boolean;
 }
 
 // Intraday / weekly / monthly candle from new endpoint
@@ -117,10 +147,30 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
-
+  const indicatorSeriesRef = useRef<ISeriesApi<'Line' | 'Histogram', Time>[]>([]);
+  const liveLineRef = useRef<IPriceLine | null>(null);
   const [symbol, setSymbol] = useAtom(activeSymbolAtom);
   const [exchange, setExchange] = useAtom(activeExchangeAtom);
   const [focusedPanel] = useAtom(focusedPanelAtom);
+  const [tickMap, setTickData] = useAtom(tickDataAtom);
+  const [savedIndicators, setSavedIndicators] = useAtom(chartIndicatorsAtom);
+
+  // Clamp persisted state (forward-compatible with future indicator versions).
+  const indicators: ActiveIndicator[] = useMemo(
+    () => clampIndicators(savedIndicators?.items),
+    [savedIndicators],
+  );
+
+  // Persist the clamped form once so corrupt/legacy entries self-heal.
+  useEffect(() => {
+    if (savedIndicators && savedIndicators.items !== undefined) {
+      const clamped = clampIndicators(savedIndicators.items);
+      if (clamped.length !== savedIndicators.items.length) {
+        setSavedIndicators({ v: 1, items: clamped });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [inputSymbol, setInputSymbol] = useState(symbol);
   const [inputExchange, setInputExchange] = useState(exchange);
@@ -321,6 +371,295 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       chartRef.current?.timeScale().fitContent();
     }, [intradayData, symbol, isIntraday]);
 
+  // ---------- Live tick: self-sufficient subscription (shared atom writer) ----------
+  const tick = tickMap[`${symbol}.${exchange}`];
+  useEffect(() => {
+    const unsub = marketDataService.onSymbolData((s, data) => {
+      if (s !== symbol || !data) return;
+      setTickData((prev) => ({
+        ...prev,
+        [`${s}.${exchange}`]: {
+          symbol: s,
+          exchange,
+          ltp: data.ltp,
+          pChange: data.pChange,
+          yearHigh: data.yearHigh,
+          yearLow: data.yearLow,
+          updatedAt: Date.now(),
+        },
+      }));
+    });
+    marketDataService.requestSymbolData([symbol]);
+    return unsub;
+  }, [symbol, exchange, setTickData]);
+
+  // ---------- EOD reference (last history bar) for the LIVE/EOD badge ----------
+  const eodInfo = useMemo(() => {
+    if (isDaily) {
+      if (!histData?.candles?.length || histData._symbol !== symbol) return null;
+      const last = histData.candles[histData.candles.length - 1];
+      const [, m, d] = last.Date.split('-');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return { close: last.close, label: `${d}-${months[Number(m) - 1] ?? m}` };
+    }
+    if (!intradayData?.candles?.length || intradayData._symbol !== symbol) return null;
+    const last = intradayData.candles[intradayData.candles.length - 1];
+    const label = new Date(last.timestamp).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    return { close: last.close, label };
+  }, [histData, intradayData, symbol, isDaily]);
+
+  const tickAgeMs = tick?.updatedAt ? Date.now() - tick.updatedAt : Number.POSITIVE_INFINITY;
+  const tickFresh = tick != null && tickAgeMs < 5 * 60_000 && isMarketHours();
+  const isStale = isDaily ? histData?.is_stale === true : false;
+  const liveVsEodPct =
+    tickFresh && tick && eodInfo && eodInfo.close !== 0
+      ? ((tick.ltp - eodInfo.close) / eodInfo.close) * 100
+      : null;
+  const inrFmt = useMemo(
+    () => new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    [],
+  );
+
+  // ---------- Indicators + LIVE price line (one combined overlay effect) ----------
+  useEffect(() => {
+    const chart = chartRef.current;
+    const main = seriesRef.current;
+    if (!chart || !main) return;
+
+    // Teardown previous overlays: LIVE line, indicator series, extra panes.
+    if (liveLineRef.current) {
+      try {
+        main.removePriceLine(liveLineRef.current);
+      } catch {
+        /* already removed with a prior teardown */
+      }
+      liveLineRef.current = null;
+    }
+    for (const s of indicatorSeriesRef.current) {
+      try {
+        chart.removeSeries(s);
+      } catch {
+        /* already removed */
+      }
+    }
+    indicatorSeriesRef.current = [];
+    while (chart.panes().length > 1) {
+      chart.removePane(chart.panes().length - 1);
+    }
+
+    // Rebuild bars with the same mapping as the render effects above.
+    let bars: IndicatorCandle[] = [];
+    if (isDaily) {
+      if (!histData?.candles?.length || histData._symbol !== symbol) return;
+      bars = histData.candles
+        .map((c) => ({
+          time: new Date(c.Date + 'T00:00:00Z').getTime() / 1000,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+        }))
+        .sort((a, b) => a.time - b.time);
+    } else {
+      if (!intradayData?.candles?.length || intradayData._symbol !== symbol) return;
+      bars = intradayData.candles
+        .map((c) => ({
+          time: Math.floor(c.timestamp / 1000),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+        }))
+        .sort((a, b) => a.time - b.time);
+    }
+    if (bars.length === 0) return;
+
+    // LIVE line on all intervals — dashed amber, history untouched.
+    if (tickFresh && tick && Number.isFinite(tick.ltp)) {
+      liveLineRef.current = main.createPriceLine({
+        price: tick.ltp,
+        color: '#FFB900',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: 'LIVE',
+      });
+    }
+
+    const times = bars.map((b) => b.time);
+    const closes = bars.map((b) => b.close);
+    const highs = bars.map((b) => b.high);
+    const lows = bars.map((b) => b.low);
+    const vols = bars.map((b) => b.volume);
+
+    const toLineData = (vals: (number | null)[]) =>
+      times.flatMap((t, i) =>
+        vals[i] == null ? [] : [{ time: t as Time, value: vals[i] as number }],
+      );
+
+    const addOverlayLine = (vals: (number | null)[], color: string, dashed = false) => {
+      const s = chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 1,
+        lineStyle: dashed ? LineStyle.Dashed : LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      s.setData(toLineData(vals));
+      indicatorSeriesRef.current.push(s);
+      return s;
+    };
+
+    const addOscillatorPane = () => {
+      // A new pane is created implicitly by adding a series at the next index.
+      return chart.panes().length;
+    };
+
+    const addOscLine = (
+      vals: (number | null)[],
+      color: string,
+      paneIndex: number,
+      bands?: number[],
+    ) => {
+      const s = chart.addSeries(
+        LineSeries,
+        {
+          color,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          crosshairMarkerVisible: false,
+        },
+        paneIndex,
+      );
+      s.setData(toLineData(vals));
+      chart.panes()[paneIndex]?.setStretchFactor(0.35);
+      if (bands) {
+        for (const level of bands) {
+          s.createPriceLine({
+            price: level,
+            color: '#787B86',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: '',
+          });
+        }
+      }
+      indicatorSeriesRef.current.push(s);
+      return s;
+    };
+
+    for (const ind of indicators) {
+      if (!ind.visible) continue;
+      const p = ind.params;
+      switch (ind.type) {
+        case 'SMA':
+          addOverlayLine(sma(closes, p.period ?? 20), ind.color);
+          break;
+        case 'EMA':
+          addOverlayLine(ema(closes, p.period ?? 20), ind.color);
+          break;
+        case 'BB': {
+          const bb = bollinger(closes, p.period ?? 20, p.mult ?? 2);
+          addOverlayLine(bb.basis, ind.color);
+          addOverlayLine(bb.upper, ind.color, true);
+          addOverlayLine(bb.lower, ind.color, true);
+          break;
+        }
+        case 'VWAP':
+          // Persisted VWAP on D/W/M is skipped (menu disables adding it there).
+          if (interval === 'D' || interval === 'W' || interval === 'M') break;
+          addOverlayLine(sessionVWAP(bars), ind.color);
+          break;
+        case 'VOLUME': {
+          const up = '#26a69a';
+          const dn = '#ef5350';
+          const s = chart.addSeries(HistogramSeries, {
+            priceScaleId: 'vol',
+            priceFormat: { type: 'volume' },
+          });
+          s.setData(
+            bars.map((b) => ({
+              time: b.time as Time,
+              value: b.volume,
+              color: b.close >= b.open ? up : dn,
+            })),
+          );
+          chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+          indicatorSeriesRef.current.push(s);
+          break;
+        }
+        case 'RSI':
+          addOscLine(rsi(closes, p.period ?? 14), ind.color, addOscillatorPane(), [70, 50, 30]);
+          break;
+        case 'MACD': {
+          const m = macd(closes, p.fast ?? 12, p.slow ?? 26, p.signal ?? 9);
+          const paneIndex = addOscillatorPane();
+          const histS = chart.addSeries(
+            HistogramSeries,
+            { priceScaleId: '', priceFormat: { type: 'price', precision: 4, minMove: 0.0001 } },
+            paneIndex,
+          );
+          histS.setData(
+            times.flatMap((t, i) =>
+              m.hist[i] == null
+                ? []
+                : [{
+                    time: t as Time,
+                    value: m.hist[i] as number,
+                    color: (m.hist[i] as number) >= 0 ? '#26a69a' : '#ef5350',
+                  }],
+            ),
+          );
+          chart.panes()[paneIndex]?.setStretchFactor(0.35);
+          indicatorSeriesRef.current.push(histS);
+          addOscLine(m.macdLine, ind.color, paneIndex);
+          addOscLine(m.signalLine, '#FF6D00', paneIndex);
+          break;
+        }
+        case 'STOCH': {
+          const st = stochastic(highs, lows, closes, p.k ?? 14, p.slowing ?? 3, p.d ?? 3);
+          const paneIndex = addOscillatorPane();
+          addOscLine(st.k, ind.color, paneIndex, [80, 20]);
+          addOscLine(st.d, '#FF6D00', paneIndex);
+          break;
+        }
+        case 'ATR':
+          addOscLine(atr(highs, lows, closes, p.period ?? 14), ind.color, addOscillatorPane());
+          break;
+        case 'OBV':
+          addOscLine(obv(closes, vols), ind.color, addOscillatorPane());
+          break;
+        default:
+          break;
+      }
+    }
+
+    return () => {
+      // Cleanup runs at the top of the next invocation; this guards unmount.
+      if (liveLineRef.current && seriesRef.current) {
+        try {
+          seriesRef.current.removePriceLine(liveLineRef.current);
+        } catch {
+          /* already removed */
+        }
+        liveLineRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [histData, intradayData, symbol, interval, indicators, tick?.ltp, tick?.updatedAt]);
+
   // ---------- Toolbar / form handlers ----------
   const handleSymbolChange = (value: string) => {
     setInputSymbol(value);
@@ -470,6 +809,14 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
               })}
             </div>
 
+            <div className="ml-1">
+              <ChartIndicatorMenu
+                interval={interval}
+                active={indicators}
+                onChange={(next) => setSavedIndicators({ v: 1, items: next })}
+              />
+            </div>
+
         {isLoading && <span className="text-white/70 text-[10px] ml-1">LOADING…</span>}
         {isError && <span className="text-terminal-red text-[10px] ml-1">FETCH ERR</span>}
 
@@ -496,6 +843,35 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
         >
           ⊡
         </button>
+
+        {/* LIVE vs EOD badge — explains LTP/close gaps (e.g. corporate actions) */}
+        {eodInfo && (
+          <span className="text-[10px] font-mono ml-1 whitespace-nowrap">
+            {tickFresh && tick ? (
+              <>
+                <span className="text-terminal-amber font-bold">
+                  LIVE {inrFmt.format(tick.ltp)}
+                </span>
+                <span className="text-white/50">
+                  {' '}· EOD {inrFmt.format(eodInfo.close)} (
+                  {liveVsEodPct != null
+                    ? `${liveVsEodPct >= 0 ? '+' : ''}${liveVsEodPct.toFixed(2)}%`
+                    : '—'}
+                  ) · EOD as of {eodInfo.label}
+                </span>
+              </>
+            ) : (
+              <span className="text-white/50">
+                EOD {inrFmt.format(eodInfo.close)} · EOD as of {eodInfo.label}
+              </span>
+            )}
+            {isStale && (
+              <span className="ml-1 px-1 border border-terminal-red text-terminal-red">
+                STALE
+              </span>
+            )}
+          </span>
+        )}
 
         {!isFocused && (
           <span className="text-white/60 text-[10px] ml-auto">{symbol}</span>

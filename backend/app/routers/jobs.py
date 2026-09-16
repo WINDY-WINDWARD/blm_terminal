@@ -189,3 +189,56 @@ async def stream_logs(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/jobs/write-queue/stats", tags=["jobs"])
+async def write_queue_stats() -> dict:
+    """Return write queue health stats for the jobs health tab."""
+    from app.services.write_queue import get_stats
+    return get_stats()
+
+
+@router.get("/jobs/db-stats/live", tags=["jobs"])
+async def db_stats_live() -> dict:
+    """Live DB-stats snapshot for the Jobs → DB Stats tab.
+
+    Cheap and non-blocking: all queue metrics are in-memory, DB size comes
+    from file stat() — no SQL is executed, so polling this every 2s never
+    contends with real DB operations.
+    """
+    from app.services.write_queue import get_db_stats
+    return get_db_stats()
+
+
+@router.get("/jobs/db-stats/alerts", tags=["jobs"])
+async def db_stats_alerts(
+    limit: int = Query(100, ge=1, le=500, description="Max alerts to return"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Persisted silent DB alert events (newest first) with frozen snapshots."""
+    import json as _json
+
+    from app.models.db_alert import DbAlert
+
+    stmt = (
+        select(DbAlert)
+        .order_by(DbAlert.ts.desc())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    alerts = []
+    for row in rows:
+        try:
+            snapshot = _json.loads(row.snapshot_json) if row.snapshot_json else {}
+        except Exception:
+            snapshot = {}
+        alerts.append({
+            "id": row.id,
+            "ts": row.ts,
+            "type": row.type,
+            "severity": row.severity,
+            "message": row.message,
+            "snapshot": snapshot,
+        })
+    return {"alerts": alerts, "total": len(alerts)}

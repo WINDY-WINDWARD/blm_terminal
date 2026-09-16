@@ -38,6 +38,11 @@ marketWss.on('connection', (ws) => {
 });
 
 app.prepare().then(() => {
+  // Ensure the proxied backend URL stays pinned to the startup value; next() may reload .env.local
+  if (backendUrl && process.env.PYTHON_BACKEND_URL !== backendUrl) {
+    process.env.PYTHON_BACKEND_URL = backendUrl;
+  }
+
   const server = createServer((req, res) => {
     handle(req, res, parse(req.url, true));
   });

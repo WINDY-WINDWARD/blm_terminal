@@ -83,7 +83,10 @@ def _ticker_backfill_sync() -> None:
             message=f"Backfilling {batch[0]}..{batch[-1]} ({batch_start + 1}-{min(batch_start + _BATCH_SIZE, total)}/{total})",
         )
 
-        with ThreadPoolExecutor(max_workers=_BATCH_SIZE) as pool:
+        # Cap workers to DB QueuePool size (3) to avoid pool_timeout contention;
+        # writes are now coalesced via write_queue, so thread count only gates NSE HTTP.
+        _workers = min(_BATCH_SIZE, 3)
+        with ThreadPoolExecutor(max_workers=_workers) as pool:
             future_to_symbol = {
                 pool.submit(ticker_warehouse.backfill_symbol, sym, 365): sym
                 for sym in batch

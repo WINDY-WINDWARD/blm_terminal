@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useAtom } from 'jotai';
 import { authAtom } from '@/store/terminalStore';
@@ -52,6 +52,76 @@ interface IntradayIntervalStatus {
   universe_covered: number;
   universe_symbols_with_indicators: number;
 }
+
+interface DbQueueDetail {
+  queue_size: number;
+  queue_max: number;
+  occupancy_pct: number;
+  contended: boolean;
+  per_prio?: Record<string, number>;
+  oldest_wait_ms?: number;
+}
+
+interface DbStatsLive {
+  occupancy: { size: number; max: number; pct: number };
+  queue_detail: DbQueueDetail;
+  throughput: {
+    counters: { enqueued: number; executed: number; dropped: number };
+    per_prio: Record<string, { enqueued: number; executed: number }>;
+    records_per_min: number;
+    batches_per_min: number;
+    avg_latency_ms: number;
+    p95_latency_ms: number;
+    avg_queue_wait_ms: number;
+    batches_sampled: number;
+  };
+  db: { db_bytes: number; wal_bytes: number; shm_bytes: number; total_bytes: number };
+  writer: { alive: boolean; uptime_s: number | null };
+  recent_alerts: { ts: number; type: string; severity: string }[];
+  history: { ts: number; occupancy_pct: number | null; records_per_min: number; avg_latency_ms: number }[];
+}
+
+interface DbAlert {
+  id: number | string;
+  ts: number;
+  type: string;
+  severity: string;
+  message: string;
+  snapshot: Record<string, unknown>;
+}
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u += 1;
+  }
+  return `${v.toFixed(1)} ${units[u]}`;
+}
+
+function formatEpoch(ts: number | null | undefined): string {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+const PRIO_LABELS: Record<string, string> = {
+  '-1': 'UI',
+  '0': 'Jobs',
+  '1': 'API cache',
+  '2': 'Notifications',
+  '3': 'Bulk data',
+};
 
 interface TickerStatus {
   total_rows: number;
@@ -153,65 +223,231 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function OccupancyBar({ size, max, pct }: { size: number; max: number; pct: number }) {
+  const color =
+    pct >= 90 ? 'bg-terminal-red' : pct >= 70 ? 'bg-terminal-amber' : 'bg-terminal-green';
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <div className="text-2xl font-bold text-white">
+          {size.toLocaleString()}
+          <span className="text-sm text-white/50">/{max.toLocaleString()}</span>
+        </div>
+        <div className={`text-lg font-bold ${pct >= 90 ? 'text-terminal-red' : pct >= 70 ? 'text-terminal-amber' : 'text-terminal-green'}`}>
+          {pct.toFixed(1)}%
+        </div>
+      </div>
+      <div className="w-full h-2 bg-terminal-gray rounded overflow-hidden mt-2">
+        <div className={`h-full transition-[width] ${color}`} style={{ width: `${Math.min(100, pct)}%` }} />
+      </div>
+      <div className="flex justify-between text-[10px] text-white/40 mt-1">
+        <span>warn ≥70% (3,500)</span>
+        <span>critical ≥90% (4,500)</span>
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ points, color }: { points: (number | null)[]; color: string }) {
+  const vals = points.filter((v): v is number => v !== null && v !== undefined);
+  const max = Math.max(...vals, 1);
+  return (
+    <div className="flex items-end gap-[2px] h-10 mt-2">
+      {points.map((v, i) => (
+        <div
+          key={i}
+          className={`flex-1 rounded-sm ${v === null || v === undefined ? 'bg-white/5' : color}`}
+          style={{ height: `${v === null || v === undefined ? 8 : Math.max(8, (v / max) * 100)}%` }}
+          title={v === null || v === undefined ? 'no data' : String(v)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DbStatsPanel({
+  live,
+  liveError,
+  alerts,
+  alertsError,
+  expandedAlert,
+  setExpandedAlert,
+}: {
+  live: DbStatsLive | null;
+  liveError: string | null;
+  alerts: DbAlert[];
+  alertsError: string | null;
+  expandedAlert: string | number | null;
+  setExpandedAlert: (v: string | number | null) => void;
+}) {
+  if (liveError && !live) {
+    return (
+      <div className="p-3 bg-terminal-red/10 border border-terminal-red text-terminal-red text-xs">
+        {liveError}
+      </div>
+    );
+  }
+  if (!live) {
+    return <div className="text-terminal-amber">Loading...</div>;
+  }
+  const occ = live.occupancy;
+  const tp = live.throughput;
+  const perPrio = live.queue_detail.per_prio || {};
+  return (
+    <div className="space-y-4">
+      {/* Row 1: occupancy + throughput + db size */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="p-3 rounded border border-terminal-gray/20 bg-terminal-gray/10">
+          <div className="text-[10px] text-white/60 uppercase tracking-wider mb-2">
+            Queue Occupancy {!live.writer.alive && <span className="text-terminal-red">(writer down)</span>}
+          </div>
+          <OccupancyBar size={occ.size} max={occ.max} pct={occ.pct} />
+          {Object.keys(perPrio).length > 0 && (
+            <div className="mt-2 space-y-0.5">
+              {Object.entries(perPrio)
+                .sort((a, b) => Number(a[0]) - Number(b[0]))
+                .map(([prio, n]) => (
+                  <div key={prio} className="flex justify-between text-[10px] text-white/50">
+                    <span>{PRIO_LABELS[prio] ?? `prio ${prio}`}</span>
+                    <span className="text-white/80">{n}</span>
+                  </div>
+                ))}
+            </div>
+          )}
+          {live.queue_detail.contended && (
+            <div className="text-[10px] text-white/40 mt-1">breakdown contended — size only</div>
+          )}
+        </div>
+
+        <div className="p-3 rounded border border-terminal-gray/20 bg-terminal-gray/10">
+          <div className="text-[10px] text-white/60 uppercase tracking-wider mb-2">Write Speed</div>
+          <div className="grid grid-cols-2 gap-2 text-center">
+            <div>
+              <div className="text-xl font-bold text-white">{tp.records_per_min.toLocaleString()}</div>
+              <div className="text-[10px] text-white/50">records/min</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold text-white">{tp.avg_latency_ms.toFixed(1)}</div>
+              <div className="text-[10px] text-white/50">avg latency ms</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold text-white">{tp.p95_latency_ms.toFixed(1)}</div>
+              <div className="text-[10px] text-white/50">p95 latency ms</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold text-white">{tp.avg_queue_wait_ms.toFixed(0)}</div>
+              <div className="text-[10px] text-white/50">avg queue wait ms</div>
+            </div>
+          </div>
+          <div className="text-[10px] text-white/40 mt-2">
+            {tp.counters.executed.toLocaleString()} executed · {tp.counters.dropped.toLocaleString()} dropped · {tp.batches_per_min.toLocaleString()} batches/min
+          </div>
+          <Sparkline points={live.history.map((h) => h.records_per_min)} color="bg-terminal-amber/70" />
+        </div>
+
+        <div className="p-3 rounded border border-terminal-gray/20 bg-terminal-gray/10">
+          <div className="text-[10px] text-white/60 uppercase tracking-wider mb-2">Database Size</div>
+          <div className="text-2xl font-bold text-white">{formatBytes(live.db.total_bytes)}</div>
+          <div className="mt-2 space-y-0.5 text-[10px]">
+            <div className="flex justify-between text-white/50">
+              <span>main db</span>
+              <span className="text-white/80">{formatBytes(live.db.db_bytes)}</span>
+            </div>
+            <div className="flex justify-between text-white/50">
+              <span>WAL</span>
+              <span className="text-white/80">{formatBytes(live.db.wal_bytes)}</span>
+            </div>
+            <div className="flex justify-between text-white/50">
+              <span>SHM</span>
+              <span className="text-white/80">{formatBytes(live.db.shm_bytes)}</span>
+            </div>
+            <div className="flex justify-between text-white/50">
+              <span>writer uptime</span>
+              <span className="text-white/80">{live.writer.uptime_s !== null ? `${Math.round(live.writer.uptime_s)}s` : '—'}</span>
+            </div>
+          </div>
+          <Sparkline points={live.history.map((h) => h.avg_latency_ms)} color="bg-blue-400/70" />
+        </div>
+      </div>
+
+      {/* Row 2: DB alerts (silent — only visible here) */}
+      <div className="bg-terminal-gray/10 p-3 rounded border border-terminal-gray/20">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-[10px] text-white/60 uppercase tracking-wider">
+            DB Alerts <span className="text-white/40 normal-case">(silent — queue/latency spikes only)</span>
+          </div>
+          <div className="text-[10px] text-white/40">
+            {alertsError ? 'Failed to load' : `${alerts.length} recorded`}
+          </div>
+        </div>
+        {alerts.length === 0 ? (
+          <div className="text-[10px] text-terminal-green py-2 text-center">
+            No alerts — queue healthy
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {alerts.map((a) => {
+              const expanded = expandedAlert === a.id;
+              const sevColor =
+                a.severity === 'critical' ? 'text-terminal-red border-terminal-red/40' : 'text-terminal-amber border-terminal-amber/40';
+              return (
+                <div key={String(a.id)} className={`border rounded ${sevColor} bg-black/20`}>
+                  <button
+                    onClick={() => setExpandedAlert(expanded ? null : a.id)}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-left"
+                  >
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${a.severity === 'critical' ? 'bg-terminal-red/20' : 'bg-terminal-amber/20'}`}>
+                      {a.severity}
+                    </span>
+                    <span className="text-[10px] text-white/40 whitespace-nowrap">{formatEpoch(a.ts)}</span>
+                    <span className="text-[10px] text-white/80 truncate flex-1">{a.message}</span>
+                    <span className="text-white/50 text-[10px]">{expanded ? '▾' : '▸'}</span>
+                  </button>
+                  {expanded && (
+                    <div className="px-2 pb-2">
+                      <div className="text-[10px] text-white/40 mb-1">Queue snapshot at event time:</div>
+                      <pre className="text-[10px] text-white/70 bg-black/40 rounded p-2 overflow-x-auto whitespace-pre-wrap">
+                        {JSON.stringify(a.snapshot, null, 1)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'jobs' | 'stats'>('jobs');
+  const [activeTab, setActiveTab] = useState<'jobs' | 'stats' | 'dbstats'>('jobs');
   const [tickerStatus, setTickerStatus] = useState<TickerStatus | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [dbLive, setDbLive] = useState<DbStatsLive | null>(null);
+  const [dbLiveError, setDbLiveError] = useState<string | null>(null);
+  const [dbAlerts, setDbAlerts] = useState<DbAlert[]>([]);
+  const [dbAlertsError, setDbAlertsError] = useState<string | null>(null);
+  const [expandedAlert, setExpandedAlert] = useState<string | number | null>(null);
   const [symbolErrors, setSymbolErrors] = useState<SymbolErrors | null>(null);
   const [errorsLoading, setErrorsLoading] = useState(false);
   const [changeSymbolInput, setChangeSymbolInput] = useState<string>('');
   const [changingSymbol, setChangingSymbol] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
 
-  // Backend log viewer state
-  const [logsOpen, setLogsOpen] = useState(false);
-  const [logLines, setLogLines] = useState<string[]>([]);
-  const [logConnected, setLogConnected] = useState(false);
-  const logBottomRef = useRef<HTMLDivElement>(null);
-  const logEventSourceRef = useRef<EventSource | null>(null);
-
   const [auth] = useAtom(authAtom);
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
-  // Auto-scroll log viewer to bottom when new lines arrive
-  useEffect(() => {
-    if (logsOpen) {
-      logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logLines, logsOpen]);
-
   const openLogs = useCallback(() => {
-    setLogLines([]);
-    setLogsOpen(true);
-    setLogConnected(false);
-    const es = new EventSource('/api/jobs/logs/stream?lines=200');
-    logEventSourceRef.current = es;
-    es.onopen = () => setLogConnected(true);
-    es.onmessage = (ev: MessageEvent) => {
-      const line = ev.data as string;
-      setLogLines(prev => {
-        const next = [...prev, line];
-        return next.length > 2000 ? next.slice(next.length - 2000) : next;
-      });
-    };
-    es.onerror = () => {
-      setLogConnected(false);
-    };
-  }, []);
-
-  const closeLogs = useCallback(() => {
-    logEventSourceRef.current?.close();
-    logEventSourceRef.current = null;
-    setLogsOpen(false);
-    setLogLines([]);
-    setLogConnected(false);
+    window.open('/logs?lines=200', 'blm_logs', 'width=900,height=520,scrollbars=yes,resizable=yes');
   }, []);
 
   const fetchJobs = useCallback(async () => {
@@ -316,6 +552,44 @@ export default function JobsPage() {
     return () => clearInterval(interval);
   }, [activeTab, fetchStats, fetchSymbolErrors]);
 
+  const fetchDbLive = useCallback(async () => {
+    try {
+      const res = await fetch('/api/jobs/db-stats/live');
+      if (!res.ok) throw new Error('Failed to fetch DB stats');
+      const data = await res.json();
+      setDbLive(data);
+      setDbLiveError(null);
+    } catch (err) {
+      console.error('Failed to fetch DB stats:', err);
+      setDbLiveError('Failed to load DB stats');
+    }
+  }, []);
+
+  const fetchDbAlerts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/jobs/db-stats/alerts?limit=100');
+      if (!res.ok) throw new Error('Failed to fetch DB alerts');
+      const data = await res.json();
+      setDbAlerts(data.alerts || []);
+      setDbAlertsError(null);
+    } catch (err) {
+      console.error('Failed to fetch DB alerts:', err);
+      setDbAlertsError('Failed to load DB alerts');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'dbstats') return;
+    fetchDbLive();
+    fetchDbAlerts();
+    const liveInterval = setInterval(fetchDbLive, 2000);
+    const alertsInterval = setInterval(fetchDbAlerts, 10000);
+    return () => {
+      clearInterval(liveInterval);
+      clearInterval(alertsInterval);
+    };
+  }, [activeTab, fetchDbLive, fetchDbAlerts]);
+
   const handleTriggerBackfill = async () => {
     if (!confirm('Trigger full backfill for all watchlist symbols?')) return;
     try {
@@ -415,7 +689,11 @@ export default function JobsPage() {
           <div>
             <h1 className="text-2xl text-terminal-amber font-bold">JOBS</h1>
             <p className="text-xs text-white/60">
-              {activeTab === 'jobs' ? 'Background task management' : 'Ticker warehouse statistics'}
+              {activeTab === 'jobs'
+                ? 'Background task management'
+                : activeTab === 'stats'
+                ? 'Ticker warehouse statistics'
+                : 'Write-queue occupancy, throughput & silent alerts'}
             </p>
           </div>
           <div className="flex gap-2">
@@ -426,7 +704,7 @@ export default function JobsPage() {
               ← BACK
             </Link>
             <button
-              onClick={activeTab === 'stats' ? fetchStats : fetchJobs}
+              onClick={activeTab === 'stats' ? fetchStats : activeTab === 'dbstats' ? fetchDbLive : fetchJobs}
               className="px-3 py-1 text-xs border border-terminal-gray text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg transition-colors"
             >
               REFRESH
@@ -455,6 +733,16 @@ export default function JobsPage() {
             }`}
           >
             Stats
+          </button>
+          <button
+            onClick={() => setActiveTab('dbstats')}
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider transition-colors ${
+              activeTab === 'dbstats'
+                ? 'bg-terminal-amber text-terminal-bg'
+                : 'text-white/60 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            DB Stats
           </button>
         </div>
 
@@ -557,6 +845,15 @@ export default function JobsPage() {
               </table>
             </div>
           )
+        ) : activeTab === 'dbstats' ? (
+          <DbStatsPanel
+            live={dbLive}
+            liveError={dbLiveError}
+            alerts={dbAlerts}
+            alertsError={dbAlertsError}
+            expandedAlert={expandedAlert}
+            setExpandedAlert={setExpandedAlert}
+          />
         ) : (
           <div>
             {statsLoading && !tickerStatus ? (
@@ -918,7 +1215,7 @@ export default function JobsPage() {
                     onClick={openLogs}
                     className="px-4 py-2 text-xs bg-white/5 text-white/70 hover:bg-white/10 hover:text-white transition-colors ml-auto"
                   >
-                    Backend Logs
+                    Backend Logs <span className="text-[10px] text-terminal-amber/70 ml-1">[POP]</span>
                   </button>
                 </div>
 
@@ -1022,67 +1319,6 @@ export default function JobsPage() {
           <p className="mt-1">Use the RUN button to manually trigger a job. Use ENABLE/DISABLE to control scheduled runs.</p>
         </div>
       </div>
-
-      {/* Backend Log Viewer Popout */}
-      {logsOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-end p-4 pointer-events-none">
-          <div
-            className="pointer-events-auto flex flex-col bg-[#0d0d0d] border border-terminal-gray/50 shadow-2xl"
-            style={{ width: 'min(900px, calc(100vw - 2rem))', height: 'min(520px, calc(100vh - 2rem))' }}
-          >
-            {/* Header */}
-            <div className="flex items-center gap-3 px-3 py-2 border-b border-terminal-gray/40 flex-shrink-0">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-white/70">Backend Logs</span>
-              <span className={`flex items-center gap-1 text-[10px] ${logConnected ? 'text-terminal-green' : 'text-terminal-amber'}`}>
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${logConnected ? 'bg-terminal-green animate-pulse' : 'bg-terminal-amber'}`} />
-                {logConnected ? 'Live' : 'Connecting…'}
-              </span>
-              <span className="ml-auto text-[10px] text-white/30">{logLines.length} lines</span>
-              <button
-                onClick={() => setLogLines([])}
-                className="text-[10px] text-white/40 hover:text-white/70 transition-colors px-2 py-0.5 hover:bg-white/10"
-                title="Clear log display"
-              >
-                Clear
-              </button>
-              <button
-                onClick={closeLogs}
-                className="text-[10px] text-white/40 hover:text-terminal-red transition-colors px-2 py-0.5 hover:bg-white/10"
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Log lines */}
-            <div className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed p-3 space-y-0.5">
-              {logLines.length === 0 ? (
-                <div className="text-white/30 text-center pt-8">Waiting for log output…</div>
-              ) : (
-                logLines.map((line, i) => {
-                  const isError = /\bERROR\b|\bCRITICAL\b/.test(line);
-                  const isWarn = /\bWARNING\b|\bWARN\b/.test(line);
-                  const isInfo = /\bINFO\b/.test(line);
-                  return (
-                    <div
-                      key={i}
-                      className={`whitespace-pre-wrap break-all ${
-                        isError ? 'text-terminal-red' :
-                        isWarn ? 'text-terminal-amber' :
-                        isInfo ? 'text-white/80' :
-                        'text-white/50'
-                      }`}
-                    >
-                      {line}
-                    </div>
-                  );
-                })
-              )}
-              <div ref={logBottomRef} />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

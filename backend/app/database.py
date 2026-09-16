@@ -32,9 +32,12 @@ def _apply_sqlite_pragmas(cursor) -> None:
     cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA wal_autocheckpoint=1000")
+    cursor.execute("PRAGMA journal_size_limit=67108864")
     cursor.execute("PRAGMA cache_size=-65536")
     cursor.execute("PRAGMA temp_store=MEMORY")
     cursor.execute("PRAGMA mmap_size=268435456")
+    cursor.execute("PRAGMA foreign_keys=ON")
 
 
 def _set_sqlite_pragma(dbapi_conn, connection_record):
@@ -89,8 +92,8 @@ _sync_engine = create_engine(
     f"sqlite:///{settings.db_path}",
     connect_args={"check_same_thread": False, "timeout": 15},
     poolclass=_SyncQueuePool,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=3,
+    max_overflow=4,
     pool_timeout=30.0,
 )
 

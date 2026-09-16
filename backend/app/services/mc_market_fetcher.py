@@ -74,7 +74,7 @@ class MarketDataFetcher:
         return self._client
 
     async def _load_fresh_cookies(self) -> bool:
-        """Load browser cookies from pickle (pre-extracted on Windows) or fallback to rookiepy."""
+        """Load browser cookies from pickle (pre-extracted) if available."""
         if self._cookies_loaded:
             return True
 
@@ -95,31 +95,7 @@ class MarketDataFetcher:
             logger.info("_load_fresh_cookies: loaded %d cookies from pickle", len(pickle_cookies))
             return True
 
-        # Fall back to browser extraction
-        try:
-            import rookiepy
-
-            raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
-            if not raw:
-                logger.warning(
-                    "_load_fresh_cookies: no cookies found in Firefox profile"
-                )
-                return False
-            client = await self._get_client()
-            for c in raw:
-                raw_domain = c.get("domain")
-                domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                name_str: str = str(c.get("name")) if c.get("name") else ""
-                value_str: str = str(c.get("value")) if c.get("value") else ""
-                client.cookies.set(
-                    name_str, value_str, domain=domain_str if domain_str else ""
-                )
-            self._cookies_loaded = True
-            logger.info("_load_fresh_cookies: loaded %d cookies from Firefox", len(raw))
-            return True
-        except Exception:
-            logger.warning("_load_fresh_cookies: failed to load cookies", exc_info=True)
-            return False
+        return False
 
     async def _refresh_cookies(self) -> bool:
         """Force-refresh cookies from Firefox profile (e.g. after a 403)."""
@@ -523,23 +499,20 @@ class MarketDataFetcher:
                 "last_updated": now,
             })
 
-        stmt = (
-            sqlite_insert(MarketCategory)
-            .values(values_list)
-            .on_conflict_do_update(
-                index_elements=["category_type", "slug"],
-                set_={
-                    "name": stmt.excluded.name,
-                    "url": stmt.excluded.url,
-                    "market_cap": stmt.excluded.market_cap,
-                    "pe": stmt.excluded.pe,
-                    "advance": stmt.excluded.advance,
-                    "decline": stmt.excluded.decline,
-                    "sentiment": stmt.excluded.sentiment,
-                    "earnings_yoy": stmt.excluded.earnings_yoy,
-                    "last_updated": stmt.excluded.last_updated,
-                },
-            )
+        insert_stmt = sqlite_insert(MarketCategory).values(values_list)
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["category_type", "slug"],
+            set_={
+                "name": insert_stmt.excluded.name,
+                "url": insert_stmt.excluded.url,
+                "market_cap": insert_stmt.excluded.market_cap,
+                "pe": insert_stmt.excluded.pe,
+                "advance": insert_stmt.excluded.advance,
+                "decline": insert_stmt.excluded.decline,
+                "sentiment": insert_stmt.excluded.sentiment,
+                "earnings_yoy": insert_stmt.excluded.earnings_yoy,
+                "last_updated": insert_stmt.excluded.last_updated,
+            },
         )
         await db.execute(stmt)
 
@@ -575,26 +548,23 @@ class MarketDataFetcher:
                     "last_updated": now,
                 })
 
-            stmt = (
-                sqlite_insert(MarketCategoryStock)
-                .values(values_list)
-                .on_conflict_do_update(
-                    index_elements=["symbol"],
-                    set_={
-                        "company_name": stmt.excluded.company_name,
-                        "exchange": stmt.excluded.exchange,
-                        "curr_price": stmt.excluded.curr_price,
-                        "per_change": stmt.excluded.per_change,
-                        "market_cap": stmt.excluded.market_cap,
-                        "ttm_pe": stmt.excluded.ttm_pe,
-                        "net_profit": stmt.excluded.net_profit,
-                        "net_profit_yoy": stmt.excluded.net_profit_yoy,
-                        "tech_trend": stmt.excluded.tech_trend,
-                        "mc_url": stmt.excluded.mc_url,
-                        "categories": stmt.excluded.categories,
-                        "last_updated": stmt.excluded.last_updated,
-                    },
-                )
+            insert_stmt2 = sqlite_insert(MarketCategoryStock).values(values_list)
+            stmt = insert_stmt2.on_conflict_do_update(
+                index_elements=["symbol"],
+                set_={
+                    "company_name": insert_stmt2.excluded.company_name,
+                    "exchange": insert_stmt2.excluded.exchange,
+                    "curr_price": insert_stmt2.excluded.curr_price,
+                    "per_change": insert_stmt2.excluded.per_change,
+                    "market_cap": insert_stmt2.excluded.market_cap,
+                    "ttm_pe": insert_stmt2.excluded.ttm_pe,
+                    "net_profit": insert_stmt2.excluded.net_profit,
+                    "net_profit_yoy": insert_stmt2.excluded.net_profit_yoy,
+                    "tech_trend": insert_stmt2.excluded.tech_trend,
+                    "mc_url": insert_stmt2.excluded.mc_url,
+                    "categories": insert_stmt2.excluded.categories,
+                    "last_updated": insert_stmt2.excluded.last_updated,
+                },
             )
             await db.execute(stmt)
 

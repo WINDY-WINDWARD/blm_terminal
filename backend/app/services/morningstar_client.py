@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.browser_harvester import harvest_public_html
+from app.services.persistent_cache import get_cached_json, set_cached_json
 import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -144,32 +146,28 @@ class MorningstarClient:
             return await self._refresh_tokens()
 
     async def _refresh_tokens(self) -> dict[str, str]:
-        """Fetch fresh tokens from Morningstar page using CookieHelper approach."""
-        client = await _get_client()
-        
+        """Fetch fresh tokens from Morningstar page using anonymous browser harvester."""
         url = DEFAULT_TOKEN_PAGE
-        
-        cookies = await self._load_browser_cookies()
-        if cookies:
-            for name, value in cookies.items():
-                client.cookies.set(name, value, domain="morningstar.in")
-                logger.debug(f"Set cookie: {name[:20]}...")
-        
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
-        
-        response = await client.get(url, headers=headers)
-        
-        logger.debug(f"Token fetch response status: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.warning(f"Failed to fetch token page, status: {response.status_code}")
+        html = await harvest_public_html(url)
+        if not html:
+            logger.info("Morningstar token harvesting via browser returned empty; trying anonymous HTTP GET")
+            try:
+                client = await _get_client()
+                headers = {
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                }
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    html = response.text
+            except Exception as e:
+                logger.warning(f"Failed to fetch token page via HTTP: {e}")
+
+        if not html:
+            logger.warning("Failed to fetch Morningstar token page")
             return {}
-        
-        return await self._extract_tokens_from_html(response.text)
+
+        return await self._extract_tokens_from_html(html)
 
     async def _extract_tokens_from_html(self, html: str) -> dict[str, str]:
         """Extract accessToken and realTimeToken from meta tags."""
@@ -203,22 +201,6 @@ class MorningstarClient:
 
         _token_cache_set("default", tokens)
         return tokens
-
-    async def _load_browser_cookies(self) -> dict[str, str]:
-        """Use pickle files (pre-extracted on Windows) or fallback to rookiepy.
-
-        Delegates to :func:`app.services.cookie_loader.load_browser_cookies`.
-        The CPU/IO work happens in a thread (rookiepy reads from a
-        browser DB which can block) so the event loop is not stalled.
-        """
-        from app.services.cookie_loader import load_browser_cookies
-
-        return await asyncio.to_thread(
-            load_browser_cookies,
-            "morningstar",
-            "morningstar.in",
-            None,  # allowed_names: morningstar wants every cookie
-        )
 
     async def resolve_symbol_to_id(
         self, symbol: str, db: AsyncSession | None = None
@@ -371,26 +353,34 @@ class MorningstarClient:
     ) -> dict[str, Any]:
         """Full pipeline: symbol → ID → fair value. Returns dict for backward compatibility."""
         symbol_upper = symbol.upper().strip()
+        cache_key = f"morningstar:fv:{symbol_upper}"
+
+        cached = await get_cached_json(cache_key)
+        if cached:
+            logger.debug(f"Morningstar FV persistent cache hit for {symbol_upper}")
+            return cached
 
         ms_id = await self.resolve_symbol_to_id(symbol_upper, db)
         if not ms_id:
-            return {
+            result = {
                 "symbol": symbol_upper,
                 "morningstarId": None,
                 "fairValue": None,
                 "updatedAt": None,
             }
+            await set_cached_json(cache_key, result, ttl_hours=24)
+            return result
 
         fair_value = await self.get_fair_value(ms_id)
 
-        return {
+        result = {
             "symbol": symbol_upper,
             "morningstarId": ms_id,
             "fairValue": fair_value,
-            "updatedAt": datetime.now(timezone.utc).isoformat()
-            if fair_value
-            else None,
+            "updatedAt": datetime.now(timezone.utc).isoformat() if fair_value else None,
         }
+        await set_cached_json(cache_key, result, ttl_hours=24)
+        return result
 
     async def get_fair_value_batch(
         self, symbols: list[str], db: AsyncSession | None = None

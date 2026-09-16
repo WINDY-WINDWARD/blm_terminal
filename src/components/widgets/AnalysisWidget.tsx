@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState } from 'react';
+import ReactDOM from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 
-type Tab = 'sector' | 'industry';
+type Tab = 'sector' | 'industry' | 'heatmap';
 
 interface Category {
   category_type: 'industry' | 'sector';
@@ -102,8 +103,12 @@ function TabButton({
   );
 }
 
-type SortKey = 'market_cap' | 'pe' | 'advance' | 'decline' | 'earnings_yoy' | 'sentiment' | 'name';
+type SortKey = 'market_cap' | 'pe' | 'advance' | 'decline' | 'breadth' | 'earnings_yoy' | 'sentiment' | 'name';
 type SortDir = 'asc' | 'desc';
+
+function breadthOf(cat: Category): number {
+  return (cat.advance || 0) - (cat.decline || 0);
+}
 
 interface SortHeaderProps {
   sortKey: SortKey;
@@ -118,6 +123,7 @@ function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
     { key: 'pe', label: 'PE', width: 'w-10' },
     { key: 'advance', label: 'Advance', width: 'w-10' },
     { key: 'decline', label: 'Decline', width: 'w-10' },
+    { key: 'breadth', label: 'Net A/D', width: 'w-12' },
     { key: 'earnings_yoy', label: 'Earn %', width: 'w-14' },
     { key: 'sentiment', label: 'Sentiment', width: 'w-16' },
   ];
@@ -178,6 +184,12 @@ function CategoryAccordion({ category, expanded, onToggle, stockCount }: Categor
           </span>
           <span className="text-terminal-red w-10 text-right">
             {category.decline || 0}▼
+          </span>
+          <span className={`w-12 text-right font-mono ${
+            breadthOf(category) > 0 ? 'text-terminal-green' :
+            breadthOf(category) < 0 ? 'text-terminal-red' : 'text-white/50'
+          }`}>
+            {breadthOf(category) > 0 ? `+${breadthOf(category)}` : `${breadthOf(category)}`}
           </span>
           <span className={`w-14 text-right ${
             category.earnings_yoy && category.earnings_yoy > 0 ? 'text-terminal-green' :
@@ -305,9 +317,11 @@ function StockList({ categorySlug, categoryType }: StockListProps) {
 export function AnalysisWidget() {
   const [activeTab, setActiveTab] = useState<Tab>('sector');
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
-  const [sortKey, setSortKey] = useState<SortKey>('market_cap');
+  const [sortKey, setSortKey] = useState<SortKey>('breadth');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
+  // Rebuild cadence mirrors the backend market_data scheduler (every 20 min
+  // in live trading hours) so the widget picks up fresh aggregates on its own.
   const { data: sectors = [], isLoading: sectorsLoading } = useQuery<Category[]>({
     queryKey: ['market/sectors'],
     queryFn: async () => {
@@ -316,8 +330,8 @@ export function AnalysisWidget() {
       return res.json() as Promise<Category[]>;
     },
     staleTime: 10 * 60 * 1000,
+    refetchInterval: 20 * 60 * 1000,
     refetchOnWindowFocus: false,
-    enabled: activeTab === 'sector',
   });
 
   const { data: industries = [], isLoading: industriesLoading } = useQuery<Category[]>({
@@ -328,8 +342,8 @@ export function AnalysisWidget() {
       return res.json() as Promise<Category[]>;
     },
     staleTime: 10 * 60 * 1000,
+    refetchInterval: 20 * 60 * 1000,
     refetchOnWindowFocus: false,
-    enabled: activeTab === 'industry',
   });
 
   const toggleKey = (key: string) => {
@@ -344,10 +358,21 @@ export function AnalysisWidget() {
     });
   };
 
-  const isLoading = activeTab === 'sector' ? sectorsLoading : industriesLoading;
+  const [heatmapMetric, setHeatmapMetric] = useState<'breadth' | 'earnings' | 'sentiment'>('breadth');
+  const [hoveredTile, setHoveredTile] = useState<{
+    item: Category;
+    rect: DOMRect;
+  } | null>(null);
+
+  const isLoading = (activeTab === 'sector' || activeTab === 'heatmap') ? sectorsLoading : industriesLoading;
   const categories = activeTab === 'sector' ? sectors : industries;
 
-  if (isLoading) {
+  const heatmapCategories = [...sectors, ...industries].filter(
+    (item, index, self) => index === self.findIndex((t) => t.slug === item.slug)
+  );
+  const totalMCap = heatmapCategories.reduce((acc, c) => acc + (c.market_cap || 0), 0) || 1;
+
+  if (isLoading && categories.length === 0) {
     return (
       <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1">
         <span className="text-terminal-amber/60 animate-pulse">
@@ -358,6 +383,10 @@ export function AnalysisWidget() {
   }
 
   const sortedCategories = [...categories].sort((a, b) => {
+    if (sortKey === 'breadth') {
+      const diff = breadthOf(a) - breadthOf(b);
+      return sortDir === 'asc' ? diff : -diff;
+    }
     const aVal = sortKey === 'name' ? (a.name || '') : (a[sortKey] ?? (sortKey === 'sentiment' ? '' : 0));
     const bVal = sortKey === 'name' ? (b.name || '') : (b[sortKey] ?? (sortKey === 'sentiment' ? '' : 0));
 
@@ -379,12 +408,52 @@ export function AnalysisWidget() {
     }
   };
 
+  const getTileBg = (cat: Category) => {
+    if (heatmapMetric === 'earnings') {
+      const yoy = cat.earnings_yoy || 0;
+      if (yoy > 20) return 'bg-emerald-600';
+      if (yoy > 5) return 'bg-emerald-800/80';
+      if (yoy < -20) return 'bg-rose-600';
+      if (yoy < -5) return 'bg-rose-800/80';
+      return 'bg-zinc-800';
+    }
+    if (heatmapMetric === 'sentiment') {
+      if (cat.sentiment === 'Bullish' || cat.sentiment === 'Very Bullish') return 'bg-emerald-700';
+      if (cat.sentiment === 'Bearish' || cat.sentiment === 'Very Bearish') return 'bg-rose-700';
+      return 'bg-zinc-800';
+    }
+    // breadth default
+    const adv = cat.advance || 0;
+    const dec = cat.decline || 0;
+    const tot = adv + dec || 1;
+    const net = (adv - dec) / tot;
+    if (net > 0.3) return 'bg-emerald-600 text-white';
+    if (net > 0.1) return 'bg-emerald-800/70 text-emerald-200';
+    if (net < -0.3) return 'bg-rose-600 text-white';
+    if (net < -0.1) return 'bg-rose-800/70 text-rose-200';
+    return 'bg-zinc-800 text-zinc-300';
+  };
+
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
-      <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-baseline gap-2 min-w-0">
+      <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-baseline justify-between gap-2 min-w-0">
         <span className="text-terminal-amber font-bold text-[11px] uppercase">
           Market Analysis
         </span>
+        {activeTab === 'heatmap' && (
+          <div className="flex items-center gap-1.5 text-[10px]">
+            <span className="text-white/40 uppercase">Color By:</span>
+            <select
+              value={heatmapMetric}
+              onChange={(e) => setHeatmapMetric(e.target.value as any)}
+              className="bg-zinc-900 border border-terminal-gray/60 text-terminal-amber text-[10px] px-1 py-0.5 rounded outline-none"
+            >
+              <option value="breadth">Advance / Decline</option>
+              <option value="earnings">Earnings YoY</option>
+              <option value="sentiment">Sentiment</option>
+            </select>
+          </div>
+        )}
       </div>
 
       <div className="flex-shrink-0 flex border-b border-terminal-gray/60">
@@ -404,12 +473,59 @@ export function AnalysisWidget() {
           }}
           label="Industry Analysis"
         />
+        <TabButton
+          active={activeTab === 'heatmap'}
+          onClick={() => {
+            setActiveTab('heatmap');
+            setExpandedKeys(new Set());
+          }}
+          label="Heatmap"
+        />
       </div>
 
-      <SortHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+      {activeTab !== 'heatmap' && (
+        <SortHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+      )}
 
-      <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
-        {categories.length === 0 ? (
+      <div className="flex-1 overflow-auto p-1 min-h-0">
+        {activeTab === 'heatmap' ? (
+          <div className="flex flex-wrap gap-1 p-1 bg-black/40 min-h-full content-start">
+            {heatmapCategories.map((cat) => {
+              const mCap = cat.market_cap || 0;
+              // Log1p scaling clamped to 18% max, minimum width/height for readable tile
+              const pct = Math.max(4, Math.min(18, (Math.log1p(mCap) / Math.log1p(totalMCap)) * 100));
+              const adv = cat.advance || 0;
+              const dec = cat.decline || 0;
+              const tot = adv + dec || 1;
+              const net = (adv - dec) / tot;
+
+              return (
+                <div
+                  key={cat.slug}
+                  onMouseEnter={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setHoveredTile({ item: cat, rect });
+                  }}
+                  onMouseLeave={() => setHoveredTile(null)}
+                  className={`flex-1 min-w-[76px] min-h-[64px] border border-white/10 rounded-sm p-1 flex flex-col justify-between cursor-pointer transition-all hover:border-terminal-amber/80 ${getTileBg(
+                    cat,
+                  )}`}
+                  style={{ flexBasis: `${pct.toFixed(1)}%` }}
+                >
+                  <div className="text-[10px] font-bold leading-tight line-clamp-2">
+                    {cat.name}
+                  </div>
+                  <div className="flex flex-col text-[9px] opacity-80 mt-1">
+                    <span className="font-mono">{fmtCrore(cat.market_cap)} Cr</span>
+                    <span className="text-[8px]">
+                      A:{cat.advance} D:{cat.decline} ({net > 0 ? '+' : ''}{(net * 100).toFixed(0)}%)
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : categories.length === 0 ? (
           <div className="text-white/40 text-[10px] py-2 px-1">
             No {activeTab === 'sector' ? 'sectors' : 'industries'} available.
           </div>
@@ -425,6 +541,49 @@ export function AnalysisWidget() {
           ))
         )}
       </div>
+
+      {hoveredTile && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          className="fixed z-[99999] pointer-events-none"
+          style={{
+            left: Math.min(hoveredTile.rect.left, window.innerWidth - 220),
+            top: hoveredTile.rect.top - 6,
+            transform: 'translateY(-100%)',
+          }}
+        >
+          <div className="bg-zinc-900 border border-terminal-amber/60 rounded shadow-2xl p-2 max-w-64 mb-1 text-[10px] font-mono text-white">
+            <div className="text-terminal-amber font-bold border-b border-terminal-gray/40 pb-1 mb-1">
+              {hoveredTile.item.name} ({hoveredTile.item.category_type})
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-white/50">Market Cap:</span>
+              <span className="text-white font-bold">{fmtCrore(hoveredTile.item.market_cap)} Cr</span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-white/50">Advance / Decline:</span>
+              <span>
+                <span className="text-terminal-green">{hoveredTile.item.advance}</span> /{' '}
+                <span className="text-terminal-red">{hoveredTile.item.decline}</span>
+              </span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-white/50">P/E:</span>
+              <span>{hoveredTile.item.pe ? hoveredTile.item.pe.toFixed(1) : '—'}</span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-white/50">Earnings YoY:</span>
+              <span className={hoveredTile.item.earnings_yoy > 0 ? 'text-terminal-green' : hoveredTile.item.earnings_yoy < 0 ? 'text-terminal-red' : ''}>
+                {fmtPercent(hoveredTile.item.earnings_yoy)}
+              </span>
+            </div>
+            <div className="flex justify-between py-0.5">
+              <span className="text-white/50">Sentiment:</span>
+              <span className={getSentimentColor(hoveredTile.item.sentiment)}>{hoveredTile.item.sentiment || '—'}</span>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

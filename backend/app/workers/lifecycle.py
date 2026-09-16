@@ -104,6 +104,8 @@ async def start_all_workers() -> list[threading.Thread]:
     from app.workers.market_calendar import results_calendar_worker
     from app.workers.maintenance import vacuum_worker
     from app.workers.ai_picks_worker import ai_picks_morning_worker, ai_picks_evening_worker
+    from app.workers.deals import watchlist_deals_worker
+    from app.workers.fundamentals import fundamentals_worker
 
     reset_async_shutdown_event()
     register_all_jobs()
@@ -122,6 +124,8 @@ async def start_all_workers() -> list[threading.Thread]:
         news_worker,                                 # 9 — global news (MoneyControl)
         news_rss_worker,                             # 10 — RSS news aggregation
         watchlist_news_worker,                       # 11 — per-symbol news
+        watchlist_deals_worker,                      # 11b — per-symbol deals & trades
+        fundamentals_worker,                         # 11c — screener mcap/NP-YoY backfill (nightly)
         results_calendar_worker,                     # 12 — upcoming results alerts
         vacuum_worker,                               # 13 — weekly VACUUM (Sunday 04:00)
         ai_picks_morning_worker,                     # 14 — AI Picks (8am)

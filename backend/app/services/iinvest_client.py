@@ -30,6 +30,8 @@ from typing import Any
 
 import httpx
 
+from app.services.persistent_cache import get_cached_json, set_cached_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,11 +47,6 @@ nse_client: Any = None  # type: ignore[assignment]
 IINVEST_BASE_URL = "https://data.cogencis.com"
 IINVEST_SITE_URL = "https://iinvest.cogencis.com"
 IINVEST_LOGIN_URL = f"{IINVEST_SITE_URL}/api/login"
-
-# The AES-256 passphrase hardcoded in iinvest's _app-*.js bundle.
-# May be overridden via env var for emergency rotation.
-DEFAULT_AES_KEY = "SQOZOt3Mx1Bouh7YgkJn1XwX2PcR8Sy6Q+q8A9rW6us="
-AES_KEY = os.environ.get("COGENCIS_AES_KEY", DEFAULT_AES_KEY)
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0",
@@ -71,41 +68,9 @@ _JWT_REFRESH_AHEAD_SECONDS = 4 * 3600
 _iinvest_client: "IinvestClient | None" = None
 
 
-# ── Crypto helpers ────────────────────────────────────────────────────────────
+# ── Auth & Harvester ─────────────────────────────────────────────────────────
 
-
-def _evp_bytes_to_key(passphrase: bytes, salt: bytes, key_len: int = 32, iv_len: int = 16) -> tuple[bytes, bytes]:
-    """OpenSSL EVP_BytesToKey with MD5, 1 round — the kdf CryptoJS.AES uses by default."""
-    d = b""
-    d_i = b""
-    while len(d) < key_len + iv_len:
-        d_i = hashlib.md5(d_i + passphrase + salt).digest()
-        d += d_i
-    return d[:key_len], d[key_len:key_len + iv_len]
-
-
-def decrypt_login_blob(b64_blob: str, passphrase: str = AES_KEY) -> dict[str, Any]:
-    """Decrypt a ``Salted__<salt><ct>`` blob produced by CryptoJS.AES.encrypt.
-
-    Returns the parsed JSON payload. Raises ValueError on bad key or
-    malformed blob.
-    """
-    raw = base64.b64decode(b64_blob)
-    if not raw.startswith(b"Salted__"):
-        raise ValueError("Not a CryptoJS OpenSSL-format blob (missing 'Salted__' magic)")
-    salt = raw[8:16]
-    ct = raw[16:]
-    key, iv = _evp_bytes_to_key(passphrase.encode(), salt)
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-    decryptor = cipher.decryptor()
-    pt_padded = decryptor.update(ct) + decryptor.finalize()
-    pad = pt_padded[-1]
-    if not 1 <= pad <= 16:
-        raise ValueError("Bad PKCS#7 padding — wrong key or corrupted blob")
-    plaintext = pt_padded[:-pad]
-    return json.loads(plaintext.decode("utf-8"))
+from app.services.browser_harvester import harvest_local_storage
 
 
 # ── Client ────────────────────────────────────────────────────────────────────
@@ -119,16 +84,28 @@ class IinvestClient:
         self._jwt: str | None = None
         self._jwt_expires_at: datetime | None = None
         self._last_error: str | None = None
-        self._lock = asyncio.Lock()
+        # asyncio.Lock objects bind to the event loop that first uses them, but
+        # the client is shared across loops (main lifespan loop + per-thread
+        # worker loops via _run_async). The lock is therefore created lazily
+        # per running loop — see _get_lock (same pattern as NewsFetcher).
+        self._lock: asyncio.Lock | None = None
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
         # Override-able for tests
         self._refresh_ahead_seconds = _JWT_REFRESH_AHEAD_SECONDS
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Return a lock bound to the current event loop (loop-mismatch safe)."""
+        current_loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
+        return self._lock
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def init(self) -> None:
         """Acquire the JWT and prepare the httpx client. Idempotent."""
-        async with self._lock:
-            await self._init_locked()
+        await self._init_locked()
 
     async def _init_locked(self) -> None:
         if self._http is None:
@@ -138,6 +115,10 @@ class IinvestClient:
                 follow_redirects=False,
             )
         await self._ensure_jwt()
+        if not self._jwt:
+            self._last_error = "JWT unavailable (consent missing or harvest failed); skipping probe"
+            logger.warning(self._last_error)
+            return
         # Validate the token with a cheap probe
         try:
             await self._http.get(
@@ -156,7 +137,7 @@ class IinvestClient:
     # ── Auth ───────────────────────────────────────────────────────────────
 
     async def _ensure_jwt(self) -> None:
-        """Acquire or refresh the JWT. Safe to call repeatedly."""
+        """Acquire or refresh the JWT. Thread-safe & coalesced."""
         now = datetime.now(timezone.utc)
         if (
             self._jwt
@@ -164,33 +145,39 @@ class IinvestClient:
             and self._jwt_expires_at - now > timedelta(seconds=self._refresh_ahead_seconds)
         ):
             return
-        await self._fetch_jwt()
+
+        async with self._get_lock():
+            # Double check after acquiring lock
+            if (
+                self._jwt
+                and self._jwt_expires_at
+                and self._jwt_expires_at - now > timedelta(seconds=self._refresh_ahead_seconds)
+            ):
+                return
+            await self._fetch_jwt()
 
     async def _fetch_jwt(self) -> None:
-        """POST /api/login, decrypt, store the JWT + expiry."""
-        if self._http is None:
-            raise RuntimeError("IinvestClient not initialized — call init() first")
-        resp = await self._http.post(IINVEST_LOGIN_URL)
-        if resp.status_code != 200:
-            self._last_error = f"/api/login HTTP {resp.status_code}"
+        """Fetch token naturally from localStorage using the generic browser harvester,
+        or fallback to authenticated session if configured.
+        """
+        now = datetime.now(timezone.utc)
+        raw_token = await harvest_local_storage(IINVEST_SITE_URL, "next-auth.token")
+        if not raw_token:
+            self._last_error = "Browser harvester unable to acquire next-auth.token (consent missing or harvester unavailable)"
             raise RuntimeError(self._last_error)
-        body = resp.json()
-        blob = body.get("data")
-        if not isinstance(blob, str):
-            self._last_error = "/api/login: missing 'data' field"
-            raise RuntimeError(self._last_error)
-        try:
-            payload = decrypt_login_blob(blob)
-        except Exception as exc:
-            self._last_error = f"JWT decrypt failed: {exc}"
-            raise RuntimeError(self._last_error) from exc
-        token = payload.get("response", {}).get("token")
-        if not token:
-            self._last_error = "Login payload missing response.token"
-            raise RuntimeError(self._last_error)
+
+        # In iinvest localStorage, "next-auth.token" is stored as JSON string:
+        # e.g. {"token":"eyJhbGci...","expiration":"..."}
+        token = raw_token
+        if raw_token.strip().startswith("{"):
+            try:
+                parsed = json.loads(raw_token)
+                token = parsed.get("token", raw_token)
+            except Exception:
+                token = raw_token
+
         self._jwt = token
-        # Parse expiry from the JWT itself (iinvest's `expiration` field is
-        # +05:30 and is the same as `exp`; we read `exp` to be timezone-safe)
+        # Parse expiry from the JWT itself
         try:
             import jwt as pyjwt
             decoded = pyjwt.decode(token, options={"verify_signature": False})
@@ -200,10 +187,9 @@ class IinvestClient:
         if exp:
             self._jwt_expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
         else:
-            # Fallback: assume 24h
             self._jwt_expires_at = now + timedelta(hours=24)
         self._last_error = None
-        logger.info("IinvestClient: JWT acquired (expires %s)", self._jwt_expires_at.isoformat())
+        logger.info("IinvestClient: JWT acquired via harvester (expires %s)", self._jwt_expires_at.isoformat())
 
     @property
     def is_authenticated(self) -> bool:
@@ -232,8 +218,21 @@ class IinvestClient:
         json_body: dict[str, Any] | None = None,
         _retried: bool = False,
     ) -> dict[str, Any]:
-        """Generic data-API call with 401 → re-login + retry."""
-        from app.services.nse_rate_limiter import throttled_nse_call
+        """Generic data-API call with 401 → re-login + retry and persistent caching."""
+        # Cache key construction for GET requests (exclude probe endpoint to preserve fresh auth checks)
+        cache_key: str | None = None
+        if method == "GET" and endpoint_name != "iinvest.financial_peer_filters":
+            params_str = ""
+            if params:
+                params_str = ":" + urllib.parse.urlencode(sorted(params.items()))
+            cache_key = f"{endpoint_name}:{url}{params_str}"
+            try:
+                cached = await get_cached_json(cache_key)
+                if cached is not None:
+                    logger.debug("iinvest persistent cache hit: %s", cache_key)
+                    return cached
+            except Exception as e:
+                logger.warning("iinvest cache lookup failed for %s: %s", cache_key, e)
 
         async def _do() -> dict[str, Any]:
             if self._http is None:
@@ -254,10 +253,20 @@ class IinvestClient:
             return resp.json()
 
         try:
-            return await throttled_nse_call(
-                endpoint_name, _do, is_async_fn=True,
-                coalesce_key=f"{endpoint_name}:{url}:{params}"
+            # iinvest data endpoints should NOT compete for the NSE India rate-limit semaphore!
+            # They use their own lightweight request coalescing.
+            from app.services.coalesce import coalesce as _coalesce
+
+            res = await _coalesce(
+                f"{endpoint_name}:{url}:{params}:{_retried}",
+                _do
             )
+            if cache_key and isinstance(res, dict):
+                try:
+                    await set_cached_json(cache_key, res, ttl_hours=24)
+                except Exception as e:
+                    logger.warning("iinvest set_cached_json failed for %s: %s", cache_key, e)
+            return res
         except _Unauthorized:
             if _retried:
                 self._last_error = f"401 on {endpoint_name} even after re-login"
@@ -324,9 +333,16 @@ class IinvestClient:
         # Verified live (2026-06-18): returns the ISIN directly in the
         # `isin` field, plus `companyName` and `symbol`. The response is
         # a single-element list (or empty if the symbol is invalid).
+        # Coalesced: 6x parallel Deals-tab requests for the same symbol
+        # collapse into a single NSE call to avoid rate-limiting.
         try:
+            from app.services.coalesce import coalesce as _coalesce
             from app.services.iinvest_client import nse_client  # set up below
-            isin_company = await nse_client.get_isin_for_symbol(symbol_upper)
+
+            async def _fetch_isin() -> tuple[str, str] | None:
+                return await nse_client.get_isin_for_symbol(symbol_upper)
+
+            isin_company = await _coalesce(f"iinvest:path:{symbol_upper}", _fetch_isin)
         except Exception as exc:
             self._last_error = f"NSE getMetaData failed for {symbol_upper}: {exc}"
             return None, None
@@ -341,15 +357,70 @@ class IinvestClient:
 
         iinvest_path_cache[symbol_upper] = {"isin": isin, "path": path}
         if db is not None:
-            await db.execute(
-                StockUniverse.__table__.update()
-                .where(StockUniverse.symbol == symbol_upper)
+            # Queue the stock_universe ISIN/path update via write_queue to avoid
+            # contending with jobs/api_cache single-row updates at startup.
+            # Keep the AsyncSession commit for test FakeSession compat but make it
+            # non-blocking: try queue first, fall back to direct.
+            try:
+                from app.services.write_queue import enqueue_write, PRIO_BULK_DATA
+                import sqlite3
+                from app.config import settings
+                from app.database import _apply_sqlite_pragmas
+
+                def _do_update(conn=None):
+                    if conn is not None:
+                        conn.execute(
+                            "UPDATE stock_universe SET isin=?, iinvest_path=?, iinvest_path_resolved_at=?, updated_at=CURRENT_TIMESTAMP WHERE symbol=?",
+                            (isin, path, datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=' '), symbol_upper),
+                        )
+                    else:
+                        con = sqlite3.connect(settings.db_path, timeout=15, check_same_thread=False, isolation_level=None)
+                        try:
+                            cur = con.cursor()
+                            _apply_sqlite_pragmas(cur)
+                            cur.close()
+                            con.execute(
+                                "UPDATE stock_universe SET isin=?, iinvest_path=?, iinvest_path_resolved_at=?, updated_at=CURRENT_TIMESTAMP WHERE symbol=?",
+                                (isin, path, datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=' '), symbol_upper),
+                            )
+                            con.commit()
+                        finally:
+                            con.close()
+
+                # Enqueue as bulk data (coalesced by queue, but distinct symbols each have unique job_key)
+                # Use direct enqueue_write so it participates in single-writer serialization.
+                try:
+                    enqueue_write(PRIO_BULK_DATA, _do_update)
+                except Exception:
+                    # Fallback to original async path if queue unavailable (tests)
+                    await db.execute(
+                        StockUniverse.__table__.update()
+                        .where(StockUniverse.symbol == symbol_upper)
+                        .values(
+                            isin=isin,
+                            iinvest_path=path,
+                            iinvest_path_resolved_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                        )
+                    )
+                    try:
+                        await db.commit()
+                    except AttributeError:
+                        pass
+            except Exception:
+                # Ultimate fallback: original async commit
+                await db.execute(
+                    StockUniverse.__table__.update()
+                    .where(StockUniverse.symbol == symbol_upper)
                     .values(
                         isin=isin,
                         iinvest_path=path,
                         iinvest_path_resolved_at=datetime.now(timezone.utc).replace(tzinfo=None),
                     )
                 )
+                try:
+                    await db.commit()
+                except AttributeError:
+                    pass
         return isin, path
 
     # ── Data fetchers ──────────────────────────────────────────────────────

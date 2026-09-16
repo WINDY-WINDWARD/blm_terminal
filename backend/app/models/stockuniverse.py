@@ -51,6 +51,7 @@ class StockUniverse(Base):
         DateTime(timezone=False), nullable=True
     )
     isin: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    market_cap_cr: Mapped[float | None] = mapped_column(Float, nullable=True)
     iinvest_path: Mapped[str | None] = mapped_column(String(256), nullable=True)
     iinvest_path_resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=False), nullable=True

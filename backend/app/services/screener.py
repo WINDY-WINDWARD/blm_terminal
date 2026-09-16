@@ -25,13 +25,21 @@ from app.config import settings
 
 # ─── SQL execution helpers ───────────────────────────────────────────────────
 
+def _apply_pragmas(conn: sqlite3.Connection) -> None:
+    """Apply WAL pragmas consistent with database.py."""
+    from app.database import _apply_sqlite_pragmas
+    cur = conn.cursor()
+    _apply_sqlite_pragmas(cur)
+    cur.close()
+
 def _execute_sql(sql: str, binds: list) -> list[dict]:
     """Execute a parameterised SQL statement and return hydrated result dicts.
 
     Uses a sync sqlite3 connection (same DB as SQLAlchemy uses for ``_SyncSessionLocal``)
     so the entire WHERE-clause evaluation happens in SQLite, not Python.
     """
-    with sqlite3.connect(settings.db_path, timeout=60) as con:
+    with sqlite3.connect(settings.db_path, timeout=15, check_same_thread=False, isolation_level=None) as con:
+        _apply_pragmas(con)
         con.row_factory = sqlite3.Row
         cur = con.execute(sql, binds)
         rows = cur.fetchall()
@@ -53,7 +61,8 @@ def _execute_tql_count(sql_no_limit: str, binds: list) -> int:
     """
     sql_count = sql_no_limit.rsplit("LIMIT", 1)[0]
     sql_count = f"SELECT COUNT(*) AS n FROM ({sql_count})"
-    with sqlite3.connect(settings.db_path, timeout=60) as con:
+    with sqlite3.connect(settings.db_path, timeout=15, check_same_thread=False, isolation_level=None) as con:
+        _apply_pragmas(con)
         row = con.execute(sql_count, binds).fetchone()
     return int(row[0])
 
@@ -78,7 +87,8 @@ def _snapshot_has_rows() -> bool:
     if now - _snapshot_check_last_ts < _snapshot_check_ttl_s:
         return _snapshot_check_last_val
     try:
-        with sqlite3.connect(settings.db_path, timeout=10) as con:
+        with sqlite3.connect(settings.db_path, timeout=15, check_same_thread=False, isolation_level=None) as con:
+            _apply_pragmas(con)
             row = con.execute("SELECT COUNT(*) FROM ticker_screener_snapshot").fetchone()
             has = int(row[0]) > 0
     except Exception:
@@ -174,9 +184,16 @@ def get_screener_sectors(use_cache: bool = True) -> list[str]:
     back to stock_universe if the snapshot hasn't been built yet.
     """
     table = "ticker_screener_snapshot" if _snapshot_has_rows() else "stock_universe"
-    with sqlite3.connect(settings.db_path, timeout=60) as con:
-        rows = con.execute(
-            f"SELECT DISTINCT sector FROM {table} "
-            "WHERE sector IS NOT NULL AND sector != '' ORDER BY sector"
-        ).fetchall()
+    if table not in ("ticker_screener_snapshot", "stock_universe"):
+        raise ValueError(f"Invalid table: {table}")
+    with sqlite3.connect(settings.db_path, timeout=15, check_same_thread=False, isolation_level=None) as con:
+        _apply_pragmas(con)
+        if table == "ticker_screener_snapshot":
+            rows = con.execute(
+                "SELECT DISTINCT sector FROM ticker_screener_snapshot WHERE sector IS NOT NULL AND sector != '' ORDER BY sector"
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT DISTINCT sector FROM stock_universe WHERE sector IS NOT NULL AND sector != '' ORDER BY sector"
+            ).fetchall()
     return [r[0] for r in rows]

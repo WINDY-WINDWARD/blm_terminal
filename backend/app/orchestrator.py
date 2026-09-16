@@ -298,6 +298,39 @@ class Orchestrator:
         logger.info("Orchestrator [%s] Stage %s complete", mode.value, stage_label)
         return True
 
+    async def _startup_universe_fresh(self) -> bool:
+        """True when the startup pipeline may skip the stock-universe sync.
+
+        Skip only when this is not the first launch AND the universe table
+        already holds a populated cache (>500 symbols). The COUNT runs in an
+        executor so the event loop is never blocked on sync DB I/O.
+        """
+        from app.backgroundtasks._runtime import _is_first_run
+
+        try:
+            if _is_first_run("stock_universe"):
+                return False
+        except Exception:
+            return False
+
+        def _count() -> int:
+            from sqlalchemy import func, select
+
+            from app.database import _SyncSessionLocal
+            from app.models.stockuniverse import StockUniverse
+
+            try:
+                with _SyncSessionLocal() as db:
+                    return db.execute(
+                        select(func.count()).select_from(StockUniverse)
+                    ).scalar() or 0
+            except Exception:
+                return 0
+
+        loop = asyncio.get_running_loop()
+        count = await loop.run_in_executor(None, _count)
+        return count > 500
+
     async def _execute_pipeline(self, mode: PipelineMode) -> None:
         """Execute the full ordered pipeline (audit B.11: uses ``_run_stage``).
 
@@ -343,11 +376,23 @@ class Orchestrator:
             ok = await self._run_stage(mode, **stage_kwargs)
             if not ok:
                 return False
+            # Yield to let the write queue flush between heavy stages
+            await asyncio.sleep(0.2)
             return True
 
         try:
-            # ── Stage 1: stock universe (always) ──────────────────────────
-            if not await _run_or_bail(dict(
+            # ── Stage 1: stock universe (skip on startup when already populated)
+            # The nightly cron / manual triggers always run the real sync
+            # (see _stock_universe_sync); only app-launch runs skip when this
+            # is not the first launch and the table is already populated.
+            if mode == PipelineMode.STARTUP and await self._startup_universe_fresh():
+                logger.info("Orchestrator [startup] Stage 1/8 skipped: stock universe already cached")
+                await update_job_status(pipeline_job_key, "running", progress=15,
+                                        message="Stage 1/8 skipped — stock universe cached")
+                await update_job_status("job.stock_universe", "idle", progress=100,
+                                        message="Skipped (cached, not first run)")
+                _startup_stock_universe_done.set()
+            elif not await _run_or_bail(dict(
                 stage_name="stock_universe",
                 sub_jobs=[("job.stock_universe", _stock_universe_sync, False)],
                 progress_start=5, progress_end=15, stage_label="1/8",
@@ -553,13 +598,20 @@ class Orchestrator:
                 is_post_market = now_ist.weekday() >= 5 or now_ist.hour > 15 or (now_ist.hour == 15 and now_ist.minute >= 30)
                 if is_post_market:
                     nightly_job = await get_job_status("job.pipeline.nightly")
-                    last_completed = nightly_job.last_completed if nightly_job else None
+                    last_completed = nightly_job.last_completed_at if nightly_job else None
                     should_run_nightly = False
                     now_utc = datetime.now(timezone.utc)
                     if not last_completed:
                         should_run_nightly = True
                     else:
-                        if (now_utc - last_completed).total_seconds() > 24 * 3600:
+                        # last_completed_at comes back naive from SQLite —
+                        # assume UTC before subtracting from the aware now.
+                        last = (
+                            last_completed
+                            if last_completed.tzinfo is not None
+                            else last_completed.replace(tzinfo=timezone.utc)
+                        )
+                        if (now_utc - last).total_seconds() > 24 * 3600:
                             should_run_nightly = True
 
                     if should_run_nightly:
@@ -569,9 +621,11 @@ class Orchestrator:
             logger.exception("Orchestrator: startup pipeline task raised an unhandled exception")
 
     async def _run_market_data_scheduler(self) -> None:
-        """Run market data sync every 5 min during market hours; sleep when closed.
+        """Rebuild market analysis every 20 min during market hours.
 
-        Waits for the startup pipeline Stage 7 (which sets
+        Post-close the analysis is frozen static: exactly one final sync
+        runs with closing values, then the scheduler sleeps until the next
+        market open. Waits for the startup pipeline Stage 7 (which sets
         ``_startup_market_data_done``) before entering the scheduling loop,
         so the first market data sync always runs as part of the startup
         pipeline rather than independently.
@@ -602,12 +656,14 @@ class Orchestrator:
 
         logger.info("market_data_scheduler: entering main loop")
 
+        was_open = False
         while not shutdown_event.is_set():
             now_utc = datetime.now(timezone.utc)
 
             if _is_market_open():
-                # During market hours: use */5 cron schedule
-                wait_secs = _seconds_until_next_cron("*/5 * * * *")
+                was_open = True
+                # During market hours: rebuild every 20 min
+                wait_secs = _seconds_until_next_cron("*/20 * * * *")
                 next_trigger = now_utc + timedelta(seconds=wait_secs)
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
@@ -629,6 +685,15 @@ class Orchestrator:
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, _market_data_sync)
             else:
+                if was_open:
+                    # Just closed — one final freeze sync with closing values,
+                    # then stay static until the next open.
+                    logger.info("market_data_scheduler: market closed — running final freeze sync")
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, _market_data_sync)
+                    was_open = False
+                    if shutdown_event.is_set():
+                        break
                 # Market closed: sleep until next market open
                 wait_secs = _seconds_until_market_open()
                 next_trigger = now_utc + timedelta(seconds=wait_secs)

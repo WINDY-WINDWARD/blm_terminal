@@ -31,15 +31,39 @@ from app.models.stockuniverse import StockUniverse
 
 
 @pytest.fixture
-async def in_memory_db_session():
-    """An in-memory SQLite AsyncSession with the news + stock_universe schema."""
+async def _inline_write_queue():
+    """Execute write-queue items inline so tests never depend on the writer thread."""
+    import app.services.news_fetcher as nf_mod
+
+    async def _inline(prio, fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    with patch.object(nf_mod, "enqueue_write_async", _inline):
+        yield
+
+
+_memdb_counter = 0
+
+
+@pytest.fixture
+async def in_memory_db_session(_inline_write_queue):
+    """An in-memory SQLite AsyncSession with the news + stock_universe schema.
+
+    Uses a shared-cache memory DB so the sync writer path
+    (``news_fetcher._SyncSessionLocal``) sees the same rows as the async
+    session under test. The URI is unique per test so state never leaks
+    across tests within one pytest process.
+    """
+    global _memdb_counter  # noqa: PLW0603
+    _memdb_counter += 1
     import app.models  # noqa: F401
     import app.models.news  # noqa: F401
     import app.models.stockuniverse  # noqa: F401
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+    shared_uri = f"file:memdb_iinvest_news_{_memdb_counter}?mode=memory&cache=shared&uri=true"
     eng = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
+        f"sqlite+aiosqlite:///{shared_uri}",
         connect_args={"check_same_thread": False},
     )
 
@@ -51,25 +75,46 @@ async def in_memory_db_session():
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Sync engine on the same shared-cache URI + a keeper connection so the
+    # in-memory DB survives across connections, and patch the sync writer
+    # path used by _do_upsert_iinvest to point at it.
+    from sqlalchemy import create_engine as _create_sync_engine
+    from sqlalchemy.orm import sessionmaker as _sessionmaker
+
+    sync_eng = _create_sync_engine(
+        f"sqlite:///{shared_uri}", connect_args={"check_same_thread": False}
+    )
+    Base.metadata.create_all(sync_eng)
+    keeper = sync_eng.connect()
+    SyncSession = _sessionmaker(bind=sync_eng, autoflush=False, expire_on_commit=False)
+
+    import app.services.news_fetcher as nf_mod
+
     Session = async_sessionmaker(eng, expire_on_commit=False)
-    async with Session() as session:
-        # Seed: a stock_universe row with an ISIN so the news fetch has a key
-        su = StockUniverse(
-            symbol="RELIANCE",
-            company_name="Reliance Industries Limited",
-            segment="EQ",
-            industry="Refineries",
-            industry_info={},
-            ticker_failure_count=0,
-            isin="INE002A01018",
-        )
-        session.add(su)
-        await session.commit()
-        yield session
+    with patch.object(nf_mod, "_SyncSessionLocal", SyncSession):
+        async with Session() as session:
+            # Seed: a stock_universe row with an ISIN so the news fetch has a key
+            su = StockUniverse(
+                symbol="RELIANCE",
+                company_name="Reliance Industries Limited",
+                segment="EQ",
+                industry="Refineries",
+                industry_info={},
+                ticker_failure_count=0,
+                isin="INE002A01018",
+            )
+            session.add(su)
+            await session.commit()
+            yield session
+    keeper.close()
+    sync_eng.dispose()
     await eng.dispose()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+_EMPTY_PAGE = {"status": True, "response": {"data": []}}
 
 
 IINVEST_NEWS_RESPONSE = {
@@ -137,7 +182,7 @@ class TestFetchIinvestCompanyNews:
 
         fake = MagicMock()
         fake.resolve_path = AsyncMock(return_value=("INE002A01018", "ine002a01018/symbol/ns/reliance/reliance"))
-        fake.get_news = AsyncMock(return_value=IINVEST_NEWS_RESPONSE)
+        fake.get_news = AsyncMock(side_effect=[IINVEST_NEWS_RESPONSE] + [_EMPTY_PAGE] * 4)
         with patch.object(mod, "get_iinvest_client", return_value=fake):
             # Use a symbol that's NOT in the seeded stock_universe
             count = await fetch_iinvest_company_news(
@@ -171,7 +216,7 @@ class TestFetchIinvestCompanyNews:
         from app.services import iinvest_client as mod
 
         fake = MagicMock()
-        fake.get_news = AsyncMock(return_value=IINVEST_NEWS_RESPONSE)
+        fake.get_news = AsyncMock(side_effect=[IINVEST_NEWS_RESPONSE] + [_EMPTY_PAGE] * 4)
         with patch.object(mod, "get_iinvest_client", return_value=fake):
             count = await fetch_iinvest_company_news(
                 symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
@@ -207,12 +252,12 @@ class TestFetchIinvestCompanyNews:
         from sqlalchemy import select, func
 
         fake = MagicMock()
-        fake.get_news = AsyncMock(return_value=IINVEST_NEWS_RESPONSE)
+        fake.get_news = AsyncMock(side_effect=[IINVEST_NEWS_RESPONSE] + [_EMPTY_PAGE] * 4)
         with patch.object(mod, "get_iinvest_client", return_value=fake):
             await fetch_iinvest_company_news(
                 symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
             )
-            # Second fetch — same stories
+            # Second fetch — same stories (served from sync cache, no HTTP)
             await fetch_iinvest_company_news(
                 symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
             )
@@ -292,14 +337,18 @@ class TestFetchIinvestCompanyNews:
             fake.resolve_path = AsyncMock(side_effect=_resolve)
 
             # Symbol 1 — gets the row created
-            fake.get_news = AsyncMock(return_value=payload("KIRLOSBROS", "INE732A01036"))
+            fake.get_news = AsyncMock(
+                side_effect=[payload("KIRLOSBROS", "INE732A01036")] + [_EMPTY_PAGE] * 4
+            )
             await fetch_iinvest_company_news(
                 symbol="KIRLOSBROS", db=in_memory_db_session, days=30, limit=50,
             )
 
             # Symbol 2 — same story_id and same URL but different ISIN.
             # Must NOT raise IntegrityError.
-            fake.get_news = AsyncMock(return_value=payload("WABAG", "INE956G01038"))
+            fake.get_news = AsyncMock(
+                side_effect=[payload("WABAG", "INE956G01038")] + [_EMPTY_PAGE] * 4
+            )
             await fetch_iinvest_company_news(
                 symbol="WABAG", db=in_memory_db_session, days=30, limit=50,
             )
@@ -318,6 +367,104 @@ class TestFetchIinvestCompanyNews:
         row = rows[0]
         assert row.company_symbol == "KIRLOSBROS"
         assert row.iinvest_story_id == SHARED_STORY_ID
+
+    @pytest.mark.asyncio
+    async def test_webpage_matching_filter_keeps_empty_isin_skips_others(self, in_memory_db_session):
+        """Strict company filter: only stories tagged with the requested ISIN
+        are kept (globals with empty/other ISINs are skipped so one symbol's
+        feed never pollutes another's). Bare-list response shapes accepted."""
+        from app.services.news_fetcher import fetch_iinvest_company_news
+        from app.services import iinvest_client as mod
+        import app.services.news_fetcher as nf_mod
+
+        def story(sid, url, isins):
+            return {
+                "id": sid,
+                "headline": f"headline {sid}",
+                "synopsis": f"synopsis {sid}",
+                "story": "",
+                "sourceLink": url,
+                "sourceName": "cogencis",
+                "sourceDateTime": "2026-09-16T10:00:00",
+                "isins": isins,
+            }
+
+        captured: list[list[dict]] = []
+
+        async def _fake_enqueue(prio, fn, *args, **kwargs):
+            # Don't hit the real DB — just record what would be upserted.
+            captured.append(list(args[0]))
+            return len(args[0])
+
+        mixed = {
+            "status": True,
+            "response": {
+                "data": [
+                    # No ISIN metadata at all → skipped (global story)
+                    story("empty-1", "https://example.com/empty-1", []),
+                    # Explicitly another company's ISIN → skipped
+                    story("other-1", "https://example.com/other-1", ["INE999X01000"]),
+                    # Matching ISIN (list form) → kept
+                    story("match-1", "https://example.com/match-1", ["INE002A01018"]),
+                    # Matching ISIN (live space-separated string form) → kept
+                    story("match-2", "https://example.com/match-2", "INE002A01018 RELIANCE.BS RELIANCE.NS"),
+                ],
+            },
+        }
+
+        fake = MagicMock()
+        # One populated page followed by empty pages (real pagination).
+        fake.get_news = AsyncMock(side_effect=[mixed] + [{"response": {"data": []}}] * 5)
+        with (
+            patch.object(mod, "get_iinvest_client", return_value=fake),
+            patch.object(nf_mod, "enqueue_write_async", side_effect=_fake_enqueue),
+        ):
+            count = await fetch_iinvest_company_news(
+                symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
+                refresh=True,
+            )
+        assert count == 2
+        kept_ids = {item["iinvest_story_id"] for item in captured[0]}
+        assert kept_ids == {"match-1", "match-2"}
+
+    @pytest.mark.asyncio
+    async def test_bare_list_response_shape_accepted(self, in_memory_db_session):
+        """Live payloads vary in nesting — a bare list of stories works too."""
+        from app.services.news_fetcher import fetch_iinvest_company_news
+        from app.services import iinvest_client as mod
+        import app.services.news_fetcher as nf_mod
+
+        captured: list[list[dict]] = []
+
+        async def _fake_enqueue(prio, fn, *args, **kwargs):
+            captured.append(list(args[0]))
+            return len(args[0])
+
+        bare = [
+            {
+                "id": "bare-1",
+                "headline": "bare headline",
+                "synopsis": "bare synopsis",
+                "story": "",
+                "sourceLink": "https://example.com/bare-1",
+                "sourceName": "cogencis",
+                "sourceDateTime": "2026-09-16T10:00:00",
+                "isins": ["INE002A01018"],
+            },
+        ]
+
+        fake = MagicMock()
+        fake.get_news = AsyncMock(side_effect=[bare, {"response": {"data": []}}])
+        with (
+            patch.object(mod, "get_iinvest_client", return_value=fake),
+            patch.object(nf_mod, "enqueue_write_async", side_effect=_fake_enqueue),
+        ):
+            count = await fetch_iinvest_company_news(
+                symbol="RELIANCE", db=in_memory_db_session, days=30, limit=50,
+                refresh=True,
+            )
+        assert count == 1
+        assert captured[0][0]["iinvest_story_id"] == "bare-1"
 
     @pytest.mark.asyncio
     async def test_upsert_after_moneycontrol_row_with_same_url(self, in_memory_db_session):
@@ -366,7 +513,7 @@ class TestFetchIinvestCompanyNews:
         }
 
         fake = MagicMock()
-        fake.get_news = AsyncMock(return_value=iinvest_payload)
+        fake.get_news = AsyncMock(side_effect=[iinvest_payload] + [_EMPTY_PAGE] * 4)
         with patch.object(mod, "get_iinvest_client", return_value=fake):
             # Must NOT raise IntegrityError.
             await fetch_iinvest_company_news(

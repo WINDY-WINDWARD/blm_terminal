@@ -18,6 +18,8 @@ from app.schemas.layout import (
     LayoutSyncResponse,
     LayoutTombstoneOut,
 )
+from app.services.write_queue import enqueue_write_async, PRIO_UI_ACTION
+from app.database import _SyncSessionLocal
 
 router = APIRouter()
 
@@ -64,34 +66,47 @@ async def save_or_update_user_layout(
     if body.name != clean_name:
         body.name = clean_name
 
-    stmt = select(UserLayout).where(
-        UserLayout.user_id == current_user.id,
-        UserLayout.name == clean_name,
-    )
-    existing = (await db.execute(stmt)).scalar_one_or_none()
+    def _save_layout_sync() -> dict:
+        with _SyncSessionLocal() as session:
+            stmt = select(UserLayout).where(
+                UserLayout.user_id == current_user.id,
+                UserLayout.name == clean_name,
+            )
+            ex = session.execute(stmt).scalar_one_or_none()
+            if ex:
+                ex.active_panels = body.active_panels
+                ex.panel_count = body.panel_count
+                ex.merged_groups = body.merged_groups
+                ex.saved_at = body.saved_at
+                ex.deleted_at = None
+                target = ex
+            else:
+                target = UserLayout(
+                    user_id=current_user.id,
+                    name=clean_name,
+                    active_panels=body.active_panels,
+                    panel_count=body.panel_count,
+                    merged_groups=body.merged_groups,
+                    saved_at=body.saved_at,
+                    deleted_at=None,
+                )
+                session.add(target)
+            session.commit()
+            session.refresh(target)
+            return {
+                "id": target.id,
+                "user_id": target.user_id,
+                "name": target.name,
+                "active_panels": target.active_panels,
+                "panel_count": target.panel_count,
+                "merged_groups": target.merged_groups,
+                "saved_at": target.saved_at,
+                "created_at": target.created_at,
+                "deleted_at": target.deleted_at,
+            }
 
-    if existing:
-        existing.active_panels = body.active_panels
-        existing.panel_count = body.panel_count
-        existing.merged_groups = body.merged_groups
-        existing.saved_at = body.saved_at
-        existing.deleted_at = None
-        layout = existing
-    else:
-        layout = UserLayout(
-            user_id=current_user.id,
-            name=clean_name,
-            active_panels=body.active_panels,
-            panel_count=body.panel_count,
-            merged_groups=body.merged_groups,
-            saved_at=body.saved_at,
-            deleted_at=None,
-        )
-        db.add(layout)
-
-    await db.commit()
-    await db.refresh(layout)
-    return LayoutOut.model_validate(layout)
+    out_dict = await enqueue_write_async(PRIO_UI_ACTION, _save_layout_sync)
+    return LayoutOut.model_validate(out_dict)
 
 
 @router.post("/layouts/bulk-sync", response_model=LayoutSyncResponse, tags=["layouts"])
@@ -111,22 +126,27 @@ async def bulk_sync_user_layouts(
     existing_list = (await db.execute(stmt)).scalars().all()
     existing_map = {l.name: l for l in existing_list}
 
-    for item in body:
-        clean_name = item.name.strip().lower()
-        ex = existing_map.get(clean_name)
-        if ex is None:
-            new_l = UserLayout(
-                user_id=current_user.id,
-                name=clean_name,
-                active_panels=item.active_panels,
-                panel_count=item.panel_count,
-                merged_groups=item.merged_groups,
-                saved_at=item.saved_at,
-                deleted_at=None,
-            )
-            db.add(new_l)
+    def _bulk_sync() -> None:
+        with _SyncSessionLocal() as session:
+            stmt = select(UserLayout).where(UserLayout.user_id == current_user.id)
+            existing_list = session.execute(stmt).scalars().all()
+            existing_map = {l.name: l for l in existing_list}
+            for item in body:
+                c_name = item.name.strip().lower()
+                if existing_map.get(c_name) is None:
+                    new_l = UserLayout(
+                        user_id=current_user.id,
+                        name=c_name,
+                        active_panels=item.active_panels,
+                        panel_count=item.panel_count,
+                        merged_groups=item.merged_groups,
+                        saved_at=item.saved_at,
+                        deleted_at=None,
+                    )
+                    session.add(new_l)
+            session.commit()
 
-    await db.commit()
+    await enqueue_write_async(PRIO_UI_ACTION, _bulk_sync)
 
     # Re-fetch active layouts
     stmt_active = (
@@ -214,18 +234,44 @@ async def rename_user_layout(
             detail=f"Active layout '{old_name}' not found",
         )
 
-    if target_existing and target_existing.deleted_at is not None:
-        # Remove target tombstone so rename constraint is satisfied
-        await db.delete(target_existing)
-        # Flush immediately to ensure DELETE executes before UPDATE
-        # (prevents SQLAlchemy from emitting UPDATE before DELETE,
-        # which would violate the unique constraint)
-        await db.flush()
+    def _rename_sync() -> dict:
+        with _SyncSessionLocal() as session:
+            if target_existing and target_existing.deleted_at is not None:
+                t_ex = session.execute(
+                    select(UserLayout).where(
+                        UserLayout.user_id == current_user.id,
+                        UserLayout.name == new_name,
+                    )
+                ).scalar_one_or_none()
+                if t_ex:
+                    session.delete(t_ex)
+                    session.flush()
 
-    layout.name = new_name
-    await db.commit()
-    await db.refresh(layout)
-    return LayoutOut.model_validate(layout)
+            stmt_find = select(UserLayout).where(
+                UserLayout.user_id == current_user.id,
+                UserLayout.name == old_name,
+                UserLayout.deleted_at.is_(None),
+            )
+            lay = session.execute(stmt_find).scalar_one_or_none()
+            if not lay:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Active layout '{old_name}' not found")
+            lay.name = new_name
+            session.commit()
+            session.refresh(lay)
+            return {
+                "id": lay.id,
+                "user_id": lay.user_id,
+                "name": lay.name,
+                "active_panels": lay.active_panels,
+                "panel_count": lay.panel_count,
+                "merged_groups": lay.merged_groups,
+                "saved_at": lay.saved_at,
+                "created_at": lay.created_at,
+                "deleted_at": lay.deleted_at,
+            }
+
+    res_dict = await enqueue_write_async(PRIO_UI_ACTION, _rename_sync)
+    return LayoutOut.model_validate(res_dict)
 
 
 @router.delete("/layouts/{name}", tags=["layouts"])
@@ -242,7 +288,18 @@ async def delete_user_layout(
     )
     layout = (await db.execute(stmt)).scalar_one_or_none()
     if layout and layout.deleted_at is None:
-        layout.deleted_at = int(time.time() * 1000)
-        await db.commit()
+        def _soft_del_sync():
+            with _SyncSessionLocal() as session:
+                target_lay = session.execute(
+                    select(UserLayout).where(
+                        UserLayout.user_id == current_user.id,
+                        UserLayout.name == clean_name,
+                    )
+                ).scalar_one_or_none()
+                if target_lay and target_lay.deleted_at is None:
+                    target_lay.deleted_at = int(time.time() * 1000)
+                    session.commit()
+
+        await enqueue_write_async(PRIO_UI_ACTION, _soft_del_sync)
 
     return {"ok": True}

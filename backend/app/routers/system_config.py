@@ -49,6 +49,57 @@ class AppStateRequest(BaseModel):
     is_active: bool
 
 
+class ConsentRequest(BaseModel):
+    consent: bool
+
+
+@router.post("/system_config/consent")
+@router.post("/system-config/consent")
+async def update_scraping_consent(
+    body: ConsentRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Record user consent for advanced web extraction / browser harvesting."""
+    stmt = sqlite_insert(SystemConfig).values(
+        key="scraping.advanced_consent",
+        value="true" if body.consent else "false",
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["key"],
+        set_={"value": stmt.excluded.value},
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+    # Invalidate in-memory consent cache immediately
+    from app.services.browser_harvester import invalidate_consent_cache
+    invalidate_consent_cache()
+
+    if body.consent:
+        # Trigger on-demand binary preparation in the background
+        from app.services.browser_harvester import (
+            ensure_warm_browser,
+            trigger_harvester_download,
+        )
+        trigger_harvester_download()
+        try:
+            ensure_warm_browser()
+        except Exception:
+            pass
+    else:
+        # Consent revoked: tear down the warm browser (off the event loop so the 10s join doesn't block).
+        try:
+            import asyncio
+            from app.services.browser_harvester import shutdown_warm_browser
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, shutdown_warm_browser)
+        except Exception:
+            pass
+
+    return {"status": "ok", "consent": body.consent}
+
+
 @router.post("/system-config/app-state")
 async def update_app_state(body: AppStateRequest, user: User = Depends(get_current_user)) -> dict[str, str]:
     """Electron pushes active/idle state here."""
@@ -58,7 +109,10 @@ async def update_app_state(body: AppStateRequest, user: User = Depends(get_curre
 
 
 @router.get("/system-config")
-async def get_system_config(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+async def get_system_config(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
     """Return editable configuration thresholds, runtime API keys, and read-only app metadata."""
     stmt = select(SystemConfig.key, SystemConfig.value).where(
         (SystemConfig.key.like("notif.%"))

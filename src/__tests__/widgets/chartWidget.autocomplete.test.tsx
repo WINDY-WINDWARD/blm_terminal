@@ -13,12 +13,21 @@ vi.mock('lightweight-charts', () => {
         setData: vi.fn(),
         update: vi.fn(),
         priceScale: () => ({ applyOptions: vi.fn() }),
+        createPriceLine: vi.fn(),
+        removePriceLine: vi.fn(),
       }),
+      removeSeries: vi.fn(),
+      removePane: vi.fn(),
+      panes: vi.fn(() => [{ setStretchFactor: vi.fn() }]),
+      priceScale: () => ({ applyOptions: vi.fn() }),
       remove: vi.fn(),
       resize: vi.fn(),
     }),
     ColorType: { Solid: 'solid' },
+    LineStyle: { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 },
     CandlestickSeries: 'Candlestick',
+    LineSeries: 'line',
+    HistogramSeries: 'histogram',
   };
 });
 

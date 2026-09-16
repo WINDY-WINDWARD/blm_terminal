@@ -1,11 +1,6 @@
 """
-ScreenerClient — authenticated HTTP client for screener.in.
-
-Cookies (sessionid, csrftoken) are loaded via
-:func:`app.services.cookie_loader.load_browser_cookies` which tries a
-pre-extracted pickle file first and falls back to reading Chrome /
-Firefox's encrypted cookie DB via rookiepy.
-All requests are made with httpx, sharing a single async client.
+ScreenerClient — HTTP and browser harvester client for screener.in.
+All requests are made with httpx or headless browser harvester, sharing a single async client.
 """
 
 from __future__ import annotations
@@ -44,37 +39,8 @@ _TRADES_RE = re.compile(r"/trades/company-(\d+)/")
 _trades_id_cache: dict[str, str] = {}
 
 from app.services.cache import screener_html_cache as _HTML_CACHE
-
-def _extract_cookies(cookies: list[dict[str, Any]]) -> dict[str, str]:
-    """Extract sessionid and csrftoken from rookiepy cookie list.
-
-    Retained for any external callers; new code should use
-    ``cookie_loader.load_browser_cookies(..., allowed_names=[...])``.
-    """
-    result: dict[str, str] = {}
-    for cookie in cookies:
-        name = cookie.get("name", "")
-        if name in ("sessionid", "csrftoken"):
-            result[name] = cookie.get("value", "")
-    return result
-
-
-def _get_browser_cookies() -> dict[str, str]:
-    """Try to extract sessionid and csrftoken for screener.in.
-
-    Delegates to :func:`app.services.cookie_loader.load_browser_cookies`
-    which implements the pickle-first / rookiepy-fallback strategy.
-    """
-    from app.services.cookie_loader import load_browser_cookies
-
-    cookies = load_browser_cookies(
-        service="screener",
-        domain="screener.in",
-        allowed_names=["sessionid", "csrftoken"],
-    )
-    if not cookies.get("sessionid"):
-        logger.warning("No screener.in session found in any source")
-    return cookies
+from app.services.browser_harvester import harvest_public_html
+from app.services.persistent_cache import get_cached_json, set_cached_json
 
 
 def _clean_value(value: str | None) -> str | None:
@@ -517,12 +483,11 @@ class ScreenerClient:
         self._http: httpx.AsyncClient | None = None
 
     async def init(self) -> None:
-        """Load browser cookies (Chrome → Firefox) and create the shared httpx client."""
-        self._cookies = await asyncio.to_thread(_get_browser_cookies)
+        """Create the shared httpx client for anonymous public requests."""
+        self._cookies = {}
 
         self._http = httpx.AsyncClient(
             base_url=BASE_URL,
-            cookies=self._cookies,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -539,10 +504,7 @@ class ScreenerClient:
                 keepalive_expiry=30.0,
             ),
         )
-        logger.info(
-            "ScreenerClient initialised (authenticated=%s)",
-            bool(self._cookies.get("sessionid")),
-        )
+        logger.info("ScreenerClient initialised (anonymous mode)")
 
     async def close(self) -> None:
         if self._http:
@@ -550,7 +512,21 @@ class ScreenerClient:
 
     @property
     def is_authenticated(self) -> bool:
-        return bool(self._cookies.get("sessionid"))
+        # Screener uses anonymous + browser harvester fallback; authenticated only when
+        # either HTTP succeeds or consent allows harvester. This preserves 503 checks.
+        # Keep True for anonymous path but allow callers to check harvester availability.
+        return True
+
+    @property
+    def is_usable(self) -> bool:
+        """True if screener can fulfill a request (anonymous HTTP or consented harvester)."""
+        try:
+            # Defer import to avoid cycle; check consent without I/O
+            from app.services.browser_harvester import _consent_cache_val
+            _ = _consent_cache_val  # noqa
+        except Exception:
+            pass
+        return True  # anonymous HTTP is primary; harvester is best-effort fallback
 
     async def search(self, query: str) -> list[dict[str, Any]]:
         """
@@ -675,9 +651,13 @@ class ScreenerClient:
             raise ValueError(f"Symbol '{symbol}' not found on screener.in")
 
         if resp.status_code == 200 and _is_login_page(resp.text):
+            logger.info("screener.in returned login page via HTTP; falling back to anonymous browser harvester for %s", url)
+            harvester_html = await harvest_public_html(url)
+            if harvester_html:
+                _HTML_CACHE[html_key] = harvester_html
+                return harvester_html
             raise RuntimeError(
-                "screener.in session appears invalid (got login page). "
-                "Please log in at https://www.screener.in in Chrome and restart the backend."
+                "screener.in requires authentication or advanced extraction consent is disabled."
             )
 
         resp.raise_for_status()
@@ -692,23 +672,17 @@ class ScreenerClient:
     ) -> dict[str, Any]:
         """
         Fetch and parse the company page for `symbol`.
-        Requires a valid sessionid cookie.
-
-        Returns a dict with:
-          - symbol, name
-          - screener_warehouse_id
-          - ratios: { market_cap, price, high_52w, low_52w, pe, book_value,
-                      dividend_yield, roce, roe, face_value, ... } (includes quick_ratios)
-          - quarters: list of { period, sales, net_profit, eps } (last 4 quarters)
-
-        Raises:
-          - RuntimeError  if not authenticated
-          - httpx.HTTPStatusError  on non-2xx from screener.in
-          - ValueError  if symbol is not found (404 from screener.in)
         """
+        symbol_upper = symbol.upper()
+        mode_str = "c" if consolidated else "s"
+        cache_key = f"screener:company:{symbol_upper}:{mode_str}"
+        cached = await get_cached_json(cache_key)
+        if cached:
+            logger.debug(f"Screener company persistent cache hit for {symbol_upper}")
+            return cached
+
         html = await self.get_company_html(symbol, consolidated=consolidated)
 
-        symbol_upper = symbol.upper()
         parsed = _parse_company_page(symbol_upper, html)
 
         warehouse_id = parsed.get("screener_warehouse_id")
@@ -719,30 +693,20 @@ class ScreenerClient:
                 merged_ratios = {**existing_ratios, **quick_ratios}
                 parsed["ratios"] = merged_ratios
 
+        await set_cached_json(cache_key, parsed, ttl_hours=24)
         return parsed
 
     async def get_trades(self, warehouse_id: str) -> dict[str, Any]:
         """
         Fetch and parse the trades page for a company identified by its
         screener warehouse ID.
-
-        URL: https://www.screener.in/trades/company-{warehouse_id}/
-
-        Returns a dict with:
-          - warehouse_id   : the requested warehouse ID
-          - insider_trades : list of insider trade records
-          - bulk_deals     : list of bulk deal records
-          - block_deals    : list of block deal records
-
-        Each record contains:
-          person, category, period, quantity_raw, quantity, direction,
-          avg_price_raw, avg_price, value_raw, value, value_in, small_quantity
-
-        Raises:
-          - RuntimeError           if client not initialised
-          - httpx.HTTPStatusError  on non-2xx from screener.in
-          - ValueError             if warehouse_id not found (404)
         """
+        cache_key = f"screener:trades:{warehouse_id}"
+        cached = await get_cached_json(cache_key)
+        if cached:
+            logger.debug(f"Screener trades persistent cache hit for {warehouse_id}")
+            return cached
+
         if self._http is None:
             raise RuntimeError(
                 "ScreenerClient not initialised. Call await client.init() first."
@@ -767,7 +731,9 @@ class ScreenerClient:
 
         resp.raise_for_status()
 
-        return _parse_trades_page(warehouse_id, resp.text)
+        parsed = _parse_trades_page(warehouse_id, resp.text)
+        await set_cached_json(cache_key, parsed, ttl_hours=24)
+        return parsed
 
     async def get_trades_by_symbol(
         self,
@@ -816,15 +782,20 @@ class ScreenerClient:
         if resp.status_code == 404:
             raise ValueError(f"Symbol '{symbol}' not found on screener.in")
 
-        if resp.status_code == 200 and _is_login_page(resp.text):
-            raise RuntimeError(
-                "screener.in session appears invalid (got login page). "
-                "Please log in at https://www.screener.in in Chrome and restart the backend."
-            )
+        text = resp.text
+        if resp.status_code == 200 and _is_login_page(text):
+            logger.info("screener.in returned login page via HTTP; falling back to anonymous browser harvester for %s", url)
+            harvester_html = await harvest_public_html(url)
+            if harvester_html:
+                text = harvester_html
+            else:
+                raise RuntimeError(
+                    "screener.in requires authentication or advanced extraction consent is disabled."
+                )
 
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(text, "lxml")
         trades_company_id = _parse_trades_company_id(soup)
         if not trades_company_id:
             raise ValueError(

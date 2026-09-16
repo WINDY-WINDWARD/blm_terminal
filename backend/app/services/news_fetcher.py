@@ -26,6 +26,8 @@ from app.models.news import NewsArticle
 from app.models.stockuniverse import StockUniverse
 from app.services.nlp_service import analyze_article_dict
 from app.services.mc_nlp import analyze_mc_article_dict
+from app.services.write_queue import enqueue_write_async, PRIO_BULK_DATA
+from app.database import _SyncSessionLocal
 
 
 @dataclass
@@ -290,29 +292,8 @@ class NewsFetcher:
         """Load cookies into the httpx client (called once on init, not on retries)."""
         if self._cookies_loaded:
             return
-        # Try rookiepy first (live Firefox cookies)
-        try:
-            import rookiepy
-            raw = await asyncio.to_thread(rookiepy.firefox, ["moneycontrol.com"])
-            if raw:
-                for c in raw:
-                    raw_domain = c.get("domain")
-                    domain_str: str = str(raw_domain) if raw_domain is not None else ""
-                    name_str: str = str(c.get("name")) if c.get("name") else ""
-                    value_str: str = str(c.get("value")) if c.get("value") else ""
-                    if self._client:
-                        self._client.cookies.set(
-                            name_str, value_str, domain=domain_str if domain_str else ""
-                        )
-                self._cookies_loaded = True
-                logger.info(
-                    "NewsFetcher: loaded %d cookies via rookiepy", len(raw)
-                )
-                return
-        except Exception as e:
-            logger.warning("NewsFetcher: rookiepy failed: %s", str(e)[:80])
 
-        # Fallback: try loading from pickle
+        # Try loading from pickle
         try:
             from app.services.cookie_loader import load_cookies_from_pickle
 
@@ -339,9 +320,7 @@ class NewsFetcher:
                 "NewsFetcher: pickle cookie load failed: %s", str(e)[:80]
             )
 
-        logger.warning(
-            "NewsFetcher: could not load cookies — proceeding without"
-        )
+        logger.info("NewsFetcher: proceeding without pre-extracted cookies")
     
     async def _get_client(self) -> httpx.AsyncClient:
         """Return the persistent client, reinitializing if missing or if the event loop changed."""
@@ -750,9 +729,7 @@ class NewsFetcher:
         if not new_urls:
             return 0
 
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        stored_count = 0
-
+        # Fetch phase — no DB transaction held
         sem = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
         async def bounded_fetch(url: str):
@@ -760,42 +737,40 @@ class NewsFetcher:
                 return await self._fetch_and_parse_article(url)
 
         tasks = [asyncio.create_task(bounded_fetch(url)) for url in new_urls]
-
-        pending_batch = []
-        for i, task in enumerate(asyncio.as_completed(tasks)):
+        fetched: list[dict] = []
+        for task in asyncio.as_completed(tasks):
             try:
                 parsed = await task
-                if parsed is None:
-                    continue
+                if parsed is not None:
+                    fetched.append(parsed)
+            except Exception:
+                logger.exception("Error fetching article")
 
-                parsed["fetched_at"] = now
-                pending_batch.append(parsed)
+        if not fetched:
+            return 0
 
-                if len(pending_batch) >= ARTICLE_BATCH_SIZE:
+        # Write phase — through serial writer queue to prevent lock contention
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for p in fetched:
+            p["fetched_at"] = now
+
+        def _do_bulk_store(items: list[dict]) -> int:
+            count = 0
+            with _SyncSessionLocal() as session:
+                for i in range(0, len(items), ARTICLE_BATCH_SIZE):
+                    batch = items[i : i + ARTICLE_BATCH_SIZE]
                     stmt = (
                         sqlite_insert(NewsArticle)
-                        .values(pending_batch)
+                        .values(batch)
                         .on_conflict_do_nothing(index_elements=["url"])
                     )
-                    await db.execute(stmt)
-                    stored_count += len(pending_batch)
-                    logger.debug(f"Stored batch of {len(pending_batch)} ({i + 1}/{len(new_urls)} processed)")
-                    pending_batch = []
-            except Exception:
-                logger.exception("Error storing article")
+                    session.execute(stmt)
+                    count += len(batch)
+                session.commit()
+            return count
 
-        if pending_batch:
-            stmt = (
-                sqlite_insert(NewsArticle)
-                .values(pending_batch)
-                .on_conflict_do_nothing(index_elements=["url"])
-            )
-            await db.execute(stmt)
-            stored_count += len(pending_batch)
-
-        await db.commit()
-        logger.info("Stored %d new articles", stored_count)
-
+        stored_count = await enqueue_write_async(PRIO_BULK_DATA, _do_bulk_store, fetched)
+        logger.info("Stored %d new articles via write_queue", stored_count)
         return stored_count
 
     def _extract_company_article_urls(self, html: str) -> list[str]:
@@ -1027,77 +1002,73 @@ class NewsFetcher:
             fetch_results = await asyncio.gather(*tasks)
             valid = [r for r in fetch_results if r is not None]
 
-            pending_batch = []
+            articles_to_insert: list[dict] = []
             for parsed in valid:
                 try:
                     parsed["fetched_at"] = now
                     parsed["company_symbol"] = symbol_upper
-                    pending_batch.append(parsed)
-
-                    if len(pending_batch) >= ARTICLE_BATCH_SIZE:
-                        stmt = (
-                            sqlite_insert(NewsArticle)
-                            .values(pending_batch)
-                            .on_conflict_do_nothing(index_elements=["url"])
-                        )
-                        await db.execute(stmt)
-                        total += len(pending_batch)
-                        pending_batch = []
+                    articles_to_insert.append(parsed)
                 except Exception:
                     logger.exception(
                         "fetch_company_news: error storing %s", parsed.get("url")
                     )
 
-            if pending_batch:
-                stmt = (
-                    sqlite_insert(NewsArticle)
-                    .values(pending_batch)
-                    .on_conflict_do_nothing(index_elements=["url"])
-                )
-                await db.execute(stmt)
-                total += len(pending_batch)
+            if articles_to_insert:
+                def _do_store_company_articles(batch_items: list[dict]) -> int:
+                    c = 0
+                    with _SyncSessionLocal() as session:
+                        for i in range(0, len(batch_items), ARTICLE_BATCH_SIZE):
+                            sub = batch_items[i : i + ARTICLE_BATCH_SIZE]
+                            stmt = (
+                                sqlite_insert(NewsArticle)
+                                .values(sub)
+                                .on_conflict_do_nothing(index_elements=["url"])
+                            )
+                            session.execute(stmt)
+                            c += len(sub)
+                        session.commit()
+                    return c
 
-        # 5. Tag already-stored articles that came from the global crawl
-        if tag_urls:
-            try:
-                await db.execute(
-                    sa_update(NewsArticle)
-                    .where(
-                        NewsArticle.url.in_(tag_urls),
-                        or_(
-                            NewsArticle.company_symbol.is_(None),
-                            NewsArticle.company_symbol != symbol_upper,
-                        ),
+                stored_new = await enqueue_write_async(PRIO_BULK_DATA, _do_store_company_articles, articles_to_insert)
+                total += stored_new
+
+        # 5 & 6. Tag already-stored articles and update fetched_at timestamps via write_queue
+        def _do_tag_and_stamp(sym: str, tags: list[str], stamp_time: datetime) -> int:
+            tagged = 0
+            with _SyncSessionLocal() as session:
+                if tags:
+                    session.execute(
+                        sa_update(NewsArticle)
+                        .where(
+                            NewsArticle.url.in_(tags),
+                            or_(
+                                NewsArticle.company_symbol.is_(None),
+                                NewsArticle.company_symbol != sym,
+                            ),
+                        )
+                        .values(company_symbol=sym)
                     )
-                    .values(company_symbol=symbol_upper)
+                    tagged = len(tags)
+                session.execute(
+                    sa_update(NewsArticle)
+                    .where(NewsArticle.company_symbol == sym)
+                    .values(fetched_at=stamp_time)
                 )
-                total += len(tag_urls)
+                session.commit()
+            return tagged
+
+        try:
+            tagged_count = await enqueue_write_async(PRIO_BULK_DATA, _do_tag_and_stamp, symbol_upper, tag_urls, now)
+            total += tagged_count
+            if tag_urls:
                 logger.info(
                     "fetch_company_news: tagged %d existing articles with symbol=%s",
-                    len(tag_urls),
+                    tagged_count,
                     symbol_upper,
                 )
-            except Exception:
-                logger.exception(
-                    "fetch_company_news: failed to tag existing articles for %s",
-                    symbol_upper,
-                )
-
-        # 6. Stamp fetched_at=now on ALL articles for this symbol so the
-        #    staleness check in get_company_news sees a fresh timestamp even
-        #    for articles that were already stored before this run.
-        try:
-            await db.execute(
-                sa_update(NewsArticle)
-                .where(NewsArticle.company_symbol == symbol_upper)
-                .values(fetched_at=now)
-            )
         except Exception:
-            logger.exception(
-                "fetch_company_news: failed to update fetched_at for %s", symbol_upper
-            )
+            logger.exception("fetch_company_news: failed tagging/stamping for %s", symbol_upper)
 
-        await db.commit()
         logger.info(
             "fetch_company_news: done — %d articles stored/tagged for %s",
             total,
@@ -1118,6 +1089,7 @@ async def fetch_iinvest_company_news(
     db: AsyncSession,
     days: int = 30,
     limit: int = 50,
+    refresh: bool = False,
 ) -> int:
     """Fetch and store iinvest news articles for a company.
 
@@ -1128,6 +1100,12 @@ async def fetch_iinvest_company_news(
     Articles are upserted by ``iinvest_story_id`` (unique-indexed). Returns
     the number of new/updated articles. Returns 0 (does not raise) when
     the symbol has no ISIN cached or when the iinvest client is unavailable.
+
+    Matching the iinvest webpage behaviour (e.g. EMUDHRA shows loosely
+    related/stale stories, not strictly ISIN-tagged ones), stories are kept
+    when the server returned them for this ISIN query unless they explicitly
+    list *other* ISINs. Zero-count syncs are NOT cached so a later refresh
+    retries instead of locking in an empty state for 2h.
     """
     from sqlalchemy import select as sa_select
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -1135,6 +1113,18 @@ async def fetch_iinvest_company_news(
     from app.services.iinvest_client import get_iinvest_client
 
     symbol_upper = symbol.upper()
+
+    # Check if we already fetched news for this company recently (within 2 hours)
+    from app.services.persistent_cache import get_cached_json, set_cached_json
+    sync_key = f"news:sync:{symbol_upper}"
+    if not refresh:
+        cached = await get_cached_json(sync_key)
+        # Only honour the gate when a previous sync actually stored articles;
+        # a cached zero-count means "nothing found last time" — retry live.
+        if cached and int(cached.get("count", 0) or 0) > 0:
+            logger.debug("fetch_iinvest_company_news: already synced recently for %s, skipping upstream fetch", symbol_upper)
+            return 0
+
     row = (await db.execute(
         sa_select(_SU.isin).where(_SU.symbol == symbol_upper)
     )).first()
@@ -1163,22 +1153,79 @@ async def fetch_iinvest_company_news(
             )
             return 0
 
+    # --- Paginated fetch: the endpoint returns a mostly-global recent feed
+    # (≈1 company story per 50). Page through until `limit` ISIN-matching
+    # stories are collected (or pages run out) so company-specific items
+    # like the webpage's HDFC list are actually reached.
+    def _extract_stories(payload: Any) -> list[dict]:
+        # Response shape tolerance across versions ({response:{data}},
+        # {data}, {response:{response:{data}}}, bare list).
+        if isinstance(payload, list):
+            return [s for s in payload if isinstance(s, dict)]
+        resp = (payload.get("response", {}) or {})
+        if isinstance(resp, list):
+            return [s for s in resp if isinstance(s, dict)]
+        out = resp.get("data") or payload.get("data") or []
+        if not out and isinstance(resp.get("response", None), dict):
+            out = resp["response"].get("data") or []
+        return [s for s in out if isinstance(s, dict)]
+
+    def _story_isins(story: dict) -> list[str]:
+        # Live `isins` is a SPACE-separated string ("INE040A01034 HDFCBANK.BS
+        # HDFCBANK.NS"), fixtures use lists — accept both, split on any
+        # comma/whitespace/semicolon boundary.
+        import re as _re
+
+        raw = (
+            story.get("isins") or story.get("isinArray")
+            or story.get("isin") or story.get("ISIN") or ""
+        )
+        if isinstance(raw, str):
+            return [s for s in _re.split(r"[,;\s]+", raw.strip()) if s]
+        if isinstance(raw, list):
+            out: list[str] = []
+            for s in raw:
+                out.extend(t for t in _re.split(r"[,;\s]+", str(s).strip()) if t)
+            return out
+        return []
+
+    _MAX_PAGES = 5
+    matched: list[dict] = []
+    pages_fetched = 0
+    scanned = 0
     try:
-        data = await get_iinvest_client().get_news([isin], size=limit)
+        for page in range(1, _MAX_PAGES + 1):
+            data = await get_iinvest_client().get_news([isin], page=page, size=50)
+            pages_fetched = page
+            for story in _extract_stories(data):
+                scanned += 1
+                if isin in _story_isins(story):
+                    matched.append(story)
+                    if len(matched) >= limit:
+                        break
+            if len(matched) >= limit:
+                break
     except Exception as exc:
         logger.warning(
             "fetch_iinvest_company_news: iinvest unavailable for %s: %s",
             symbol_upper, exc,
         )
-        return 0
+        if not matched:
+            return 0
 
-    stories = (data.get("response", {}) or {}).get("data") or []
-    if not stories:
+    if not matched:
+        logger.info(
+            "fetch_iinvest_company_news: 0 articles upserted for %s "
+            "(%d stories scanned across %d pages, none tagged %s) — not caching zero",
+            symbol_upper, scanned, pages_fetched, isin,
+        )
         return 0
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     new_count = 0
-    for story in stories:
+    parsed_items: list[dict] = []
+    for story in matched:
+
         url = story.get("sourceLink") or f"iinvest://{story.get('id', '')}"
         if not url:
             continue
@@ -1196,7 +1243,7 @@ async def fetch_iinvest_company_news(
             source_name=source_name,
         )
 
-        isins = story.get("isins") or [isin]
+        isins = _story_isins(story)
         tickers: list[str] = []
         # iinvest doesn't expose tickers directly; the ISIN → ticker map is
         # done at read-time by the frontend from the company_symbol field.
@@ -1226,50 +1273,85 @@ async def fetch_iinvest_company_news(
             "iinvest_story_id": str(story.get("id", "")),
             "iinvest_published_at": publish_date,
         }
-        # Upsert by url (the primary key). The same iinvest story can be
-        # returned for multiple unrelated companies; the first symbol to
-        # write the row owns the company_symbol tag — later symbols
-        # update the metadata but never overwrite the original tag, and
-        # they get a tickers entry in the entities JSON so downstream
-        # readers can still see they were related. See
-        # backend/tests/test_iinvest_news_fetcher.py for the regression
-        # test that pins this behaviour.
-        from sqlalchemy import case
+        parsed_items.append(parsed)
 
-        update_set = {
-            "source": parsed["source"],
-            "title": parsed["title"],
-            "text": parsed["text"],
-            "top_image": parsed["top_image"],
-            "publish_date": parsed["publish_date"],
-            "fetched_at": parsed["fetched_at"],
-            "sentiment": parsed["sentiment"],
-            "sentiment_score": parsed["sentiment_score"],
-            "confidence": parsed["confidence"],
-            "language": parsed["language"],
-            "entities": parsed["entities"],
-            "threat_level": parsed["threat_level"],
-            "threat_category": parsed["threat_category"],
-            "source_credibility": parsed["source_credibility"],
-            "iinvest_story_id": parsed["iinvest_story_id"],
-            "iinvest_published_at": parsed["iinvest_published_at"],
-            "company_symbol": case(
-                (NewsArticle.company_symbol.is_(None), parsed["company_symbol"]),
-                else_=NewsArticle.company_symbol,
-            ),
-        }
-        stmt = sqlite_insert(NewsArticle).values(**parsed)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["url"],
-            set_=update_set,
-        )
-        await db.execute(stmt)
-        new_count += 1
+    from sqlalchemy import case
 
-    await db.commit()
+    def _do_upsert_iinvest(items: list[dict]) -> int:
+        count = 0
+        with _SyncSessionLocal() as session:
+            # Merge ISIN/ticker tags across fetchers: the same global URL is
+            # returned for many symbols, and a scalar company_symbol can only
+            # name the first writer. Union the per-fetch isins/tickers into
+            # the stored entities JSON so every owning symbol stays findable
+            # via the entities-ISIN read path in routers/news.py.
+            existing_map: dict[str, dict] = {}
+            try:
+                urls = [it["url"] for it in items]
+                for url, ent in session.execute(
+                    select(NewsArticle.url, NewsArticle.entities).where(
+                        NewsArticle.url.in_(urls)
+                    )
+                ).all():
+                    if isinstance(ent, dict):
+                        existing_map[url] = ent
+            except Exception:
+                logger.debug("_do_upsert_iinvest: existing-entities read failed", exc_info=True)
+
+            for item in items:
+                merged_entities = dict(item["entities"] or {})
+                prev = existing_map.get(item["url"]) or {}
+                for key in ("isins", "tickers"):
+                    try:
+                        union = list(dict.fromkeys(
+                            [str(x) for x in list(prev.get(key) or []) + list(merged_entities.get(key) or [])]
+                        ))
+                    except Exception:
+                        union = list(merged_entities.get(key) or [])
+                    merged_entities[key] = union
+                item = {**item, "entities": merged_entities}
+                update_set = {
+                    "source": item["source"],
+                    "title": item["title"],
+                    "text": item["text"],
+                    "top_image": item["top_image"],
+                    "publish_date": item["publish_date"],
+                    "fetched_at": item["fetched_at"],
+                    "sentiment": item["sentiment"],
+                    "sentiment_score": item["sentiment_score"],
+                    "confidence": item["confidence"],
+                    "language": item["language"],
+                    "entities": item["entities"],
+                    "threat_level": item["threat_level"],
+                    "threat_category": item["threat_category"],
+                    "source_credibility": item["source_credibility"],
+                    "iinvest_story_id": item["iinvest_story_id"],
+                    "iinvest_published_at": item["iinvest_published_at"],
+                    "company_symbol": case(
+                        (NewsArticle.company_symbol.is_(None), item["company_symbol"]),
+                        else_=NewsArticle.company_symbol,
+                    ),
+                }
+                stmt = sqlite_insert(NewsArticle).values(**item)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["url"],
+                    set_=update_set,
+                )
+                session.execute(stmt)
+                count += 1
+            session.commit()
+        return count
+
+    if not parsed_items:
+        return 0
+
+    new_count = await enqueue_write_async(PRIO_BULK_DATA, _do_upsert_iinvest, parsed_items)
+    # Only cache successful (non-zero) syncs so empty results retry next time.
+    await set_cached_json(sync_key, {"synced": True, "count": new_count}, ttl_hours=2)
     logger.info(
-        "fetch_iinvest_company_news: %d articles upserted for %s",
-        new_count, symbol_upper,
+        "fetch_iinvest_company_news: %d articles upserted for %s "
+        "(%d matched of %d scanned across %d pages)",
+        new_count, symbol_upper, len(matched), scanned, pages_fetched,
     )
     return new_count
 

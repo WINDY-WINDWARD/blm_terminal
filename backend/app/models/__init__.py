@@ -3,8 +3,10 @@
 from app.models import (  # noqa: F401
     ai_chat,
     ai_picks,
+    api_cache,
     breakout_snapshot,
     corporatefilings,
+    db_alert,
     layout,
     marketcategory,
     news,

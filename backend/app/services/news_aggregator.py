@@ -18,6 +18,8 @@ from app.models.news import NewsArticle
 from app.services.nlp_service import analyze_article_dict, Sentiment
 from app.services.mc_nlp import analyze_mc_article_dict
 from app.services.rss_parser import ParsedArticle, fetch_all_feeds, FetchResult
+from app.services.write_queue import enqueue_write_async, PRIO_BULK_DATA
+from app.database import _SyncSessionLocal
 from app.services.news_sources import (
     ALL_SOURCES,
     HIGH_PRIORITY_SOURCES,
@@ -138,37 +140,35 @@ async def store_articles(
     articles: list[dict[str, Any]],
     batch_size: int = 50,
 ) -> int:
-    """Store articles in database with upsert (skip duplicates).
-
-    Args:
-        db: Database session
-        articles: List of article dictionaries
-        batch_size: Number of articles per batch
-
-    Returns:
-        Number of articles stored
+    """Store articles with deduplication by URL.
+    Routes writes through the serial writer priority queue to eliminate
+    concurrency contention with other workers or UI interactions.
     """
-    stored = 0
+    if not articles:
+        return 0
 
-    for i in range(0, len(articles), batch_size):
-        batch = articles[i:i + batch_size]
+    def _do_store_sync(items: list[dict[str, Any]]) -> int:
+        stored = 0
+        with _SyncSessionLocal() as session:
+            for i in range(0, len(items), batch_size):
+                batch = items[i:i + batch_size]
+                for article in batch:
+                    try:
+                        if article.get("publish_date"):
+                            article["publish_date"] = _naive_datetime(article["publish_date"])
+                        if article.get("fetched_at"):
+                            article["fetched_at"] = _naive_datetime(article["fetched_at"])
 
-        for article in batch:
-            try:
-                if article.get("publish_date"):
-                    article["publish_date"] = _naive_datetime(article["publish_date"])
-                if article.get("fetched_at"):
-                    article["fetched_at"] = _naive_datetime(article["fetched_at"])
+                        stmt = sqlite_insert(NewsArticle).values(article)
+                        stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
+                        session.execute(stmt)
+                        stored += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to store article {article.get('url')}: {e}")
+            session.commit()
+        return stored
 
-                stmt = sqlite_insert(NewsArticle).values(article)
-                stmt = stmt.on_conflict_do_nothing(index_elements=["url"])
-                await db.execute(stmt)
-                stored += 1
-            except Exception as e:
-                logger.debug(f"Failed to store article {article.get('url')}: {e}")
-
-    await db.commit()
-    return stored
+    return await enqueue_write_async(PRIO_BULK_DATA, _do_store_sync, articles)
 
 
 async def fetch_store_and_return(

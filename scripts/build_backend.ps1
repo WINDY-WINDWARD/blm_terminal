@@ -21,6 +21,10 @@ if (Test-Path ".venv\Scripts\python.exe") {
 & $PythonCmd -m pip install pyinstaller
 
 # Build the executable
+# --collect-all camoufox / apify_fingerprint_datapoints: Camoufox needs its
+# bundled data files (e.g. input-network-definition.zip) at runtime. Without
+# them the frozen exe fails to launch the persistent warm browser with
+# "No such file or directory ... _MEI*/apify_fingerprint_datapoints/...".
 & $PyInstallerCmd `
     --name blm-backend `
     --onefile `
@@ -29,10 +33,12 @@ if (Test-Path ".venv\Scripts\python.exe") {
     --add-data "app/assets;app/assets" `
     --hidden-import "aiosqlite" `
     --hidden-import "sqlalchemy.dialects.sqlite" `
-    --hidden-import "rookiepy" `
     --hidden-import "newspaper" `
     --hidden-import "newspaper.extractors" `
     --hidden-import "passlib.handlers.bcrypt" `
+    --collect-all "camoufox" `
+    --collect-all "apify_fingerprint_datapoints" `
+    --collect-all "language_tags" `
     main.py
 
 Write-Host "Build complete! Executable is at backend\dist\blm-backend.exe"

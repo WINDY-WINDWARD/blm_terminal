@@ -4,8 +4,8 @@ Extracted from ``app/backgroundtasks/_impl.py``.  Holds the
 market-data sync cores (work bodies).
 
 ``market_data`` is now managed by the orchestrator — it runs as
-Stage 7 of the startup/nightly pipeline and on a ``*/5 * * * *``
-cron scheduler during market hours (see
+Stage 7 of the startup/nightly pipeline and on a ``*/20 * * * *``
+cron scheduler during market hours with one freeze sync after close (see
 ``Orchestrator._run_market_data_scheduler``).
 
 Public functions (4):
@@ -94,27 +94,14 @@ def _seconds_until_market_open() -> float:
 
 
 async def _refresh_market_data_async() -> None:
-    """Async helper: refresh all market data using AsyncSession.
+    """Local aggregator — delegates to market_local (no network)."""
+    from app.services.data_sync.market_local import _refresh_market_data_local_async as _local
 
-    Uses AsyncSessionLocal (NullPool) — called via _run_async() which
-    creates a new event loop per worker thread. NullPool is already
-    thread-safe; each ``engine.connect()`` opens a fresh DBAPI connection
-    bound to the loop that opened it.
-    """
-    from app.database import AsyncSessionLocal
-    from app.services.mc_market_fetcher import market_data_fetcher
-
-    async with AsyncSessionLocal() as session:
-        await market_data_fetcher.refresh_all(session)
+    await _local()
 
 
 def _market_data_sync() -> None:
-    """Fetch and store all industry and sector data from MoneyControl."""
-    from app.backgroundtasks._runtime import _run_async
+    """Build industry/sector aggregates locally from stock_universe (no network)."""
+    from app.services.data_sync.market_local import _market_local_sync
 
-    try:
-        logger.info("market_data_sync: starting")
-        _run_async(_refresh_market_data_async())
-        logger.info("market_data_sync: complete")
-    except Exception:
-        logger.exception("market_data_sync: unhandled exception; will retry next cycle")
+    _market_local_sync()

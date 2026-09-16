@@ -15,16 +15,14 @@
 
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
+import { getPythonBackendUrl } from '@/lib/backendUrl'
 
 export const dynamic = 'force-dynamic'
-
-const PYTHON_BACKEND_URL =
-  process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455'
 
 function buildUpstreamUrl(params: { path: string[] }, request: NextRequest): string {
   const apiPath = params.path.join('/')
   const search = request.nextUrl.search // preserves ?foo=bar&baz=qux
-  return `${PYTHON_BACKEND_URL}/api/${apiPath}${search}`
+  return `${getPythonBackendUrl()}/api/${apiPath}${search}`
 }
 
 async function proxyRequest(
@@ -57,8 +55,8 @@ async function proxyRequest(
 
     const isSse = request.headers.get('accept')?.includes('text/event-stream')
     
-    // Give streams a very long timeout (10 mins) so reasoning models aren't cut off
-    const timeoutMs = isSse ? 600000 : 15000
+    // Give streams 10 mins; give standard requests 60s to allow for cold-start web harvesting / rate-limited endpoints
+    const timeoutMs = isSse ? 600000 : 60000
 
     const upstream = await fetch(upstreamUrl, {
       method: request.method,

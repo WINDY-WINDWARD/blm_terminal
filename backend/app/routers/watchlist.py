@@ -19,6 +19,8 @@ from app.schemas.watchlist import (
     WatchlistOut,
     WatchlistWithCountOut,
 )
+from app.services.write_queue import enqueue_write_async, PRIO_UI_ACTION
+from app.database import _SyncSessionLocal
 
 router = APIRouter()
 
@@ -28,11 +30,23 @@ async def get_default_watchlist_id(db: AsyncSession, current_user: User) -> int:
     wl = (await db.execute(q)).scalar_one_or_none()
     if wl:
         return wl.id
-    wl = WatchlistModel(name="Default", user_id=current_user.id)
-    db.add(wl)
-    await db.commit()
-    await db.refresh(wl)
-    return wl.id
+    def _create_default_sync() -> int:
+        with _SyncSessionLocal() as session:
+            existing = session.execute(
+                select(WatchlistModel).where(
+                    WatchlistModel.user_id == current_user.id,
+                    WatchlistModel.name == "Default"
+                )
+            ).scalar_one_or_none()
+            if existing:
+                return existing.id
+            new_wl = WatchlistModel(name="Default", user_id=current_user.id)
+            session.add(new_wl)
+            session.commit()
+            session.refresh(new_wl)
+            return new_wl.id
+
+    return await enqueue_write_async(PRIO_UI_ACTION, _create_default_sync)
 
 
 @router.get("/watchlists", response_model=List[WatchlistWithCountOut], tags=["watchlist"])
@@ -73,11 +87,21 @@ async def create_watchlist(
     db: AsyncSession = Depends(get_db),
 ) -> WatchlistOut:
     """Create a new watchlist with the given name."""
-    watchlist = WatchlistModel(name=body.name, user_id=current_user.id)
-    db.add(watchlist)
-    await db.commit()
-    await db.refresh(watchlist)
-    return WatchlistOut.model_validate(watchlist)
+    def _create_wl_sync() -> dict:
+        with _SyncSessionLocal() as session:
+            wl = WatchlistModel(name=body.name, user_id=current_user.id)
+            session.add(wl)
+            session.commit()
+            session.refresh(wl)
+            return {
+                "id": wl.id,
+                "name": wl.name,
+                "user_id": wl.user_id,
+                "created_at": wl.created_at,
+            }
+
+    wl_dict = await enqueue_write_async(PRIO_UI_ACTION, _create_wl_sync)
+    return WatchlistOut.model_validate(wl_dict)
 
 
 @router.delete("/watchlists/{watchlist_id}", tags=["watchlist"])
@@ -98,8 +122,14 @@ async def delete_watchlist(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot delete the Default watchlist",
         )
-    await db.delete(watchlist)
-    await db.commit()
+    def _del_wl_sync() -> None:
+        with _SyncSessionLocal() as session:
+            wl = session.get(WatchlistModel, watchlist_id)
+            if wl:
+                session.delete(wl)
+                session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _del_wl_sync)
     return {"ok": True}
 
 
@@ -159,15 +189,33 @@ async def add_watchlist_item(
     if row is not None:
         return row  # type: ignore[return-value]
 
-    item = WatchlistItemModel(
-        watchlist_id=watchlist_id,
-        symbol=body.symbol,
-        exchange=body.exchange,
-    )
-    db.add(item)
-    await db.commit()
-    await db.refresh(item)
-    return item  # type: ignore[return-value]
+    def _add_item_sync() -> dict:
+        with _SyncSessionLocal() as session:
+            new_item = WatchlistItemModel(
+                watchlist_id=watchlist_id,
+                symbol=body.symbol,
+                exchange=body.exchange,
+            )
+            session.add(new_item)
+            session.commit()
+            session.refresh(new_item)
+            return {
+                "id": new_item.id,
+                "watchlist_id": new_item.watchlist_id,
+                "symbol": new_item.symbol,
+                "exchange": new_item.exchange,
+            }
+
+    item_dict = await enqueue_write_async(PRIO_UI_ACTION, _add_item_sync)
+
+    # Warm deals cache asynchronously for the newly added symbol
+    try:
+        from app.services.data_sync.deals import warm_symbol_deals
+        warm_symbol_deals(body.symbol)
+    except Exception:
+        pass
+
+    return item_dict  # type: ignore[return-value]
 
 
 @router.delete("/watchlists/{watchlist_id}/items/{item_id}", tags=["watchlist"])
@@ -195,8 +243,14 @@ async def remove_watchlist_item(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Item {item_id} does not belong to watchlist {watchlist_id}",
         )
-    await db.delete(item)
-    await db.commit()
+    def _delete_item_sync() -> None:
+        with _SyncSessionLocal() as session:
+            db_item = session.get(WatchlistItemModel, item_id)
+            if db_item:
+                session.delete(db_item)
+                session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _delete_item_sync)
     return {"ok": True}
 
 
@@ -222,23 +276,33 @@ async def bulk_replace_watchlist_items(
             detail=f"Watchlist {watchlist_id} not found",
         )
 
-    # Delete existing items
-    await db.execute(
-        delete(WatchlistItemModel).where(
-            WatchlistItemModel.watchlist_id == watchlist_id
-        )
-    )
+    # Delete existing items and insert new items via single serialized write
+    def _bulk_replace_sync(target_wlid: int, symbols: list[str], exch: str) -> None:
+        with _SyncSessionLocal() as session:
+            session.execute(
+                delete(WatchlistItemModel).where(
+                    WatchlistItemModel.watchlist_id == target_wlid
+                )
+            )
+            for sym in symbols:
+                item = WatchlistItemModel(
+                    watchlist_id=target_wlid,
+                    symbol=sym,
+                    exchange=exch,
+                )
+                session.add(item)
+            session.commit()
 
-    # Insert new items (deduped and uppercased by the schema validator)
-    for sym in body.symbols:
-        item = WatchlistItemModel(
-            watchlist_id=watchlist_id,
-            symbol=sym,
-            exchange=body.exchange,
-        )
-        db.add(item)
+    await enqueue_write_async(PRIO_UI_ACTION, _bulk_replace_sync, watchlist_id, list(body.symbols), body.exchange)
 
-    await db.commit()
+    # Warm deals cache asynchronously for newly added symbols
+    try:
+        from app.services.data_sync.deals import warm_symbol_deals
+        for s in body.symbols:
+            warm_symbol_deals(s)
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "watchlist_id": watchlist_id,
@@ -293,15 +357,25 @@ async def add_default_watchlist_item(
     if row is not None:
         return row  # type: ignore[return-value]
 
-    item = WatchlistItemModel(
-        watchlist_id=default_id,
-        symbol=body.symbol,
-        exchange=body.exchange,
-    )
-    db.add(item)
-    await db.commit()
-    await db.refresh(item)
-    return item  # type: ignore[return-value]
+    def _add_legacy_sync() -> dict:
+        with _SyncSessionLocal() as session:
+            new_item = WatchlistItemModel(
+                watchlist_id=default_id,
+                symbol=body.symbol,
+                exchange=body.exchange,
+            )
+            session.add(new_item)
+            session.commit()
+            session.refresh(new_item)
+            return {
+                "id": new_item.id,
+                "watchlist_id": new_item.watchlist_id,
+                "symbol": new_item.symbol,
+                "exchange": new_item.exchange,
+            }
+
+    item_dict = await enqueue_write_async(PRIO_UI_ACTION, _add_legacy_sync)
+    return item_dict  # type: ignore[return-value]
 
 
 @router.delete("/watchlist/{item_id}", tags=["watchlist-legacy"])
@@ -323,6 +397,12 @@ async def remove_default_watchlist_item(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Item {item_id} does not belong to the Default watchlist",
         )
-    await db.delete(item)
-    await db.commit()
+    def _delete_legacy_sync() -> None:
+        with _SyncSessionLocal() as session:
+            db_item = session.get(WatchlistItemModel, item_id)
+            if db_item:
+                session.delete(db_item)
+                session.commit()
+
+    await enqueue_write_async(PRIO_UI_ACTION, _delete_legacy_sync)
     return {"ok": True}

@@ -908,6 +908,7 @@ async def list_stock_universe() -> dict[str, Any]:
                     "industryInfo": r.industry_info or {},
                     "lastUpdateTime": r.last_update_time,
                     "screenerTradesId": r.screener_trades_id,
+                    "marketCapCr": r.market_cap_cr,
                 }
                 for r in rows
             ]
@@ -946,6 +947,7 @@ async def get_stock_universe(
             "industryInfo": rec.industry_info or {},
             "lastUpdateTime": rec.last_update_time,
             "screenerTradesId": rec.screener_trades_id,
+            "marketCapCr": rec.market_cap_cr,
         }
 
     if symbol is not None:
@@ -999,6 +1001,7 @@ async def search_stock_universe(prefix: str) -> dict[str, Any]:
                     "industryInfo": r.industry_info or {},
                     "lastUpdateTime": r.last_update_time,
                     "screenerTradesId": r.screener_trades_id,
+                    "marketCapCr": r.market_cap_cr,
                 }
                 for r in rows
             ]
@@ -1454,7 +1457,7 @@ async def get_morningstar_fairvalue(
 
     Returns per symbol: symbol, morningstarId, fairValue, updatedAt.
     In bulk mode returns a dict keyed by symbol; failed symbols return {"error": "<message>"}.
-    Requires a valid Morningstar browser session (rookiepy).
+    Uses anonymous browser harvester or cached public data.
     """
     from app.services.morningstar_client import morningstar_client
 
@@ -1597,6 +1600,22 @@ async def get_company_news(
         sym = sym.upper()
         start_date = datetime.now() - timedelta(days=days)
 
+        # ISIN for the entities-ISIN read path: iinvest rows keep the
+        # first-writer company_symbol (scalar), so symbol-owned stories are
+        # also matched via their entities ISIN tags (mirrors routers/news.py).
+        isin: str | None = None
+        try:
+            async with AsyncSessionLocal() as db_isin:
+                isin = (
+                    await db_isin.execute(
+                        sa_select(StockUniverseModel.isin).where(
+                            StockUniverseModel.symbol == sym
+                        )
+                    )
+                ).scalar_one_or_none()
+        except Exception:
+            logger.debug("get_company_news: ISIN lookup failed for %s", sym)
+
         # Determine which source to actually try, and trigger fetches.
         iinvest_attempted = False
         mc_attempted = False
@@ -1650,8 +1669,14 @@ async def get_company_news(
             else:
                 src_filter = NewsArticle.source.like("iinvest:%")
 
+        company_match = NewsArticle.company_symbol == sym
+        if isin:
+            company_match = or_(
+                company_match,
+                NewsArticle.entities.like(f'%"{isin}"%'),
+            )
         conditions = [
-            NewsArticle.company_symbol == sym,
+            company_match,
             src_filter,
             or_(
                 NewsArticle.publish_date >= start_date,

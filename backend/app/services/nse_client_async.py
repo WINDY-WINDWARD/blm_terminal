@@ -63,6 +63,28 @@ NSE_FIELD_MAP_CHANGE_RANGES: dict[str, str] = {
     "fiveYearPercent": "five_year_chng_per",
 }
 
+#: NSE reports total market capitalisation in **rupees**;
+#: the warehouse stores it in **Rs Cr**.
+_INR_PER_CR = 1e7
+
+
+def mcap_cr_from_trade_info(trade_info: dict[str, Any] | None) -> float | None:
+    """Extract market cap in Rs Cr from a getSymbolData ``tradeInfo`` block.
+
+    Returns None when the block is missing or ``totalMarketCap`` is absent
+    / non-positive (e.g. suspended series) so callers never clobber a
+    previously stored value with NULL.
+    """
+    if not isinstance(trade_info, dict):
+        return None
+    try:
+        raw = float(trade_info.get("totalMarketCap"))
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    return raw / _INR_PER_CR
+
 
 class NSEClientAsync:
     """
@@ -403,6 +425,7 @@ class NSEClientAsync:
                         price_info = temp.get("priceInfo", {})
                         sec_info = temp.get("secInfo", {})
                         meta = temp.get("metaData", {})
+                        trade_info = temp.get("tradeInfo", {})
 
                         def _parse_date(date_str: str | None) -> datetime | None:
                             if not date_str or date_str == "-":
@@ -430,6 +453,8 @@ class NSEClientAsync:
                             "high_52w_date": _parse_date(price_info.get("yearHightDt")),
                             "low_52w_date": _parse_date(price_info.get("yearLowDt")),
                             "series": active_s,
+                            "isin": meta_payload.get("isin") or meta.get("isin"),
+                            "market_cap_cr": mcap_cr_from_trade_info(trade_info),
                         }
                         logger.debug("NSE: metadata fetched for %s", symbol)
                         return StockUniverse(**tempdict)

@@ -1,9 +1,9 @@
 import re
 from typing import Any
 from app.services.nlp_service import (
-    Sentiment, 
-    ThreatLevel, 
-    SourceCredibility, 
+    Sentiment,
+    ThreatLevel,
+    SourceCredibility,
     ExtractedEntities,
     detect_language,
     extract_entities,
@@ -11,6 +11,31 @@ from app.services.nlp_service import (
     analyze_sentiment,
     classify_threat
 )
+
+# Kill-switch for MoneyControl NLP (noisy entity/sentiment output).
+# When False, analyze_mc_article_dict returns a neutral stub — same shape,
+# no analysis. Covers both MC call sites (news_fetcher scrape +
+# news_aggregator RSS). iinvest uses analyze_article_dict directly and is
+# unaffected. Flip to True to restore rule-based MC analysis.
+MC_NLP_ENABLED = False
+
+
+def _neutral_stub(headline: str = "", summary: str = "", source_name: str = "") -> dict[str, Any]:
+    """Neutral placeholder when MC NLP is disabled — identical dict shape."""
+    from dataclasses import asdict
+
+    return {
+        "sentiment": Sentiment.NEUTRAL.value,
+        "sentiment_score": 0.0,
+        "confidence": 0.0,
+        "language": detect_mc_language(headline, summary),
+        "entities": asdict(ExtractedEntities(
+            countries=[], organizations=[], people=[], tickers=[]
+        )),
+        "threat_level": ThreatLevel.LOW.value,
+        "threat_category": "general",
+        "source_credibility": get_source_credibility(source_name).value,
+    }
 
 def analyze_mc_sentiment(headline: str, summary: str = "") -> dict[str, Any]:
     """MoneyControl specific sentiment rules."""
@@ -58,6 +83,8 @@ def detect_mc_language(headline: str, summary: str = "") -> str:
 
 def analyze_mc_article_dict(headline: str, summary: str = "", source_name: str = "") -> dict[str, Any]:
     """Wrapper that returns dict matching analyze_article_dict structure."""
+    if not MC_NLP_ENABLED:
+        return _neutral_stub(headline, summary, source_name)
     sentiment = analyze_mc_sentiment(headline, summary)
     threat = classify_mc_threat(headline, summary)
     lang = detect_mc_language(headline, summary)

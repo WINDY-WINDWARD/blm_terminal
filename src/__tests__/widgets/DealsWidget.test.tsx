@@ -68,45 +68,55 @@ const realIinvestInsider = {
   },
 };
 
+const mockBlockDeals = {
+  status: true,
+  response: {
+    data: [
+      { f_32: 'BLOCK_TRADER_X', f_33: 'BUY', f_34: 1000000, f_36: 500, f_35: '15 Jan 26' },
+      { f_32: 'BLOCK_TRADER_Y', f_33: 'SELL', f_34: 800000, f_36: 510, f_35: '14 Jan 26' },
+    ],
+  },
+};
+
+const mockBulkDeals = {
+  status: true,
+  response: {
+    data: [
+      { f_32: 'BULK_CLIENT_A', f_33: 'BUY', f_34: 50000, f_36: 100, f_35: '10 Jan 26' },
+      { f_32: 'BULK_CLIENT_B', f_33: 'SELL', f_34: 30000, f_36: 101, f_35: '09 Jan 26' },
+    ],
+  },
+};
+
+const mockPledgedShares = {
+  status: true,
+  response: {
+    columns: [
+      { field: 'f_5',  displayName: 'Promoter Name', dataType: 'String' },
+      { field: 'f_7',  displayName: 'No of Shares',  dataType: 'Number' },
+      { field: 'f_8',  displayName: 'Percentage',    dataType: 'Number' },
+    ],
+    data: [
+      { f_5: 'Promoter', f_7: 100000, f_8: 50.0 },
+    ],
+  },
+};
+
 vi.mock('@/lib/iinvest', () => ({
-  fetchIinvestPledgedShares: vi.fn(async () => ({
-    status: true,
-    response: {
-      columns: [
-        { field: 'f_5',  displayName: 'Promoter Name', dataType: 'String' },
-        { field: 'f_7',  displayName: 'No of Shares',  dataType: 'Number' },
-        { field: 'f_8',  displayName: 'Percentage',    dataType: 'Number' },
-      ],
-      data: [
-        { f_5: 'Promoter', f_7: 100000, f_8: 50.0 },
-      ],
-    },
+  fetchIinvestAll: vi.fn(async () => ({
+    pledged_shares: mockPledgedShares,
+    key_shareholders: realKeyShareholders,
+    sast: realSast,
+    insider_trading: realIinvestInsider,
+    block_deals: mockBlockDeals,
+    bulk_deals: mockBulkDeals,
   })),
+  fetchIinvestPledgedShares: vi.fn(async () => mockPledgedShares),
   fetchIinvestKeyShareholders: vi.fn(async () => realKeyShareholders),
   fetchIinvestSast: vi.fn(async () => realSast),
   fetchIinvestInsiderTrading: vi.fn(async () => realIinvestInsider),
-  fetchIinvestBlockDeals: vi.fn(async () => {
-    return {
-      status: true,
-      response: {
-        data: [
-          { f_32: 'BLOCK_TRADER_X', f_33: 'BUY', f_34: 1000000, f_36: 500, f_35: '15 Jan 26' },
-          { f_32: 'BLOCK_TRADER_Y', f_33: 'SELL', f_34: 800000, f_36: 510, f_35: '14 Jan 26' },
-        ],
-      },
-    };
-  }),
-  fetchIinvestBulkDeals: vi.fn(async () => {
-    return {
-      status: true,
-      response: {
-        data: [
-          { f_32: 'BULK_CLIENT_A', f_33: 'BUY', f_34: 50000, f_36: 100, f_35: '10 Jan 26' },
-          { f_32: 'BULK_CLIENT_B', f_33: 'SELL', f_34: 30000, f_36: 101, f_35: '09 Jan 26' },
-        ],
-      },
-    };
-  }),
+  fetchIinvestBlockDeals: vi.fn(async () => mockBlockDeals),
+  fetchIinvestBulkDeals: vi.fn(async () => mockBulkDeals),
 }));
 
 // ── screener fetch mock (returns empty for the 3 screener tabs) ─────────────

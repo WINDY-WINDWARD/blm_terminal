@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 import type { FundsData } from '@/lib/openalgo';
 import type { NewsArticle } from '@/lib/newsSocket';
+import type { ActiveIndicator } from '@/lib/indicators/types';
 
 /** Live tick data shape — LTP-centric, populated by marketWs SymbolData */
 export interface TickData {
@@ -11,6 +12,8 @@ export interface TickData {
   pChange?: number;
   yearHigh?: number;
   yearLow?: number;
+  /** Epoch ms when this tick was received — enables tick-age staleness checks */
+  updatedAt?: number;
 }
 
 // ─── Dual Storage (Syncs between window.localStorage and Electron appData) ───
@@ -94,6 +97,12 @@ export interface AuthState {
 export const authAtom = atomWithStorage<AuthState | null>('terminal.auth', null);
 
 export const isAuthenticatedAtom = atom((get) => get(authAtom) !== null);
+
+/** Legal consent for generic browser automation / advanced scraping */
+export const advancedScrapingConsentAtom = atomWithStorage<boolean | null>(
+  'terminal.advancedScrapingConsent',
+  null,
+);
 
 // ─── Existing Atoms ───────────────────────────────────────────────────────────
 
@@ -411,3 +420,11 @@ export const layoutSyncStatusAtom = atom<LayoutSyncStatus>({
   status: 'synced',
   pendingCount: 0,
 });
+
+// ─── Chart Indicators ────────────────────────────────────────────────────────
+
+/** Persisted chart indicator set — clamped via clampIndicators() on load. */
+export const chartIndicatorsAtom = atomWithStorage<{ v: number; items: ActiveIndicator[] }>(
+  'terminal.chartIndicators',
+  { v: 1, items: [] },
+);

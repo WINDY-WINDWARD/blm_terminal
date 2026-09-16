@@ -102,9 +102,14 @@ async def get_industry_stocks(
             "Use GET /markets/industries to list all available industries.",
         )
 
-    # Get stocks and filter in Python, but pre-filter in DB with LIKE for performance
-    stmt = select(MarketCategoryStock).where(MarketCategoryStock.categories.cast(String).like(f'%"{slug}"%'))
-    result = await db.execute(stmt)
+    # Pre-filter in DB with parameterized LIKE (escaped) then exact Python filter
+    from sqlalchemy import bindparam
+    escaped = slug.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pat = f'%"{escaped}"%'
+    stmt = select(MarketCategoryStock).where(
+        MarketCategoryStock.categories.cast(String).like(bindparam("pat", pat), escape="\\")
+    )
+    result = await db.execute(stmt, {"pat": pat})
     all_stocks = result.scalars().all()
 
     # Filter stocks that have this industry in their categories
@@ -149,9 +154,13 @@ async def get_sector_stocks(
             "Use GET /markets/sectors to list all available sectors.",
         )
 
-    # Get stocks and filter in Python, but pre-filter in DB with LIKE for performance
-    stmt = select(MarketCategoryStock).where(MarketCategoryStock.categories.cast(String).like(f'%"{slug}"%'))
-    result = await db.execute(stmt)
+    from sqlalchemy import bindparam
+    escaped = slug.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pat = f'%"{escaped}"%'
+    stmt = select(MarketCategoryStock).where(
+        MarketCategoryStock.categories.cast(String).like(bindparam("pat", pat), escape="\\")
+    )
+    result = await db.execute(stmt, {"pat": pat})
     all_stocks = result.scalars().all()
 
     # Filter stocks that have this sector in their categories

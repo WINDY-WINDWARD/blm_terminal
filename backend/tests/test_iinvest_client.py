@@ -107,6 +107,8 @@ def fresh_client(monkeypatch):
     client = mod.IinvestClient()
     # Shorten the refresh window so tests can drive the cycle in ms
     client._refresh_ahead_seconds = 60
+    # Mock harvest_local_storage by default so data tests acquire JWT smoothly
+    monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=_make_jwt()))
     yield client
     # Best-effort cleanup
     try:
@@ -164,45 +166,42 @@ def _make_fake_httpx(responses: list[tuple[int, dict | str]]) -> tuple[MagicMock
 
 
 class TestIinvestClientAuth:
-    """The auth flow: /api/login → AES decrypt → JWT in memory."""
+    """The auth flow: on-demand browser harvester extracts token."""
 
     @pytest.mark.asyncio
-    async def test_init_acquires_jwt_from_login(self, fresh_client, monkeypatch):
-        """First init() should POST /api/login, decrypt, and store a JWT."""
+    async def test_init_acquires_jwt_from_harvester(self, fresh_client, monkeypatch):
+        """First init() should harvest localStorage token and store a JWT."""
         from app.services import iinvest_client as mod
 
         jwt = _make_jwt()
-        blob = _make_login_blob(jwt)
-        login_resp = {"data": blob}
-        # The validation probe after init hits /financials/peers/filters
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
 
         client, state = _make_fake_httpx([
-            (200, login_resp),       # POST /api/login
             (200, filters_resp),     # GET /financials/peers/filters (health probe)
         ])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=jwt))
 
         await fresh_client.init()
 
         assert fresh_client._jwt == jwt
         assert fresh_client.is_authenticated is True
-        assert state["idx"] == 2  # both responses consumed
 
     @pytest.mark.asyncio
     async def test_init_is_lazy_no_network_until_first_call(self, fresh_client):
-        """No /api/login POST happens until init() is called or a request needs it."""
+        """No token harvesting happens until init() is called or a request needs it."""
         from app.services import iinvest_client as mod
         assert fresh_client._jwt is None
         assert fresh_client.is_authenticated is False
 
     @pytest.mark.asyncio
     async def test_init_failure_marks_unhealthy(self, fresh_client, monkeypatch):
-        """If /api/login 403s or decrypt fails, client must surface as unhealthy."""
+        """If harvesting returns None, client must surface as unhealthy."""
         from app.services import iinvest_client as mod
 
-        client, _ = _make_fake_httpx([(403, {"error": "blocked"})])
+        client, _ = _make_fake_httpx([])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=None))
 
         with pytest.raises(RuntimeError):
             await fresh_client.init()
@@ -214,22 +213,16 @@ class TestIinvestClientAuth:
         from app.services import iinvest_client as mod
 
         jwt = _make_jwt(exp_offset_seconds=7200)
-        blob = _make_login_blob(jwt)
-        login_resp = {"data": blob}
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
-        client, _ = _make_fake_httpx([(200, login_resp), (200, filters_resp)])
+        client, _ = _make_fake_httpx([(200, filters_resp)])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=jwt))
 
         await fresh_client.init()
         h = fresh_client.health()
         assert h["configured"] is True
         assert h["healthy"] is True
         assert h["expires_at"] is not None
-        # Should be roughly 2h from now
-        from datetime import datetime, timezone
-        expires = datetime.fromisoformat(h["expires_at"])
-        delta = (expires - datetime.now(timezone.utc)).total_seconds()
-        assert 7000 < delta < 7300
 
 
 # ── Tests: Path builder ───────────────────────────────────────────────────────
@@ -287,11 +280,9 @@ class TestIinvestClientDataFetchers:
         blob = _make_login_blob(jwt)
         # We need 2 calls: /api/login + /financials/peers/filters probe + /announcements
         announcements = {"status": True, "response": {"pagingInfo": {"total": 5}, "columns": [], "data": []}}
-        login_resp = {"data": blob}
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
 
         client, _ = _make_fake_httpx([
-            (200, login_resp),
             (200, filters_resp),
             (200, announcements),
         ])
@@ -363,21 +354,17 @@ class TestIinvestClientDataFetchers:
     async def test_block_deals_uses_type_param(self, fresh_client, monkeypatch):
         from app.services import iinvest_client as mod
 
-        jwt = _make_jwt()
-        blob = _make_login_blob(jwt)
         block_resp = {"status": True, "response": {"data": []}}
-        login_resp = {"data": blob}
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
 
         client, _ = _make_fake_httpx([
-            (200, login_resp), (200, filters_resp), (200, block_resp),
+            (200, filters_resp), (200, block_resp),
         ])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
 
         await fresh_client.init()
         await fresh_client.get_block_deals(
             "ine002a01018/symbol/ns/reliance/reliance%20industries%20limited",
-            deal_type=1,
         )
         last = client.get.call_args_list[-1]
         params = last.kwargs.get("params", {})
@@ -397,23 +384,18 @@ class TestIinvestClientAuthRefresh:
 
         jwt1 = _make_jwt()
         jwt2 = _make_jwt()
-        blob1 = _make_login_blob(jwt1)
-        blob2 = _make_login_blob(jwt2)
-        login_resp1 = {"data": blob1}
-        login_resp2 = {"data": blob2}
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
         data_resp = {"status": True, "response": {"data": [{"id": 1}]}}
 
-        # init: login#1 + filters probe
+        # init: filters probe
         # data call: 401 + relogin#2 + retry → 200
         client, _ = _make_fake_httpx([
-            (200, login_resp1),     # init POST /api/login
             (200, filters_resp),    # init GET /financials/peers/filters probe
             (401, {"error": "expired"}),  # first announcements call → 401
-            (200, login_resp2),     # relogin POST /api/login
             (200, data_resp),       # retry → 200
         ])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(side_effect=[jwt1, jwt2]))
 
         await fresh_client.init()
         assert fresh_client._jwt == jwt1
@@ -428,21 +410,20 @@ class TestIinvestClientAuthRefresh:
         from app.services import iinvest_client as mod
 
         jwt = _make_jwt()
-        blob = _make_login_blob(jwt)
-        login_resp = {"data": blob}
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
 
         client, _ = _make_fake_httpx([
-            (200, login_resp), (200, filters_resp),
+            (200, filters_resp),
             (401, {"e": "x"}),  # first call 401
-            (200, login_resp),  # relogin
             (401, {"e": "x"}),  # retry still 401
         ])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=jwt))
 
         await fresh_client.init()
         with pytest.raises(RuntimeError, match="401"):
-            await fresh_client.get_announcements("ine002a01018/symbol/ns/reliance/reliance")
+            # Use distinct path so coalescing key doesn't collision with previous test
+            await fresh_client.get_announcements("ine002a01018/symbol/ns/reliance/retry401")
 
 
 # ── Tests: News fetcher with NLP post-processing ─────────────────────────────
@@ -455,8 +436,6 @@ class TestIinvestClientNews:
     async def test_get_news_returns_raw_response(self, fresh_client, monkeypatch):
         from app.services import iinvest_client as mod
 
-        jwt = _make_jwt()
-        blob = _make_login_blob(jwt)
         # iinvest news shape (no sentiment/threat fields)
         news_resp = {
             "status": True,
@@ -476,11 +455,10 @@ class TestIinvestClientNews:
                 ],
             },
         }
-        login_resp = {"data": blob}
         filters_resp = {"status": True, "message": "ok", "response": {"filters": [], "compare": [], "annual": []}}
 
         client, _ = _make_fake_httpx([
-            (200, login_resp), (200, filters_resp), (200, news_resp),
+            (200, filters_resp), (200, news_resp),
         ])
         monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
 

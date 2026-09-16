@@ -9,6 +9,7 @@ import {
   newsWsConnectedAtom,
   liveNewsArticlesAtom,
   newsFiltersAtom,
+  advancedScrapingConsentAtom,
 } from '@/store/terminalStore';
 import { newsSocketService } from '@/lib/newsSocket';
 import type { NewsArticle } from '@/lib/newsSocket';
@@ -489,9 +490,21 @@ export function NewsWidget() {
   const [activeTab, setActiveTab] = useState<Tab>('global');
   const [globalOffset, setGlobalOffset] = useState(0);
   const [companyOffset, setCompanyOffset] = useState(0);
-  const [companySource, setCompanySource] = useState<'auto' | 'iinvest' | 'moneycontrol' | 'merged'>('auto');
+  const [companySource, setCompanySource] = useState<'auto' | 'iinvest' | 'moneycontrol' | 'merged'>('merged');
   const [localSearch, setLocalSearch] = useState(filters.searchQuery || '');
+  const [scrapingConsent] = useAtom(advancedScrapingConsentAtom);
+  const [showNudge, setShowNudge] = useState(false);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (scrapingConsent === false) {
+      setShowNudge(true);
+      const timer = setTimeout(() => {
+        setShowNudge(false);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [scrapingConsent]);
   
   useEffect(() => {
     const t = setTimeout(() => {
@@ -543,6 +556,11 @@ export function NewsWidget() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol }),
     });
+    // Force upstream re-fetch (bypasses the 2h iinvest sync cache) before refetching.
+    const sq = filters.searchQuery ? `&q=${encodeURIComponent(filters.searchQuery)}` : '';
+    await fetch(
+      `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=0&source=${effectiveCompanySource}${sq}&refresh=true`,
+    );
     setCompanyOffset(0);
     await queryClient.refetchQueries({ queryKey: ['news/company', symbol] });
   };
@@ -581,17 +599,22 @@ export function NewsWidget() {
     enabled: activeTab === 'global',
   });
 
+  const effectiveCompanySource =
+    scrapingConsent === false && (companySource === 'iinvest' || companySource === 'auto')
+      ? 'moneycontrol'
+      : companySource;
+
   const {
     data: companyData,
     isLoading: companyLoading,
     isFetching: companyFetching,
     error: companyError,
   } = useQuery<NewsPaginatedResponse>({
-    queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset, source: companySource }],
+    queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset, source: effectiveCompanySource }],
     queryFn: async () => {
       const sq = filters.searchQuery ? `&q=${encodeURIComponent(filters.searchQuery)}` : '';
       const res = await fetch(
-        `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}&source=${companySource}${sq}`,
+        `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}&source=${effectiveCompanySource}${sq}`,
       );
       if (res.status === 404) {
         const postRes = await fetch('/api/py/news/company', {
@@ -822,6 +845,19 @@ export function NewsWidget() {
           </div>
         )}
       </div>
+
+      {showNudge && (
+        <div className="shrink-0 bg-terminal-dark border-t border-amber-500/40 px-3 py-1.5 flex items-center justify-between text-[11px] text-amber-400 animate-in fade-in slide-in-from-bottom duration-300">
+          <span>💡 Tip: Enable Advanced Extraction in Settings for premium news & deeper fundamentals.</span>
+          <button
+            type="button"
+            onClick={() => setShowNudge(false)}
+            className="text-zinc-400 hover:text-white text-[10px] ml-2 px-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }

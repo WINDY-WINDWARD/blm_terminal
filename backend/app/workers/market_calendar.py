@@ -5,7 +5,8 @@ functions live in ``app/services/data_sync/calendar.py``.
 
 ``market_data`` is no longer a standalone daemon — it runs as Stage 7
 of the orchestrator pipeline (both startup and nightly) and on a
-``*/5 * * * *`` cron scheduler managed by ``Orchestrator._run_market_data_scheduler``.
+``*/20 * * * *`` cron scheduler during market hours (plus one freeze sync
+after close) managed by ``Orchestrator._run_market_data_scheduler``.
 
 Public workers:
 - ``results_calendar_worker()`` — cron ``0 8,14 * * 1-5``.

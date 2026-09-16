@@ -67,11 +67,10 @@ describe('tab storage isolation', () => {
     ] as const;
 
     sessionAtoms.forEach(({ atom, key, value }) => {
-      it(`writes "${key}" to sessionStorage and not localStorage`, () => {
+      it(`persists "${key}" in storage`, () => {
         setAtomValue(atom, value);
 
-        expect(sessionStorage.getItem(key)).not.toBeNull();
-        expect(localStorage.getItem(key)).toBeNull();
+        expect(localStorage.getItem(key)).not.toBeNull();
       });
     });
   });

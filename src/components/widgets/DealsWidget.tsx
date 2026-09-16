@@ -6,15 +6,11 @@ import { useAtomValue } from 'jotai';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, Legend } from 'recharts';
 import { activeSymbolAtom } from '@/store/terminalStore';
 import {
-  fetchIinvestPledgedShares,
-  fetchIinvestKeyShareholders,
-  fetchIinvestSast,
-  fetchIinvestInsiderTrading,
-  fetchIinvestBlockDeals,
-  fetchIinvestBulkDeals,
-  IinvestShareholderRow,
-  IinvestResponse,
-  IinvestInsiderRow,
+  fetchIinvestAll,
+  type IinvestAllResponse,
+  type IinvestInsiderRow,
+  type IinvestResponse,
+  type IinvestShareholderRow,
 } from '@/lib/iinvest';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -219,28 +215,38 @@ export function DealsWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
   const [activeTab, setActiveTab] = useState<Tab>('insider');
 
-  const { data, isLoading, isError } = useQuery<ScreenerTradesResponse>({
-    queryKey: ['screener/trades', symbol],
+  const { data: allData, isLoading: isAllLoading } = useQuery<[ScreenerTradesResponse, IinvestAllResponse]>({
+    queryKey: ['deals/all', symbol],
     queryFn: async () => {
-      const res = await fetch(
-        `/api/py/screener/trades/${encodeURIComponent(symbol)}`,
-      );
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const json = (await res.json()) as { detail?: string };
-          if (json.detail) detail = json.detail;
-        } catch { /* ignore */ }
-        const err = new Error(detail);
-        (err as Error & { status: number }).status = res.status;
-        throw err;
-      }
-      return res.json() as Promise<ScreenerTradesResponse>;
+      const fetchScreener = async (): Promise<ScreenerTradesResponse> => {
+        const res = await fetch(`/api/py/screener/trades/${encodeURIComponent(symbol)}`);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const json = (await res.json()) as { detail?: string };
+            if (json.detail) detail = json.detail;
+          } catch { /* ignore */ }
+          const err = new Error(detail);
+          (err as Error & { status: number }).status = res.status;
+          throw err;
+        }
+        return res.json() as Promise<ScreenerTradesResponse>;
+      };
+
+      const [screenerRes, iinvestRes] = await Promise.all([
+        fetchScreener().catch((err) => {
+          return { insider_trades: [], bulk_deals: [], block_deals: [] } as ScreenerTradesResponse;
+        }),
+        fetchIinvestAll(symbol).catch((err) => {
+          return {} as IinvestAllResponse;
+        }),
+      ]);
+      return [screenerRes, iinvestRes];
     },
-    staleTime: 15 * 60 * 1000,
+    enabled: !!symbol,
+    staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     retry: false,
-    enabled: !!symbol,
   });
 
   const { data: screenerCompany } = useQuery<ScreenerCompanyData>({
@@ -257,67 +263,20 @@ export function DealsWidget() {
     enabled: !!symbol && activeTab === 'shareholding',
   });
 
-  const { data: pledgedData } = useQuery<IinvestResponse<Record<string, unknown>>>({
-    queryKey: ['iinvest', 'pledged-shares', symbol],
-    queryFn: () => fetchIinvestPledgedShares(symbol),
-    enabled: !!symbol,
-    staleTime: 30 * 60 * 1000,
-    retry: false,
-  });
+  const [screenerTradesData, iinvestAllData] = allData ?? [
+    { insider_trades: [], bulk_deals: [], block_deals: [] },
+    {},
+  ];
 
-  const { data: shareholderData } = useQuery<{
-    status: boolean;
-    response: { data?: IinvestShareholderRow[] };
-  }>({
-    queryKey: ['iinvest', 'key-shareholders', symbol],
-    queryFn: () => fetchIinvestKeyShareholders(symbol),
-    enabled: !!symbol,
-    staleTime: 15 * 60 * 1000,
-    retry: false,
-  });
+  const pledgedData = iinvestAllData?.pledged_shares;
+  const shareholderData = iinvestAllData?.key_shareholders;
+  const sastData = iinvestAllData?.sast;
+  const iinvestInsider = iinvestAllData?.insider_trading;
+  const iinvestBlockData = iinvestAllData?.block_deals;
+  const iinvestBulkData = iinvestAllData?.bulk_deals;
 
-  const { data: sastData } = useQuery<IinvestResponse>({
-    queryKey: ['iinvest', 'sast', symbol],
-    queryFn: () => fetchIinvestSast(symbol),
-    enabled: !!symbol,
-    staleTime: 30 * 60 * 1000,
-    retry: false,
-  });
-
-  const screenerHasInsider = data && data.insider_trades.length > 0;
-  const screenerHasBulk = data && data.bulk_deals.length > 0;
-  const screenerHasBlock = data && data.block_deals.length > 0;
-  const needIinvestFallback = !!symbol && (isError || (
-    (!screenerHasInsider) && (!screenerHasBulk) && (!screenerHasBlock)
-  ));
-
-  const { data: iinvestInsider } = useQuery<{
-    status: boolean;
-    response: { data?: IinvestInsiderRow[] };
-  }>({
-    queryKey: ['iinvest', 'insider-trading', symbol],
-    queryFn: () => fetchIinvestInsiderTrading(symbol),
-    enabled: !!symbol && (needIinvestFallback || activeTab === 'insider'),
-    staleTime: 15 * 60 * 1000,
-    retry: false,
-  });
-
-  const { data: iinvestBlockData } = useQuery<IinvestResponse<Record<string, unknown>>>({
-    queryKey: ['iinvest', 'block-deals', symbol, 'block'],
-    queryFn: () => fetchIinvestBlockDeals(symbol),
-    enabled: !!symbol,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  });
-  const { data: iinvestBulkData } = useQuery<IinvestResponse<Record<string, unknown>>>({
-    queryKey: ['iinvest', 'bulk-deals', symbol, 'bulk'],
-    queryFn: () => fetchIinvestBulkDeals(symbol),
-    enabled: !!symbol,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  });
-  const iinvestBulkCount = iinvestBulkData?.response.data?.length ?? 0;
-  const iinvestBlockCount = iinvestBlockData?.response.data?.length ?? 0;
+  const iinvestBulkCount = iinvestBulkData?.response?.data?.length ?? 0;
+  const iinvestBlockCount = iinvestBlockData?.response?.data?.length ?? 0;
 
   if (!symbol) {
     return (
@@ -327,22 +286,13 @@ export function DealsWidget() {
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1">
-        <span className="text-terminal-amber/60 animate-pulse">LOADING DEALS...</span>
-        <span className="text-white text-[10px]">{symbol}</span>
-      </div>
-    );
-  }
-
-  const screenerData: ScreenerTradesResponse = data ?? {
+  const screenerData: ScreenerTradesResponse = screenerTradesData ?? {
     insider_trades: [],
     bulk_deals: [],
     block_deals: [],
   };
 
-  const iinvestInsiderRows = iinvestInsider?.response.data
+  const iinvestInsiderRows = iinvestInsider?.response?.data
     ? mapIinvestInsiderToTradeRecords(iinvestInsider.response.data)
     : [];
 
@@ -350,8 +300,8 @@ export function DealsWidget() {
     ? screenerData.insider_trades
     : iinvestInsiderRows;
     
-  const iinvestBulkRawRows = iinvestBulkData?.response.data ?? [];
-  const iinvestBlockRawRows = iinvestBlockData?.response.data ?? [];
+  const iinvestBulkRawRows = iinvestBulkData?.response?.data ?? [];
+  const iinvestBlockRawRows = iinvestBlockData?.response?.data ?? [];
   const iinvestBulkTradeRecords = mapIinvestBlockToTradeRecords(iinvestBulkRawRows);
   const iinvestBlockTradeRecords = mapIinvestBlockToTradeRecords(iinvestBlockRawRows);
   
@@ -411,13 +361,43 @@ export function DealsWidget() {
 
       {/* Table */}
       <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
-        {activeTab === 'insider' || activeTab === 'bulk' || activeTab === 'block' ? (
+        {activeTab === 'insider' && isAllLoading ? (
+          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
+            LOADING INSIDER TRADES...
+          </div>
+        ) : activeTab === 'bulk' && isAllLoading ? (
+          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
+            LOADING BULK DEALS...
+          </div>
+        ) : activeTab === 'block' && isAllLoading ? (
+          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
+            LOADING BLOCK DEALS...
+          </div>
+        ) : activeTab === 'shareholding' && isAllLoading ? (
+          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
+            LOADING SHAREHOLDING PATTERN...
+          </div>
+        ) : activeTab === 'pledged' && isAllLoading ? (
+          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
+            LOADING PLEDGED SHARES...
+          </div>
+        ) : activeTab === 'sast' && isAllLoading ? (
+          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
+            LOADING SAST DISCLOSURES...
+          </div>
+        ) : activeTab === 'insider' || activeTab === 'bulk' || activeTab === 'block' ? (
           <SectionTable
             rows={activeRows}
             showCategory={activeTab === 'insider'}
           />
-        ) : activeTab === 'shareholding' && shareholderData?.response?.data ? (
-          <ShareholdingTable data={shareholderData.response.data} screenerData={screenerCompany} />
+        ) : activeTab === 'shareholding' ? (
+          shareholderData?.response?.data ? (
+            <ShareholdingTable data={shareholderData.response.data} screenerData={screenerCompany} />
+          ) : (
+            <div className="h-full flex items-center justify-center font-mono text-xs text-white/40">
+              No shareholding pattern on record
+            </div>
+          )
         ) : activeTab === 'pledged' ? (
           <IinvestGenericTable
             data={pledgedData?.response.data ?? []}

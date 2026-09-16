@@ -214,6 +214,7 @@ async def get_company_news(
         pattern="^(auto|iinvest|moneycontrol|merged)$",
     ),
     q: str | None = Query(default=None, description="Text search query"),
+    refresh: bool = Query(default=False, description="Force re-fetch from upstream, bypassing the 2h sync cache"),
     db: AsyncSession = Depends(get_db),
 ) -> NewsPaginatedOut:
     """Return paginated cached news articles tagged with *symbol*.
@@ -243,6 +244,7 @@ async def get_company_news(
         try:
             await fetch_iinvest_company_news(
                 symbol=symbol_upper, db=db, days=days, limit=limit,
+                refresh=refresh,
             )
             iinvest_attempted = True
         except Exception as exc:
@@ -273,17 +275,51 @@ async def get_company_news(
             )
 
     # ── Step 3: query the DB and tag the response ──────────────────────
+    # iinvest URLs are shared across symbols (one global feed, URL primary
+    # key, first-writer-wins company_symbol), so an iinvest row fetched for
+    # this symbol may be tagged with another symbol. Match those rows via
+    # the merged entities JSON: entities["isins"] is unioned across fetchers
+    # in fetch_iinvest_company_news, and JSON-serialised list items are
+    # double-quoted, so LIKE '%"ISIN"%' is a precise token match.
+    symbol_isin: str | None = None
+    try:
+        from app.models.stockuniverse import StockUniverse as _SU
+
+        _isin_row = (await db.execute(
+            select(_SU.isin).where(_SU.symbol == symbol_upper)
+        )).first()
+        symbol_isin = _isin_row[0] if _isin_row else None
+    except Exception:
+        symbol_isin = None
+
+    def _iinvest_conditions() -> Any:
+        sym_owned = and_(
+            NewsArticle.company_symbol == symbol_upper,
+            NewsArticle.source.like("iinvest:%"),
+        )
+        if symbol_isin:
+            return or_(
+                sym_owned,
+                and_(
+                    NewsArticle.source.like("iinvest:%"),
+                    cast(NewsArticle.entities, String).like(f'%"{symbol_isin}"%'),
+                ),
+            )
+        return sym_owned
+
     if source == "merged":
         # Include iinvest articles (source LIKE 'iinvest:%') AND moneycontrol
         conditions = [
-            NewsArticle.company_symbol == symbol_upper,
-            NewsArticle.source.like("iinvest:%") | NewsArticle.source.like("moneycontrol%"),
+            or_(
+                _iinvest_conditions(),
+                and_(
+                    NewsArticle.company_symbol == symbol_upper,
+                    NewsArticle.source.like("moneycontrol%"),
+                ),
+            )
         ]
     elif source == "iinvest" or (source == "auto" and iinvest_attempted):
-        conditions = [
-            NewsArticle.company_symbol == symbol_upper,
-            NewsArticle.source.like("iinvest:%"),
-        ]
+        conditions = [_iinvest_conditions()]
     elif source == "moneycontrol":
         conditions = [
             NewsArticle.company_symbol == symbol_upper,
@@ -291,10 +327,7 @@ async def get_company_news(
         ]
     else:
         # auto, no iinvest attempt — default to iinvest rows
-        conditions = [
-            NewsArticle.company_symbol == symbol_upper,
-            NewsArticle.source.like("iinvest:%"),
-        ]
+        conditions = [_iinvest_conditions()]
 
     if start_date:
         conditions.append(NewsArticle.publish_date >= start_date)

@@ -29,6 +29,7 @@ from app.services.data_sync.intraday import (
     _ticker_intraday_hourly_stale_check_sync,
     _ticker_intraday_update_sync,
 )
+from app.services.data_sync.fundamentals import _fundamentals_sync
 from app.services.data_sync.market import _market_data_sync
 from app.services.data_sync.news import _news_sync, _watchlist_news_sync
 from app.services.data_sync.scores import _ticker_scores_sync
@@ -158,9 +159,9 @@ def register_all_jobs() -> None:
         JobDefinition(
             job_key="job.market_data",
             name="market_data",
-            description="Fetch sector/industry data from MoneyControl",
+            description="Rebuild sector/industry aggregates locally every 20 min during market hours (one freeze sync after close)",
             category="data_sync",
-            cron_expression="*/5 * * * *",
+            cron_expression="*/20 * * * *",
             callable=_market_data_sync,
             is_async=False,
         ),
@@ -183,6 +184,16 @@ def register_all_jobs() -> None:
             callable=_notification_cycle_full,
             is_async=False,
         ),
+        # --- Fundamentals (screener market cap + net-profit YoY backfill) ---
+        JobDefinition(
+            job_key="job.fundamentals",
+            name="fundamentals",
+            description="Backfill screener market cap + quarterly net-profit YoY for symbols missing them (bounded nightly batches)",
+            category="data_sync",
+            cron_expression="30 1 * * *",
+            callable=_fundamentals_sync,
+            is_async=False,
+        ),
         # --- News ---
         JobDefinition(
             job_key="job.news",
@@ -200,6 +211,15 @@ def register_all_jobs() -> None:
             category="notifications",
             cron_expression="*/5 * * * *",
             callable=_watchlist_news_sync,
+            is_async=False,
+        ),
+        JobDefinition(
+            job_key="job.watchlist_deals",
+            name="watchlist_deals",
+            description="Fetch deals and insider trades for watchlist symbols",
+            category="notifications",
+            cron_expression="*/30 * * * *",
+            callable=__import__("app.services.data_sync.deals", fromlist=["_watchlist_deals_sync"])._watchlist_deals_sync,
             is_async=False,
         ),
         # --- Fair value (async) ---

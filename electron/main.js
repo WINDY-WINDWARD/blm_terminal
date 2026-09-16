@@ -290,6 +290,24 @@ async function startApp() {
     log(`DB path: ${dbPath}`);
     log(`Backend log dir: ${backendLogDir}`);
 
+    // Playwright browsers live in the user's persistent ms-playwright dir
+    // (downloaded on demand). The frozen PyInstaller exe resolves its driver
+    // package dir to the _MEI temp folder, so without this env var it never
+    // finds the installed browsers and every harvest (warm or cold) fails.
+    const os = require('os');
+    if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+      const home = os.homedir();
+      if (process.platform === 'win32') {
+        process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(home, 'AppData', 'Local', 'ms-playwright');
+      } else if (process.platform === 'darwin') {
+        process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(home, 'Library', 'Caches', 'ms-playwright');
+      } else {
+        // Linux
+        const xdgCache = process.env.XDG_CACHE_HOME || path.join(home, '.cache');
+        process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(xdgCache, 'ms-playwright');
+      }
+    }
+
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
@@ -476,12 +494,40 @@ async function startApp() {
       return widgetWindow;
     }
 
+    // Helper: Create lightweight logs popout window
+    function createLogsWindow(targetUrl) {
+      const logsWindow = new BrowserWindow({
+        width: 900,
+        height: 520,
+        titleBarStyle: 'hidden',
+        titleBarOverlay: {
+          color: '#121212',
+          symbolColor: '#ffb000',
+          height: 32
+        },
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: path.join(__dirname, 'preload.js')
+        }
+      });
+
+      logsWindow.loadURL(targetUrl);
+      return logsWindow;
+    }
+
     // Multi-Window Pop-out Interceptor
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       // If the frontend calls window.open (e.g. for popped out widgets or OAuth)
       if (url.includes('/widget/')) {
         createWidgetWindow(url);
         return { action: 'deny' }; // Prevent default pop-up
+      }
+
+      // Backend logs popout — create a lightweight BrowserWindow
+      if (url.includes('/logs')) {
+        createLogsWindow(url);
+        return { action: 'deny' };
       }
       
       if (url.includes('accounts.google.com/o/oauth2')) {

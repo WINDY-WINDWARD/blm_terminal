@@ -81,7 +81,13 @@ _ALEMBIC_INI = _resolve_alembic_ini()
 def _get_current_revision() -> str | None:
     """Read the current alembic_version directly from the DB."""
     sync_url = f"sqlite:///{settings.db_path}"
-    engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+    engine = create_engine(sync_url, connect_args={"check_same_thread": False, "timeout": 15})
+    @sa_event.listens_for(engine, "connect")
+    def _set_pragma(dbapi_conn, connection_record):
+        from app.database import _apply_sqlite_pragmas
+        cur = dbapi_conn.cursor()
+        _apply_sqlite_pragmas(cur)
+        cur.close()
     try:
         with engine.connect() as conn:
             result = conn.execute(sa_text("SELECT version_num FROM alembic_version"))
@@ -120,9 +126,9 @@ def _run_migrations_sync() -> None:
 
     @sa_event.listens_for(sync_engine, "connect")
     def set_sqlite_pragma(dbapi_conn, connection_record):
+        from app.database import _apply_sqlite_pragmas
         cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        _apply_sqlite_pragmas(cursor)
         cursor.close()
 
     try:
@@ -183,9 +189,14 @@ def _run_migrations_sync() -> None:
                 "recreating missing tables and stamping at HEAD"
             )
             from app.models import __init__ as _models_init  # noqa: F401 — ensure models loaded
-            from app.database import Base
+            from app.database import Base, _apply_sqlite_pragmas
             sync_url2 = f"sqlite:///{settings.db_path}"
-            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False})
+            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False, "timeout": 15})
+            @sa_event.listens_for(sync_engine2, "connect")
+            def _set_pragma2(dbapi_conn, connection_record):
+                cur = dbapi_conn.cursor()
+                _apply_sqlite_pragmas(cur)
+                cur.close()
             try:
                 # 1. Create any missing tables (idempotent).
                 Base.metadata.create_all(sync_engine2)
@@ -211,9 +222,14 @@ def _run_migrations_sync() -> None:
                 exc,
             )
             from app.models import __init__ as _models_init  # noqa: F401
-            from app.database import Base
+            from app.database import Base, _apply_sqlite_pragmas
             sync_url2 = f"sqlite:///{settings.db_path}"
-            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False})
+            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False, "timeout": 15})
+            @sa_event.listens_for(sync_engine2, "connect")
+            def _set_pragma3(dbapi_conn, connection_record):
+                cur = dbapi_conn.cursor()
+                _apply_sqlite_pragmas(cur)
+                cur.close()
             try:
                 Base.metadata.create_all(sync_engine2)
                 logger.info("migrations: Base.metadata.create_all() completed")
@@ -238,9 +254,14 @@ def _run_migrations_sync() -> None:
     # squash migration, tables like 'users' may be missing even though
     # alembic reports no errors.  create_all() is idempotent.
     from app.models import __init__ as _models_init  # noqa: F401
-    from app.database import Base as _Base
+    from app.database import Base as _Base, _apply_sqlite_pragmas as _apply_safety_pragmas
     _safety_url = f"sqlite:///{settings.db_path}"
-    _safety_engine = create_engine(_safety_url, connect_args={"check_same_thread": False})
+    _safety_engine = create_engine(_safety_url, connect_args={"check_same_thread": False, "timeout": 15})
+    @sa_event.listens_for(_safety_engine, "connect")
+    def _set_safety_pragma(dbapi_conn, connection_record):
+        cur = dbapi_conn.cursor()
+        _apply_safety_pragmas(cur)
+        cur.close()
     try:
         before = set(sa_inspect(_safety_engine).get_table_names())
         _Base.metadata.create_all(_safety_engine)
@@ -263,9 +284,9 @@ def _ensure_watchlist_data() -> None:
 
     @sa_event.listens_for(sync_engine, "connect")
     def set_sqlite_pragma(dbapi_conn, connection_record):
+        from app.database import _apply_sqlite_pragmas
         cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        _apply_sqlite_pragmas(cursor)
         cursor.close()
 
     try:
@@ -302,9 +323,9 @@ def _ensure_stock_universe() -> None:
 
     @sa_event.listens_for(sync_engine, "connect")
     def set_sqlite_pragma(dbapi_conn, connection_record):
+        from app.database import _apply_sqlite_pragmas
         cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        _apply_sqlite_pragmas(cursor)
         cursor.close()
 
     try:
@@ -416,12 +437,16 @@ def _ensure_user_columns() -> None:
     All existing rows are backfilled to user_id=1 (the admin user).
     """
     import sqlite3
+    from app.database import _apply_sqlite_pragmas
 
     db_path = Path(settings.db_path)
     if not db_path.exists():
         return
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=15, check_same_thread=False, isolation_level=None)
+    cur = conn.cursor()
+    _apply_sqlite_pragmas(cur)
+    cur.close()
     try:
         for table in ("watchlists", "chat_sessions"):
             try:
@@ -447,12 +472,16 @@ def _ensure_user_layouts_columns() -> None:
     SQLite's ALTER TABLE ADD COLUMN is idempotent (errors if column exists).
     """
     import sqlite3
+    from app.database import _apply_sqlite_pragmas
 
     db_path = Path(settings.db_path)
     if not db_path.exists():
         return
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=15, check_same_thread=False, isolation_level=None)
+    cur = conn.cursor()
+    _apply_sqlite_pragmas(cur)
+    cur.close()
     try:
         try:
             conn.execute("ALTER TABLE user_layouts ADD COLUMN deleted_at BIGINT NULL")
@@ -473,12 +502,16 @@ def _ensure_admin_user() -> None:
     import sqlite3
     import bcrypt
     import os
+    from app.database import _apply_sqlite_pragmas
 
     db_path = Path(settings.db_path)
     if not db_path.exists():
         return
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=15, check_same_thread=False, isolation_level=None)
+    cur = conn.cursor()
+    _apply_sqlite_pragmas(cur)
+    cur.close()
     try:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if count > 0:
@@ -610,7 +643,11 @@ def _backfill_entities_double_encoding() -> None:
         logger.warning("_backfill_entities: DB not found at %s — skipping", db_path)
         return
 
-    conn = sqlite3.connect(str(db_path))
+    from app.database import _apply_sqlite_pragmas
+    conn = sqlite3.connect(str(db_path), timeout=15, check_same_thread=False, isolation_level=None)
+    cur = conn.cursor()
+    _apply_sqlite_pragmas(cur)
+    cur.close()
     try:
         cur = conn.cursor()
         cur.execute("SELECT rowid, entities FROM news_articles WHERE typeof(entities) = 'text'")
@@ -688,6 +725,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await asyncio.to_thread(_ensure_stock_universe)
     await asyncio.to_thread(_backfill_entities_double_encoding)
 
+    # Start the priority write queue writer thread (serialises non-critical writes)
+    from app.services.write_queue import start_writer
+    start_writer()
+
     # alembic/env.py calls fileConfig(alembic.ini) during migrations which
     # resets the root logger to WARNING/stderr-only.  Restore our handlers now.
     _configure_logging()
@@ -698,13 +739,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await screener_client.init()
     await news_fetcher.init()
 
-    # iinvest: lazy init — don't block startup if it fails (e.g. Akamai blocks)
-    try:
-        from app.services.iinvest_client import get_iinvest_client
-        await get_iinvest_client().init()
-        logger.info("iinvest: client initialized")
-    except Exception as exc:
-        logger.warning("iinvest: init failed (will retry on first request): %s", exc)
+    # iinvest: lazy init in background — do NOT block FastAPI lifespan!
+    async def _init_iinvest_bg():
+        try:
+            from app.services.iinvest_client import get_iinvest_client
+            await get_iinvest_client().init()
+            logger.info("iinvest: client initialized in background")
+        except Exception as exc:
+            logger.warning("iinvest: background init failed: %s", exc)
+
+    asyncio.create_task(_init_iinvest_bg())
+
+    # Warm browser: background task — do NOT block FastAPI lifespan!
+    async def _start_warm_browser_bg():
+        try:
+            from app.services.browser_harvester import (
+                ensure_warm_browser,
+                get_consent_status,
+            )
+
+            if await get_consent_status():
+                ensure_warm_browser()
+                logger.info("WarmBrowser: startup requested (consented)")
+            else:
+                logger.info("WarmBrowser: skipped (no advanced consent)")
+        except Exception as exc:
+            logger.warning("WarmBrowser: startup failed (cold path still works): %s", exc)
+
+    asyncio.create_task(_start_warm_browser_bg())
 
     # Start all workers, schedulers, and the startup pipeline via the orchestrator.
     # This replaces the previous scattered calls to start_all_workers(),
@@ -731,6 +793,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Shutting down — stopping workers and closing clients...")
     await orchestrator.stop()
+
+    # Drain and stop the write queue writer
+    from app.services.write_queue import stop_writer
+    stop_writer(timeout=10.0)
+
+    try:
+        from app.services.browser_harvester import shutdown_warm_browser
+        await asyncio.to_thread(shutdown_warm_browser)
+        logger.info("WarmBrowser: stopped on shutdown")
+    except Exception as exc:
+        logger.debug("WarmBrowser: shutdown error (non-fatal): %s", exc)
 
     from app.services.llm_provider import cleanup_shared_clients
     await cleanup_shared_clients()

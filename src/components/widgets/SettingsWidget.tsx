@@ -21,6 +21,7 @@ import {
   savedLayoutsAtom,
   layoutSyncStatusAtom,
   layoutToastAtom,
+  advancedScrapingConsentAtom,
   type Watchlist,
   type PanelCount,
   type SavedLayout,
@@ -212,6 +213,29 @@ export function SettingsWidget() {
   const [updaterStatus, setUpdaterStatus] = useState<string>('');
   const [updaterProgress, setUpdaterProgress] = useState<{ percent: number } | null>(null);
   const [updateReady, setUpdateReady] = useState(false);
+
+  // Advanced Web Extraction / Scraping Consent
+  const [scrapingConsent, setScrapingConsent] = useAtom(advancedScrapingConsentAtom);
+  const [consentSyncStatus, setConsentSyncStatus] = useState<string | null>(null);
+
+  const handleUpdateConsent = async (val: boolean) => {
+    setScrapingConsent(val);
+    try {
+      setConsentSyncStatus('Updating...');
+      await fetch('/api/py/system_config/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ consent: val }),
+      });
+      setConsentSyncStatus(val ? 'Advanced Extraction Enabled' : 'Safe Mode Enabled');
+      setTimeout(() => setConsentSyncStatus(null), 3000);
+    } catch (e) {
+      console.error('Failed to sync consent:', e);
+      setConsentSyncStatus('Error syncing setting');
+      setTimeout(() => setConsentSyncStatus(null), 3000);
+    }
+  };
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electronAPI) {
@@ -739,6 +763,60 @@ export function SettingsWidget() {
           selected={moversCols}
           onChange={handleMoversChange}
         />
+      </div>
+
+      {/* Data Extraction & Privacy */}
+      <div className="flex flex-col gap-1.5 p-2 border border-terminal-border bg-terminal-panel">
+        <div className="flex items-center justify-between">
+          <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
+            Data Extraction & Privacy
+          </div>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+              scrapingConsent === true
+                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                : scrapingConsent === null
+                ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+            }`}
+          >
+            {scrapingConsent === true ? 'Advanced Extraction Active' : scrapingConsent === null ? 'Consent Required' : 'Safe Mode (Anonymous)'}
+          </span>
+        </div>
+        <p className="text-[10px] text-white/60 leading-relaxed">
+          When Advanced Extraction is enabled, the terminal operates generic headless automation on your behalf to harvest deep company fundamentals and premium news tokens. In Safe Mode, external scraping is disabled.
+        </p>
+        <div className="flex items-center gap-2 mt-1">
+          <button
+            type="button"
+            onClick={() => handleUpdateConsent(false)}
+            disabled={scrapingConsent !== true}
+            className={`px-3 py-1 text-[11px] font-mono rounded border transition ${
+              scrapingConsent !== true
+                ? 'bg-zinc-800/60 text-zinc-500 border-zinc-700/50 cursor-not-allowed opacity-60'
+                : 'bg-zinc-800 text-zinc-300 border-zinc-600 hover:bg-zinc-700 hover:text-white cursor-pointer'
+            }`}
+          >
+            Disable (Safe Mode)
+          </button>
+          <button
+            type="button"
+            onClick={() => handleUpdateConsent(true)}
+            disabled={scrapingConsent === true}
+            className={`px-3 py-1 text-[11px] font-mono rounded border transition ${
+              scrapingConsent === true
+                ? 'bg-zinc-800/60 text-zinc-500 border-zinc-700/50 cursor-not-allowed opacity-60'
+                : 'bg-blue-600 text-white border-blue-500 hover:bg-blue-500 cursor-pointer font-semibold shadow-sm'
+            }`}
+          >
+            Enable Advanced Extraction
+          </button>
+        </div>
+        {consentSyncStatus && (
+          <div className="text-[10px] text-terminal-amber animate-pulse mt-0.5">
+            {consentSyncStatus}
+          </div>
+        )}
       </div>
 
       {/* Runtime API Keys & Integrations */}
