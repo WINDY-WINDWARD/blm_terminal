@@ -1,19 +1,22 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useAtom } from 'jotai';
-import { advancedScrapingConsentAtom } from '@/store/terminalStore';
+import { useAtom, useAtomValue } from 'jotai';
+import { advancedScrapingConsentAtom, onboardingCompletedAtom } from '@/store/terminalStore';
 
 export function AdvancedScrapingModal() {
   const [consent, setConsent] = useAtom(advancedScrapingConsentAtom);
+  const onboardingCompleted = useAtomValue(onboardingCompletedAtom);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Avoid hydration mismatch with localStorage
-  if (!mounted || consent !== null) {
+  // Avoid hydration mismatch with localStorage.
+  // Suppressed while the first-launch wizard is active — consent is collected
+  // as a wizard step instead of via this standalone modal.
+  if (!mounted || consent !== null || !onboardingCompleted) {
     return null;
   }
 

@@ -1,13 +1,14 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useAtom } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import { useQueryClient } from '@tanstack/react-query';
-import { authAtom, isAuthenticatedAtom } from '@/store/terminalStore';
+import { authAtom, isAuthenticatedAtom, onboardingCompletedAtom } from '@/store/terminalStore';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useAtom(authAtom);
   const [isAuthenticated] = useAtom(isAuthenticatedAtom);
+  const onboardingCompleted = useAtomValue(onboardingCompletedAtom);
   const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -15,6 +16,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [sessionChecking, setSessionChecking] = useState(true);
+  // True when the backend has no user accounts yet — the first-launch wizard
+  // owns auth in that case, so this guard must not show its own login wall.
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -45,6 +49,21 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
                 setAuth({ user: userData });
               } else {
                 setAuth(null);
+              }
+              // Best-effort first-boot probe: when no accounts exist, the
+              // setup wizard handles auth and this guard stays out of the way.
+              try {
+                const setupRes = await fetch('/api/py/auth/setup-status', {
+                  signal: AbortSignal.timeout(2000),
+                });
+                if (setupRes.ok) {
+                  const setupData = await setupRes.json();
+                  if (!isCancelled && setupData?.needs_setup === true) {
+                    setNeedsSetup(true);
+                  }
+                }
+              } catch {
+                // Ignore — login wall remains the fallback.
               }
               setSessionChecking(false);
             }
@@ -77,6 +96,12 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  // First boot with no accounts: the setup wizard owns the auth flow, so let
+  // the app render underneath it instead of stacking a second login wall.
+  if (!isAuthenticated && needsSetup && !onboardingCompleted) {
+    return <>{children}</>;
   }
 
   if (!isAuthenticated) {

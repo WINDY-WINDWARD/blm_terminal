@@ -104,6 +104,22 @@ export const advancedScrapingConsentAtom = atomWithStorage<boolean | null>(
   null,
 );
 
+// ─── First-Launch Onboarding ────────────────────────────────────────────────
+
+/** True once the user has completed (or finished) the first-launch setup wizard */
+export const onboardingCompletedAtom = atomWithStorage<boolean>(
+  'terminal.onboarding.v1',
+  false,
+);
+
+/** Guided tutorial lifecycle: pending → active → done */
+export type TutorialStatus = 'pending' | 'active' | 'done';
+
+export const tutorialStatusAtom = atomWithStorage<TutorialStatus>(
+  'terminal.tutorial.v1',
+  'pending',
+);
+
 // ─── Existing Atoms ───────────────────────────────────────────────────────────
 
 export const activeCommandAtom = atom<string>('');

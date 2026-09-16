@@ -233,12 +233,13 @@ def _run_migrations_sync() -> None:
             try:
                 Base.metadata.create_all(sync_engine2)
                 logger.info("migrations: Base.metadata.create_all() completed")
-                # Run the seed functions inline so the watchlist + admin user
-                # get created (these normally run later in the lifespan, but
-                # only if migrations succeed).
+                # Run the seed functions inline so the watchlist data
+                # gets created (these normally run later in the lifespan, but
+                # only if migrations succeed). Admin creation is owned by
+                # POST /api/auth/setup — _ensure_admin_user only logs.
                 _ensure_admin_user()
                 _ensure_watchlist_data()
-                logger.info("migrations: seed functions (admin user, watchlist) applied")
+                logger.info("migrations: seed functions (watchlist) applied")
                 # Stamp at HEAD so the database is marked as up-to-date
                 # with the latest migration, permanently breaking any infinite loop.
                 alembic_command.stamp(alembic_cfg, "head")
@@ -494,14 +495,14 @@ def _ensure_user_layouts_columns() -> None:
 
 
 def _ensure_admin_user() -> None:
-    """Create a default admin user if the users table is empty.
+    """No-op placeholder kept for lifespan ordering.
 
-    Requires ADMIN_PASSWORD env var or generates a secure random one.
-    Never uses admin/admin.
+    First-boot admin creation is owned by the frontend setup wizard via
+    ``POST /api/auth/setup`` (single-use, empty-users-table only). No default
+    credential is ever written here — an empty users table means "first boot,
+    setup required", which ``GET /api/auth/setup-status`` reports to clients.
     """
     import sqlite3
-    import bcrypt
-    import os
     from app.database import _apply_sqlite_pragmas
 
     db_path = Path(settings.db_path)
@@ -514,26 +515,8 @@ def _ensure_admin_user() -> None:
     cur.close()
     try:
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        if count > 0:
-            return
-        
-        # TODO: eliminate admin:admin default password fallback
-        admin_pass = os.environ.get("ADMIN_PASSWORD")
-        if not admin_pass:
-            admin_pass = "admin"
-            logger.info("No custom ADMIN_PASSWORD provided in env. Defaulting to 'admin'.")
-            
-        hashed = bcrypt.hashpw(admin_pass.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-        conn.execute(
-            "INSERT INTO users (username, hashed_password, is_admin, created_at) "
-            "VALUES (?, ?, 1, datetime('now'))",
-            ("admin", hashed),
-        )
-        conn.commit()
-        logger.info("_ensure_admin_user: created default admin user 'admin'")
-    except RuntimeError:
-        # Configuration errors must bubble up to abort startup immediately
-        raise
+        if count == 0:
+            logger.info("_ensure_admin_user: no users found — first-boot setup required (see POST /api/auth/setup)")
     except Exception:
         logger.exception("_ensure_admin_user: failed")
     finally:

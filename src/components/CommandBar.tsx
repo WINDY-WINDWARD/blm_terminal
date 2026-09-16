@@ -46,6 +46,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'PICKS', desc: 'AI Swing Trade Picks' },
   { cmd: 'CLEAR', desc: 'Clear focused slot (empty slot)' },
   { cmd: 'LOGOUT', desc: 'End session and log out' },
+  { cmd: 'TOUR', desc: 'Replay the guided tour' },
 ];
 
 export function CommandBar() {

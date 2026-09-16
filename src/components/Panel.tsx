@@ -147,6 +147,8 @@ export function Panel({ id, title }: PanelProps) {
 
   return (
     <div
+      data-tour-panel={title}
+      data-tour-panel-id={id}
       className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-150 h-full w-full ${
         isSelected
           ? 'border-yellow-500'

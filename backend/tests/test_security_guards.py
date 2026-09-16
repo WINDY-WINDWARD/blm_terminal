@@ -30,7 +30,10 @@ def test_jwt_secret_validation_in_production(monkeypatch):
         importlib.reload(app.auth)
 
 
-def test_admin_bootstrap_raises_in_production_without_password(monkeypatch, tmp_path):
+def test_admin_bootstrap_never_writes_default_credential(monkeypatch, tmp_path):
+    """_ensure_admin_user is a no-op: first-boot admin creation is owned by
+    POST /api/auth/setup. No default credential may ever be written,
+    in any environment."""
     monkeypatch.setenv("ENV", "production")
     monkeypatch.setenv("SECRET_KEY", "valid_strong_secret_key_12345")
     monkeypatch.setenv("ADMIN_PASSWORD", "")
@@ -44,5 +47,11 @@ def test_admin_bootstrap_raises_in_production_without_password(monkeypatch, tmp_
     conn.close()
 
     from main import _ensure_admin_user
-    with pytest.raises(RuntimeError, match="ADMIN_PASSWORD environment variable must be set"):
-        _ensure_admin_user()
+    assert _ensure_admin_user() is None
+
+    conn = sqlite3.connect(str(db_file))
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0

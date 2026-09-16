@@ -1,0 +1,59 @@
+/* driver.js theme overrides — amber-on-dark terminal look */
+.blm-tour-popover.driver-popover {
+  background-color: #121418;
+  border: 1px solid #2d3139;
+  border-radius: 6px;
+  color: #e1e4ea;
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.blm-tour-popover .driver-popover-title {
+  color: #f59e0b;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.blm-tour-popover .driver-popover-description {
+  color: #d1d5db;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.blm-tour-popover .driver-popover-progress-text {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.blm-tour-popover .driver-popover-footer button {
+  font-family: inherit;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #2d3139;
+  background: #1a1d23;
+  color: #e1e4ea;
+  text-shadow: none;
+}
+
+.blm-tour-popover .driver-popover-footer button:hover {
+  background: #252830;
+  color: #fff;
+}
+
+.blm-tour-popover .driver-popover-footer button.driver-popover-next-btn {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.blm-tour-popover .driver-popover-footer button.driver-popover-next-btn:hover {
+  background: #1d4ed8;
+}
+
+.blm-tour-popover .driver-popover-arrow-side-left.driver-popover-arrow,
+.blm-tour-popover .driver-popover-arrow-side-right.driver-popover-arrow,
+.blm-tour-popover .driver-popover-arrow-side-top.driver-popover-arrow,
+.blm-tour-popover .driver-popover-arrow-side-bottom.driver-popover-arrow {
+  border-color: #121418;
+}

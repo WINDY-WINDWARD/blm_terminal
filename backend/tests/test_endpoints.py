@@ -50,14 +50,25 @@ _AUTH_TOKEN: str | None = None
 def get_auth_headers() -> dict[str, str]:
     global _AUTH_TOKEN
     if _AUTH_TOKEN is None:
+        password = os.environ.get("ADMIN_PASSWORD", "admin")
         try:
             resp = requests.post(
                 f"{BASE_URL}/api/auth/login",
-                data={"username": "admin", "password": os.environ.get("ADMIN_PASSWORD", "admin")},
+                data={"username": "admin", "password": password},
                 timeout=10,
             )
             if resp.status_code == 200:
                 _AUTH_TOKEN = resp.json().get("access_token")
+            elif resp.status_code == 401 and len(password) >= 8:
+                # Fresh backend with no accounts: first-boot setup owns admin
+                # creation (no default credential is seeded anymore).
+                setup_resp = requests.post(
+                    f"{BASE_URL}/api/auth/setup",
+                    json={"username": "admin", "password": password},
+                    timeout=10,
+                )
+                if setup_resp.status_code == 200:
+                    _AUTH_TOKEN = setup_resp.json().get("access_token")
         except Exception:
             pass
     return {"Authorization": f"Bearer {_AUTH_TOKEN}"} if _AUTH_TOKEN else {}

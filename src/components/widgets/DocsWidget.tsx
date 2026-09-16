@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useAtomValue } from 'jotai';
-import { focusedPanelAtom, activePanelsAtom } from '@/store/terminalStore';
+import { useAtomValue, useSetAtom } from 'jotai';
+import { focusedPanelAtom, activePanelsAtom, tutorialStatusAtom } from '@/store/terminalStore';
 import { WIDGET_DOCS, DOCS_INDEX, type WidgetDoc, type DocField } from '@/lib/widgetDocs';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -101,6 +101,7 @@ function IndexView({ onSelect }: { onSelect: (cmd: string) => void }) {
 export function DocsWidget() {
   const focusedPanel = useAtomValue(focusedPanelAtom);
   const activePanels = useAtomValue(activePanelsAtom);
+  const startTour = useSetAtom(tutorialStatusAtom);
   const [manualCmd, setManualCmd] = useState<string | null>(null);
 
   // Determine which widget to document:
@@ -117,6 +118,14 @@ export function DocsWidget() {
     <div className="h-full flex flex-col bg-terminal-bg text-terminal-amber">
       {/* Inner nav bar */}
       <div className="flex items-center gap-2 px-2 py-1 border-b border-terminal-gray/40 shrink-0">
+        <button
+          onClick={() => startTour('active')}
+          title="Replay the guided tour"
+          className="text-terminal-amber/70 hover:text-terminal-amber text-[10px] font-mono transition-colors shrink-0"
+        >
+          ▸ TOUR
+        </button>
+        <span className="text-terminal-gray/40 text-[10px]">/</span>
         {doc ? (
           <>
             <button
