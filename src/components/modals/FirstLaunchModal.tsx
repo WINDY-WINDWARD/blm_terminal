@@ -528,16 +528,10 @@ export function FirstLaunchModal() {
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">AI assistant (optional)</p>
             <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-[#d1d5db] border border-[#2d3139]">
-              Tip: OpenCode has a generous free tier — sign up at{' '}
-              <a
-                href="https://opencode.ai/auth"
-                target="_blank"
-                rel="noreferrer"
-                className="text-terminal-amber underline hover:text-yellow-400"
-              >
-                opencode.ai/auth
-              </a>
-              , copy your API key, and paste it below. No billing required to get started.
+              Please note: the best results come from a paid subscription provider
+              or a pay-as-you-go API provider. Free models work well too, depending
+              on the provider and model — and if you really have to use free models,
+              the maker personally recommends OpenCode Zen (Free).
             </div>
             {aiStatus && (
               <div

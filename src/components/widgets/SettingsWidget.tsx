@@ -1088,6 +1088,11 @@ export function SettingsWidget() {
           {/* AI Provider Section */}
           <div className="flex flex-col gap-2">
             <div className="flex flex-col gap-1.5 text-xs">
+              <span className="text-white/50 text-[10px] leading-relaxed">
+                Best results need a paid subscription or pay-as-you-go provider.
+                Free models work well too depending on provider/model — the maker
+                recommends OpenCode Zen (Free) if you must use free.
+              </span>
               <label className="flex flex-col gap-0.5">
                 <span className="text-white/70 text-[10px]">Provider:</span>
                 <select
