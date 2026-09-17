@@ -25,6 +25,10 @@ if (Test-Path ".venv\Scripts\python.exe") {
 # bundled data files (e.g. input-network-definition.zip) at runtime. Without
 # them the frozen exe fails to launch the persistent warm browser with
 # "No such file or directory ... _MEI*/apify_fingerprint_datapoints/...".
+# --exclude-module camoufox.gui: the optional Qt launcher UI for Camoufox,
+# never imported by the backend (only camoufox + camoufox.sync_api are used).
+# Without the exclusion, --collect-all trips over it and warns about the
+# missing PySide6 dependency on every build.
 & $PyInstallerCmd `
     --name blm-backend `
     --onefile `
@@ -37,6 +41,7 @@ if (Test-Path ".venv\Scripts\python.exe") {
     --hidden-import "newspaper.extractors" `
     --hidden-import "passlib.handlers.bcrypt" `
     --collect-all "camoufox" `
+    --exclude-module "camoufox.gui" `
     --collect-all "apify_fingerprint_datapoints" `
     --collect-all "language_tags" `
     main.py
