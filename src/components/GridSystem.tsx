@@ -195,6 +195,7 @@ export function GridSystem() {
   return (
     <div
       ref={containerRef}
+      data-tour="terminal-grid"
       className="flex-1 min-h-0 overflow-hidden bg-terminal-gray p-[1px] relative"
     >
       {hasMerges ? (

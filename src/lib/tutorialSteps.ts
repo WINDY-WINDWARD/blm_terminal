@@ -44,7 +44,7 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
   {
     id: 'action-select',
     command: '',
-    selector: '[data-tour-panel-id="panel-1"]',
+    selector: '[data-tour="terminal-grid"]',
     title: 'Try it: Select panels (Ctrl+Click)',
     description:
       'Hold Ctrl (Cmd on Mac) and click two adjacent panels (e.g. Panel 1 and Panel 2). ' +
@@ -54,7 +54,7 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
   {
     id: 'action-merge',
     command: '',
-    selector: '[data-tour-panel-id="panel-1"]',
+    selector: '[data-tour="terminal-grid"]',
     title: 'Try it: Merge panels (Press M)',
     description:
       'With the panels selected in gold, press the "M" key on your keyboard to merge them into one expanded view! (Or click Next / Skip).',
@@ -63,7 +63,7 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
   {
     id: 'action-unmerge',
     command: '',
-    selector: '[data-tour-panel-id="panel-1"]',
+    selector: '[data-tour="terminal-grid"]',
     title: 'Try it: Unmerge panel (Press U)',
     description:
       'Focus the merged panel and press "U" on your keyboard to unmerge and split it back into separate panels! (Or click Next / Skip).',

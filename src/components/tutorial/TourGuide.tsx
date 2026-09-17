@@ -104,7 +104,7 @@ export function TourGuide() {
     const { steps } = buildTutorialSteps(undefined, onActionStepHighlight);
     const d = driver({
       showProgress: true,
-      allowClose: true,
+      allowClose: false,
       overlayColor: '#000',
       overlayOpacity: 0.7,
       stagePadding: 6,

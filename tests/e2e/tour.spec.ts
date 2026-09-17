@@ -72,8 +72,8 @@ test('fresh boot: wizard → create admin → consent → skip AI → tour → d
   await clickContinue(page);
 
   // Step 2: backend (mocked 401 = alive)
-  await expect(page.locator(MODAL)).toContainText('Connect to the backend');
-  await expect(page.locator(MODAL)).toContainText('Backend reachable', { timeout: 10_000 });
+  await expect(page.locator(MODAL)).toContainText('Checking engine status');
+  await expect(page.locator(MODAL)).toContainText('Engine active', { timeout: 10_000 });
   await clickContinue(page);
 
   // Step 3: create admin

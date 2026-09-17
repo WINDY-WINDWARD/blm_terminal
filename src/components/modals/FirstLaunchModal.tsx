@@ -84,6 +84,7 @@ export function FirstLaunchModal() {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMsg, setAiMsg] = useState('');
   const geminiPollRef = useRef<NodeJS.Timeout | null>(null);
+  const keyDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -91,6 +92,10 @@ export function FirstLaunchModal() {
       if (geminiPollRef.current) {
         clearInterval(geminiPollRef.current);
         geminiPollRef.current = null;
+      }
+      if (keyDebounceRef.current) {
+        clearTimeout(keyDebounceRef.current);
+        keyDebounceRef.current = null;
       }
     };
   }, []);
@@ -233,24 +238,29 @@ export function FirstLaunchModal() {
     }
   };
 
-  const handleSaveAiKey = async () => {
+  const handleKeyChange = (val: string) => {
+    setAiKey(val);
     setAiMsg('');
-    if (!aiKey.trim()) {
-      setAiMsg('Paste an API key first, or skip this step.');
+    if (keyDebounceRef.current) clearTimeout(keyDebounceRef.current);
+    const trimmed = val.trim();
+    if (!trimmed) {
+      setAiStatus({ provider: aiProvider, isConfigured: false });
       return;
     }
     setAiBusy(true);
-    try {
-      await saveSystemConfig('ai.provider', aiProvider);
-      await saveSystemConfig(`ai.${aiProvider}_api_key`, aiKey.trim());
-      const st = await checkAiStatus();
-      setAiStatus(st);
-      setAiMsg(st.isConfigured ? 'AI connected successfully.' : 'Key saved but backend reports unconfigured.');
-    } catch (err: unknown) {
-      setAiMsg(errText(err, 'Could not save AI key'));
-    } finally {
-      setAiBusy(false);
-    }
+    keyDebounceRef.current = setTimeout(async () => {
+      try {
+        await saveSystemConfig('ai.provider', aiProvider);
+        await saveSystemConfig(`ai.${aiProvider}_api_key`, trimmed);
+        const st = await checkAiStatus();
+        setAiStatus(st);
+        setAiMsg(st.isConfigured ? 'Connected successfully.' : '');
+      } catch (err: unknown) {
+        setAiMsg(errText(err, 'Could not save AI key'));
+      } finally {
+        setAiBusy(false);
+      }
+    }, 400);
   };
 
   const finish = () => {
@@ -291,37 +301,27 @@ export function FirstLaunchModal() {
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">Welcome to BLM Terminal.</p>
             <p className="text-xs text-terminal-muted leading-relaxed">
-              Step into the future of information and market intelligence. In just sixty seconds,
-              we'll verify your high-speed analytics engine, set up your secure administrator account,
-              tailor your real-time data extraction preferences, and awaken your AI market copilot.
-              Your competitive edge begins here—trading connections (OpenAlgo) can be seamlessly
-              linked whenever you're ready in Settings.
+              Welcome to the future of financial intelligence. In a few quick steps,
+              we'll activate your real-time analytics engine, create your admin account,
+              and connect your AI assistant. You'll be exploring the markets in under a minute.
             </p>
           </div>
         )}
 
         {step === 'backend' && (
           <div className="space-y-3 text-sm">
-            <p className="text-base text-white font-semibold">Connect to the backend</p>
+            <p className="text-base text-white font-semibold">Checking engine status</p>
             <p className="text-xs text-terminal-muted leading-relaxed">
-              The terminal needs its Python backend (blm-backend / uvicorn on port 4455).
+              Connecting to the local analytics and data processing engine.
             </p>
-            {healthChecking && <p className="text-xs text-terminal-amber animate-pulse">CHECKING…</p>}
+            {healthChecking && <p className="text-xs text-terminal-amber animate-pulse">CHECKING ENGINE…</p>}
             {health && (
               <div
                 className={`p-2 text-xs border ${health.ok ? 'bg-green-900/40 border-green-600 text-green-200' : 'bg-red-900/50 border-red-500 text-red-200'}`}
               >
-                {health.message}
+                {health.ok ? 'Engine active' : health.message}
               </div>
             )}
-            <button
-              type="button"
-              onClick={runBackendCheck}
-              disabled={healthChecking}
-              className="px-3 py-1.5 text-xs border border-terminal-border bg-terminal-bg hover:border-terminal-amber disabled:opacity-50 transition-colors"
-            >
-              {healthChecking ? 'CHECKING…' : 'RETRY CHECK'}
-            </button>
           </div>
         )}
 
@@ -482,26 +482,16 @@ export function FirstLaunchModal() {
                 </button>
               </div>
             ) : (
-              <>
-                <Field label={`${aiProvider === 'go' ? 'GO' : 'ZEN'} API KEY`}>
-                  <input
-                    type="password"
-                    value={aiKey}
-                    onChange={(e) => setAiKey(e.target.value)}
-                    className={inputCls}
-                    placeholder="sk-…"
-                    autoComplete="off"
-                  />
-                </Field>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveAiKey()}
-                  disabled={aiBusy}
-                  className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 disabled:opacity-50 transition-colors text-sm"
-                >
-                  {aiBusy ? 'SAVING…' : 'SAVE AI KEY'}
-                </button>
-              </>
+              <Field label={`${aiProvider === 'go' ? 'GO' : 'ZEN'} API KEY`}>
+                <input
+                  type="password"
+                  value={aiKey}
+                  onChange={(e) => handleKeyChange(e.target.value)}
+                  className={inputCls}
+                  placeholder="sk-…"
+                  autoComplete="off"
+                />
+              </Field>
             )}
             {aiMsg && (
               <div
