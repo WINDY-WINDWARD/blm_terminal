@@ -147,6 +147,17 @@ export function FirstLaunchModal() {
       .finally(() => setHealthChecking(false));
   };
 
+  // Auto-retry the engine probe while it keeps failing. The packaged
+  // backend can take 30-90s to boot on first launch, and the one-shot
+  // probe above never refires on its own (health stays non-null), which
+  // used to leave users permanently stuck on the error state.
+  useEffect(() => {
+    if (!mounted || completed || step !== 'backend') return;
+    if (!health || health.ok || healthChecking) return;
+    const t = setTimeout(() => runBackendCheck(), 5000);
+    return () => clearTimeout(t);
+  });
+
   const applyAuth = (next: { user: { id: number; username: string; is_admin: boolean } }) => {
     setAuth(next);
     queryClient.invalidateQueries();
@@ -410,6 +421,18 @@ export function FirstLaunchModal() {
                 className={`p-2 text-xs border ${health.ok ? 'bg-green-900/40 border-green-600 text-green-200' : 'bg-red-900/50 border-red-500 text-red-200'}`}
               >
                 {health.ok ? 'Engine active' : health.message}
+              </div>
+            )}
+            {health && !health.ok && !healthChecking && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={runBackendCheck}
+                  className="rounded px-4 py-2 text-xs font-medium text-[#9ca3af] hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139]"
+                >
+                  Retry check
+                </button>
+                <span className="text-[11px] text-terminal-muted">Retrying automatically every 5s…</span>
               </div>
             )}
           </div>
