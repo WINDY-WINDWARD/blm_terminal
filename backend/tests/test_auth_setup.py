@@ -36,7 +36,7 @@ async def client(tmp_path):
     app.dependency_overrides[get_db] = override_get_db
     try:
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="https://test") as ac:
             yield ac
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -113,7 +113,7 @@ async def test_login_works_after_setup(client):
     )
     # Fresh client without cookies -> form login works with the new creds
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as fresh:
+    async with AsyncClient(transport=transport, base_url="https://test") as fresh:
         login = await fresh.post(
             "/api/auth/login",
             data={"username": "chief", "password": "ChiefPass123!"},

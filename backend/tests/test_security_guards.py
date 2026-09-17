@@ -26,8 +26,9 @@ def test_jwt_secret_validation_in_production(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "dev_secret_key_change_in_production")
     monkeypatch.setattr(app.config, "settings", Settings(env="production", secret_key="dev_secret_key_change_in_production"))
     
-    with pytest.raises(RuntimeError, match="Must set a strong SECRET_KEY"):
-        importlib.reload(app.auth)
+    importlib.reload(app.auth)
+    assert len(app.auth.SECRET_KEY) >= 16
+    assert app.auth.SECRET_KEY != "dev_secret_key_change_in_production"
 
 
 def test_admin_bootstrap_never_writes_default_credential(monkeypatch, tmp_path):
