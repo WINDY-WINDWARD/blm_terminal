@@ -40,7 +40,7 @@ describe('buildTutorialSteps', () => {
 
   it('every skippable def carries a command so users can open it manually', () => {
     for (const def of TUTORIAL_STEP_DEFS) {
-      if (def.id === 'command-bar' || def.id === 'panels') continue;
+      if (def.id === 'command-bar' || def.id.startsWith('action-')) continue;
       expect(def.command.length).toBeGreaterThan(0);
     }
   });

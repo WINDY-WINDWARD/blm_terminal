@@ -32,6 +32,7 @@ interface ChatMessage {
 interface ModelOption {
   id: string;
   label: string;
+  is_free?: boolean;
 }
 
 interface SessionSummary {
@@ -894,14 +895,41 @@ export function AiWidget() {
             value={model || defaultModel}
             onChange={(e) => patchSession(activeKey, { model: e.target.value })}
             disabled={isStreaming}
-            className="bg-terminal-bg border border-terminal-amber/20 text-terminal-amber/70 text-[10px] font-mono px-1 py-0.5 rounded outline-none focus:border-terminal-amber/50 disabled:opacity-50 max-w-[160px]"
+            className="bg-terminal-bg border border-terminal-amber/20 text-terminal-amber/70 text-[10px] font-mono px-1 py-0.5 rounded outline-none focus:border-terminal-amber/50 disabled:opacity-50 max-w-[170px]"
           >
             {availableModels.length > 0 ? (
-              availableModels.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))
+              availableModels.some((m) => m.is_free !== undefined) ? (
+                <>
+                  {availableModels.some((m) => m.is_free) && (
+                    <optgroup label="Free Models" className="bg-[#121418] text-terminal-amber font-bold">
+                      {availableModels
+                        .filter((m) => m.is_free)
+                        .map((m) => (
+                          <option key={m.id} value={m.id} className="text-white font-normal">
+                            {m.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                  {availableModels.some((m) => !m.is_free) && (
+                    <optgroup label="Paid Models" className="bg-[#121418] text-white/50 font-bold">
+                      {availableModels
+                        .filter((m) => !m.is_free)
+                        .map((m) => (
+                          <option key={m.id} value={m.id} className="text-white font-normal">
+                            {m.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                </>
+              ) : (
+                availableModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))
+              )
             ) : (
               <option value="">Loading models…</option>
             )}

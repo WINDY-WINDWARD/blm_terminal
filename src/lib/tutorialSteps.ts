@@ -7,9 +7,10 @@ export interface TutorialStepDef {
   selector: string;
   title: string;
   description: string;
+  actionType?: 'focus' | 'widget' | 'select' | 'merge' | 'unmerge' | 'layout';
 }
 
-/** Full tour: terminal basics + per-widget deep-dives, in walk order. */
+/** Full tour: terminal basics + interactive hands-on actions + widget deep-dives. */
 export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
   {
     id: 'command-bar',
@@ -17,19 +18,66 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '#terminal-command-input',
     title: 'Command bar',
     description:
-      'Type a widget command (CHART, WATCH, NEWS…) to load it into the focused panel. ' +
-      'Type / followed by a symbol (e.g. /RELIANCE) to switch the global symbol. ' +
-      'Type TOUR anytime to replay this guide.',
+      'This is your control center. Type widget commands (CHART, WATCH, NEWS, SETTINGS), ' +
+      'switch symbols (/RELIANCE), or manage layouts. Type TOUR anytime to replay this guide.',
   },
   {
-    id: 'panels',
+    id: 'action-focus',
     command: '',
-    selector: '[data-tour-panel="TOP"]',
-    title: 'Panels: focus, select, merge',
+    selector: '[data-tour-panel-id="panel-2"]',
+    title: 'Try it: Click to focus',
     description:
-      'Click a panel to focus it (blue border) — commands load there. ' +
-      'Ctrl+click panels to select them (gold), then press M to merge into one big view. ' +
-      'Focus a merged panel and press U to unmerge. Changing the panel count in Settings resets merges.',
+      'Click this panel (or any other panel) to focus it. Its border turns blue to show it is active—commands ' +
+      'you type in the bar load into the focused panel. (Click to try, or click Next / Skip).',
+    actionType: 'focus',
+  },
+  {
+    id: 'action-widget',
+    command: 'NEWS',
+    selector: '#terminal-command-input',
+    title: 'Try it: Change widget',
+    description:
+      'Now load a different widget into your focused panel. Click here, type NEWS (or WATCH or CHART), ' +
+      'and press Enter! The focused panel will change instantly. (Or click Next / Skip).',
+    actionType: 'widget',
+  },
+  {
+    id: 'action-select',
+    command: '',
+    selector: '[data-tour-panel-id="panel-1"]',
+    title: 'Try it: Select panels (Ctrl+Click)',
+    description:
+      'Hold Ctrl (Cmd on Mac) and click two adjacent panels (e.g. Panel 1 and Panel 2). ' +
+      'Their borders will turn gold to show they are selected together! (Or click Next / Skip).',
+    actionType: 'select',
+  },
+  {
+    id: 'action-merge',
+    command: '',
+    selector: '[data-tour-panel-id="panel-1"]',
+    title: 'Try it: Merge panels (Press M)',
+    description:
+      'With the panels selected in gold, press the "M" key on your keyboard to merge them into one expanded view! (Or click Next / Skip).',
+    actionType: 'merge',
+  },
+  {
+    id: 'action-unmerge',
+    command: '',
+    selector: '[data-tour-panel-id="panel-1"]',
+    title: 'Try it: Unmerge panel (Press U)',
+    description:
+      'Focus the merged panel and press "U" on your keyboard to unmerge and split it back into separate panels! (Or click Next / Skip).',
+    actionType: 'unmerge',
+  },
+  {
+    id: 'action-layout',
+    command: 'LAYOUT',
+    selector: '#terminal-command-input',
+    title: 'Try it: Change panel layout',
+    description:
+      'You can switch your workspace grid between 2, 4, 6, or 8 panels. Try typing LAYOUT 6 or LAYOUT 2 in the command bar, ' +
+      'or change it anytime in Settings! (Or click Next / Skip).',
+    actionType: 'layout',
   },
   {
     id: 'chart',
@@ -37,7 +85,7 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '[data-tour-panel="CHART"]',
     title: 'CHART: price action',
     description:
-      'Candlestick chart for the active symbol with indicators and a LIVE overlay. ' +
+      'Candlestick chart for the active symbol with indicators, a LIVE overlay line, and EOD comparisons. ' +
       'Switch symbols from the command bar and every symbol-aware widget follows.',
   },
   {
@@ -46,7 +94,7 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '[data-tour-panel="WATCH"]',
     title: 'WATCH: your watchlist',
     description:
-      'Add symbols here to track LTP, change, and multi-timeframe returns. ' +
+      'Track real-time LTP, % change, and multi-timeframe returns for your portfolio. ' +
       'The top ticker tape follows your watchlist by default.',
   },
   {
@@ -55,7 +103,7 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '[data-tour-panel="NEWS"]',
     title: 'NEWS: market & company feed',
     description:
-      'Live headlines with source, sentiment, and threat filters. ' +
+      'Live financial headlines from iinvest and MoneyControl with sentiment and threat filters. ' +
       'The company tab follows the active symbol.',
   },
   {
@@ -64,8 +112,8 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '[data-tour-panel="AI"]',
     title: 'AI: market assistant',
     description:
-      'Chat about the active symbol, summarize news and announcements. ' +
-      'Needs an AI key — you set one during setup, or add it later in Settings.',
+      'Chat about any NSE stock, analyze fundamentals, or summarize corporate filings. ' +
+      'Supports OpenCode Zen (with free & paid models) and Google Gemini.',
   },
   {
     id: 'scan',
@@ -73,8 +121,8 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '[data-tour-panel="SCAN"]',
     title: 'SCAN & NOTIF: alerts',
     description:
-      'The global scanner flags momentum, volume, and 52-week triggers across the market. ' +
-      'Tune thresholds in Settings (admin).',
+      'The global scanner continuously monitors momentum, breakout, volume, and 52-week triggers across the market. ' +
+      'Tune thresholds in Settings.',
   },
   {
     id: 'settings',
@@ -82,13 +130,12 @@ export const TUTORIAL_STEP_DEFS: TutorialStepDef[] = [
     selector: '[data-tour-panel="SETTINGS"]',
     title: 'SETTINGS: connections',
     description:
-      'OpenAlgo trading connection, AI keys, ticker source, panel count, and scan thresholds ' +
-      'all live here (admin-gated where sensitive).',
+      'Configure OpenAlgo trading connections, AI provider keys, ticker sources, window layouts, and scanner thresholds.',
   },
 ];
 
 export interface BuiltTutorial {
-  steps: DriveStep[];
+  steps: (DriveStep & { actionType?: string })[];
   /** Defs skipped because their widget is not on screen */
   skipped: TutorialStepDef[];
 }
@@ -98,6 +145,7 @@ export interface BuiltTutorial {
 export function buildTutorialSteps(
   exists: (selector: string) => boolean = (sel) =>
     typeof document !== 'undefined' && document.querySelector(sel) !== null,
+  onActionStepHighlight?: (actionType: string | null) => void,
 ): BuiltTutorial {
   const present: TutorialStepDef[] = [];
   const skipped: TutorialStepDef[] = [];
@@ -105,9 +153,13 @@ export function buildTutorialSteps(
     (exists(def.selector) ? present : skipped).push(def);
   }
 
-  const steps: DriveStep[] = present.map((def) => ({
+  const steps: (DriveStep & { actionType?: string })[] = present.map((def) => ({
     element: def.selector,
+    actionType: def.actionType,
     popover: { title: def.title, description: def.description },
+    onHighlightStarted: () => {
+      onActionStepHighlight?.(def.actionType ?? null);
+    },
   }));
 
   const skippedHint =
@@ -122,6 +174,9 @@ export function buildTutorialSteps(
       title: 'You are set up',
       description:
         `That's the tour. Type TOUR to replay it, or open DOCS for per-widget reference.${skippedHint}`,
+    },
+    onHighlightStarted: () => {
+      onActionStepHighlight?.(null);
     },
   });
 

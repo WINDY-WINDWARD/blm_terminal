@@ -17,7 +17,7 @@ import {
   layoutConfirmAtom,
   authAtom,
 } from '@/store/terminalStore';
-import type { SavedLayout } from '@/store/terminalStore';
+import type { SavedLayout, PanelCount } from '@/store/terminalStore';
 import {
   enqueueQueueOperation,
   updateAndPersistLayouts,
@@ -241,6 +241,28 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       setLayoutToast({ visible: true, message: `Layout "${name}" loaded`, type: 'success' });
       setActiveCommand('');
       return;
+    }
+
+    // ── Layout size change (e.g. LAYOUT 2, LAYOUT 4, LAYOUT 6, LAYOUT 8) ───
+    const layoutMatch = activeCommand.match(/^(?:LAYOUT\s+)?([2468])$/i);
+    if (activeCommand.toUpperCase().startsWith('LAYOUT') || (layoutMatch && activeCommand.toUpperCase().startsWith('LAYOUT'))) {
+      const match = activeCommand.match(/([2468])/);
+      if (match) {
+        const count = parseInt(match[1], 10) as PanelCount;
+        setPanelCount(count);
+        setPanelSizes(null);
+        setSelectedPanels([]);
+        setMergedGroups({});
+        setLayoutToast({ visible: true, message: `Window layout set to ${count} panels`, type: 'success' });
+        setActiveCommand('');
+        return;
+      }
+      if (activeCommand.trim().toUpperCase() === 'LAYOUT') {
+        setActivePanels((prev) => ({ ...prev, [focusedPanel]: 'SETTINGS' }));
+        setLayoutToast({ visible: true, message: 'Type LAYOUT 2, 4, 6, or 8 to switch layout directly', type: 'success' });
+        setActiveCommand('');
+        return;
+      }
     }
 
     let targetCommand = activeCommand;

@@ -563,7 +563,7 @@ export function SettingsWidget() {
       </div>
 
       {/* Window Layout */}
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1" data-tour="layout-controls">
         <div className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest mb-1">
           Window Layout
         </div>

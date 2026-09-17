@@ -121,10 +121,82 @@ def _make_title(first_user_content: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
+
+_ZEN_MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "models": []}
+
+FALLBACK_ZEN_MODELS = [
+    {"id": "deepseek-v4-flash-free", "label": "[FREE] deepseek-v4-flash-free", "is_free": True},
+    {"id": "mimo-v2.5-free", "label": "[FREE] mimo-v2.5-free", "is_free": True},
+    {"id": "nemotron-3.5-lightning-free", "label": "[FREE] nemotron-3.5-lightning-free", "is_free": True},
+    {"id": "nemotron-3-ultra-free", "label": "[FREE] nemotron-3-ultra-free", "is_free": True},
+    {"id": "ling-3.0-flash-fin-free", "label": "[FREE] ling-3.0-flash-fin-free", "is_free": True},
+    {"id": "muse-spark-1.3-contributor-free", "label": "[FREE] muse-spark-1.3-contributor-free", "is_free": True},
+    {"id": "muse-spark-1.2-contributor-free", "label": "[FREE] muse-spark-1.2-contributor-free", "is_free": True},
+    {"id": "claude-sonnet-4-5", "label": "claude-sonnet-4-5", "is_free": False},
+    {"id": "claude-haiku-4-5", "label": "claude-haiku-4-5", "is_free": False},
+    {"id": "gemini-3.7-flash", "label": "gemini-3.7-flash", "is_free": False},
+    {"id": "gemini-3.5-flash", "label": "gemini-3.5-flash", "is_free": False},
+    {"id": "gpt-5.4-mini", "label": "gpt-5.4-mini", "is_free": False},
+    {"id": "deepseek-v4-flash", "label": "deepseek-v4-flash", "is_free": False},
+    {"id": "kimi-k2.5", "label": "kimi-k2.5", "is_free": False},
+    {"id": "minimax-m3", "label": "minimax-m3", "is_free": False},
+    {"id": "qwen3.6-plus", "label": "qwen3.6-plus", "is_free": False},
+]
+
+
+async def fetch_zen_models(api_key: str = "") -> list[dict[str, Any]]:
+    """Fetch OpenCode Zen models, listing free models at the top followed by paid models."""
+    import time
+
+    now = time.monotonic()
+    if _ZEN_MODELS_CACHE["models"] and (now - _ZEN_MODELS_CACHE["ts"]) < 600.0:
+        return _ZEN_MODELS_CACHE["models"]
+
+    if not api_key or api_key == "none":
+        return FALLBACK_ZEN_MODELS
+
+    url = "https://opencode.ai/zen/v1/models"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            models_data = data.get("data", [])
+
+            free_list: list[dict[str, Any]] = []
+            paid_list: list[dict[str, Any]] = []
+            for m in models_data:
+                mid = m.get("id", "")
+                if not mid:
+                    continue
+                if "-free" in mid.lower():
+                    free_list.append({"id": mid, "label": f"[FREE] {mid}", "is_free": True})
+                else:
+                    paid_list.append({"id": mid, "label": mid, "is_free": False})
+
+            free_list.sort(key=lambda x: x["id"])
+            paid_list.sort(key=lambda x: x["id"])
+            sorted_models = free_list + paid_list
+            if sorted_models:
+                _ZEN_MODELS_CACHE["models"] = sorted_models
+                _ZEN_MODELS_CACHE["ts"] = now
+                return sorted_models
+    except Exception as e:
+        logger.warning("Failed to fetch dynamic Zen models: %s", e)
+
+    return FALLBACK_ZEN_MODELS
+
+
 @router.get("/provider-models")
 async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
     """Fetch models dynamically from the provider API."""
-    if provider.lower() == "gemini":
+    prov = provider.lower().strip()
+    if prov == "gemini":
         return [
             {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
             {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
@@ -132,38 +204,39 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
             {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
             {"id": "gemini-3.1-pro-high",     "label": "Gemini 3.1 Pro (Reasoning / High)"},
         ]
-    
-    if provider.lower() in ("zen", "go"):
-        if not api_key:
-            return [{"id": "", "label": f"Enter {provider.title()} API Key to fetch models"}]
-        
-        # Zen and Go use the same base URL structure
+
+    if prov == "zen":
+        key = api_key.strip()
+        if not key or key == "none":
+            key = await get_dynamic_ai_api_key("zen")
+        return await fetch_zen_models(key)
+
+    if prov == "go":
+        key = api_key.strip()
+        if not key or key == "none":
+            key = await get_dynamic_ai_api_key("go")
+        if not key or key == "none":
+            return AVAILABLE_MODELS
+
         base_url = "https://opencode.ai/zen/go/v1"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     f"{base_url}/models",
-                    headers={"Authorization": f"Bearer {api_key}"}
+                    headers={"Authorization": f"Bearer {key}", "User-Agent": "Mozilla/5.0"}
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 models = data.get("data", [])
-                
-                # Format for dropdown
-                result = []
-                for m in models:
-                    model_id = m.get("id")
-                    # Emphasize potentially free models or just list them all
-                    result.append({"id": model_id, "label": model_id})
-                
-                # Sort alphabetically
+                result = [{"id": m.get("id"), "label": m.get("id")} for m in models if m.get("id")]
                 result.sort(key=lambda x: x["id"])
-                return result
+                return result or AVAILABLE_MODELS
         except Exception as e:
-            logger.warning("Failed to fetch dynamic models for %s: %s", provider, e)
-            return [{"id": "", "label": f"Failed to fetch models: {str(e)[:50]}"}]
-            
+            logger.warning("Failed to fetch dynamic models for go: %s", e)
+            return AVAILABLE_MODELS
+
     return []
+
 
 @router.get("/chat/models")
 async def get_chat_models() -> list[dict]:
@@ -176,7 +249,16 @@ async def get_chat_models() -> list[dict]:
             {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
             {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
         ]
-        
+
+    if provider == "zen":
+        api_key = await get_dynamic_ai_api_key("zen")
+        return await fetch_zen_models(api_key)
+
+    if provider == "go":
+        api_key = await get_dynamic_ai_api_key("go")
+        models = await get_provider_models("go", api_key)
+        return models or AVAILABLE_MODELS
+
     return AVAILABLE_MODELS
 
 

@@ -125,3 +125,21 @@ export async function checkAiStatus(): Promise<AiStatus> {
     isConfigured: d.is_configured === true,
   };
 }
+
+export async function initiateGeminiOAuth(): Promise<string> {
+  const { res, data } = await fetchJson('/api/py/auth/gemini/login');
+  if (!res.ok) throw new Error('Failed to initiate Gemini login');
+  const authUrl = (data as { auth_url?: unknown })?.auth_url;
+  if (typeof authUrl !== 'string') throw new Error('No authorization URL returned');
+  return authUrl;
+}
+
+export async function checkGeminiOAuthStatus(): Promise<{ configured: boolean; hasRefreshToken: boolean }> {
+  const { res, data } = await fetchJson('/api/py/auth/gemini/status', undefined, 5000);
+  if (!res.ok) return { configured: false, hasRefreshToken: false };
+  const d = data as { configured?: unknown; has_refresh_token?: unknown };
+  return {
+    configured: d.configured === true,
+    hasRefreshToken: d.has_refresh_token === true,
+  };
+}

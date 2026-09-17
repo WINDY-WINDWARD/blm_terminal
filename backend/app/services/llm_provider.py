@@ -122,8 +122,10 @@ async def _run_openai_loop(
     tools: list[dict[str, Any]],
     tool_executor: ToolExecutor,
     max_iter: int = 10,
+    base_url: str | None = None,
 ) -> AsyncGenerator[str, None]:
-    url = f"{settings.zen_base_url}/chat/completions"
+    endpoint = base_url or settings.zen_base_url
+    url = f"{endpoint}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -241,8 +243,10 @@ async def _run_anthropic_loop(
     tools: list[dict[str, Any]],
     tool_executor: ToolExecutor,
     max_iter: int = 10,
+    base_url: str | None = None,
 ) -> AsyncGenerator[str, None]:
-    url = f"{settings.zen_base_url}/messages"
+    endpoint = base_url or settings.zen_base_url
+    url = f"{endpoint}/messages"
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
@@ -626,15 +630,23 @@ async def stream_chat_completion(
         yield json.dumps({"type": "done"})
         return
 
+    base_url = (
+        "https://opencode.ai/zen/v1"
+        if provider == "zen"
+        else "https://opencode.ai/zen/go/v1"
+        if provider == "go"
+        else settings.zen_base_url
+    )
+
     if model in ANTHROPIC_MODELS:
         anthropic_messages = [m for m in messages if m.get("role") != "system"]
         sys_prompt = system_prompt or ""
-        async for chunk in _run_anthropic_loop(anthropic_messages, sys_prompt, model, api_key, tools, tool_executor, max_iter):
+        async for chunk in _run_anthropic_loop(anthropic_messages, sys_prompt, model, api_key, tools, tool_executor, max_iter, base_url=base_url):
             yield chunk
     else:
         full_messages = []
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
-        async for chunk in _run_openai_loop(full_messages, model, api_key, tools, tool_executor, max_iter):
+        async for chunk in _run_openai_loop(full_messages, model, api_key, tools, tool_executor, max_iter, base_url=base_url):
             yield chunk

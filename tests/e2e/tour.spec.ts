@@ -86,11 +86,9 @@ test('fresh boot: wizard → create admin → consent → skip AI → tour → d
   await expect(page.locator(MODAL)).toContainText('Signed in as admin', { timeout: 10_000 });
   await clickContinue(page);
 
-  // Step 4: consent
+  // Step 4: consent (agree immediately transitions to AI)
   await expect(page.locator(MODAL)).toContainText('Data extraction & privacy');
   await page.locator(`${MODAL} button:has-text("I Agree, Enable")`).click();
-  await expect(page.locator(MODAL)).toContainText('Choice saved', { timeout: 10_000 });
-  await clickContinue(page);
 
   // Step 5: AI — skip
   await expect(page.locator(MODAL)).toContainText('AI assistant (optional)');

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAtom } from 'jotai';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -12,7 +12,9 @@ import {
 import {
   checkAiStatus,
   checkBackendHealth,
+  checkGeminiOAuthStatus,
   getSetupStatus,
+  initiateGeminiOAuth,
   loginWithPassword,
   postScrapingConsent,
   saveSystemConfig,
@@ -57,7 +59,6 @@ export function FirstLaunchModal() {
 
   const [mounted, setMounted] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
-  const [dismissed, setDismissed] = useState(false);
 
   // backend step
   const [health, setHealth] = useState<HealthResult | null>(null);
@@ -82,16 +83,23 @@ export function FirstLaunchModal() {
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMsg, setAiMsg] = useState('');
+  const geminiPollRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setMounted(true);
+    return () => {
+      if (geminiPollRef.current) {
+        clearInterval(geminiPollRef.current);
+        geminiPollRef.current = null;
+      }
+    };
   }, []);
 
   const step = STEPS[stepIdx].id;
 
   // Lazily probe when entering gated steps
   useEffect(() => {
-    if (!mounted || completed || dismissed) return;
+    if (!mounted || completed) return;
     if (step === 'backend' && health === null && !healthChecking) {
       setHealthChecking(true);
       checkBackendHealth()
@@ -109,9 +117,9 @@ export function FirstLaunchModal() {
         .catch(() => setAiStatus(null));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, mounted, completed, dismissed]);
+  }, [step, mounted, completed]);
 
-  if (!mounted || completed || dismissed) return null;
+  if (!mounted || completed) return null;
 
   const runBackendCheck = () => {
     setHealthChecking(true);
@@ -169,10 +177,59 @@ export function FirstLaunchModal() {
     try {
       await postScrapingConsent(value);
       setConsent(value);
+      if (value) {
+        // When user agrees, immediately advance to next step without asking to continue
+        setStepIdx((i) => Math.min(i + 1, STEPS.length - 1));
+      }
     } catch (err: unknown) {
       setConsentError(errText(err, 'Could not save consent'));
     } finally {
       setConsentBusy(false);
+    }
+  };
+
+  const handleProviderChange = (newProvider: string) => {
+    if (geminiPollRef.current) {
+      clearInterval(geminiPollRef.current);
+      geminiPollRef.current = null;
+    }
+    setAiProvider(newProvider);
+    setAiMsg('');
+    setAiBusy(false);
+  };
+
+  const handleGeminiLogin = async () => {
+    setAiMsg('');
+    setAiBusy(true);
+    if (geminiPollRef.current) {
+      clearInterval(geminiPollRef.current);
+      geminiPollRef.current = null;
+    }
+    try {
+      const authUrl = await initiateGeminiOAuth();
+      window.open(authUrl, '_blank');
+      setAiMsg('Awaiting Google OAuth... Complete sign-in in your browser window.');
+      geminiPollRef.current = setInterval(async () => {
+        try {
+          const status = await checkGeminiOAuthStatus();
+          if (status.configured && status.hasRefreshToken) {
+            if (geminiPollRef.current) {
+              clearInterval(geminiPollRef.current);
+              geminiPollRef.current = null;
+            }
+            await saveSystemConfig('ai.provider', 'gemini');
+            const st = await checkAiStatus();
+            setAiStatus(st);
+            setAiMsg('Gemini connected successfully!');
+            setAiBusy(false);
+          }
+        } catch {
+          // Keep polling
+        }
+      }, 2500);
+    } catch (err: unknown) {
+      setAiBusy(false);
+      setAiMsg(errText(err, 'Failed to initiate Google OAuth'));
     }
   };
 
@@ -188,7 +245,7 @@ export function FirstLaunchModal() {
       await saveSystemConfig(`ai.${aiProvider}_api_key`, aiKey.trim());
       const st = await checkAiStatus();
       setAiStatus(st);
-      setAiMsg(st.isConfigured ? 'AI configured successfully.' : 'Key saved but backend reports unconfigured.');
+      setAiMsg(st.isConfigured ? 'AI connected successfully.' : 'Key saved but backend reports unconfigured.');
     } catch (err: unknown) {
       setAiMsg(errText(err, 'Could not save AI key'));
     } finally {
@@ -234,9 +291,11 @@ export function FirstLaunchModal() {
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">Welcome to BLM Terminal.</p>
             <p className="text-xs text-terminal-muted leading-relaxed">
-              This short setup connects the app backend, creates your administrator account,
-              records your data-extraction choice, and optionally enables the AI assistant.
-              Takes about a minute. Trading connections (OpenAlgo) can be added later in Settings.
+              Step into the future of information and market intelligence. In just sixty seconds,
+              we'll verify your high-speed analytics engine, set up your secure administrator account,
+              tailor your real-time data extraction preferences, and awaken your AI market copilot.
+              Your competitive edge begins here—trading connections (OpenAlgo) can be seamlessly
+              linked whenever you're ready in Settings.
             </p>
           </div>
         )}
@@ -354,16 +413,12 @@ export function FirstLaunchModal() {
                 Choice saved: {consent ? 'Advanced Extraction enabled.' : 'Safe Mode (extraction disabled).'}
               </div>
             )}
-            <div className="flex gap-2">
+            <div className="flex gap-2.5 pt-1">
               <button
                 type="button"
                 onClick={() => void handleConsent(false)}
                 disabled={consentBusy}
-                className={`flex-1 px-3 py-2 text-xs font-medium border transition disabled:opacity-50 ${
-                  consentChoice === false
-                    ? 'border-terminal-amber text-terminal-amber'
-                    : 'border-terminal-border text-terminal-muted hover:text-white'
-                }`}
+                className="px-3.5 py-2.5 text-xs font-medium border border-terminal-border text-terminal-muted hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition rounded disabled:opacity-50"
               >
                 Decline (Safe Mode)
               </button>
@@ -371,13 +426,9 @@ export function FirstLaunchModal() {
                 type="button"
                 onClick={() => void handleConsent(true)}
                 disabled={consentBusy}
-                className={`flex-1 px-3 py-2 text-xs font-medium border transition disabled:opacity-50 ${
-                  consentChoice === true
-                    ? 'border-terminal-amber text-terminal-amber'
-                    : 'border-terminal-border text-terminal-muted hover:text-white'
-                }`}
+                className="flex-1 px-4 py-2.5 text-xs font-bold bg-terminal-amber text-terminal-bg hover:bg-yellow-400 border border-terminal-amber rounded shadow-[0_0_15px_rgba(245,158,11,0.35)] hover:shadow-[0_0_20px_rgba(245,158,11,0.5)] transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 uppercase tracking-wider"
               >
-                I Agree, Enable
+                {consentBusy ? 'Enabling…' : '★ I Agree, Enable'}
               </button>
             </div>
           </div>
@@ -402,50 +453,66 @@ export function FirstLaunchModal() {
               <div
                 className={`p-2 text-xs border ${aiStatus.isConfigured ? 'bg-green-900/40 border-green-600 text-green-200' : 'bg-[#1a1d23] border-terminal-border text-terminal-muted'}`}
               >
-                Status: provider={aiStatus.provider} · {aiStatus.isConfigured ? 'configured' : 'not configured'}
+                Status: {aiStatus.isConfigured ? 'connected' : 'not configured'}
               </div>
             )}
             <Field label="PROVIDER">
               <select
                 value={aiProvider}
-                onChange={(e) => setAiProvider(e.target.value)}
+                onChange={(e) => handleProviderChange(e.target.value)}
                 className={`${inputCls} [&>option]:bg-terminal-bg`}
               >
                 <option value="zen">OpenCode Zen (recommended)</option>
                 <option value="go">Go</option>
-                <option value="gemini">Gemini (OAuth via Settings)</option>
+                <option value="gemini">Google Gemini (OAuth)</option>
               </select>
             </Field>
-            {aiProvider !== 'gemini' ? (
-              <Field label={`${aiProvider === 'go' ? 'GO' : 'ZEN'} API KEY`}>
-                <input
-                  type="password"
-                  value={aiKey}
-                  onChange={(e) => setAiKey(e.target.value)}
-                  className={inputCls}
-                  placeholder="sk-…"
-                  autoComplete="off"
-                />
-              </Field>
+            {aiProvider === 'gemini' ? (
+              <div className="space-y-2 pt-1">
+                <p className="text-xs text-terminal-muted leading-relaxed">
+                  Sign in with your Google account to connect Gemini AI directly without copying API keys.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void handleGeminiLogin()}
+                  disabled={aiBusy}
+                  className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 disabled:opacity-50 transition-colors text-sm uppercase flex items-center justify-center gap-2 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                >
+                  {aiBusy ? 'Awaiting sign in…' : 'Login with Google (Gemini)'}
+                </button>
+              </div>
             ) : (
-              <p className="text-xs text-terminal-muted">
-                Gemini uses OAuth — connect it later in the Settings widget.
-              </p>
+              <>
+                <Field label={`${aiProvider === 'go' ? 'GO' : 'ZEN'} API KEY`}>
+                  <input
+                    type="password"
+                    value={aiKey}
+                    onChange={(e) => setAiKey(e.target.value)}
+                    className={inputCls}
+                    placeholder="sk-…"
+                    autoComplete="off"
+                  />
+                </Field>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAiKey()}
+                  disabled={aiBusy}
+                  className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 disabled:opacity-50 transition-colors text-sm"
+                >
+                  {aiBusy ? 'SAVING…' : 'SAVE AI KEY'}
+                </button>
+              </>
             )}
             {aiMsg && (
-              <div className="p-2 bg-[#1a1d23] border border-terminal-border text-xs text-terminal-muted">
+              <div
+                className={`p-2 border text-xs ${
+                  aiMsg.includes('success') || aiMsg.includes('connected') || aiMsg.includes('configured')
+                    ? 'bg-green-900/40 border-green-600 text-green-200'
+                    : 'bg-[#1a1d23] border-terminal-border text-terminal-muted'
+                }`}
+              >
                 {aiMsg}
               </div>
-            )}
-            {aiProvider !== 'gemini' && (
-              <button
-                type="button"
-                onClick={() => void handleSaveAiKey()}
-                disabled={aiBusy}
-                className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 disabled:opacity-50 transition-colors text-sm"
-              >
-                {aiBusy ? 'SAVING…' : 'SAVE AI KEY'}
-              </button>
             )}
           </div>
         )}
@@ -457,7 +524,7 @@ export function FirstLaunchModal() {
               <li>Backend: {health?.ok ? 'connected' : 'not verified'}.</li>
               <li>Signed in as {auth?.user.username ?? '—'}.</li>
               <li>Extraction: {consent === true ? 'enabled' : consent === false ? 'Safe Mode' : '—'}.</li>
-              <li>AI: {aiStatus?.isConfigured ? `configured (${aiStatus.provider})` : 'skipped — add a key later in Settings'}.</li>
+              <li>AI: {aiStatus?.isConfigured ? `connected (${aiStatus.provider})` : 'skipped — add a key or connect later in Settings'}.</li>
               <li>Trading (OpenAlgo): add later in the Settings widget.</li>
             </ul>
             <p className="text-xs text-terminal-muted">
@@ -505,14 +572,6 @@ export function FirstLaunchModal() {
             </button>
           )}
         </div>
-
-        <button
-          type="button"
-          onClick={() => setDismissed(true)}
-          className="mt-3 w-full text-center text-[11px] text-terminal-muted hover:text-white transition"
-        >
-          Remind me later
-        </button>
       </div>
     </div>
   );

@@ -45,6 +45,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'ADMIN', desc: 'Admin Dashboard' },
   { cmd: 'PICKS', desc: 'AI Swing Trade Picks' },
   { cmd: 'CLEAR', desc: 'Clear focused slot (empty slot)' },
+  { cmd: 'LAYOUT', desc: 'Set panel count (LAYOUT 2, 4, 6, 8)' },
   { cmd: 'LOGOUT', desc: 'End session and log out' },
   { cmd: 'TOUR', desc: 'Replay the guided tour' },
 ];
