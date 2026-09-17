@@ -13,6 +13,7 @@ import {
   checkAiStatus,
   checkBackendHealth,
   checkGeminiOAuthStatus,
+  fetchProviderModels,
   getSetupStatus,
   initiateGeminiOAuth,
   loginWithPassword,
@@ -21,7 +22,10 @@ import {
   setupFirstAdmin,
   type AiStatus,
   type HealthResult,
+  type ProviderModel,
 } from '@/lib/onboarding';
+import { AI_PROVIDERS, AI_PROVIDER_MAP } from '@/lib/aiProviders';
+import { AiProviderInstructions } from '@/components/AiProviderInstructions';
 
 type StepId = 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'done';
 
@@ -78,17 +82,26 @@ export function FirstLaunchModal() {
   const [consentError, setConsentError] = useState('');
 
   // ai step
-  const [aiProvider, setAiProvider] = useState('zen');
+  const [aiProvider, setAiProvider] = useState('zen-free');
   const [aiKey, setAiKey] = useState('');
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMsg, setAiMsg] = useState('');
   const geminiPollRef = useRef<NodeJS.Timeout | null>(null);
   const keyDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  // Guards async continuations (debounced saves, OAuth polling) against
+  // setting state after the modal unmounts.
+  const isMountedRef = useRef(true);
+  // background worker (AI picks) model selection
+  const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [hunterModel, setHunterModel] = useState('');
+  const [verifierModel, setVerifierModel] = useState('');
 
   useEffect(() => {
     setMounted(true);
     return () => {
+      isMountedRef.current = false;
       if (geminiPollRef.current) {
         clearInterval(geminiPollRef.current);
         geminiPollRef.current = null;
@@ -193,6 +206,40 @@ export function FirstLaunchModal() {
     }
   };
 
+  // Maps a provider id to its system_config API-key slot (null = no key needed).
+  // Labels/placeholders come from the shared aiProviders meta (same as Settings).
+  const providerKeySlot = (p: string): string | null =>
+    AI_PROVIDER_MAP[p]?.credentialDbKey ?? null;
+
+  const providerKeyLabel = (p: string): string =>
+    AI_PROVIDER_MAP[p]?.credentialLabel?.toUpperCase() ?? 'API KEY';
+
+  const providerKeyPlaceholder = (p: string): string =>
+    AI_PROVIDER_MAP[p]?.placeholder ?? 'sk-…';
+
+  // Load the provider's model catalog for the hunter/verifier pickers.
+  const loadProviderModels = async (provider: string, key: string) => {
+    setModelsLoading(true);
+    try {
+      const models = await fetchProviderModels(provider, key);
+      if (isMountedRef.current) setProviderModels(models);
+    } catch {
+      if (isMountedRef.current) setProviderModels([]);
+    } finally {
+      if (isMountedRef.current) setModelsLoading(false);
+    }
+  };
+
+  const handleWorkerModelChange = async (slot: 'ai.hunter_model' | 'ai.verifier_model', value: string) => {
+    if (slot === 'ai.hunter_model') setHunterModel(value);
+    else setVerifierModel(value);
+    try {
+      await saveSystemConfig(slot, value);
+    } catch (err: unknown) {
+      if (isMountedRef.current) setAiMsg(errText(err, 'Could not save worker model'));
+    }
+  };
+
   const handleProviderChange = (newProvider: string) => {
     if (geminiPollRef.current) {
       clearInterval(geminiPollRef.current);
@@ -201,6 +248,36 @@ export function FirstLaunchModal() {
     setAiProvider(newProvider);
     setAiMsg('');
     setAiBusy(false);
+    setProviderModels([]);
+    setHunterModel('');
+    setVerifierModel('');
+    // Free tier needs no key — persist immediately so status flips to connected.
+    if (newProvider === 'zen-free') {
+      setAiBusy(true);
+      saveSystemConfig('ai.provider', 'zen-free')
+        .then(() => checkAiStatus())
+        .then((st) => {
+          if (!isMountedRef.current) return;
+          setAiStatus(st);
+          setAiMsg(st.isConfigured ? 'Free tier connected — no API key required.' : '');
+          if (st.isConfigured) void loadProviderModels('zen-free', '');
+        })
+        .catch((err: unknown) => { if (isMountedRef.current) setAiMsg(errText(err, 'Could not save provider')); })
+        .finally(() => { if (isMountedRef.current) setAiBusy(false); });
+    } else if (newProvider === 'codex') {
+      // Codex connects via browser sign-in in Settings — there is no key
+      // field on this screen, so persist the choice immediately or it is lost.
+      setAiBusy(true);
+      saveSystemConfig('ai.provider', 'codex')
+        .then(() => checkAiStatus())
+        .then((st) => {
+          if (!isMountedRef.current) return;
+          setAiStatus(st);
+          setAiMsg('Codex selected — connect it in Settings → AI after setup.');
+        })
+        .catch((err: unknown) => { if (isMountedRef.current) setAiMsg(errText(err, 'Could not save provider')); })
+        .finally(() => { if (isMountedRef.current) setAiBusy(false); });
+    }
   };
 
   const handleGeminiLogin = async () => {
@@ -215,6 +292,13 @@ export function FirstLaunchModal() {
       window.open(authUrl, '_blank');
       setAiMsg('Awaiting Google OAuth... Complete sign-in in your browser window.');
       geminiPollRef.current = setInterval(async () => {
+        if (!isMountedRef.current) {
+          if (geminiPollRef.current) {
+            clearInterval(geminiPollRef.current);
+            geminiPollRef.current = null;
+          }
+          return;
+        }
         try {
           const status = await checkGeminiOAuthStatus();
           if (status.configured && status.hasRefreshToken) {
@@ -224,15 +308,18 @@ export function FirstLaunchModal() {
             }
             await saveSystemConfig('ai.provider', 'gemini');
             const st = await checkAiStatus();
+            if (!isMountedRef.current) return;
             setAiStatus(st);
             setAiMsg('Gemini connected successfully!');
             setAiBusy(false);
+            if (st.isConfigured) void loadProviderModels('gemini', '');
           }
         } catch {
           // Keep polling
         }
       }, 2500);
     } catch (err: unknown) {
+      if (!isMountedRef.current) return;
       setAiBusy(false);
       setAiMsg(errText(err, 'Failed to initiate Google OAuth'));
     }
@@ -251,14 +338,18 @@ export function FirstLaunchModal() {
     keyDebounceRef.current = setTimeout(async () => {
       try {
         await saveSystemConfig('ai.provider', aiProvider);
-        await saveSystemConfig(`ai.${aiProvider}_api_key`, trimmed);
+        const slot = providerKeySlot(aiProvider);
+        if (slot) await saveSystemConfig(slot, trimmed);
         const st = await checkAiStatus();
+        if (!isMountedRef.current) return;
         setAiStatus(st);
         setAiMsg(st.isConfigured ? 'Connected successfully.' : '');
+        if (st.isConfigured) void loadProviderModels(aiProvider, trimmed);
+        else setProviderModels([]);
       } catch (err: unknown) {
-        setAiMsg(errText(err, 'Could not save AI key'));
+        if (isMountedRef.current) setAiMsg(errText(err, 'Could not save AI key'));
       } finally {
-        setAiBusy(false);
+        if (isMountedRef.current) setAiBusy(false);
       }
     }, 400);
   };
@@ -302,8 +393,7 @@ export function FirstLaunchModal() {
             <p className="text-base text-white font-semibold">Welcome to BLM Terminal.</p>
             <p className="text-xs text-terminal-muted leading-relaxed">
               Welcome to the future of financial intelligence. In a few quick steps,
-              we'll activate your real-time analytics engine, create your admin account,
-              and connect your AI assistant. You'll be exploring the markets in under a minute.
+              we'll activate your real-time analytics engine.
             </p>
           </div>
         )}
@@ -462,15 +552,16 @@ export function FirstLaunchModal() {
                 onChange={(e) => handleProviderChange(e.target.value)}
                 className={`${inputCls} [&>option]:bg-terminal-bg`}
               >
-                <option value="zen">OpenCode Zen (recommended)</option>
-                <option value="go">Go</option>
-                <option value="gemini">Google Gemini (OAuth)</option>
+                {AI_PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
               </select>
             </Field>
             {aiProvider === 'gemini' ? (
               <div className="space-y-2 pt-1">
                 <p className="text-xs text-terminal-muted leading-relaxed">
-                  Sign in with your Google account to connect Gemini AI directly without copying API keys.
+                  Use your existing Google subscription via the Google Antigravity proxy —
+                  no API key needed. Sign in with your Google account below.
                 </p>
                 <button
                   type="button"
@@ -481,17 +572,69 @@ export function FirstLaunchModal() {
                   {aiBusy ? 'Awaiting sign in…' : 'Login with Google (Gemini)'}
                 </button>
               </div>
+            ) : aiProvider === 'zen-free' ? (
+              <div className="rounded bg-green-900/30 border border-green-700 p-3 text-xs leading-relaxed text-green-200">
+                Free tier selected — no API key required. Free models are available immediately.
+              </div>
+            ) : aiProvider === 'codex' ? (
+              <div className="rounded bg-[#1a1d23] border border-terminal-border p-3 text-xs leading-relaxed text-terminal-muted">
+                Codex uses your ChatGPT Plus/Pro subscription via a browser sign-in.
+                Finish setup here, then connect it in the Settings widget (AI → Codex → Sign in with ChatGPT).
+              </div>
             ) : (
-              <Field label={`${aiProvider === 'go' ? 'GO' : 'ZEN'} API KEY`}>
-                <input
-                  type="password"
-                  value={aiKey}
-                  onChange={(e) => handleKeyChange(e.target.value)}
-                  className={inputCls}
-                  placeholder="sk-…"
-                  autoComplete="off"
-                />
-              </Field>
+              <div className="space-y-2">
+                <Field label={providerKeyLabel(aiProvider)}>
+                  <input
+                    type="password"
+                    value={aiKey}
+                    onChange={(e) => handleKeyChange(e.target.value)}
+                    className={inputCls}
+                    placeholder={providerKeyPlaceholder(aiProvider)}
+                    autoComplete="off"
+                  />
+                </Field>
+              </div>
+            )}
+            <AiProviderInstructions providerId={aiProvider} />
+            {aiStatus?.isConfigured && aiProvider !== 'codex' && (
+              <div className="space-y-2 rounded bg-[#1a1d23] border border-terminal-border p-3">
+                <p className="text-xs text-white font-semibold">Background worker models (AI picks)</p>
+                <Field label="HUNTER MODEL">
+                  <select
+                    value={hunterModel}
+                    onChange={(e) => void handleWorkerModelChange('ai.hunter_model', e.target.value)}
+                    className={`${inputCls} [&>option]:bg-terminal-bg`}
+                    disabled={modelsLoading}
+                  >
+                    <option value="">Default</option>
+                    {providerModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
+                  Hunter scans the market for opportunities — pick a smarter, more capable model.
+                </p>
+                <Field label="VERIFIER MODEL">
+                  <select
+                    value={verifierModel}
+                    onChange={(e) => void handleWorkerModelChange('ai.verifier_model', e.target.value)}
+                    className={`${inputCls} [&>option]:bg-terminal-bg`}
+                    disabled={modelsLoading}
+                  >
+                    <option value="">Default</option>
+                    {providerModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
+                  Verifier double-checks the hunter's picks — a faster, less capable model is fine.
+                </p>
+                {modelsLoading && (
+                  <p className="text-[11px] text-terminal-amber animate-pulse">Loading models…</p>
+                )}
+              </div>
             )}
             {aiMsg && (
               <div
@@ -524,14 +667,17 @@ export function FirstLaunchModal() {
         )}
 
         <div className="flex items-center justify-between gap-3 pt-4 mt-6 border-t border-[#2d3139]/60">
-          <button
-            type="button"
-            onClick={back}
-            disabled={stepIdx === 0}
-            className="rounded px-4 py-2 text-xs font-medium text-[#9ca3af] hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139] disabled:opacity-40"
-          >
-            Back
-          </button>
+          {stepIdx > 0 ? (
+            <button
+              type="button"
+              onClick={back}
+              className="rounded px-4 py-2 text-xs font-medium text-[#9ca3af] hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139]"
+            >
+              Back
+            </button>
+          ) : (
+            <div />
+          )}
           {stepIdx < STEPS.length - 1 ? (
             <div className="flex items-center gap-2">
               {step === 'ai' && (

@@ -47,6 +47,7 @@ from app.routers import (
     jobs_router,
     auth_router,
     gemini_auth_router,
+    codex_auth_router,
     users_router,
 )
 from app.workers.lifecycle import start_cache_cleanup
@@ -885,6 +886,7 @@ from app.routers.ticker import router as ticker_router
 app.include_router(ticker_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(gemini_auth_router, prefix="/api")
+app.include_router(codex_auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 
 if settings.is_development:

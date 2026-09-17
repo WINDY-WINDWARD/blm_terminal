@@ -16,19 +16,18 @@ from app.workers.lifecycle import _startup_pipeline_done
 from app.services.llm_provider import stream_chat_completion
 from app.services.ai_chat_service import BLM_TOOLS, _run_tools_parallel
 
-from app.services.ai_config import get_dynamic_ai_provider
-
 logger = logging.getLogger(__name__)
 
 async def get_dynamic_models():
-    """Fetch hunter and verifier models dynamically."""
-    provider = await get_dynamic_ai_provider()
-    
+    """Fetch hunter and verifier models.
+
+    The user picks both explicitly — in the first-launch setup wizard or in
+    Settings → AI → Background Worker Models — stored as ai.hunter_model /
+    ai.verifier_model. The hardcoded values below are last-resort fallbacks
+    used only when nothing has been picked yet.
+    """
     hunter = "kimi-k2.6"
     verifier = "minimax-m2.5"
-    if provider == "gemini":
-        hunter = "gemini-3.1-pro-high"
-        verifier = "gemini-3.7-flash-medium"
         
     try:
         from app.database import AsyncSessionLocal

@@ -924,11 +924,47 @@ export function AiWidget() {
                   )}
                 </>
               ) : (
-                availableModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))
+                // Group by [Provider] label prefix when present (multi-provider
+                // catalogs); flat list otherwise.
+                (() => {
+                  const groups = new Map<string, ModelOption[]>();
+                  const ungrouped: ModelOption[] = [];
+                  for (const m of availableModels) {
+                    const match = /^\[([^\]]+)\]\s*/.exec(m.label);
+                    if (match) {
+                      const g = groups.get(match[1]) ?? [];
+                      g.push(m);
+                      groups.set(match[1], g);
+                    } else {
+                      ungrouped.push(m);
+                    }
+                  }
+                  if (groups.size === 0) {
+                    return availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ));
+                  }
+                  return (
+                    <>
+                      {[...groups.entries()].map(([name, items]) => (
+                        <optgroup key={name} label={name} className="bg-[#121418] text-terminal-amber font-bold">
+                          {items.map((m) => (
+                            <option key={m.id} value={m.id} className="text-white font-normal">
+                              {m.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                      {ungrouped.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </>
+                  );
+                })()
               )
             ) : (
               <option value="">Loading models…</option>

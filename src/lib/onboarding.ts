@@ -121,9 +121,27 @@ export async function checkAiStatus(): Promise<AiStatus> {
   if (!res.ok) throw new Error(`AI status check failed (HTTP ${res.status})`);
   const d = data as { provider?: unknown; is_configured?: unknown };
   return {
-    provider: typeof d.provider === 'string' ? d.provider : 'zen',
+    provider: typeof d.provider === 'string' ? d.provider : 'zen-free',
     isConfigured: d.is_configured === true,
   };
+}
+
+export interface ProviderModel {
+  id: string;
+  label: string;
+}
+
+export async function fetchProviderModels(provider: string, apiKey = ''): Promise<ProviderModel[]> {
+  const { res, data } = await fetchJson(
+    `/api/py/ai/provider-models?provider=${encodeURIComponent(provider)}&api_key=${encodeURIComponent(apiKey)}`,
+    undefined,
+    15000,
+  );
+  if (!res.ok) throw new Error(`Model list fetch failed (HTTP ${res.status})`);
+  if (!Array.isArray(data)) return [];
+  return (data as { id?: unknown; label?: unknown }[])
+    .filter((m) => typeof m.id === 'string' && m.id)
+    .map((m) => ({ id: m.id as string, label: typeof m.label === 'string' ? m.label : (m.id as string) }));
 }
 
 export async function initiateGeminiOAuth(): Promise<string> {

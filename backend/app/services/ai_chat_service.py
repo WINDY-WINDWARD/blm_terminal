@@ -1068,6 +1068,7 @@ async def run_chat_agent(
     exchange: str,
     model: str = "kimi-k2.5",
     persona: str | None = None,
+    session_id: str | int | None = None,
 ) -> AsyncGenerator[str, None]:
     system_prompt = _get_system_prompt(symbol, exchange, persona)
     
@@ -1083,5 +1084,6 @@ async def run_chat_agent(
         tools=tools,
         tool_executor=executor,
         system_prompt=system_prompt,
+        session_id=session_id,
     ):
         yield chunk

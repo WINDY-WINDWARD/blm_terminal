@@ -26,6 +26,7 @@ from app.routers.layout import router as layout_router
 
 from app.routers.auth import router as auth_router
 from app.routers.gemini_auth import router as gemini_auth_router
+from app.routers.codex_auth import router as codex_auth_router
 from app.routers.users import router as users_router
 
 __all__ = [
@@ -55,5 +56,6 @@ __all__ = [
     "layout_router",
     "auth_router",
     "gemini_auth_router",
+    "codex_auth_router",
     "users_router",
 ]

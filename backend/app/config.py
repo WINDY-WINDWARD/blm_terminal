@@ -39,12 +39,33 @@ class Settings(BaseSettings):
     ai_max_tokens: int = 512
     ai_temperature: float = 0.3
 
-    # AI Provider: "zen" | "antigravity"
-    ai_provider: str = "zen"
+    # AI Provider: "zen-free" | "zen-paid" | "go" | "gemini" | "aistudio" | "groq" | "nvidia"
+    #   | "anthropic" | "claude-code" | "openai" | "openrouter" | "deepseek" | "xai"
+    #   | "together" | "copilot" | "codex"
+    # ("zen" is a legacy alias resolved to zen-paid/zen-free in ai_config.py)
+    ai_provider: str = "zen-free"
 
     # OpenCode Zen / MiniMax chat agent settings
     opencode_zen_api_key: str = "none"
     zen_base_url: str = "https://opencode.ai/zen/go/v1"
+
+    # Google AI Studio (Gemini API), Groq, and NVIDIA NIM keys — DB slots
+    # ai.aistudio_api_key / ai.groq_api_key / ai.nvidia_api_key take
+    # precedence when set.
+    aistudio_api_key: str = "none"
+    groq_api_key: str = "none"
+    nvidia_api_key: str = "none"
+
+    # --- Multi-provider keys (DB slots ai.<name> take precedence when set) ---
+    anthropic_api_key: str = "none"       # direct Anthropic API key
+    claude_code_oauth_token: str = "none"  # sk-ant-oat01… token from `claude setup-token`
+    openai_api_key: str = "none"           # direct OpenAI API key
+    openrouter_api_key: str = "none"       # OpenRouter API key
+    deepseek_api_key: str = "none"         # DeepSeek API key
+    xai_api_key: str = "none"              # xAI (Grok) API key
+    together_api_key: str = "none"         # Together AI API key
+    copilot_gh_token: str = "none"         # GitHub token (COPILOT_GITHUB_TOKEN)
+    gh_token: str = "none"                 # fallback alias (GH_TOKEN / GITHUB_TOKEN)
 
     # AI Picks Zen API resilience — Phase 1 fix for httpx.ReadTimeout failures.
     # 5 min per-call gives Kimi/MiniMax time to reason over multi-tool results
