@@ -30,11 +30,11 @@ export async function checkBackendHealth(): Promise<HealthResult> {
   try {
     const { res } = await fetchJson('/api/py/system-config', undefined, 5000);
     if (res.status === 502 || res.status === 503 || res.status === 504) {
-      return { ok: false, message: `Backend unreachable (HTTP ${res.status}). Start blm-backend / uvicorn on :4455.` };
+      return { ok: false, message: `Engine still starting or unreachable (HTTP ${res.status}). Wait ~30 seconds and retry — the desktop app launches its engine automatically.` };
     }
     return { ok: true, message: `Backend reachable (HTTP ${res.status}).` };
   } catch (err: unknown) {
-    return { ok: false, message: errMessage(err, 'Backend unreachable. Start blm-backend / uvicorn on :4455.') };
+    return { ok: false, message: errMessage(err, 'Engine still starting or unreachable. Wait ~30 seconds and retry — the desktop app launches its engine automatically.') };
   }
 }
 
