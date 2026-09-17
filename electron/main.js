@@ -158,6 +158,26 @@ function removeWidgetFromRegistry(routeKey) {
   }
 }
 
+// ── Diagnostic coverage: log navigation failures on EVERY window/webview
+// (main, popouts, logs, OAuth popups) so a blank/error screen can always be
+// traced to the exact URL that failed.
+app.on('web-contents-created', (_event, contents) => {
+  const tag = `webContents#${contents.id}`;
+  contents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+    log(`[${tag}] did-fail-load mainFrame=${isMainFrame} ${url}: ${desc} (${code})`);
+  });
+  contents.on('did-finish-load', () => {
+    try {
+      log(`[${tag}] did-finish-load ${contents.getURL()}`);
+    } catch {}
+  });
+  contents.on('render-process-gone', (_e, details) => {
+    log(`[${tag}] render-process-gone reason=${details?.reason} exitCode=${details?.exitCode}`);
+  });
+  contents.on('unresponsive', () => log(`[${tag}] unresponsive'));
+  contents.on('responsive', () => log(`[${tag}] responsive`));
+});
+
 // Ensure single instance
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -572,6 +592,7 @@ async function startApp() {
 
     // Multi-Window Pop-out Interceptor
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      log(`window.open intercepted: ${url}`);
       // If the frontend calls window.open (e.g. for popped out widgets or OAuth)
       if (url.includes('/widget/')) {
         createWidgetWindow(url);
