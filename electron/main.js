@@ -397,20 +397,55 @@ async function startApp() {
     await waitForServer(`http://127.0.0.1:${nextPort}`, 30000);
     log(`Next.js is ready!`);
 
-    // 4. Create Main Window
+    // 4. Splash window — visible immediately while servers boot, so the
+    // user never stares at a blank window or a raw Chromium error page.
+    let splashWindow = null;
+    try {
+      splashWindow = new BrowserWindow({
+        width: 420,
+        height: 300,
+        title: "BLM Terminal",
+        frame: false,
+        alwaysOnTop: true,
+        resizable: false,
+        show: true,
+        icon: path.join(__dirname, 'icon.ico'),
+        webPreferences: { nodeIntegration: false, contextIsolation: true }
+      });
+      splashWindow.loadFile(path.join(__dirname, 'splash.html'));
+    } catch (e) {
+      log(`Splash window creation failed (non-fatal): ${e.message}`);
+      splashWindow = null;
+    }
+    const closeSplash = () => {
+      try {
+        if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+      } catch {}
+      splashWindow = null;
+    };
+
+    // 5. Create Main Window (hidden until its first paint is ready)
     const savedBounds = loadMainBounds();
+    const targetUrl = `http://127.0.0.1:${nextPort}`;
+    let loadAttempts = 0;
+    const MAX_LOAD_ATTEMPTS = 10;
     mainWindow = new BrowserWindow({
       width: savedBounds.width,
       height: savedBounds.height,
       title: "BLM Terminal",
       autoHideMenuBar: true,
-      show: true,
+      show: false,
       icon: path.join(__dirname, 'icon.ico'),
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.js')
       }
+    });
+    mainWindow.once('ready-to-show', () => {
+      log('Main window ready-to-show — closing splash, showing app.');
+      closeSplash();
+      if (!mainWindow.isDestroyed()) mainWindow.show();
     });
 
     // Track and persist main window size (only size, not position)
@@ -422,7 +457,26 @@ async function startApp() {
     });
 
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-      console.error(`Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
+      log(`did-fail-load ${validatedURL}: ${errorDescription} (${errorCode}) — attempt ${loadAttempts + 1}/${MAX_LOAD_ATTEMPTS}`);
+      // The Next.js server can hiccup (restart/crash) after the initial
+      // readiness probe. Retry the navigation instead of stranding the
+      // user on Chromium's raw error page.
+      if (loadAttempts < MAX_LOAD_ATTEMPTS && !mainWindow.isDestroyed()) {
+        loadAttempts += 1;
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            log(`Retrying main window load (attempt ${loadAttempts})...`);
+            mainWindow.loadURL(targetUrl).catch((e) => log(`Reload error: ${e.message}`));
+          }
+        }, 3000);
+      } else {
+        // Out of retries — show the window anyway (last-resort error page
+        // beats a permanent splash screen).
+        closeSplash();
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+          mainWindow.show();
+        }
+      }
     });
 
     // Helper: Create native popped-out widget window with persistent size and position
@@ -601,7 +655,7 @@ async function startApp() {
       console.warn('System tray initialization warning:', err);
     }
 
-    mainWindow.loadURL(`http://127.0.0.1:${nextPort}`);
+    mainWindow.loadURL(targetUrl);
 
     // Restore previously open popped-out widgets
     popoutsRegistry = loadPopoutsRegistry();
