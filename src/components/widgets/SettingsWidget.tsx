@@ -1223,7 +1223,7 @@ export function SettingsWidget() {
                 }}
                   className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
                 >
-                  <option value="">Default</option>
+                  <option value="">Select</option>
                   {aiAvailableModels.map(m => (
                     <option key={m.id} value={m.id}>{m.label}</option>
                   ))}
@@ -1241,7 +1241,7 @@ export function SettingsWidget() {
                 }}
                   className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
                 >
-                  <option value="">Default</option>
+                  <option value="">Select</option>
                   {aiAvailableModels.map(m => (
                     <option key={m.id} value={m.id}>{m.label}</option>
                   ))}

@@ -26,9 +26,10 @@ import {
 } from '@/lib/onboarding';
 import { AI_PROVIDERS, AI_PROVIDER_MAP } from '@/lib/aiProviders';
 import { ENGINE_WARM_LIMIT, useWarmupMessage } from '@/components/EngineWarmup';
+import { ModelCombobox } from '@/components/ModelCombobox';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
 
-type StepId = 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'done';
+type StepId = 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'models' | 'done';
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: 'welcome', label: 'Welcome' },
@@ -36,6 +37,7 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: 'admin', label: 'Admin' },
   { id: 'consent', label: 'Privacy' },
   { id: 'ai', label: 'AI' },
+  { id: 'models', label: 'Models' },
   { id: 'done', label: 'Done' },
 ];
 
@@ -151,6 +153,24 @@ export function FirstLaunchModal() {
       checkAiStatus()
         .then(setAiStatus)
         .catch(() => setAiStatus(null));
+    }
+    // Entering the models step: pull the provider's live catalog (once the
+    // provider is set up) so the hunter/verifier pickers have options.
+    if (step === 'models' && providerModels.length === 0 && !modelsLoading) {
+      void (async () => {
+        try {
+          const st = aiStatus ?? (await checkAiStatus());
+          if (!isMountedRef.current) return;
+          if (st) setAiStatus(st);
+          if (st?.isConfigured && aiProvider !== 'codex') {
+            const key =
+              aiProvider === 'zen-free' || aiProvider === 'gemini' ? '' : aiKey;
+            await loadProviderModels(aiProvider, key);
+          }
+        } catch {
+          // loadProviderModels already clears the list on failure.
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, mounted, completed]);
@@ -285,6 +305,7 @@ export function FirstLaunchModal() {
     setAiProvider(newProvider);
     setAiMsg('');
     setAiBusy(false);
+    setAiKey('');
     setProviderModels([]);
     setHunterModel('');
     setVerifierModel('');
@@ -402,6 +423,7 @@ export function FirstLaunchModal() {
     (step === 'admin' && auth !== null) ||
     (step === 'consent' && consent !== null && !consentBusy) ||
     step === 'ai' ||
+    step === 'models' ||
     step === 'done';
 
   const next = () => setStepIdx((i) => Math.min(i + 1, STEPS.length - 1));
@@ -655,46 +677,6 @@ export function FirstLaunchModal() {
               </div>
             )}
             <AiProviderInstructions providerId={aiProvider} />
-            {aiStatus?.isConfigured && aiProvider !== 'codex' && (
-              <div className="space-y-2 rounded bg-[#1a1d23] border border-terminal-border p-3">
-                <p className="text-xs text-white font-semibold">Background worker models (AI picks)</p>
-                <Field label="HUNTER MODEL">
-                  <select
-                    value={hunterModel}
-                    onChange={(e) => void handleWorkerModelChange('ai.hunter_model', e.target.value)}
-                    className={`${inputCls} [&>option]:bg-terminal-bg`}
-                    disabled={modelsLoading}
-                  >
-                    <option value="">Default</option>
-                    {providerModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </select>
-                </Field>
-                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
-                  Hunter scans the market for opportunities — pick a smarter, more capable model.
-                </p>
-                <Field label="VERIFIER MODEL">
-                  <select
-                    value={verifierModel}
-                    onChange={(e) => void handleWorkerModelChange('ai.verifier_model', e.target.value)}
-                    className={`${inputCls} [&>option]:bg-terminal-bg`}
-                    disabled={modelsLoading}
-                  >
-                    <option value="">Default</option>
-                    {providerModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </select>
-                </Field>
-                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
-                  Verifier double-checks the hunter's picks — a faster, less capable model is fine.
-                </p>
-                {modelsLoading && (
-                  <p className="text-[11px] text-terminal-amber animate-pulse">Loading models…</p>
-                )}
-              </div>
-            )}
             {aiMsg && (
               <div
                 className={`p-2 border text-xs ${
@@ -709,6 +691,54 @@ export function FirstLaunchModal() {
           </div>
         )}
 
+        {step === 'models' && (
+          <div className="space-y-3 text-sm">
+            <p className="text-base text-white font-semibold">Background worker models (AI picks)</p>
+            {!aiStatus?.isConfigured || aiProvider === 'codex' ? (
+              <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-terminal-muted border border-[#2d3139]">
+                No provider connected yet — hunter and verifier will use the
+                provider defaults. You can set these later in the Settings widget.
+              </div>
+            ) : modelsLoading && providerModels.length === 0 ? (
+              <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-terminal-amber border border-[#2d3139] animate-pulse">
+                Loading models for {AI_PROVIDER_MAP[aiProvider]?.label ?? aiProvider}…
+              </div>
+            ) : providerModels.length === 0 ? (
+              <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-terminal-muted border border-[#2d3139]">
+                No models could be loaded — hunter and verifier will use the
+                provider defaults. You can set these later in the Settings widget.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <Field label="HUNTER MODEL">
+                  <ModelCombobox
+                    value={hunterModel}
+                    options={providerModels}
+                    onChange={(id) => void handleWorkerModelChange('ai.hunter_model', id)}
+                    placeholder="Select…"
+                    emptyText="No models match your search."
+                  />
+                </Field>
+                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
+                  Hunter scans the market for opportunities — pick a smarter, more capable model.
+                </p>
+                <Field label="VERIFIER MODEL">
+                  <ModelCombobox
+                    value={verifierModel}
+                    options={providerModels}
+                    onChange={(id) => void handleWorkerModelChange('ai.verifier_model', id)}
+                    placeholder="Select…"
+                    emptyText="No models match your search."
+                  />
+                </Field>
+                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
+                  Verifier double-checks the hunter&apos;s picks — a faster, less capable model is fine.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {step === 'done' && (
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">Setup complete</p>
@@ -717,6 +747,7 @@ export function FirstLaunchModal() {
               <li>Signed in as {auth?.user.username ?? '—'}.</li>
               <li>Extraction: {consent === true ? 'enabled' : consent === false ? 'Safe Mode' : '—'}.</li>
               <li>AI: {aiStatus?.isConfigured ? `connected (${aiStatus.provider})` : 'skipped — add a key or connect later in Settings'}.</li>
+              <li>Worker models: hunter {hunterModel || 'not set'}, verifier {verifierModel || 'not set'}.</li>
               <li>Trading (OpenAlgo): add later in the Settings widget.</li>
             </ul>
             <p className="text-xs text-terminal-muted">
