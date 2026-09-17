@@ -25,6 +25,7 @@ import {
   type ProviderModel,
 } from '@/lib/onboarding';
 import { AI_PROVIDERS, AI_PROVIDER_MAP } from '@/lib/aiProviders';
+import { ENGINE_WARM_LIMIT, useWarmupMessage } from '@/components/EngineWarmup';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
 
 type StepId = 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'done';
@@ -67,6 +68,7 @@ export function FirstLaunchModal() {
   // backend step
   const [health, setHealth] = useState<HealthResult | null>(null);
   const [healthChecking, setHealthChecking] = useState(false);
+  const [healthAttempts, setHealthAttempts] = useState(0);
 
   // admin step
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
@@ -115,13 +117,29 @@ export function FirstLaunchModal() {
 
   const step = STEPS[stepIdx].id;
 
+  // Still in the warm-up window (no result yet, or failing for less than
+  // ENGINE_WARM_LIMIT probes) — show lively loading copy instead of an error.
+  const warming =
+    step === 'backend' &&
+    (!health || (!health.ok && healthAttempts < ENGINE_WARM_LIMIT));
+  const warmupMsg = useWarmupMessage(mounted && !completed && warming);
+
+  const recordHealth = (st: HealthResult) => {
+    setHealth(st);
+    if (st.ok) {
+      setHealthAttempts(0);
+    } else {
+      setHealthAttempts((n) => n + 1);
+    }
+  };
+
   // Lazily probe when entering gated steps
   useEffect(() => {
     if (!mounted || completed) return;
     if (step === 'backend' && health === null && !healthChecking) {
       setHealthChecking(true);
       checkBackendHealth()
-        .then(setHealth)
+        .then(recordHealth)
         .finally(() => setHealthChecking(false));
     }
     if (step === 'admin' && needsSetup === null && !auth) {
@@ -150,7 +168,7 @@ export function FirstLaunchModal() {
       setHealthChecking(true);
       setHealth(null);
       checkBackendHealth()
-        .then(setHealth)
+        .then(recordHealth)
         .finally(() => setHealthChecking(false));
     }, 5000);
     return () => clearTimeout(t);
@@ -162,7 +180,7 @@ export function FirstLaunchModal() {
     setHealthChecking(true);
     setHealth(null);
     checkBackendHealth()
-      .then(setHealth)
+      .then(recordHealth)
       .finally(() => setHealthChecking(false));
   };
 
@@ -423,25 +441,41 @@ export function FirstLaunchModal() {
             <p className="text-xs text-terminal-muted leading-relaxed">
               Connecting to the local analytics and data processing engine.
             </p>
-            {healthChecking && <p className="text-xs text-terminal-amber animate-pulse">CHECKING ENGINE…</p>}
-            {health && (
-              <div
-                className={`p-2 text-xs border ${health.ok ? 'bg-green-900/40 border-green-600 text-green-200' : 'bg-red-900/50 border-red-500 text-red-200'}`}
-              >
-                {health.ok ? 'Engine active' : health.message}
+            {health?.ok ? (
+              <div className="p-2 text-xs border bg-green-900/40 border-green-600 text-green-200">
+                Engine active
               </div>
-            )}
-            {health && !health.ok && !healthChecking && (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={runBackendCheck}
-                  className="rounded px-4 py-2 text-xs font-medium text-[#9ca3af] hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139]"
-                >
-                  Retry check
-                </button>
-                <span className="text-[11px] text-terminal-muted">Retrying automatically every 5s…</span>
+            ) : warming ? (
+              <div className="rounded bg-[#1a1d23] border border-[#2d3139] p-3 flex items-center gap-3">
+                <span className="h-6 w-6 shrink-0 rounded-full border-2 border-[#2d3139] border-t-terminal-amber animate-spin" />
+                <div>
+                  <p key={warmupMsg} className="text-xs text-terminal-amber animate-pulse leading-relaxed">
+                    {warmupMsg}
+                  </p>
+                  <p className="text-[11px] text-terminal-muted mt-1 leading-relaxed">
+                    First boot can take up to ~90 seconds. Retrying automatically…
+                  </p>
+                </div>
               </div>
+            ) : (
+              <>
+                {health && (
+                  <div className="p-2 text-xs border bg-red-900/50 border-red-500 text-red-200">
+                    {health.message}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={runBackendCheck}
+                    disabled={healthChecking}
+                    className="rounded px-4 py-2 text-xs font-medium text-[#9ca3af] hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139] disabled:opacity-50"
+                  >
+                    {healthChecking ? 'Checking…' : 'Retry check'}
+                  </button>
+                  <span className="text-[11px] text-terminal-muted">Retrying automatically every 5s…</span>
+                </div>
+              </>
             )}
           </div>
         )}

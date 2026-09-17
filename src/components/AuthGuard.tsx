@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useAtom, useAtomValue } from 'jotai';
 import { useQueryClient } from '@tanstack/react-query';
 import { authAtom, isAuthenticatedAtom, onboardingCompletedAtom } from '@/store/terminalStore';
+import { useWarmupMessage } from '@/components/EngineWarmup';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useAtom(authAtom);
@@ -16,6 +17,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [sessionChecking, setSessionChecking] = useState(true);
+  const warmupMsg = useWarmupMessage(sessionChecking);
   // True when the backend has no user accounts yet — the first-launch wizard
   // owns auth in that case, so this guard must not show its own login wall.
   const [needsSetup, setNeedsSetup] = useState(false);
@@ -90,8 +92,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!mounted || sessionChecking) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-terminal-bg">
-        <div className="flex flex-col items-center gap-4">
-          <span className="text-terminal-amber font-mono text-sm animate-pulse">CONNECTING TO BACKEND...</span>
+        <div className="flex flex-col items-center gap-4 px-6 text-center">
+          <span className="h-10 w-10 rounded-full border-2 border-terminal-border border-t-terminal-amber animate-spin" />
+          <span key={warmupMsg} className="text-terminal-amber font-mono text-sm animate-pulse">{warmupMsg}</span>
           <span className="text-terminal-muted font-mono text-xs">Please wait while the system initializes</span>
         </div>
       </div>
