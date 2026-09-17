@@ -174,7 +174,7 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('render-process-gone', (_e, details) => {
     log(`[${tag}] render-process-gone reason=${details?.reason} exitCode=${details?.exitCode}`);
   });
-  contents.on('unresponsive', () => log(`[${tag}] unresponsive'));
+  contents.on('unresponsive', () => log(`[${tag}] unresponsive`));
   contents.on('responsive', () => log(`[${tag}] responsive`));
 });
 
