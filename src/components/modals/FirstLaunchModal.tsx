@@ -137,6 +137,25 @@ export function FirstLaunchModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, mounted, completed]);
 
+  // Auto-retry the engine probe while it keeps failing. The packaged
+  // backend can take 30-90s to boot on first launch, and the one-shot
+  // probe above never refires on its own (health stays non-null), which
+  // used to leave users permanently stuck on the error state.
+  // NOTE: this hook must stay above the early return below — a hook after
+  // a conditional return crashes React (#310, more hooks than last render).
+  useEffect(() => {
+    if (!mounted || completed || step !== 'backend') return;
+    if (!health || health.ok || healthChecking) return;
+    const t = setTimeout(() => {
+      setHealthChecking(true);
+      setHealth(null);
+      checkBackendHealth()
+        .then(setHealth)
+        .finally(() => setHealthChecking(false));
+    }, 5000);
+    return () => clearTimeout(t);
+  });
+
   if (!mounted || completed) return null;
 
   const runBackendCheck = () => {
@@ -146,17 +165,6 @@ export function FirstLaunchModal() {
       .then(setHealth)
       .finally(() => setHealthChecking(false));
   };
-
-  // Auto-retry the engine probe while it keeps failing. The packaged
-  // backend can take 30-90s to boot on first launch, and the one-shot
-  // probe above never refires on its own (health stays non-null), which
-  // used to leave users permanently stuck on the error state.
-  useEffect(() => {
-    if (!mounted || completed || step !== 'backend') return;
-    if (!health || health.ok || healthChecking) return;
-    const t = setTimeout(() => runBackendCheck(), 5000);
-    return () => clearTimeout(t);
-  });
 
   const applyAuth = (next: { user: { id: number; username: string; is_admin: boolean } }) => {
     setAuth(next);
