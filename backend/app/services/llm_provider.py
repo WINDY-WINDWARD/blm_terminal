@@ -293,6 +293,35 @@ def _rate_limit_wait(retry_after: str | None, body: str = "") -> float:
             pass
     return 60.0
 
+
+def _friendly_gateway_error(api_label: str, status_code: int, body_text: str) -> str:
+    """Translate known gateway failure shapes into actionable messages.
+
+    The Zen free tier in particular fails in cryptic ways (FreeTierError
+    rate-limiting, rotated models, capacity 500s). Users get guidance
+    instead of a raw JSON blob; the raw excerpt is kept for debugging.
+    """
+    raw = body_text[:200]
+    low = body_text.lower()
+    if "freetiererror" in low or "free tier can only be used from within opencode" in low:
+        return (
+            f"{api_label} free tier is unavailable right now — OpenCode is "
+            "rate-limiting free requests from outside its own app. Wait a few "
+            "minutes and retry, or switch to Zen Paid / another provider. "
+            f"(Raw: {raw})"
+        )
+    if "model is unavailable" in low:
+        return (
+            f"The selected model is currently unavailable on {api_label} "
+            f"(rotated or pulled). Pick another model. (Raw: {raw})"
+        )
+    if status_code == 500 and "internal server error" in low:
+        return (
+            f"{api_label} hit an internal error (likely free-tier capacity). "
+            f"Retry in a bit or switch provider. (Raw: {raw})"
+        )
+    return f"{api_label} {status_code}: {body_text[:300]}"
+
 # Mirrors the plugin's getRandomizedHeaders() from constants.js
 _AG_VERSION = "2.5.5"
 _AG_PLATFORMS = ["windows/amd64", "darwin/arm64", "darwin/amd64"]
@@ -455,7 +484,8 @@ async def _run_openai_loop(
                         continue
                     if response.status_code != 200:
                         body = await response.aread()
-                        yield json.dumps({"type": "error", "message": f"{api_label} {response.status_code}: {body.decode()[:300]}"})
+                        msg = _friendly_gateway_error(api_label, response.status_code, body.decode(errors="replace"))
+                        yield json.dumps({"type": "error", "message": msg})
                         yield json.dumps({"type": "done"})
                         return
 
@@ -625,7 +655,8 @@ async def _run_anthropic_loop(
             async with client.stream("POST", url, json=payload, headers=headers) as response:
                 if response.status_code != 200:
                     body = await response.aread()
-                    yield json.dumps({"type": "error", "message": f"Zen API {response.status_code}: {body.decode()[:300]}"})
+                    msg = _friendly_gateway_error("Zen API", response.status_code, body.decode(errors="replace"))
+                    yield json.dumps({"type": "error", "message": msg})
                     yield json.dumps({"type": "done"})
                     return
 
