@@ -39,11 +39,11 @@ class Settings(BaseSettings):
     ai_max_tokens: int = 512
     ai_temperature: float = 0.3
 
-    # AI Provider: "zen-free" | "zen-paid" | "go" | "gemini" | "aistudio" | "groq" | "nvidia"
+    # AI Provider: "zen-paid" | "go" | "gemini" | "aistudio" | "groq" | "nvidia"
     #   | "anthropic" | "claude-code" | "openai" | "openrouter" | "deepseek" | "xai"
     #   | "together" | "copilot" | "codex"
-    # ("zen" is a legacy alias resolved to zen-paid/zen-free in ai_config.py)
-    ai_provider: str = "zen-free"
+    # ("zen"/"zen-free" are retired aliases resolved to zen-paid in ai_config.py)
+    ai_provider: str = "aistudio"
 
     # OpenCode Zen / MiniMax chat agent settings
     opencode_zen_api_key: str = "none"

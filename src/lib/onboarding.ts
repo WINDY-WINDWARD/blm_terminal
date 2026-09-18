@@ -121,7 +121,7 @@ export async function checkAiStatus(): Promise<AiStatus> {
   if (!res.ok) throw new Error(`AI status check failed (HTTP ${res.status})`);
   const d = data as { provider?: unknown; is_configured?: unknown };
   return {
-    provider: typeof d.provider === 'string' ? d.provider : 'zen-free',
+    provider: typeof d.provider === 'string' ? d.provider : 'aistudio',
     isConfigured: d.is_configured === true,
   };
 }

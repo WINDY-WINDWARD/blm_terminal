@@ -86,7 +86,7 @@ export function FirstLaunchModal() {
   const [consentError, setConsentError] = useState('');
 
   // ai step
-  const [aiProvider, setAiProvider] = useState('zen-free');
+  const [aiProvider, setAiProvider] = useState('aistudio');
   const [aiKey, setAiKey] = useState('');
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
@@ -163,8 +163,7 @@ export function FirstLaunchModal() {
           if (!isMountedRef.current) return;
           if (st) setAiStatus(st);
           if (st?.isConfigured && aiProvider !== 'codex') {
-            const key =
-              aiProvider === 'zen-free' || aiProvider === 'gemini' ? '' : aiKey;
+            const key = aiProvider === 'gemini' ? '' : aiKey;
             await loadProviderModels(aiProvider, key);
           }
         } catch {
@@ -309,20 +308,7 @@ export function FirstLaunchModal() {
     setProviderModels([]);
     setHunterModel('');
     setVerifierModel('');
-    // Free tier needs no key — persist immediately so status flips to connected.
-    if (newProvider === 'zen-free') {
-      setAiBusy(true);
-      saveSystemConfig('ai.provider', 'zen-free')
-        .then(() => checkAiStatus())
-        .then((st) => {
-          if (!isMountedRef.current) return;
-          setAiStatus(st);
-          setAiMsg(st.isConfigured ? 'Free tier connected — no API key required.' : '');
-          if (st.isConfigured) void loadProviderModels('zen-free', '');
-        })
-        .catch((err: unknown) => { if (isMountedRef.current) setAiMsg(errText(err, 'Could not save provider')); })
-        .finally(() => { if (isMountedRef.current) setAiBusy(false); });
-    } else if (newProvider === 'codex') {
+    if (newProvider === 'codex') {
       // Codex connects via browser sign-in in Settings — there is no key
       // field on this screen, so persist the choice immediately or it is lost.
       setAiBusy(true);
@@ -617,8 +603,8 @@ export function FirstLaunchModal() {
             <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-[#d1d5db] border border-[#2d3139]">
               Please note: the best results come from a paid subscription provider
               or a pay-as-you-go API provider. Free models work well too, depending
-              on the provider and model — and if you really have to use free models,
-              the maker personally recommends OpenCode Zen (Free).
+              on the provider and model — if you want a free option, grab a free
+              key from Google AI Studio.
             </div>
             {aiStatus && (
               <div
@@ -652,10 +638,6 @@ export function FirstLaunchModal() {
                 >
                   {aiBusy ? 'Awaiting sign in…' : 'Login with Google (Gemini)'}
                 </button>
-              </div>
-            ) : aiProvider === 'zen-free' ? (
-              <div className="rounded bg-green-900/30 border border-green-700 p-3 text-xs leading-relaxed text-green-200">
-                Free tier selected — no API key required. Free models are available immediately.
               </div>
             ) : aiProvider === 'codex' ? (
               <div className="rounded bg-[#1a1d23] border border-terminal-border p-3 text-xs leading-relaxed text-terminal-muted">

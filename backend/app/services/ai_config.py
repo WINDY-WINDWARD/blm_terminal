@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 
 # Provider identifiers. "zen" is a legacy alias kept for backward
 # compatibility with installs that stored ai.provider="zen" before the
-# free/paid split — it resolves to "zen-paid" when a key exists, else "zen-free".
+# free/paid split — it now always resolves to "zen-paid". "zen-free" is
+# likewise a retired alias (OpenCode gated the external free tier); stored
+# values resolve to "zen-paid" so old installs land on an honest
+# not-configured state instead of a dead option.
 ZEN_FREE = "zen-free"
 ZEN_PAID = "zen-paid"
 ZEN_PROVIDERS = (ZEN_FREE, ZEN_PAID)
@@ -60,8 +63,9 @@ ALL_PROVIDERS: tuple[str, ...] = (
 async def get_dynamic_ai_provider() -> str:
     """Fetch AI Provider from settings or fallback to dynamic system_config.
 
-    Returns 'zen-free', 'zen-paid', 'go', 'gemini' (or 'antigravity'),
-    'aistudio', 'groq', or 'nvidia'.
+    Returns 'zen-paid', 'go', 'gemini' (or 'antigravity'), 'aistudio',
+    'groq', 'nvidia', etc. Retired aliases ('zen', 'zen-free') resolve to
+    'zen-paid'.
     """
     provider = settings.ai_provider
     try:
@@ -81,10 +85,10 @@ async def get_dynamic_ai_provider() -> str:
     if provider == "antigravity":
         provider = "gemini"
 
-    # Normalize legacy "zen" alias: paid when a key is stored, else free.
-    if provider == "zen":
-        legacy_key = await get_dynamic_ai_api_key("zen-paid")
-        provider = ZEN_PAID if (legacy_key and legacy_key != "none") else ZEN_FREE
+    # Normalize retired aliases to "zen-paid" (same key slot): legacy "zen"
+    # and the retired "zen-free" (external free tier is gated by OpenCode).
+    if provider in ("zen", ZEN_FREE):
+        provider = ZEN_PAID
 
     return provider
 

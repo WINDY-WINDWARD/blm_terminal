@@ -35,16 +35,6 @@ export interface AiProviderMeta {
 
 export const AI_PROVIDERS: AiProviderMeta[] = [
   {
-    id: 'zen-free',
-    label: 'OpenCode Zen (Free)',
-    kind: 'free',
-    steps: [
-      'Select OpenCode Zen (Free) — no API key needed.',
-      'Free models are available immediately in the AI widget.',
-    ],
-    links: [{ label: 'opencode.ai', url: 'https://opencode.ai/auth' }],
-  },
-  {
     id: 'zen-paid',
     label: 'OpenCode Zen (Paid)',
     kind: 'api-key',

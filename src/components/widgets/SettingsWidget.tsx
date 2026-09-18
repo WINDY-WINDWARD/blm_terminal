@@ -289,7 +289,7 @@ export function SettingsWidget() {
   const [openAlgoApiKeyInput, setOpenAlgoApiKeyInput] = useState('');
   
   // AI Settings
-  const [aiProvider, setAiProvider] = useState('zen-free');
+  const [aiProvider, setAiProvider] = useState('aistudio');
   const [aiZenApiKeyInput, setAiZenApiKeyInput] = useState('');
   const [aiGoApiKeyInput, setAiGoApiKeyInput] = useState('');
   const [aiAistudioApiKeyInput, setAiAistudioApiKeyInput] = useState('');
@@ -508,10 +508,10 @@ export function SettingsWidget() {
         }
         if (typeof data['ai.provider'] === 'string') {
           const stored = data['ai.provider'] as string;
-          // Migrate legacy "zen": paid when a key is stored, else free.
-          if (stored === 'zen') {
-            const hasKey = typeof data['ai.zen_api_key'] === 'string' && (data['ai.zen_api_key'] as string).trim() !== '';
-            setAiProvider(hasKey ? 'zen-paid' : 'zen-free');
+          // Migrate retired values to zen-paid (same key slot): legacy "zen"
+          // and the retired "zen-free" (external free tier is gated).
+          if (stored === 'zen' || stored === 'zen-free') {
+            setAiProvider('zen-paid');
           } else {
             setAiProvider(stored);
           }
@@ -561,7 +561,7 @@ export function SettingsWidget() {
 
   // Data-driven map: provider id -> credential input binding.
   // Labels/placeholders/hints/DB slots come from the shared aiProviders meta;
-  // OAuth/subscription providers (gemini, codex) and zen-free need no key.
+  // OAuth/subscription providers (gemini, codex) need no key.
   const aiKeyStates: Record<string, { value: string; set: (v: string) => void }> = {
     'zen-paid': { value: aiZenApiKeyInput, set: setAiZenApiKeyInput },
     'go': { value: aiGoApiKeyInput, set: setAiGoApiKeyInput },
@@ -588,7 +588,7 @@ export function SettingsWidget() {
   useEffect(() => {
     const key = activeKeyBinding?.value ?? '';
 
-    if (aiProvider !== 'gemini' && aiProvider !== 'zen-free' && aiProvider !== 'codex' && !key) {
+    if (aiProvider !== 'gemini' && aiProvider !== 'codex' && !key) {
       setAiAvailableModels([{ id: '', label: `Enter ${aiProvider} API key to fetch models` }]);
       return;
     }
@@ -1090,8 +1090,8 @@ export function SettingsWidget() {
             <div className="flex flex-col gap-1.5 text-xs">
               <span className="text-white/50 text-[10px] leading-relaxed">
                 Best results need a paid subscription or pay-as-you-go provider.
-                Free models work well too depending on provider/model — the maker
-                recommends OpenCode Zen (Free) if you must use free.
+                Free models work well too depending on provider/model — Google
+                AI Studio offers a free key.
               </span>
               <label className="flex flex-col gap-0.5">
                 <span className="text-white/70 text-[10px]">Provider:</span>
@@ -1143,8 +1143,6 @@ export function SettingsWidget() {
                     Login to Gemini
                   </button>
                 </div>
-              ) : aiProvider === 'zen-free' ? (
-                <span className="text-green-300/80 text-[10px]">No API key required — free models available immediately.</span>
               ) : aiProvider === 'codex' ? (
                 <div className="flex flex-col gap-1 mt-1">
                   <span className="text-white/70 text-[10px]">Use your ChatGPT Plus/Pro subscription via the Codex backend — no API key needed.</span>
