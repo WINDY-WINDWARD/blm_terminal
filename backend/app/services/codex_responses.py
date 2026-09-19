@@ -130,7 +130,16 @@ def build_responses_payload(
     tools: list[dict[str, Any]] | None,
     max_tokens: int = 4096,
 ) -> dict[str, Any]:
-    """Build the POST body for ``{base}/responses``."""
+    """Build the POST body for ``{base}/responses``.
+
+    NOTE: ``max_output_tokens`` is deliberately NOT sent. OpenAI dropped
+    support for it on the ChatGPT-account Codex route (newer models such as
+    gpt-5.5 reject it with ``400 Unsupported parameter``). Output length is
+    bounded by ``reasoning.effort`` + the agentic-loop ``max_iter`` cap in
+    the caller instead. ``max_tokens`` is accepted for signature
+    compatibility but ignored.
+    """
+    _ = max_tokens
     payload: dict[str, Any] = {
         "model": model,
         "instructions": instructions or "You are a helpful assistant.",
@@ -138,7 +147,6 @@ def build_responses_payload(
         "store": False,
         "stream": True,
         "reasoning": {"effort": "medium", "summary": "auto"},
-        "max_output_tokens": max_tokens,
     }
     response_tools = openai_tools_to_responses_tools(tools)
     if response_tools:

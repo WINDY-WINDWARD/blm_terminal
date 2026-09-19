@@ -122,7 +122,7 @@ def test_codex_request_conversion():
         {"role": "tool", "tool_call_id": "call_1", "content": "[...]"},
     ]
     payload = build_responses_payload(
-        model="gpt-5.1-codex",
+        model="gpt-5.5",
         instructions="sys-prompt",
         messages=msgs,
         tools=[
@@ -137,6 +137,9 @@ def test_codex_request_conversion():
         ],
     )
     assert payload["store"] is False and payload["stream"] is True
+    # max_output_tokens must NOT be sent: the ChatGPT-account Codex route
+    # rejects it (400 Unsupported parameter) on current models.
+    assert "max_output_tokens" not in payload
     types = [i.get("type", i.get("role")) for i in payload["input"]]
     assert types == ["user", "assistant", "function_call", "function_call_output"]
     assert payload["tools"][0] == {

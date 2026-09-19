@@ -1076,7 +1076,25 @@ async def _run_codex_loop(
                         return
                     if response.status_code != 200:
                         body = await response.aread()
-                        yield json.dumps({"type": "error", "message": f"Codex API {response.status_code}: {body.decode()[:300]}"})
+                        raw = body.decode(errors="replace")[:300]
+                        lowered = raw.lower()
+                        if response.status_code == 400 and "not supported" in lowered:
+                            # Model retired or gated by ChatGPT plan (the Codex
+                            # backend exposes no /models catalog, so availability
+                            # varies by account/rollout).
+                            msg = (
+                                f"Codex: model '{model}' isn't available on your ChatGPT plan "
+                                f"(or is retired). Pick another model in Settings → AI "
+                                f"(gpt-5.6-terra works on all plans). Details: {raw}"
+                            )
+                        elif response.status_code == 400 and "unsupported parameter" in lowered:
+                            msg = (
+                                f"Codex rejected a request parameter for model '{model}'. "
+                                f"Please report this (include the model name). Details: {raw}"
+                            )
+                        else:
+                            msg = f"Codex API {response.status_code}: {raw}"
+                        yield json.dumps({"type": "error", "message": msg})
                         yield json.dumps({"type": "done"})
                         return
 
