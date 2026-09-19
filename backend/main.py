@@ -812,13 +812,13 @@ app = FastAPI(
 # Middleware
 # ---------------------------------------------------------------------------
 
-# CORS — allow the Next.js dev server and any local variants.
+# CORS — locked down (Step 5): the renderer always talks to the backend through
+# the same-origin Next.js proxy (/api/py/*), never cross-origin from a browser,
+# so no browser origin is allowed. Direct browser access is removed; loopback
+# HTTP clients (proxies, CLIs, tests) are unaffected by CORS.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=[],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -850,6 +850,60 @@ async def log_requests(request: Request, call_next) -> Response:  # type: ignore
         elapsed_ms,
     )
     return response
+
+
+# ---------------------------------------------------------------------------
+# Per-launch token (Step 5): the Electron parent writes one line on stdin,
+# then EOF. Dev direct-run may set BLM_LAUNCH_TOKEN. Without either, the API
+# runs OPEN with a loud warning (packaged runs always receive the token).
+# Registered AFTER log_requests so it runs FIRST (outermost).
+# /health stays open for diagnostics; everything else needs x-blm-token.
+# WebSocket streams (public market/news data) are Host-checked by the Next.js
+# upgrade layer + loopback bind here; they carry no token by browser design.
+# ---------------------------------------------------------------------------
+import os as _os
+import secrets as _secrets
+
+
+def _read_stdin_token(timeout_s: float = 3.0) -> str:
+    import sys as _sys
+    import threading as _threading
+
+    box: list[str] = []
+
+    def _rd() -> None:
+        try:
+            box.append(_sys.stdin.readline())
+        except Exception:
+            pass
+
+    t = _threading.Thread(target=_rd, daemon=True)
+    t.start()
+    t.join(timeout_s)
+    return (box[0] if box else "").strip()
+
+
+LAUNCH_TOKEN = _read_stdin_token() or _os.environ.get("BLM_LAUNCH_TOKEN") or None
+
+logger = logging.getLogger("blm")
+if LAUNCH_TOKEN:
+    logger.info("Launch token armed (%d chars)", len(LAUNCH_TOKEN))
+else:
+    logger.warning(
+        "BLM launch token absent (no stdin token, no BLM_LAUNCH_TOKEN): "
+        "local API running OPEN — dev only, packaged runs always receive a token"
+    )
+
+
+@app.middleware("http")
+async def launch_token_guard(request: Request, call_next) -> Response:  # type: ignore[type-arg]
+    """Reject token-less local API calls (401). /health stays open."""
+    if request.url.path != "/health":
+        if not LAUNCH_TOKEN or not _secrets.compare_digest(
+            request.headers.get("x-blm-token", ""), LAUNCH_TOKEN
+        ):
+            return JSONResponse(status_code=401, content={"error": "missing or invalid launch token"})
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -901,13 +955,34 @@ async def health() -> dict[str, str]:
 
 
 if __name__ == "__main__":
+    import socket as _socket
+    import sys as _sys
     import uvicorn
 
-    uvicorn.run(
-        app,
-        host="127.0.0.1",
-        port=settings.port,
-        reload=False,
-        log_config=None,
-        forwarded_allow_ips='*',
-    )
+    # Ephemeral by default (Step 5/A6): PORT unset or 0 binds a free loopback
+    # port and reports BLM_BACKEND_PORT=<n> on stdout for the Electron parent.
+    # Explicit PORT (launch scripts, uvicorn CLI) keeps working unchanged.
+    requested = int(_os.environ.get("PORT", "0") or 0)
+    if requested:
+        print(f"BLM_BACKEND_PORT={requested}", flush=True)
+        uvicorn.run(
+            app,
+            host="127.0.0.1",
+            port=requested,
+            reload=False,
+            log_config=None,
+            forwarded_allow_ips='*',
+        )
+    else:
+        _sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        _sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        _sock.bind(("127.0.0.1", 0))
+        print(f"BLM_BACKEND_PORT={_sock.getsockname()[1]}", flush=True)
+        _sys.stdout.flush()
+        uvicorn.run(
+            app,
+            fd=_sock.fileno(),
+            reload=False,
+            log_config=None,
+            forwarded_allow_ips='*',
+        )

@@ -1,3 +1,5 @@
+import { withTicket } from './wsTicket';
+
 export interface NewsArticle {
   url: string;
   source: string | null;
@@ -93,13 +95,14 @@ class NewsWebSocketService {
     return `${ws}://${window.location.host}/ws/news`;
   }
 
-  private openSocket(): void {
+  private async openSocket(): Promise<void> {
     if (!this.wsUrl) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) return;
 
     console.log('[newsSocket] Connecting to', this.wsUrl);
     try {
-      this.socket = new WebSocket(this.wsUrl);
+      const url = await withTicket(this.wsUrl);
+      this.socket = new WebSocket(url);
 
       this.socket.onopen = () => {
         console.log('[newsSocket] Connected');

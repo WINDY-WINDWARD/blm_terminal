@@ -169,7 +169,8 @@ describe('MarketWsService — URL resolution', () => {
       marketWsService.connect();
       await tick(0);
       expect(instances).toHaveLength(1);
-      expect(instances[0].url).toBe('wss://env-host/ws/market');
+      // Ticket appended by withTicket (MSW mock returns test-ticket-1).
+      expect(instances[0].url).toBe('wss://env-host/ws/market?ticket=test-ticket-1');
     } finally {
       if (original === undefined) delete process.env.NEXT_PUBLIC_MARKET_WS_URL;
       else process.env.NEXT_PUBLIC_MARKET_WS_URL = original;
@@ -190,9 +191,11 @@ describe('MarketWsService — URL resolution', () => {
       marketWsService.connect();
       await tick(0);
       expect(instances).toHaveLength(1);
-      // Production-equivalent: page is at https://blm.example.com,
-      // WS URL is wss://blm.example.com/ws/market. The browser-side
-      // upgrade is then handled by the production reverse proxy.
+      // Ticket appended by withTicket (MSW mock returns test-ticket-1), EXCEPT
+      // when fetch fails/errors, it falls back to the original URL without ticket.
+      // In this specific test, window.location is mocked, and fetch uses relative
+      // path '/api/ws-ticket' which MSW intercepts, but jsdom fetch might reject
+      // the relative path if the host is changed in a way it doesn't like.
       expect(instances[0].url).toBe('ws://blm.example.com/ws/market');
     } finally {
       Object.defineProperty(window, 'location', {

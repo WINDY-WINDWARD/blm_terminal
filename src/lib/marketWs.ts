@@ -63,6 +63,7 @@
  */
 
 import type { ChangeRanges, SymbolDataExtract } from './nseTypes';
+import { withTicket } from './wsTicket';
 
 type ChangeRangesHandler = (symbol: string, data: ChangeRanges | null) => void;
 type SymbolDataHandler = (symbol: string, data: SymbolDataExtract | null) => void;
@@ -376,14 +377,15 @@ class MarketWsService {
     return `${proto}://${window.location.host}/ws/market`;
   }
 
-  private openSocket(): void {
+  private async openSocket(): Promise<void> {
     if (!this.wsUrl) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
     try {
-      this.socket = new WebSocket(this.wsUrl);
+      const url = await withTicket(this.wsUrl);
+      this.socket = new WebSocket(url);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       console.error('[marketWs] WebSocket constructor failed:', message);

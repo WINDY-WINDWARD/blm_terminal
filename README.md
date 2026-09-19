@@ -286,3 +286,5 @@ Other docs:
 - [`backend/README.md`](backend/README.md) — Python backend setup
 - [`backend/MCP_INTEGRATION.md`](backend/MCP_INTEGRATION.md) — MCP server integration details
 - [`blm-mcp-bundle/README.md`](blm-mcp-bundle/README.md) — Claude Desktop MCP plugin
+S e e   d o c s / l i c e n s i n g . m d   f o r   d e t a i l s   o n   t h e   c l i e n t - s i d e   l i c e n s e   e n f o r c e m e n t ,   o f f l i n e   l e a s e s ,   a n d   O T A   v e r i f i c a t i o n .  
+ 

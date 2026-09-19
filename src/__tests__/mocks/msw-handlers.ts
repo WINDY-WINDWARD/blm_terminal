@@ -94,6 +94,11 @@ const openAlgoHandlers = [
   http.get('/api/openalgo/ws-token', () => {
     return HttpResponse.json({ api_key: 'TEST_KEY' });
   }),
+  // Local WS ticket minting (server/tokenHolder.js). Tests get a fixed ticket
+  // so WebSocket URLs are deterministic: <base>?ticket=test-ticket-1.
+  http.get('/api/ws-ticket', () => {
+    return HttpResponse.json({ ticket: 'test-ticket-1' });
+  }),
   http.post('/api/openalgo/funds', () => {
     return HttpResponse.json({ status: 'success', data: fundsData });
   }),

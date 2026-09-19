@@ -250,28 +250,37 @@ async function startApp() {
   try {
     const isDev = !app.isPackaged;
     log(`startApp() called — isDev=${isDev}`);
+
+    // ── License gate (MUST precede all server spawns) ──
+    const { runGate, runManifestCheckedUpdate } = require('./license/gate');
+    const licConfig = require('./license/config');
+    let licenseCfg = null;
+    try {
+      licenseCfg = licConfig.resolve();
+    } catch (e) {
+      log(`License config error: ${e.message} — quitting`);
+      app.quit();
+      return;
+    }
+    const licKey = await runGate(log);
+    if (!licKey) {
+      log('License gate denied — quitting (update check remains available from the license window before quit)');
+      app.quit();
+      return;
+    }
+    log(`License gate passed (key ${licKey === 'dev-no-key' ? 'not enforced in dev' : 'verified'})`);
+    let lastVerifiedUpdate = null;
     
     // Dynamic port for Python backend, fixed default port (with fallback) for Next.js
     // IMPORTANT: Next.js frontend origin MUST remain consistent (e.g. http://127.0.0.1:4400)
     // across restarts so that the browser's localStorage (containing layout, watchlists,
     // active widgets, auth, filters) persists across cold boots!
-    const pythonPort = await findFreePort();
-    let nextPort = 4400;
-    try {
-      // Test if 4400 is free
-      await new Promise((resolve, reject) => {
-        const testSrv = net.createServer();
-        testSrv.once('error', reject);
-        testSrv.once('listening', () => {
-          testSrv.close(resolve);
-        });
-        testSrv.listen(nextPort, '127.0.0.1');
-      });
-    } catch (e) {
-      log(`Default port 4400 busy, finding dynamic free port: ${e.message}`);
-      nextPort = await findFreePort();
-    }
-    log(`Ports allocated — python=${pythonPort}, next=${nextPort}`);
+    // ── Per-launch token (A6/§8): children bind ephemeral ports and report
+    // back; the token travels over stdin/IPC, never argv/env. Fixed ports are
+    // gone so a local squatter can never receive the token or user data. ──
+    const crypto = require('crypto');
+    const launchToken = crypto.randomBytes(32).toString('base64url');
+    log('Per-launch token generated (stdin/IPC only)');
     
     // Determine paths
     const userDataPath = app.getPath('userData');
@@ -331,18 +340,45 @@ async function startApp() {
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
-        PORT: pythonPort.toString(),
+        // NOTE: no PORT — the backend binds ephemeral and reports BLM_BACKEND_PORT.
         DB_PATH: dbPath,
         LOG_DIR: backendLogDir,
         ENV: isDev ? 'development' : 'production',
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
         SECRET_KEY: 'desktop_terminal_local_secret_key_123456789'
       },
-      stdio: 'ignore',
+      stdio: ['pipe', 'pipe', 'ignore'],
       windowsHide: true
     });
 
     log(`Python process spawned — pid=${pythonProcess.pid}`);
+
+    // Deliver the launch token over stdin (one line), then close stdin.
+    try {
+      pythonProcess.stdin.write(launchToken + '\n');
+      pythonProcess.stdin.end();
+    } catch (e) {
+      log(`Failed to write launch token to backend stdin: ${e.message}`);
+    }
+
+    // Learn the ephemeral backend port from its stdout banner.
+    const pythonPort = await new Promise((resolve, reject) => {
+      let buf = '';
+      const timer = setTimeout(() => reject(new Error('backend did not report BLM_BACKEND_PORT in 30s')), 30000);
+      pythonProcess.stdout.on('data', (d) => {
+        buf += d.toString();
+        const m = /BLM_BACKEND_PORT=(\d+)/.exec(buf);
+        if (m) {
+          clearTimeout(timer);
+          resolve(parseInt(m[1], 10));
+        }
+      });
+      pythonProcess.on('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`backend exited before reporting port (code=${code})`));
+      });
+    });
+    log(`Backend ephemeral port: ${pythonPort}`);
 
     pythonProcess.on('error', (err) => {
       log(`PYTHON PROCESS ERROR: ${err.message}`);
@@ -376,12 +412,12 @@ async function startApp() {
     }
 
     const nextCwd = isDev ? path.join(__dirname, '..') : path.dirname(app.getPath('exe'));
-    log(`Forking Next.js process with cwd=${nextCwd}...`);
+    log(`Forking Next.js process with cwd=${nextCwd} (ephemeral port, token over IPC)...`);
     nextProcess = fork(serverJsPath, [], {
       cwd: nextCwd,
       env: {
         ...process.env,
-        PORT: nextPort.toString(),
+        // NOTE: no PORT — the Next server binds ephemeral and reports back.
         PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
         NODE_ENV: 'production',
         NEXT_DIR: nextDir
@@ -389,6 +425,23 @@ async function startApp() {
       stdio: 'pipe',
       windowsHide: true
     });
+
+    // Token over IPC (fork channel), then await the reported ephemeral port.
+    nextProcess.send({ type: 'license-token', token: launchToken });
+    const nextPort = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Next.js did not report server-ready in 30s')), 30000);
+      nextProcess.on('message', (m) => {
+        if (m && m.type === 'server-ready' && Number.isInteger(m.port)) {
+          clearTimeout(timer);
+          resolve(m.port);
+        }
+      });
+      nextProcess.on('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`Next.js exited before reporting port (code=${code})`));
+      });
+    });
+    log(`Next.js ephemeral port: ${nextPort}`);
 
     log(`Next.js process forked — pid=${nextProcess.pid}`);
 
@@ -416,6 +469,20 @@ async function startApp() {
     log(`Waiting for Next.js at http://127.0.0.1:${nextPort} (timeout 30s)...`);
     await waitForServer(`http://127.0.0.1:${nextPort}`, 30000);
     log(`Next.js is ready!`);
+
+    // Token injection scoped to the EXACT local origins (never wildcard).
+    // The renderer never sees the token; fetches/XHR to these origins carry it.
+    // WS upgrades use single-use tickets from /api/ws-ticket instead.
+    {
+      const { session } = require('electron');
+      const origins = [`http://127.0.0.1:${nextPort}`, `http://127.0.0.1:${pythonPort}`];
+      const filter = { urls: origins.map((o) => `${o}/*`) };
+      session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, cb) => {
+        details.requestHeaders['x-blm-token'] = launchToken;
+        cb({ requestHeaders: details.requestHeaders });
+      });
+      log(`Token injection armed for ${origins.join(', ')}`);
+    }
 
     // 4. Splash window — visible immediately while servers boot, so the
     // user never stares at a blank window or a raw Chromium error page.
@@ -735,15 +802,33 @@ async function startApp() {
       }
     });
     ipcMain.handle('download-update', async () => {
-      log('IPC download-update triggered');
+      log('IPC download-update triggered (manifest-first)');
       try {
-        return await autoUpdater.downloadUpdate();
+        const r = await runManifestCheckedUpdate(licenseCfg, log);
+        if (r.ok) {
+          lastVerifiedUpdate = { manifest: r.manifest, files: r.files };
+          sendStatusToWindow('downloaded', { version: r.manifest.version });
+        }
+        return r;
       } catch (err) {
         log(`IPC download-update error: ${err?.message || err}`);
         throw err;
       }
     });
-    ipcMain.handle('install-update', () => {
+    ipcMain.handle('install-update', async () => {
+      // Re-verify the cached installer immediately before installing.
+      try {
+        if (!lastVerifiedUpdate) {
+          throw new Error('no verified update pending: download first');
+        }
+        const ota = require('./license/ota');
+        await ota.verifyDownloaded(lastVerifiedUpdate.files, lastVerifiedUpdate.manifest);
+        log('Installer re-verified before quitAndInstall');
+      } catch (err) {
+        log(`Install refused: ${err?.message || err}`);
+        autoUpdater.autoInstallOnAppQuit = false;
+        throw err;
+      }
       isQuitting = true;
       cleanupProcesses();
       autoUpdater.quitAndInstall(true, true);
@@ -756,6 +841,46 @@ async function startApp() {
           log(`Launch auto-check failed: ${err?.message || err}`);
         });
       }, 7000);
+    }
+
+    // ── License re-validation (6–12h jittered). Definitive negative: warn,
+    // allow minutes to save, then quit. Never touches user data. ──
+    if (licKey !== 'dev-no-key') {
+      const licClient = require('./license/client');
+      const licStore = require('./license/store');
+      const scheduleReval = () => {
+        const delay = (6 + Math.random() * 6) * 3600 * 1000;
+        setTimeout(async () => {
+          try {
+            const st = licStore.load();
+            if (!st.key) { scheduleReval(); return; }
+            const r = await licClient.validateWithRetry({
+              url: licenseCfg.url, boxKid: licenseCfg.boxKid, encPub: licenseCfg.encPub,
+              key: st.key, iid: st.iid, timeoutMs: 10000,
+            });
+            if (r.outcome === 'denied') {
+              const { dialog } = require('electron');
+              log(`License re-validation denied (${r.status}) — warning user, quitting in 5 min`);
+              licStore.clearLease();
+              dialog.showMessageBox(mainWindow, {
+                type: 'warning', title: 'BLM Terminal license',
+                message: r.status === 'revoked'
+                  ? 'This license was revoked. The app will quit in 5 minutes — save your work.'
+                  : 'This license is no longer valid. The app will quit in 5 minutes — save your work.',
+              }).catch(() => {});
+              setTimeout(() => { isQuitting = true; cleanupProcesses(); app.quit(); }, 5 * 60 * 1000);
+              return;
+            }
+            if (r.outcome === 'ok' && r.reply && r.reply.lease) {
+              licStore.saveLease(r.reply.lease, r.reply.ts, Math.floor(Date.now() / 1000));
+            }
+          } catch (e) {
+            log(`License re-validation error (indeterminate, continuing): ${e.message}`);
+          }
+          scheduleReval();
+        }, delay);
+      };
+      scheduleReval();
     }
 
   } catch (error) {

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BLM Terminal — License</title>
+<style>
+  body { background: #0e0e11; color: #e8e0cf; font-family: monospace; margin: 0;
+    display: flex; align-items: center; justify-content: center; height: 100vh; }
+  .card { border: 1px solid #ffb00055; padding: 28px; width: 400px; }
+  h1 { color: #ffb000; font-size: 16px; margin: 0 0 12px; }
+  p { font-size: 12px; line-height: 1.5; }
+  input { width: 100%; box-sizing: border-box; background: #1a1a1f; color: #e8e0cf;
+    border: 1px solid #ffb00055; padding: 10px; font-family: monospace; font-size: 14px; }
+  button { background: #1a1a1f; color: #ffb000; border: 1px solid #ffb00088;
+    padding: 8px 14px; cursor: pointer; font-family: monospace; margin-top: 10px; }
+  button:hover { background: #2a2a30; }
+  #msg { min-height: 18px; font-size: 12px; margin-top: 10px; }
+  .err { color: #ff5555; } .ok { color: #00ff88; }
+  .row { display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>BLM Terminal — License</h1>
+  <p id="desc">Enter the license key mailed to you (BLM-XXXXXX-XXXXXX-XXXXXX).</p>
+  <input id="key" type="text" placeholder="BLM-XXXXXX-XXXXXX-XXXXXX" autocomplete="off" spellcheck="false">
+  <div class="row">
+    <button id="go" onclick="submit()">Activate</button>
+    <button onclick="retry()">Retry online check</button>
+  </div>
+  <div class="row">
+    <button onclick="updates()">Check for updates</button>
+    <button onclick="quit()">Quit</button>
+  </div>
+  <div id="msg"></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+function say(text, cls) { const m = $('msg'); m.textContent = text; m.className = cls || ''; }
+async function submit() {
+  say('Verifying…');
+  try {
+    const r = await window.blmLicense.submit($('key').value.trim());
+    if (r.ok) { say('Licensed. Starting…', 'ok'); }
+    else say(r.message || 'Not licensed.', 'err');
+  } catch (e) { say('Check failed: ' + (e.message || e), 'err'); }
+}
+async function retry() { say('Retrying…'); submit(); }
+async function updates() {
+  say('Checking for updates…');
+  try {
+    const r = await window.blmLicense.checkUpdates();
+    say(r.message || 'Update check finished.', r.ok ? 'ok' : 'err');
+  } catch (e) { say('Update check failed: ' + (e.message || e), 'err'); }
+}
+function quit() { window.blmLicense.quit(); }
+window.blmLicense.onMessage((m) => say(m.text, m.cls));
+document.getElementById('key').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+</script>
+</body>
+</html>
