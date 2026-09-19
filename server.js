@@ -85,6 +85,12 @@ app.prepare().then(() => {
       socket.destroy();
       return;
     }
+    
+    // Ignore Next.js internal paths to allow Hot Module Replacement (HMR) to work during development
+    if (pathname.startsWith('/_next/')) {
+      return;
+    }
+    
     if (pathname !== '/ws/market' && pathname !== '/ws/news') {
       socket.destroy();
       return;

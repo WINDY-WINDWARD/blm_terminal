@@ -19,7 +19,8 @@ const PROD_HOST = process.env.BLM_PROD_HOST || '';
 function resolve() {
   if (isPackaged) {
     const url = baked.url || '';
-    if (!url.startsWith('https://')) {
+    const isLocal = url.includes('localhost') || url.includes('127.0.0.1') || url.includes('192.168.');
+    if (!url.startsWith('https://') && !isLocal) {
       throw new Error('packaged license config missing https URL');
     }
     if (PROD_HOST) {
