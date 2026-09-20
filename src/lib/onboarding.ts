@@ -40,12 +40,31 @@ export async function checkBackendHealth(): Promise<HealthResult> {
 
 // ─── First-boot setup status ────────────────────────────────────────────────
 
-export async function getSetupStatus(): Promise<{ needsSetup: boolean }> {
-  const { res, data } = await fetchJson('/api/py/auth/setup-status');
-  if (!res.ok) throw new Error(`Setup status check failed (HTTP ${res.status})`);
-  const needsSetup = (data as { needs_setup?: unknown })?.needs_setup === true;
-  return { needsSetup };
-}
+  export async function getSetupStatus(): Promise<{ needsSetup: boolean }> {
+    const { res, data } = await fetchJson('/api/py/auth/setup-status');
+    if (!res.ok) throw new Error(`Setup status check failed (HTTP ${res.status})`);
+    const needsSetup = (data as { needs_setup?: unknown })?.needs_setup === true;
+    return { needsSetup };
+  }
+
+  // ─── First-boot flag (config table, survives origin/port changes) ─────────
+  // Backend is the source of truth; the local atom is a fast-path cache.
+  // Best-effort: backend unreachable (cold boot) means "not completed".
+
+  export async function getFirstBootStatus(): Promise<{ onboardingCompleted: boolean }> {
+    const { res, data } = await fetchJson('/api/py/first-boot', undefined, 5000);
+    if (!res.ok) return { onboardingCompleted: false };
+    const done = (data as { onboarding_completed?: unknown })?.onboarding_completed === true;
+    return { onboardingCompleted: done };
+  }
+
+  export async function completeFirstBoot(): Promise<void> {
+    const { res } = await fetchJson('/api/py/first-boot/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }, 5000);
+    if (!res.ok) throw new Error(`First-boot persist failed (HTTP ${res.status})`);
+  }
 
 // ─── Admin bootstrap / login ────────────────────────────────────────────────
 

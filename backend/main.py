@@ -38,6 +38,7 @@ from app.routers import (
     iinvest_router,
     tradingview as tradingview_router,
     system_config_router,
+    first_boot_router,
     stockuniverse_router,
     stockuniverse_errors_router,
     valuation_router,
@@ -927,6 +928,8 @@ app.include_router(screener_router, prefix="/api")
 app.include_router(iinvest_router, prefix="/api")
 app.include_router(tradingview_router.router, prefix="/api")
 app.include_router(system_config_router, prefix="/api")
+# First-boot flag: token-gated only (must work pre-login on fresh machines).
+app.include_router(first_boot_router, prefix="/api")
 app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")

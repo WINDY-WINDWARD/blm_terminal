@@ -15,6 +15,35 @@ from app.models.user import User
 
 router = APIRouter(tags=["system-config"], dependencies=[Depends(get_current_user)])
 
+# First-boot state lives in the same config table (key below) but MUST work
+# pre-login on a fresh machine — so it gets its own router with no user
+# dependency. Still protected by the per-launch token middleware (local-only).
+first_boot_router = APIRouter(tags=["first-boot"])
+
+ONBOARDING_COMPLETED_KEY = "app.onboarding_completed"
+
+
+@first_boot_router.get("/first-boot")
+async def get_first_boot(db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+    """First-boot/onboarding flag. Token-gated, no user login required."""
+    stmt = select(SystemConfig.value).where(SystemConfig.key == ONBOARDING_COMPLETED_KEY)
+    result = await db.execute(stmt)
+    row = result.first()
+    return {"onboarding_completed": (row[0] == "1") if row else False}
+
+
+@first_boot_router.post("/first-boot/complete")
+async def complete_first_boot(db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+    """Persist onboarding completion. Idempotent. Token-gated, no login required."""
+    stmt = sqlite_insert(SystemConfig).values(key=ONBOARDING_COMPLETED_KEY, value="1")
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["key"],
+        set_={"value": stmt.excluded.value},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"onboarding_completed": True}
+
 DEFAULT_NOTIF_CONFIG: dict[str, float] = {
     "notif.rsi_oversold_threshold": 30.0,
     "notif.rsi_overbought_threshold": 70.0,

@@ -46,7 +46,7 @@ describe('FirstLaunchModal gating', () => {
     render(<FirstLaunchModal />, {
       wrapperProps: { initialAtomValues: [[onboardingCompletedAtom, false]] },
     });
-    expect(screen.getByText('FIRST-TIME SETUP · STEP 1 OF 6')).toBeInTheDocument();
+    expect(screen.getByText('FIRST-TIME SETUP · STEP 1 OF 7')).toBeInTheDocument();
     expect(screen.getByText('Welcome to BLM Terminal.')).toBeInTheDocument();
   });
 

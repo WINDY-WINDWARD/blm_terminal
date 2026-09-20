@@ -13,7 +13,9 @@ import {
   checkAiStatus,
   checkBackendHealth,
   checkGeminiOAuthStatus,
+  completeFirstBoot,
   fetchProviderModels,
+  getFirstBootStatus,
   getSetupStatus,
   initiateGeminiOAuth,
   loginWithPassword,
@@ -104,6 +106,14 @@ export function FirstLaunchModal() {
 
   useEffect(() => {
     setMounted(true);
+    // Config-table check: onboarding may have completed in a previous
+    // install/session whose localStorage is gone (ephemeral ports, reinstall).
+    // Backend is source of truth; local atom is the fast-path cache.
+    getFirstBootStatus()
+      .then((s) => {
+        if (isMountedRef.current && s.onboardingCompleted) setCompleted(true);
+      })
+      .catch(() => {});
     return () => {
       isMountedRef.current = false;
       if (geminiPollRef.current) {
@@ -401,6 +411,9 @@ export function FirstLaunchModal() {
   const finish = () => {
     setTutorialStatus('active');
     setCompleted(true);
+    // Persist to the backend config table (survives origin changes); the
+    // local atom write above keeps the UI instant. Best-effort only.
+    completeFirstBoot().catch(() => {});
   };
 
   const canContinue =

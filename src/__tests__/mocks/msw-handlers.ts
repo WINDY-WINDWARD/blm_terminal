@@ -99,6 +99,13 @@ const openAlgoHandlers = [
   http.get('/api/ws-ticket', () => {
     return HttpResponse.json({ ticket: 'test-ticket-1' });
   }),
+  // First-boot flag (backend config table). Default: not completed.
+  http.get('/api/py/first-boot', () => {
+    return HttpResponse.json({ onboarding_completed: false });
+  }),
+  http.post('/api/py/first-boot/complete', () => {
+    return HttpResponse.json({ onboarding_completed: true });
+  }),
   http.post('/api/openalgo/funds', () => {
     return HttpResponse.json({ status: 'success', data: fundsData });
   }),

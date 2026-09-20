@@ -18,6 +18,7 @@ from app.routers.paper_trades import router as paper_trades_router
 from app.routers.screener import router as screener_router
 from app.routers.iinvest import router as iinvest_router
 from app.routers.system_config import router as system_config_router
+from app.routers.system_config import first_boot_router
 from app.routers.stockuniverse import router as stockuniverse_router, errors_router as stockuniverse_errors_router
 from app.routers.portfolio import router as portfolio_router
 from app.routers.valuation import router as valuation_router
