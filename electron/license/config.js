@@ -6,8 +6,9 @@
 
 let baked = {};
 try {
-  baked = require('./licenseConfig.js');
-} catch {
+  baked = require('../licenseConfig.js');
+} catch (e) {
+  // If it's genuinely missing, we fall back to an empty object
   baked = {};
 }
 
