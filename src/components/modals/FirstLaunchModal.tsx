@@ -106,14 +106,6 @@ export function FirstLaunchModal() {
 
   useEffect(() => {
     setMounted(true);
-    // Config-table check: onboarding may have completed in a previous
-    // install/session whose localStorage is gone (ephemeral ports, reinstall).
-    // Backend is source of truth; local atom is the fast-path cache.
-    getFirstBootStatus()
-      .then((s) => {
-        if (isMountedRef.current && s.onboardingCompleted) setCompleted(true);
-      })
-      .catch(() => {});
     return () => {
       isMountedRef.current = false;
       if (geminiPollRef.current) {
@@ -184,21 +176,54 @@ export function FirstLaunchModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, mounted, completed]);
 
-  // Backend flag resolution: the mount-time check can fire while the backend
-  // is still cold (connection refused/timeout), so the wizard may show even
-  // though a previous install completed onboarding. Once the backend is known
-  // reachable (health ok), resolve the flag authoritatively exactly once.
-  const flagResolvedRef = useRef(false);
+  // Backend flag resolution (single path): the check can fire while the
+  // backend is still cold (refused/timeout), so poll until the first
+  // REACHABLE answer instead of treating "unreachable" as "not completed".
+  // - reachable + true  -> close the wizard (previous install completed it)
+  // - reachable + false + local atom true -> self-heal: converge the missed
+  //   config-table write from an earlier failed finish()
+  // - reachable + false + local false -> genuine first boot, wizard proceeds
+  // - unreachable -> keep polling (5s, ~5min cap; next boot retries after that)
+  // This effect intentionally lives above the early return so it also runs
+  // while the wizard is closed (self-heal path).
+  const completedRef = useRef(false);
+  useEffect(() => { completedRef.current = completed; });
   useEffect(() => {
-    if (!mounted || completed || !health?.ok || flagResolvedRef.current) return;
-    flagResolvedRef.current = true;
-    getFirstBootStatus()
-      .then((s) => {
-        if (isMountedRef.current && s.onboardingCompleted) setCompleted(true);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 60;
+    const poll = async () => {
+      if (cancelled || !isMountedRef.current) return;
+      attempts += 1;
+      let s;
+      try {
+        s = await getFirstBootStatus();
+      } catch {
+        s = { reachable: false, onboardingCompleted: false };
+      }
+      if (cancelled || !isMountedRef.current) return;
+      if (!s.reachable) {
+        if (attempts < MAX_ATTEMPTS) {
+          setTimeout(() => { void poll(); }, 5000);
+        }
+        return;
+      }
+      if (s.onboardingCompleted) {
+        setCompleted(true);
+        return;
+      }
+      if (completedRef.current) {
+        try {
+          await completeFirstBoot();
+        } catch (err: unknown) {
+          console.error('[onboarding] self-heal persist failed:', err);
+        }
+      }
+    };
+    void poll();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, completed, health?.ok]);
+  }, [mounted]);
 
   // Auto-retry the engine probe while it keeps failing. The packaged
   // backend can take 30-90s to boot on first launch, and the one-shot
@@ -217,7 +242,7 @@ export function FirstLaunchModal() {
         .finally(() => setHealthChecking(false));
     }, 5000);
     return () => clearTimeout(t);
-  });
+  }, [mounted, completed, step, health, healthChecking]);
 
   if (!mounted || completed) return null;
 
@@ -424,12 +449,23 @@ export function FirstLaunchModal() {
     }, 400);
   };
 
-  const finish = () => {
+  const finish = async () => {
     setTutorialStatus('active');
     setCompleted(true);
     // Persist to the backend config table (survives origin changes); the
-    // local atom write above keeps the UI instant. Best-effort only.
-    completeFirstBoot().catch(() => {});
+    // local atom write above keeps the UI instant. Retry once, then loud:
+    // a silent failure here diverges local vs backend state (the mount
+    // poller self-heals it next boot, but we should still see it).
+    try {
+      await completeFirstBoot();
+    } catch (err: unknown) {
+      console.error('[onboarding] completeFirstBoot failed, retrying once:', err);
+      try {
+        await completeFirstBoot();
+      } catch (err2: unknown) {
+        console.error('[onboarding] completeFirstBoot retry failed; self-heal on next boot:', err2);
+      }
+    }
   };
 
   const canContinue =
