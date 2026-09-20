@@ -315,9 +315,9 @@ export function DealsWidget() {
     { id: 'insider',      label: 'Insider',      count: insiderRows.length,            description: 'Buys/sells by directors, officers, promoters, and their relatives (SEBI Reg. 7(2))' },
     { id: 'bulk',         label: 'Bulk',         count: bulkRows.length,               description: 'Bulk deals — single transaction crossing 0.5% of a company’s paid-up capital' },
     { id: 'block',        label: 'Block',        count: blockRows.length,              description: 'Block deals — negotiated trade window 09:15–09:40 IST for 5%+ block size' },
-    { id: 'pledged',      label: 'Pledged',      count: pledgedData?.response.data?.length ?? 0,      description: 'Promoter shares pledged as collateral with lenders (Reg. 31(2))' },
-    { id: 'shareholding', label: 'Shareholding', count: shareholderData?.response.data?.length ?? 0, description: 'Quarterly shareholding pattern: Promoter / FII / DII / Public breakdown (~5y history)' },
-    { id: 'sast',         label: 'SAST',         count: sastData?.response.data?.length ?? 0,         description: 'Substantial Acquisition of Shares & Takeovers (SEBI Reg. 29(2))' },
+    { id: 'pledged',      label: 'Pledged',      count: pledgedData?.response?.data?.length ?? 0,      description: 'Promoter shares pledged as collateral with lenders (Reg. 31(2))' },
+    { id: 'shareholding', label: 'Shareholding', count: shareholderData?.response?.data?.length ?? 0, description: 'Quarterly shareholding pattern: Promoter / FII / DII / Public breakdown (~5y history)' },
+    { id: 'sast',         label: 'SAST',         count: sastData?.response?.data?.length ?? 0,         description: 'Substantial Acquisition of Shares & Takeovers (SEBI Reg. 29(2))' },
   ];
 
   const activeRows: TradeRecord[] =
@@ -400,8 +400,8 @@ export function DealsWidget() {
           )
         ) : activeTab === 'pledged' ? (
           <IinvestGenericTable
-            data={pledgedData?.response.data ?? []}
-            columns={(pledgedData?.response.columns ?? []) as any}
+            data={pledgedData?.response?.data ?? []}
+            columns={(pledgedData?.response?.columns ?? []) as any}
             emptyMsg={
               symbol
                 ? `${symbol} has no pledged shares on record.`
@@ -410,8 +410,8 @@ export function DealsWidget() {
           />
         ) : activeTab === 'sast' ? (
           <IinvestGenericTable
-            data={sastData?.response.data ?? []}
-            columns={(sastData?.response.columns ?? []) as IinvestColumn[]}
+            data={sastData?.response?.data ?? []}
+            columns={(sastData?.response?.columns ?? []) as IinvestColumn[]}
             emptyMsg="No SAST disclosures on record"
           />
         ) : null}

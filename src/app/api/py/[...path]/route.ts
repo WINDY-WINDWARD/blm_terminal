@@ -46,11 +46,11 @@ async function proxyRequest(
       forwardHeaders.set(key, value)
     }
   })
-  // Per-launch token (Step 5): server.js sets BLM_LOCAL_TOKEN at runtime when
-  // Electron delivers it over IPC. Never trust a client-supplied value here —
-  // delete it first, then set the server-side one (if any; dev may have none).
+  // Per-launch token (Step 5): server.js injects x-blm-internal-token at the
+  // edge before passing the request to Next.js. Never trust a client-supplied
+  // value here — delete it first, then set the server-side one (if any).
   forwardHeaders.delete('x-blm-token')
-  const localToken = process.env.BLM_LOCAL_TOKEN
+  const localToken = request.headers.get('x-blm-internal-token')
   if (localToken) {
     forwardHeaders.set('x-blm-token', localToken)
   }

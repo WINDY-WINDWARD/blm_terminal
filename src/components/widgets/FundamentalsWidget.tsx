@@ -662,11 +662,11 @@ export function FundamentalsWidget() {
             symbol={symbol}
             iinvestAvailable={iinvestAvailable}
             nseRatios={nseRatios}
-            announcements={announcements?.response.data}
-            boardMeetings={boardMeetings?.response.data}
-            corporateActions={corporateActions?.response.data}
-            legalCases={legalCases?.response.data}
-            capitalHistory={capitalHistory?.response.data}
+            announcements={announcements?.response?.data}
+            boardMeetings={boardMeetings?.response?.data}
+            corporateActions={corporateActions?.response?.data}
+            legalCases={legalCases?.response?.data}
+            capitalHistory={capitalHistory?.response?.data}
           />
         </div>
       );
@@ -1028,11 +1028,11 @@ export function FundamentalsWidget() {
           <IinvestEnrichmentPanel
             symbol={symbol}
             iinvestAvailable={iinvestAvailable}
-            announcements={announcements?.response.data}
-            boardMeetings={boardMeetings?.response.data}
-            corporateActions={corporateActions?.response.data}
-            legalCases={legalCases?.response.data}
-            capitalHistory={capitalHistory?.response.data}
+            announcements={announcements?.response?.data}
+            boardMeetings={boardMeetings?.response?.data}
+            corporateActions={corporateActions?.response?.data}
+            legalCases={legalCases?.response?.data}
+            capitalHistory={capitalHistory?.response?.data}
             nseRatios={nseRatios}
           />
         )}

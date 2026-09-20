@@ -67,6 +67,12 @@ app.prepare().then(() => {
     if (!tokenHolder.tokenOk(req)) {
       return deny(res, 401, 'missing_or_invalid_launch_token');
     }
+    
+    // Pass the token inward to Next.js API routes (which run in worker threads
+    // and don't share memory/env changes) so they can forward it to Python.
+    const t = tokenHolder.getToken();
+    if (t) req.headers['x-blm-internal-token'] = t;
+
     const { pathname, query } = parse(req.url || '', true);
     // Single-use WS ticket minting (renderer fetches same-origin, gets the
     // token header injected by Electron, then connects WS with ?ticket=).
