@@ -975,13 +975,16 @@ if __name__ == "__main__":
         )
     else:
         _sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-        _sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
         _sock.bind(("127.0.0.1", 0))
-        print(f"BLM_BACKEND_PORT={_sock.getsockname()[1]}", flush=True)
+        ephemeral_port = _sock.getsockname()[1]
+        _sock.close()
+        
+        print(f"BLM_BACKEND_PORT={ephemeral_port}", flush=True)
         _sys.stdout.flush()
         uvicorn.run(
             app,
-            fd=_sock.fileno(),
+            host="127.0.0.1",
+            port=ephemeral_port,
             reload=False,
             log_config=None,
             forwarded_allow_ips='*',
