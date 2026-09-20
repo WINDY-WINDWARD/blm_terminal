@@ -792,6 +792,9 @@ async function startApp() {
       return true;
     });
     ipcMain.handle('storage-get-all', () => terminalStorageData);
+    ipcMain.on('storage-get-all-sync', (event) => {
+      event.returnValue = terminalStorageData;
+    });
     ipcMain.handle('check-for-updates', async () => {
       log('IPC check-for-updates triggered');
       try {
