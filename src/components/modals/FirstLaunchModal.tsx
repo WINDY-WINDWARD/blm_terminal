@@ -184,6 +184,22 @@ export function FirstLaunchModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, mounted, completed]);
 
+  // Backend flag resolution: the mount-time check can fire while the backend
+  // is still cold (connection refused/timeout), so the wizard may show even
+  // though a previous install completed onboarding. Once the backend is known
+  // reachable (health ok), resolve the flag authoritatively exactly once.
+  const flagResolvedRef = useRef(false);
+  useEffect(() => {
+    if (!mounted || completed || !health?.ok || flagResolvedRef.current) return;
+    flagResolvedRef.current = true;
+    getFirstBootStatus()
+      .then((s) => {
+        if (isMountedRef.current && s.onboardingCompleted) setCompleted(true);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, completed, health?.ok]);
+
   // Auto-retry the engine probe while it keeps failing. The packaged
   // backend can take 30-90s to boot on first launch, and the one-shot
   // probe above never refires on its own (health stays non-null), which
