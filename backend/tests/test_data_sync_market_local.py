@@ -25,7 +25,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import delete, insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +132,70 @@ class TestDeleteThenInsert:
                 sa.select(table.c.company_name).where(table.c.symbol == "RELIANCE")
             )
             assert name == "Reliance Industries"
+        await engine.dispose()
+
+
+def _categories_table(metadata: sa.MetaData) -> sa.Table:
+    """Live shape: composite PK, no separate unique constraint."""
+    return sa.Table(
+        "market_categories",
+        metadata,
+        sa.Column("category_type", sa.String(32), primary_key=True),
+        sa.Column("slug", sa.String(128), primary_key=True),
+        sa.Column("name", sa.String(255), nullable=False),
+        sa.Column("last_updated", sa.DateTime(), nullable=False),
+    )
+
+
+class TestIntraBatchCollisions:
+    async def test_plain_insert_rejects_slug_collision(self):
+        """Distinct raw names can slug-collide; plain INSERT then fails."""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        metadata = sa.MetaData()
+        table = _categories_table(metadata)
+        async with engine.begin() as conn:
+            await conn.run_sync(metadata.create_all)
+            vals = [
+                {"category_type": "industry", "slug": "bank-private",
+                 "name": "Bank - Private", "last_updated": datetime(2026, 9, 22)},
+                {"category_type": "industry", "slug": "bank-private",
+                 "name": "Bank Private", "last_updated": datetime(2026, 9, 22)},
+            ]
+            with pytest.raises(IntegrityError, match="UNIQUE constraint failed"):
+                await conn.execute(insert(table).values(vals))
+        await engine.dispose()
+
+    async def test_keyed_dedupe_last_wins(self):
+        """The persistence strategy (keyed dict, last wins) absorbs it."""
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        metadata = sa.MetaData()
+        table = _categories_table(metadata)
+        async with engine.begin() as conn:
+            await conn.run_sync(metadata.create_all)
+        async with engine.connect() as conn:
+            vals = [
+                {"category_type": "industry", "slug": "bank-private",
+                 "name": "Bank - Private", "last_updated": datetime(2026, 9, 22)},
+                {"category_type": "industry", "slug": "bank-private",
+                 "name": "Bank Private", "last_updated": datetime(2026, 9, 22)},
+                {"category_type": "sector", "slug": "banks",
+                 "name": "Banks", "last_updated": datetime(2026, 9, 22)},
+            ]
+            deduped: dict = {}
+            for v in vals:
+                deduped[(v["category_type"], v["slug"])] = v
+            await conn.execute(delete(table))
+            await conn.execute(insert(table).values(list(deduped.values())))
+            await conn.commit()
+            count = await conn.scalar(sa.select(sa.func.count()).select_from(table))
+            assert count == 2
+            name = await conn.scalar(
+                sa.select(table.c.name).where(
+                    (table.c.category_type == "industry")
+                    & (table.c.slug == "bank-private")
+                )
+            )
+            assert name == "Bank Private"
         await engine.dispose()
 
 

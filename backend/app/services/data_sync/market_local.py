@@ -302,6 +302,16 @@ async def _refresh_market_data_local_async() -> None:
                     "earnings_yoy": data.get("earnings_yoy"),
                     "last_updated": now,
                 })
+            # Distinct raw names can slug-collide (UNIQUE(category_type,
+            # slug)); the old ON CONFLICT upsert absorbed that, plain INSERT
+            # does not — dedupe, last wins.
+            deduped: dict[tuple[str, str], dict[str, Any]] = {}
+            for v in values_list:
+                deduped[(v["category_type"], v["slug"])] = v
+            if len(deduped) != len(values_list):
+                logger.debug("market_local_sync: dropped %d slug-colliding category rows",
+                             len(values_list) - len(deduped))
+                values_list = list(deduped.values())
             try:
                 await session.execute(delete(MarketCategory))
                 await session.execute(insert(MarketCategory).values(values_list))
@@ -337,6 +347,16 @@ async def _refresh_market_data_local_async() -> None:
                     "last_updated": now,
                 })
             try:
+                # Same slug-collision insurance as categories: dedupe by
+                # symbol within the batch (last wins) so one dup row can't
+                # fail the batch against uq_market_stock_symbol.
+                seen: dict[str, dict[str, Any]] = {}
+                for v in vals:
+                    seen[v["symbol"]] = v
+                if len(seen) != len(vals):
+                    logger.debug("market_local_sync: dropped %d duplicate-symbol rows in batch",
+                                 len(vals) - len(seen))
+                    vals = list(seen.values())
                 await session.execute(
                     delete(MarketCategoryStock).where(
                         MarketCategoryStock.symbol.in_([v["symbol"] for v in vals])
