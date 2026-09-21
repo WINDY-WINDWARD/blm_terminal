@@ -150,6 +150,7 @@ FALLBACK_ZEN_MODELS = [
     {"id": "muse-spark-1.2-contributor-free", "label": "[FREE] muse-spark-1.2-contributor-free", "is_free": True},
     {"id": "claude-sonnet-4-5", "label": "claude-sonnet-4-5", "is_free": False},
     {"id": "claude-haiku-4-5", "label": "claude-haiku-4-5", "is_free": False},
+    {"id": "gemini-3.8-flash", "label": "gemini-3.8-flash", "is_free": False},
     {"id": "gemini-3.7-flash", "label": "gemini-3.7-flash", "is_free": False},
     {"id": "gemini-3.5-flash", "label": "gemini-3.5-flash", "is_free": False},
     {"id": "gpt-5.4-mini", "label": "gpt-5.4-mini", "is_free": False},
@@ -515,6 +516,9 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
     prov = provider.lower().strip()
     if prov == "gemini":
         return [
+            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
+            {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+            {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
             {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
             {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
             {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
@@ -628,6 +632,9 @@ async def get_chat_models() -> list[dict]:
     provider = await get_dynamic_ai_provider()
     if provider == "gemini":
         return [
+            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
+            {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+            {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
             {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
             {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
             {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
