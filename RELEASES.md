@@ -91,6 +91,22 @@ This command will:
 > proof, byte-compare a fast build against a full build once per release
 > cycle: same `blm-backend.exe` hash, same asar content, installer boots and
 > passes the license gate.
+>
+> **Release assets (5, not 6):** exe, blockmap, `latest.yml`, plus the
+> `ota-manifest.json`/`.sig` pair. No `.nsis.7z`: neither update client
+> consumes differential packages (electron-updater reads the host
+> `latest.yml` which references the full exe; the custom OTA in
+> `electron/license/ota.js` downloads the full exe from the signed
+> manifest), so shipping one would add an untested path for zero benefit.
+>
+> **Install discipline (2026-09-22 lesson):** stopping "BLM Terminal"
+> processes does NOT stop `blm-backend.exe` children — an orphaned backend
+> survives silent uninstall/reinstall, keeps the old exe file locked (so the
+> installer silently keeps the stale backend!), and keeps writing to the
+> shared DB with old code alongside the new backend. Before any
+> install/reinstall: stop-process BOTH names, then hash-compare
+> `dist-desktop/win-unpacked/resources/blm-backend/blm-backend.exe` against
+> the installed copy — they must MATCH before launching.
 
 ### Step 4: Publish the Draft Release
 1.  Go to the **Releases** page of your GitHub repository.

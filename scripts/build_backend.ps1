@@ -29,6 +29,14 @@ if (-not $PyInstallerOk) {
 }
 
 # Build the executable
+# NOTE (2026-09-22): always wipe the PyInstaller work dirs first so every
+# backend exe is built from current source. A reused backend/build/ cache is
+# a silent stale-backend risk; the few minutes of a clean Analysis are
+# non-negotiable for release integrity. (Separate real incident the same
+# day: an orphaned blm-backend.exe survived reinstall and kept writing with
+# old code — see the install discipline note in RELEASES.md.)
+Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "dist" -ErrorAction SilentlyContinue
 # --collect-all camoufox / apify_fingerprint_datapoints: Camoufox needs its
 # bundled data files (e.g. input-network-definition.zip) at runtime. Without
 # them the frozen exe fails to launch the persistent warm browser with

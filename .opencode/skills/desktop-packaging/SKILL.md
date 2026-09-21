@@ -51,6 +51,16 @@
      $proc = Start-Process -FilePath $setup -ArgumentList "/S" -PassThru
      $proc.WaitForExit()
      ```
+   - **Verify the backend actually replaced** (2026-09-22 lesson): stopping
+     "BLM Terminal" does NOT stop `blm-backend.exe` children — an orphaned
+     backend keeps the installed exe locked, so the installer silently keeps
+     the STALE backend while everything else updates. After install, BEFORE
+     launching, hash-compare and re-install if mismatched:
+     ```powershell
+     $a = Get-FileHash "dist-desktop/win-unpacked/resources/blm-backend/blm-backend.exe" -Algorithm SHA256
+     $b = Get-FileHash "$env:LOCALAPPDATA\Programs\BLM Terminal\resources\blm-backend\blm-backend.exe" -Algorithm SHA256
+     if ($a.Hash -ne $b.Hash) { echo "STALE BACKEND — kill all processes and re-run installer" }
+     ```
 
 5. **Pre-Release Checklist** (run before every release build):
     - **Use the FULL build** (`npm run build:desktop`). The fast build skips
