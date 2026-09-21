@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,75 @@ from app.services.llm_provider import stream_chat_completion
 from app.services.ai_chat_service import BLM_TOOLS, _run_tools_parallel
 
 logger = logging.getLogger(__name__)
+
+_IST = ZoneInfo("Asia/Kolkata")
+_LAST_SUCCESS_KEY = "ai_picks.last_success_date"  # IST YYYY-MM-DD of last run yielding >=1 pick
+_LAST_EVAL_KEY = "ai_picks.last_eval_date"  # IST YYYY-MM-DD of last evaluator pass
+_STALE_SECTOR_HOURS = 48
+
+
+def _today_ist_str(now: datetime | None = None) -> str:
+    """Current date in Asia/Kolkata as YYYY-MM-DD."""
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(_IST).strftime("%Y-%m-%d")
+
+
+def _past_market_hours(now: datetime | None = None) -> bool:
+    """True at/after the 15:30 IST close (any day — weekends count as closed)."""
+    now = now or datetime.now(timezone.utc)
+    ist = now.astimezone(_IST)
+    return (ist.hour, ist.minute) >= (15, 30)
+
+
+def _morning_due(last_success: str | None, today: str) -> bool:
+    """Pure decision: run the morning hunter iff no successful run today."""
+    return last_success != today
+
+
+def _evening_due(last_eval: str | None, today: str, has_picks_today: bool, past_hours: bool) -> bool:
+    """Pure decision: evaluate iff picks exist today, none evaluated, past close."""
+    return bool(has_picks_today and past_hours and last_eval != today)
+
+
+async def _get_config_value(db: AsyncSession, key: str) -> str | None:
+    try:
+        from app.models.system_config import SystemConfig
+        res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == key))
+        row = res.first()
+        return row[0] if row else None
+    except Exception as e:
+        logger.warning(f"Failed to read system_config {key}: {e}")
+        return None
+
+
+async def _set_config_value(db: AsyncSession, key: str, value: str) -> None:
+    from app.models.system_config import SystemConfig
+    res = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
+    row = res.scalars().first()
+    if row is None:
+        db.add(SystemConfig(key=key, value=value))
+    else:
+        row.value = value
+    await db.commit()
+
+
+def _ist_day_utc_bounds(today_str: str) -> tuple[datetime, datetime]:
+    """UTC [start, end) bounds for an IST calendar day (naive, SQLite-style)."""
+    start_ist = datetime.strptime(today_str, "%Y-%m-%d").replace(tzinfo=_IST)
+    start_utc = start_ist.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, start_utc + timedelta(days=1)
+
+
+async def _picks_created_today(db: AsyncSession, today: str) -> bool:
+    """Any NEW/ACTED_ON pick created today (IST)?"""
+    start_utc, end_utc = _ist_day_utc_bounds(today)
+    res = await db.execute(
+        select(AIPick.id)
+        .where(AIPick.created_at >= start_utc, AIPick.created_at < end_utc)
+        .where(AIPick.status.in_([PickStatus.NEW, PickStatus.ACTED_ON]))
+        .limit(1)
+    )
+    return res.first() is not None
 
 async def get_dynamic_models():
     """Fetch hunter and verifier models.
@@ -64,8 +134,9 @@ Execute a deep market scan across the NSE to identify exactly 4 to 6 highly acti
 Workflow Directives:
 1. DISCOVERY: Call `get_global_notifications` and `get_volume_gainers` to identify stocks with recent technical breakouts or abnormal volume surges.
 2. SCREENING: Call `run_tql_screener` with strict momentum filters (e.g., RSI > 55, MACDHist > 0, From52wHigh > -15) to narrow down candidates.
-3. CATALYST VALIDATION: For top candidates, call `get_company_news` and `get_upcoming_events` to confirm positive catalysts and avoid adverse events.
-4. SYNTHESIS: Select the absolute best 4-6 setups. Discard weak setups.
+3. NEWS (YOUR JOB — the injected context contains NO news): Call `get_global_news` yourself for the macro regime, then `get_company_news` for EVERY shortlisted candidate. Never present a pick whose catalyst you have not read firsthand. Confirm positive catalysts and avoid adverse events with `get_upcoming_events` and `get_recent_announcements`.
+4. SECTOR CHECK: The injected snapshot lists top/bottom industries and sectors. Drill into your candidates' sectors with `list_industries`/`list_sectors` → `get_industry_stocks`/`get_sector_stocks` to confirm sector tailwinds.
+5. SYNTHESIS: Select the absolute best 4-6 setups. Discard weak setups.
 </task>
 
 <tool_usage_guidelines>
@@ -73,6 +144,12 @@ Workflow Directives:
 - If `get_company_news` fails or returns insufficient data, immediately fallback to `company_fdm` to check recent corporate announcements.
 - Do not guess parameter values (e.g., sector slugs). If you need an industry list, call `list_industries` first.
 </tool_usage_guidelines>
+
+<freshness_rules>
+- The injected breadth snapshot is stamped with as-of times; sector/industry rows carry their own `last_updated`.
+- FRESHNESS IS MANDATORY: cite the as-of time for EVERY data claim in your thesis. Treat sector/industry data older than 48 hours as STALE: say so explicitly and prefer a fresher cross-check (technicals, news, events).
+- Never invent market context. Every claim must trace to a tool output you actually called.
+</freshness_rules>
 
 <format>
 For each selected pick, your thesis MUST include:
@@ -109,14 +186,20 @@ The Hunter AI has provided a list of proposed mid-cap swing trade setups. Your j
 
 <task>
 1. Independently verify the technicals, fundamentals, news, and fair value of each proposed setup.
-2. Call tools like `get_symbol_data`, `company_fdm`, and `get_company_news` to check for red flags.
-3. REJECT any setup that has poor financials, bad news sentiment, or overextended technicals.
-4. Keep only the absolute best 2 to 3 setups. If none pass your strict criteria, return an empty array.
+2. Re-pull `get_company_news` yourself for EVERY proposed pick — never trust the Hunter's news summary. Call tools like `get_symbol_data`, `company_fdm`, `get_upcoming_events`, and `get_recent_announcements` to check for red flags.
+3. Sanity-check each pick against its sector: confirm the industry/sector trend supports (or at least does not contradict) the setup.
+4. REJECT any setup that has poor financials, bad news sentiment, or overextended technicals.
+5. Keep only the absolute best 2 to 3 setups. If none pass your strict criteria, return an empty array.
 </task>
 
 <tool_usage_guidelines>
 - If `get_company_news` fails or returns insufficient data, immediately fallback to `company_fdm` to check recent corporate announcements.
 </tool_usage_guidelines>
+
+<freshness_rules>
+- FRESHNESS IS MANDATORY: cite the as-of time (`last_updated`) for every dataset you rely on. Sector/industry data older than 48 hours is STALE — say so explicitly and prefer fresher cross-checks.
+- Never invent market context. Every claim must trace to a tool output you actually called.
+</freshness_rules>
 
 <format>
 CRITICAL FINAL OUTPUT:
@@ -154,9 +237,10 @@ CRITICAL INSTRUCTIONS:
    - OR technical structure has fully broken (support broken cleanly on high volume, reversal patterns confirmed).
 
 2. EVALUATE TODAY'S CONTEXT:
-   - Use your tools to check today's closing price, recent news, and technicals for the given symbol.
-   - Assess if the thesis remains intact, targets need adjustment, or position must close.
-   - Compare current price action to the entry point and stop loss level.
+    - Use your tools to check today's closing price, recent news (`get_company_news`), and technicals for the given symbol.
+    - Assess if the thesis remains intact, targets need adjustment, or position must close.
+    - Compare current price action to the entry point and stop loss level.
+    - FRESHNESS IS MANDATORY: cite the `last_updated` as-of time for all data used; treat sector/industry data older than 48 hours as stale.
 
 3. DECISION LOGIC:
    - HOLD: Setup is progressing normally, no adverse signals, OR position not yet triggered.
@@ -273,160 +357,243 @@ async def _run_agent_loop(messages: list[dict], model: str, system_prompt: str |
             
     return full_content
 
-async def _call_hunter(db: AsyncSession, market_context: str = "") -> list[dict]:
-    """Loop 1: Run hunt for picks."""
+
+async def _run_agent_loop_retry(
+    messages: list[dict],
+    model: str,
+    system_prompt: str | None,
+    label: str,
+    attempts: int = 3,
+) -> str:
+    """Run the agent loop, retrying transport/API errors (429, tokens, network).
+
+    Parse errors are NOT retried here — they surface from _extract_json_block
+    in the caller, where retrying cannot help.
+    """
+    last_err: Exception | None = None
+    for i in range(attempts):
+        try:
+            return await _run_agent_loop(messages, model, system_prompt)
+        except Exception as e:
+            last_err = e
+            logger.warning(f"{label} attempt {i + 1}/{attempts} failed: {e}")
+            if i < attempts - 1:
+                await asyncio.sleep(2.0 * (2 ** i))
+    assert last_err is not None
+    raise last_err
+
+
+async def _call_hunter(db: AsyncSession, market_context: str = "") -> tuple[list[dict], str | None]:
+    """Loop 1: Run hunt for picks. Returns (picks, error). Empty+None = no setups (legit)."""
     logger.info("Loop 1: Hunter starting")
     start_time = time.time()
-    
+
     sys_prompt = HUNTER_PROMPT + "\n\n" + market_context
     messages = [{"role": "user", "content": "Execute your market scan and provide the top 2-3 swing trade picks."}]
-    
+
     hunter_model, verifier_model = await get_dynamic_models()
+    full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
     try:
-        text = await _run_agent_loop(
+        text = await _run_agent_loop_retry(
             messages=messages,
             model=hunter_model,
-            system_prompt=sys_prompt
+            system_prompt=sys_prompt,
+            label="Hunter",
         )
     except Exception as e:
-        logger.error(f"Hunter API error: {e}")
-        return []
-    
+        duration = int((time.time() - start_time) * 1000)
+        await _save_trace(db, "MULTI", "HUNTER", full_prompt, "", duration, "FAILED", str(e))
+        return [], f"Hunter API failed after retries: {e}"
+
     duration = int((time.time() - start_time) * 1000)
-    full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
     await _save_trace(db, "MULTI", "HUNTER", full_prompt, text, duration, "SUCCESS")
-    
+
     try:
-        return _extract_json_block(text, "picks")
+        return _extract_json_block(text, "picks"), None
     except Exception as e:
         logger.error(f"Hunter parsing failed: {e}. Raw content: {text}")
-    return []
+        return [], f"Hunter output unparseable: {e}"
 
-async def _call_verifier(db: AsyncSession, proposed_picks: list[dict], market_context: str = "") -> list[dict]:
-    """Loop 2: Run verify picks."""
+
+async def _call_verifier(db: AsyncSession, proposed_picks: list[dict], market_context: str = "") -> tuple[list[dict], str | None]:
+    """Loop 2: Run verify picks. Returns (picks, error). Empty+None = all rejected (legit)."""
     logger.info("Loop 2: Verifier starting")
     start_time = time.time()
-    
+
     sys_prompt = VERIFIER_PROMPT + "\n\n" + market_context
     user_msg = f"Here are the proposed setups. Verify them carefully:\n{json.dumps(proposed_picks, indent=2)}"
     messages = [{"role": "user", "content": user_msg}]
-    
+
     hunter_model, verifier_model = await get_dynamic_models()
+    full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
     try:
-        text = await _run_agent_loop(
+        text = await _run_agent_loop_retry(
             messages=messages,
             model=verifier_model,
-            system_prompt=sys_prompt
+            system_prompt=sys_prompt,
+            label="Verifier",
         )
     except Exception as e:
-        logger.error(f"Verifier API error: {e}")
-        return []
-    
+        duration = int((time.time() - start_time) * 1000)
+        await _save_trace(db, "MULTI", "VERIFIER", full_prompt, "", duration, "FAILED", str(e))
+        return [], f"Verifier API failed after retries: {e}"
+
     duration = int((time.time() - start_time) * 1000)
-    full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
     await _save_trace(db, "MULTI", "VERIFIER", full_prompt, text, duration, "SUCCESS")
-    
+
     try:
-        return _extract_json_block(text, "verified_picks")
+        return _extract_json_block(text, "verified_picks"), None
     except Exception as e:
         logger.error(f"Verifier parsing failed: {e}. Raw content: {text}")
-    return []
+        return [], f"Verifier output unparseable: {e}"
+
 
 async def _call_evaluator(db: AsyncSession, pick_data: dict, market_context: str = "") -> dict:
-    """Loop 3: Run evaluator for an existing pick."""
+    """Loop 3: Run evaluator for an existing pick (HOLD stays the safe default)."""
     start_time = time.time()
-    
+
     sys_prompt = EVALUATOR_PROMPT + "\n\n" + market_context
     user_msg = f"Re-evaluate this active position:\n{json.dumps(pick_data, indent=2)}"
     messages = [{"role": "user", "content": user_msg}]
-    
+
     hunter_model, verifier_model = await get_dynamic_models()
+    full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
     try:
-        text = await _run_agent_loop(
+        text = await _run_agent_loop_retry(
             messages=messages,
             model=verifier_model,
-            system_prompt=sys_prompt
+            system_prompt=sys_prompt,
+            label=f"Evaluator {pick_data.get('symbol', 'UNKNOWN')}",
         )
     except Exception as e:
-        logger.error(f"Evaluator API error: {e}")
+        duration = int((time.time() - start_time) * 1000)
+        await _save_trace(db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, "", duration, "FAILED", str(e))
         return {"note": f"Evaluation failed due to API error: {str(e)}", "action": "HOLD"}
-    
+
     duration = int((time.time() - start_time) * 1000)
-    full_prompt = sys_prompt + "\n\n" + json.dumps(messages)
     await _save_trace(db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, text, duration, "SUCCESS")
-    
+
     try:
         return _extract_json_block(text, "evaluation")
     except Exception as e:
         logger.error(f"Evaluator parsing failed: {e}. Raw content: {text}")
-    
+
     return {"note": "Failed to generate evaluation.", "action": "HOLD"}
 
 
 
-from app.mcp_server import get_top_gainers, get_top_losers, get_volume_gainers, get_global_news
+from app.mcp_server import get_top_gainers, get_top_losers, get_volume_gainers, list_sectors, list_industries
+
+
+def _spread(row: dict) -> float:
+    try:
+        return float(row.get("advance") or 0) - float(row.get("decline") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_breadth_row(row: dict) -> str:
+    return (
+        f"- {row.get('name')} (slug: {row.get('slug')}): "
+        f"adv {row.get('advance')}/dec {row.get('decline')}, "
+        f"sentiment {row.get('sentiment')}, PE {row.get('pe')}, "
+        f"earnings YoY {row.get('earnings_yoy')}% "
+        f"— as of {row.get('last_updated') or 'unknown'}"
+    )
+
 
 async def _fetch_market_context() -> str:
-    """Fetch a high-level summary of the broader market conditions."""
-    context_parts = ["### GLOBAL MARKET CONTEXT ###"]
-    
-    # 1. Top Gainers & Losers
+    """Deterministic breadth snapshot. Every section carries its as-of time.
+
+    News is deliberately NOT included here — the agents fetch it themselves
+    via get_global_news / get_company_news tools (fresher + per-symbol).
+    """
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    context_parts = ["### MARKET BREADTH SNAPSHOT ###"]
+
+    # 1. Top Gainers & Losers (live snapshot — no stored timestamp available)
     try:
         gainers = await get_top_gainers(category="allSec")
         losers = await get_top_losers(category="allSec")
-        
+
         g_symbols = [g.get('symbol', '') for g in gainers[:5]]
         l_symbols = [l.get('symbol', '') for l in losers[:5]]
-        
-        context_parts.append(f"Top Gainers: {', '.join(g_symbols)}")
-        context_parts.append(f"Top Losers: {', '.join(l_symbols)}")
+
+        context_parts.append(f"Top Gainers (live, fetched {now_utc}): {', '.join(g_symbols)}")
+        context_parts.append(f"Top Losers (live, fetched {now_utc}): {', '.join(l_symbols)}")
     except Exception as e:
         logger.error(f"Failed to fetch market gainers/losers: {e}")
-        
-    # 2. Volume Surge
+
+    # 2. Volume Surge (live snapshot)
     try:
         vol = await get_volume_gainers()
-        v_symbols = [v.get('symbol', '') for v in vol.get('data', [])[:5]]
-        context_parts.append(f"Volume Surges: {', '.join(v_symbols)}")
+        items = vol if isinstance(vol, list) else vol.get('data', [])
+        v_symbols = [v.get('symbol', '') for v in items[:5]]
+        context_parts.append(f"Volume Surges (live, fetched {now_utc}): {', '.join(v_symbols)}")
     except Exception as e:
         logger.error(f"Failed to fetch volume gainers: {e}")
-        
-    # 3. Global News
+
+    # 3. Sector & Industry breadth (stored snapshot — stamped per row)
     try:
-        news = await get_global_news(limit=5)
-        articles = news.get("articles", [])
-        news_lines = []
-        for a in articles:
-            title = a.get("title", "")
-            sentiment = a.get("sentiment_label", "NEUTRAL")
-            news_lines.append(f"- [{sentiment}] {title}")
-        if news_lines:
-            context_parts.append("Latest Global News:\n" + "\n".join(news_lines))
+        for label, rows in (("SECTORS", await list_sectors()), ("INDUSTRIES", await list_industries())):
+            ranked = sorted(rows, key=_spread, reverse=True)
+            if not ranked:
+                continue
+            lines = [f"### {label} BREADTH (top/bottom 3 by advance-decline spread) ###"]
+            for row in ranked[:3] + ranked[-3:]:
+                lines.append(_format_breadth_row(row))
+            context_parts.append("\n".join(lines))
     except Exception as e:
-        logger.error(f"Failed to fetch global news: {e}")
-        
+        logger.error(f"Failed to fetch sector/industry breadth: {e}")
+
     return "\n\n".join(context_parts)
 
 
-async def run_loop_1_and_2():
-    """Execute Hunter (8am) and Verifier pipelines."""
+async def run_loop_1_and_2(late: bool = False) -> str:
+    """Execute Hunter (8am) and Verifier pipelines.
+
+    Returns "ok" (>=1 pick saved), "empty" (legit: no setups / all rejected),
+    or "error:<detail>" (API/parse failure — caller must report failed, and
+    the success date stays unwritten so the next boot retries).
+    """
     _, verifier_model = await get_dynamic_models()
     market_context = await _fetch_market_context()
-    
+    today = _today_ist_str()
+    if late:
+        market_context += (
+            f"\n\nNOTE: This is a late catch-up run for {today} (the scheduled "
+            "8am run was missed). Data may be less fresh than a morning run — "
+            "say so where relevant and prefer the freshest cross-checks."
+        )
+
     async with AsyncSessionLocal() as db:
-        proposed_picks = await _call_hunter(db, market_context)
+        proposed_picks, hunter_err = await _call_hunter(db, market_context)
+        if hunter_err:
+            logger.error(f"Loop 1 failed: {hunter_err}")
+            return f"error:{hunter_err}"
         if not proposed_picks:
             logger.info("Loop 1 found no valid setups today.")
-            return
-            
-        verified_picks = await _call_verifier(db, proposed_picks, market_context)
+            return "empty"
+
+        verified_picks, verifier_err = await _call_verifier(db, proposed_picks, market_context)
+        if verifier_err:
+            logger.error(f"Loop 2 failed: {verifier_err}")
+            return f"error:{verifier_err}"
         if not verified_picks:
             logger.info("Loop 2 rejected all setups.")
-            return
-            
+            return "empty"
+
         # Commit to DB
         for pick in verified_picks:
             try:
+                notes = []
+                if late:
+                    notes.append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "note": f"Catch-up run for {today} (scheduled 8am run missed). Freshness reduced; verify before acting.",
+                        "model": "system",
+                        "late": True,
+                    })
                 new_pick = AIPick(
                     symbol=pick['symbol'],
                     direction=PickDirection.LONG if pick.get('direction', 'LONG').upper() == 'LONG' else PickDirection.SHORT,
@@ -434,7 +601,7 @@ async def run_loop_1_and_2():
                     take_profit=float(pick['take_profit']),
                     stop_loss=float(pick['stop_loss']),
                     status=PickStatus.NEW,
-                    notes=[
+                    notes=notes + [
                         {
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "note": market_context,
@@ -457,21 +624,29 @@ async def run_loop_1_and_2():
             except Exception as e:
                 logger.error(f"Failed to save pick {pick}: {e}")
             await db.commit()
-            logger.info(f"Loop 1 & 2 completed. Saved {len(verified_picks)} picks.")
+        await _set_config_value(db, _LAST_SUCCESS_KEY, today)
+        logger.info(f"Loop 1 & 2 completed. Saved {len(verified_picks)} picks.")
+        return "ok"
 
 
-async def run_loop_3():
-    """Execute Evaluator (5pm) pipeline."""
+async def run_loop_3(late: bool = False) -> bool:
+    """Execute Evaluator (5pm) pipeline. Returns True on commit. Raises on failure."""
     _, verifier_model = await get_dynamic_models()
     market_context = await _fetch_market_context()
+    today = _today_ist_str()
+    if late:
+        market_context += (
+            f"\n\nNOTE: This is a late catch-up evaluation for {today} (the scheduled "
+            "5pm run was missed)."
+        )
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(AIPick).where(AIPick.status.in_([PickStatus.NEW, PickStatus.ACTED_ON]))
         )
         active_picks = result.scalars().all()
-        
+
         if not active_picks:
-            return
+            return True
 
         # Prepare pick wrappers to decouple DB objects from concurrent network tasks
         tasks = []
@@ -538,66 +713,172 @@ async def run_loop_3():
                     "action": eval_data.get("action")
                 })
             pick.notes = notes
-            
+
         await db.commit()
+        await _set_config_value(db, _LAST_EVAL_KEY, _today_ist_str())
         logger.info(f"Loop 3 completed. Evaluated {len(active_picks)} active picks.")
+        return True
+
+async def _morning_catchup_due() -> bool:
+    """Catch-up needed iff no successful morning run recorded today (IST)."""
+    async with AsyncSessionLocal() as db:
+        return _morning_due(await _get_config_value(db, _LAST_SUCCESS_KEY), _today_ist_str())
+
+
+async def _evening_catchup_due() -> bool:
+    """Catch-up needed iff past close, picks exist today, none evaluated today."""
+    if not _past_market_hours():
+        return False
+    today = _today_ist_str()
+    async with AsyncSessionLocal() as db:
+        last_eval = await _get_config_value(db, _LAST_EVAL_KEY)
+        if last_eval == today:
+            return False
+        return await _picks_created_today(db, today)
+
+
+async def _eval_done_today() -> bool:
+    async with AsyncSessionLocal() as db:
+        return (await _get_config_value(db, _LAST_EVAL_KEY)) == _today_ist_str()
+
+
+def _execute_morning_run(late: bool) -> None:
+    """Run hunter+verifier once and report honestly (shared by catch-up + cron)."""
+    from app.backgroundtasks._runtime import _run_async
+    from app.jobs.runner import update_job_status_sync
+    tag = " (catch-up, late)" if late else ""
+    update_job_status_sync("job.ai_picks_morning", "running", progress=10,
+                           message=f"Executing AI Hunter & Verifier...{tag}")
+    try:
+        outcome = _run_async(run_loop_1_and_2(late=late))
+    except Exception as e:
+        logger.exception(f"Error in Morning AI Picks: {e}")
+        update_job_status_sync("job.ai_picks_morning", "failed", progress=0,
+                               message="Failed", error=str(e)[:512])
+        return
+    now = datetime.now(timezone.utc)
+    if outcome == "ok":
+        update_job_status_sync("job.ai_picks_morning", "completed", progress=100,
+                               message="Completed successfully" + (" (catch-up)" if late else ""),
+                               last_completed=now)
+    elif outcome == "empty":
+        # Legitimate: no setups proposed or all rejected. Not a failure, but
+        # the success date stays unwritten so the next boot scans afresh.
+        update_job_status_sync("job.ai_picks_morning", "completed", progress=100,
+                               message="No setups today", last_completed=now)
+    else:  # "error:<detail>" — token/network/parse failure. Next boot retries.
+        detail = outcome[6:] if outcome.startswith("error:") else outcome
+        logger.error(f"Morning AI Picks failed: {detail}")
+        update_job_status_sync("job.ai_picks_morning", "failed", progress=0,
+                               message="Failed", error=detail[:512])
+
+
+def _execute_evening_run(late: bool) -> None:
+    """Run evaluator once and report honestly (shared by catch-up + cron)."""
+    from app.backgroundtasks._runtime import _run_async
+    from app.jobs.runner import update_job_status_sync
+    tag = " (catch-up, late)" if late else ""
+    update_job_status_sync("job.ai_picks_evening", "running", progress=10,
+                           message=f"Executing AI Evaluator...{tag}")
+    try:
+        _run_async(run_loop_3(late=late))
+    except Exception as e:
+        logger.exception(f"Error in Evening AI Picks: {e}")
+        update_job_status_sync("job.ai_picks_evening", "failed", progress=0,
+                               message="Failed", error=str(e)[:512])
+        return
+    update_job_status_sync("job.ai_picks_evening", "completed", progress=100,
+                           message="Completed successfully" + (" (catch-up)" if late else ""),
+                           last_completed=datetime.now(timezone.utc))
+
 
 def ai_picks_morning_worker() -> None:
     """Daemon thread for AI Picks Morning Hunter (cron: 0 8 * * *)."""
     from app.backgroundtasks._runtime import _run_async, _report_job_waiting, _sleep_interruptible, _shutdown_event, _is_job_enabled
     from app.workers.lifecycle import _startup_pipeline_done
     from app.jobs.runner import update_job_status_sync
-    
+
     _startup_pipeline_done.wait()
     logger.info("AI Picks Morning daemon started.")
-    
+
+    # Boot catch-up (once): 8am run missed (app off / failed) and no success
+    # recorded today → execute now, flagged late.
+    try:
+        if _is_job_enabled("job.ai_picks_morning") and _run_async(_morning_catchup_due()):
+            logger.info("AI Picks Morning: missed run detected, catching up now (late).")
+            _execute_morning_run(late=True)
+    except Exception:
+        logger.exception("AI Picks Morning: catch-up check failed")
+
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.ai_picks_morning"):
             update_job_status_sync("job.ai_picks_morning", "waiting", progress=0, message="Disabled")
             _sleep_interruptible(60)
             continue
-            
+
         wait_secs = _report_job_waiting("job.ai_picks_morning", "0 8 * * *")
         if _sleep_interruptible(wait_secs):
             break
-            
+
         if not _shutdown_event.is_set():
-            update_job_status_sync("job.ai_picks_morning", "running", progress=10, message="Executing AI Hunter & Verifier...")
+            # Skip if already completed today (e.g. catch-up ran at 07:55) —
+            # a second hunter run would duplicate picks.
             try:
-                _run_async(run_loop_1_and_2())
-                update_job_status_sync("job.ai_picks_morning", "completed", progress=100, message="Completed successfully")
-            except Exception as e:
-                logger.exception(f"Error in Morning AI Picks: {e}")
-                update_job_status_sync("job.ai_picks_morning", "idle", progress=0, message="Failed")
-                
+                due = _run_async(_morning_catchup_due())
+            except Exception:
+                logger.exception("AI Picks Morning: pre-run check failed, running anyway")
+                due = True
+            if not due:
+                logger.info("AI Picks Morning: already completed today, skipping scheduled run.")
+                update_job_status_sync("job.ai_picks_morning", "completed", progress=100,
+                                       message="Already completed today")
+                continue
+            _execute_morning_run(late=False)
+
     update_job_status_sync("job.ai_picks_morning", "idle", progress=0, message="Stopped")
+
 
 def ai_picks_evening_worker() -> None:
     """Daemon thread for AI Picks Evening Evaluator (cron: 0 17 * * *)."""
     from app.backgroundtasks._runtime import _run_async, _report_job_waiting, _sleep_interruptible, _shutdown_event, _is_job_enabled
     from app.workers.lifecycle import _startup_pipeline_done
     from app.jobs.runner import update_job_status_sync
-    
+
     _startup_pipeline_done.wait()
     logger.info("AI Picks Evening daemon started.")
-    
+
+    # Boot catch-up (once): past close with unevaluated picks from today and
+    # no evaluation recorded → evaluate now, flagged late. If the app was off
+    # all day there are no picks (or the morning runner covers it) → skip.
+    try:
+        if _is_job_enabled("job.ai_picks_evening") and _run_async(_evening_catchup_due()):
+            logger.info("AI Picks Evening: unevaluated picks found past close, catching up now (late).")
+            _execute_evening_run(late=True)
+    except Exception:
+        logger.exception("AI Picks Evening: catch-up check failed")
+
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.ai_picks_evening"):
             update_job_status_sync("job.ai_picks_evening", "waiting", progress=0, message="Disabled")
             _sleep_interruptible(60)
             continue
-            
+
         wait_secs = _report_job_waiting("job.ai_picks_evening", "0 17 * * *")
         if _sleep_interruptible(wait_secs):
             break
-            
+
         if not _shutdown_event.is_set():
-            update_job_status_sync("job.ai_picks_evening", "running", progress=10, message="Executing AI Evaluator...")
+            # Skip if already evaluated today (e.g. afternoon catch-up ran).
             try:
-                _run_async(run_loop_3())
-                update_job_status_sync("job.ai_picks_evening", "completed", progress=100, message="Completed successfully")
-            except Exception as e:
-                logger.exception(f"Error in Evening AI Picks: {e}")
-                update_job_status_sync("job.ai_picks_evening", "idle", progress=0, message="Failed")
-                
+                done = _run_async(_eval_done_today())
+            except Exception:
+                logger.exception("AI Picks Evening: pre-run check failed, running anyway")
+                done = False
+            if done:
+                logger.info("AI Picks Evening: already evaluated today, skipping scheduled run.")
+                update_job_status_sync("job.ai_picks_evening", "completed", progress=100,
+                                       message="Already evaluated today")
+                continue
+            _execute_evening_run(late=False)
+
     update_job_status_sync("job.ai_picks_evening", "idle", progress=0, message="Stopped")

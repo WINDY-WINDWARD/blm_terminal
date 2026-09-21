@@ -718,6 +718,62 @@ BLM_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_upcoming_events",
+            "description": _desc("get_upcoming_events"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE symbol to check for upcoming board meetings, earnings, and corporate events."},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_announcements",
+            "description": _desc("get_recent_announcements"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE symbol to check for recent corporate announcements and past results."},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_upcoming_events",
+            "description": _desc("get_upcoming_events"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE symbol to check for upcoming board meetings, earnings, and corporate events."},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_announcements",
+            "description": _desc("get_recent_announcements"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE symbol to check for recent corporate announcements and past results."},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_positions",
             "description": _desc("get_positions"),
             "parameters": {
