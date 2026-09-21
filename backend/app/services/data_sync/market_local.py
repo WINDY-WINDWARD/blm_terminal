@@ -30,8 +30,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import delete, func, insert, select
 
 from app.database import _SyncSessionLocal  # noqa: F401 — used by scheduler fallback
 from app.models.marketcategory import MarketCategory, MarketCategoryStock
@@ -283,7 +282,10 @@ async def _refresh_market_data_local_async() -> None:
                 "categories": cats,
             })
 
-        # Bulk upsert categories
+        # Persist categories with delete-then-insert (no ON CONFLICT arbiter
+        # needed, so DBs missing a unique index still sync). Committed
+        # independently of stocks so one failure can't zero both tables.
+        cats_upserted = 0
         if category_rows:
             values_list = []
             for cat_type, data in category_rows:
@@ -300,25 +302,21 @@ async def _refresh_market_data_local_async() -> None:
                     "earnings_yoy": data.get("earnings_yoy"),
                     "last_updated": now,
                 })
-            insert_stmt = sqlite_insert(MarketCategory).values(values_list)
-            stmt = insert_stmt.on_conflict_do_update(
-                index_elements=["category_type", "slug"],
-                set_={
-                    "name": insert_stmt.excluded.name,
-                    "url": insert_stmt.excluded.url,
-                    "market_cap": insert_stmt.excluded.market_cap,
-                    "pe": insert_stmt.excluded.pe,
-                    "advance": insert_stmt.excluded.advance,
-                    "decline": insert_stmt.excluded.decline,
-                    "sentiment": insert_stmt.excluded.sentiment,
-                    "earnings_yoy": insert_stmt.excluded.earnings_yoy,
-                    "last_updated": insert_stmt.excluded.last_updated,
-                },
-            )
-            await session.execute(stmt)
+            try:
+                await session.execute(delete(MarketCategory))
+                await session.execute(insert(MarketCategory).values(values_list))
+                await session.commit()
+                cats_upserted = len(category_rows)
+            except Exception:
+                await session.rollback()
+                logger.exception("market_local_sync: categories replace failed; continuing with stocks")
 
-        # Bulk upsert stocks in batches
+        # Persist stocks in batches with delete-then-insert per batch, keyed
+        # by symbol. No ON CONFLICT arbiter needed (old DBs lack
+        # uq_market_stock_symbol). Each batch commits independently and a
+        # failing batch logs its range and continues with the next.
         BATCH = 500
+        stocks_upserted = 0
         for i in range(0, len(stock_rows), BATCH):
             chunk = stock_rows[i:i+BATCH]
             vals = []
@@ -338,29 +336,24 @@ async def _refresh_market_data_local_async() -> None:
                     "categories": row.get("categories", []),
                     "last_updated": now,
                 })
-            insert_stmt2 = sqlite_insert(MarketCategoryStock).values(vals)
-            stmt2 = insert_stmt2.on_conflict_do_update(
-                index_elements=["symbol"],
-                set_={
-                    "company_name": insert_stmt2.excluded.company_name,
-                    "exchange": insert_stmt2.excluded.exchange,
-                    "curr_price": insert_stmt2.excluded.curr_price,
-                    "per_change": insert_stmt2.excluded.per_change,
-                    "market_cap": insert_stmt2.excluded.market_cap,
-                    "ttm_pe": insert_stmt2.excluded.ttm_pe,
-                    "net_profit": insert_stmt2.excluded.net_profit,
-                    "net_profit_yoy": insert_stmt2.excluded.net_profit_yoy,
-                    "tech_trend": insert_stmt2.excluded.tech_trend,
-                    "mc_url": insert_stmt2.excluded.mc_url,
-                    "categories": insert_stmt2.excluded.categories,
-                    "last_updated": insert_stmt2.excluded.last_updated,
-                },
-            )
-            await session.execute(stmt2)
+            try:
+                await session.execute(
+                    delete(MarketCategoryStock).where(
+                        MarketCategoryStock.symbol.in_([v["symbol"] for v in vals])
+                    )
+                )
+                await session.execute(insert(MarketCategoryStock).values(vals))
+                await session.commit()
+                stocks_upserted += len(vals)
+            except Exception:
+                await session.rollback()
+                logger.exception(
+                    "market_local_sync: stocks batch rows %d-%d failed; continuing",
+                    i, i + len(chunk),
+                )
 
-        await session.commit()
-        logger.info("market_local_sync: upserted %d categories (%d industries + %d sectors) and %d stocks",
-                    len(category_rows), len(industry_groups), len(sector_groups), len(stock_rows))
+        logger.info("market_local_sync: replaced %d categories (%d industries + %d sectors) and %d stocks",
+                    cats_upserted, len(industry_groups), len(sector_groups), stocks_upserted)
 
 
 def _market_local_sync() -> None:
