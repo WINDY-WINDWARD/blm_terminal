@@ -41,6 +41,7 @@ npm run build         # production Next.js build + TypeScript check
 npm run electron      # run desktop app in development
 npm run electron:prod # run desktop app in production mode
 npm run build:desktop # complete build (Next.js + Backend + Electron Builder)
+npm run build:desktop:fast # fast LOCAL build (parallel + skip unchanged); never for releases
 npm run pack:desktop  # local dir packaging via electron-builder
 ```
 

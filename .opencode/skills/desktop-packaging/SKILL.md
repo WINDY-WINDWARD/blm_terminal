@@ -5,7 +5,12 @@
 ## Core Directives
 
 1. **Direct From Source Build**:
-   - Always compile the fresh source directly using `npm run build:desktop`.
+   - For local iteration, use the fast build (default): `npm run build:desktop:fast`.
+     It runs the Next.js and backend builds concurrently and skips any side
+     whose inputs are unchanged (hash state in `dist-desktop/.build-hashes.json`).
+   - For releases (version bump, `gh release`, `publish:desktop`), ALWAYS use the
+     full sequential build: `npm run build:desktop`. Never ship a fast-build
+     installer without re-running the full path first.
    - Never pull remote pre-compiled release assets when requested to build from source.
 
 2. **Clean State Protocol**:
@@ -13,10 +18,13 @@
      ```powershell
      Get-Process | Where-Object { $_.ProcessName -match "BLM Terminal|blm-backend" } | Stop-Process -Force -ErrorAction SilentlyContinue
      ```
-   - Clear temporary build artifacts in `dist-desktop\` to avoid stale cached ASAR or blockmaps:
+   - Full builds only: clear temporary build artifacts in `dist-desktop\` to avoid stale cached ASAR or blockmaps:
      ```powershell
      if (Test-Path "dist-desktop") { Remove-Item -Path "dist-desktop\*" -Recurse -Force }
      ```
+   - Fast builds: do NOT clear `dist-desktop\` — the hash-state file and prior
+     outputs live there and are what make skipping correct. Staleness is
+     prevented by input hashing, not by wiping.
 
 3. **Complete Build Sequence**:
    - Execute the combined desktop build script:
@@ -45,6 +53,9 @@
      ```
 
 5. **Pre-Release Checklist** (run before every release build):
+    - **Use the FULL build** (`npm run build:desktop`). The fast build skips
+      unchanged stages, so it must never produce a shipped installer directly.
+    - **Refresh the Codex model list**:
    - **Refresh the Codex model list**: the Codex backend exposes no `/models`
      catalog, so `CODEX_MODELS` in `backend/app/services/codex_auth.py` is
      hand-curated and rots as OpenAI retires IDs. Before each release, check

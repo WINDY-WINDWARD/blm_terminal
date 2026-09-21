@@ -85,6 +85,13 @@ This command will:
 4.  Package the Windows NSIS installer using `electron-builder`.
 5.  Upload the `.exe`, `latest.yml`, and `.blockmap` to the draft Release on your GitHub repository.
 
+> **Release rigor:** releases always use the full sequential `build:desktop`
+> path. `build:desktop:fast` (parallel stages, skip-unchanged) is strictly
+> for local iteration and must never produce a shipped installer. As a final
+> proof, byte-compare a fast build against a full build once per release
+> cycle: same `blm-backend.exe` hash, same asar content, installer boots and
+> passes the license gate.
+
 ### Step 4: Publish the Draft Release
 1.  Go to the **Releases** page of your GitHub repository.
 2.  Locate the newly created Draft release for your version (e.g., `v2026.9.1`).

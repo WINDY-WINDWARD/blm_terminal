@@ -17,8 +17,16 @@ if (Test-Path ".venv\Scripts\python.exe") {
     Write-Host "No local .venv found. Assuming global environment (e.g., GitHub Actions runner)."
 }
 
-# Install PyInstaller if missing
-& $PythonCmd -m pip install pyinstaller
+# Install PyInstaller if missing (gated: skips the network round-trip when the
+# local venv already has a working pyinstaller — the common case).
+$PyInstallerOk = $false
+try {
+    & $PythonCmd -c "import PyInstaller; print(PyInstaller.__version__)" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { $PyInstallerOk = $true }
+} catch { $PyInstallerOk = $false }
+if (-not $PyInstallerOk) {
+    & $PythonCmd -m pip install pyinstaller
+}
 
 # Build the executable
 # --collect-all camoufox / apify_fingerprint_datapoints: Camoufox needs its
