@@ -183,9 +183,13 @@ export function FirstLaunchModal() {
   // - reachable + false + local atom true -> self-heal: converge the missed
   //   config-table write from an earlier failed finish()
   // - reachable + false + local false -> genuine first boot, wizard proceeds
-  // - unreachable -> keep polling (5s, ~5min cap; next boot retries after that)
+  // - unreachable -> keep polling (5s, ~5min cap); on exhaustion resolve
+  //   false (show the wizard, never trap the user behind a spinner)
+  // backendFlag mirrors the first authoritative answer (null = unread) and
+  // drives the loading gate below the early return.
   // This effect intentionally lives above the early return so it also runs
   // while the wizard is closed (self-heal path).
+  const [backendFlag, setBackendFlag] = useState<boolean | null>(null);
   const completedRef = useRef(false);
   useEffect(() => { completedRef.current = completed; });
   useEffect(() => {
@@ -205,13 +209,17 @@ export function FirstLaunchModal() {
       if (!s.reachable) {
         if (attempts < MAX_ATTEMPTS) {
           setTimeout(() => { void poll(); }, 5000);
+        } else {
+          setBackendFlag(false);
         }
         return;
       }
       if (s.onboardingCompleted) {
+        setBackendFlag(true);
         setCompleted(true);
         return;
       }
+      setBackendFlag(false);
       if (completedRef.current) {
         try {
           await completeFirstBoot();
@@ -245,6 +253,28 @@ export function FirstLaunchModal() {
   }, [mounted, completed, step, health, healthChecking]);
 
   if (!mounted || completed) return null;
+
+  // Loading gate: while the backend flag is unread, show a spinner instead
+  // of the wizard. The wizard used to render immediately on mount while the
+  // poll ran in the background, so every fresh install flashed the setup
+  // flow before the backend could report "already completed".
+  if (backendFlag === null) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="w-full max-w-lg rounded border border-[#2d3139] bg-[#121418] p-6 text-[#e1e4ea] shadow-2xl font-mono">
+          <div className="text-center mb-4">
+            <h2 className="text-xl text-terminal-amber font-bold tracking-wider">BLM TERMINAL</h2>
+          </div>
+          <div className="rounded bg-[#1a1d23] border border-[#2d3139] p-3 flex items-center gap-3">
+            <span className="h-6 w-6 shrink-0 rounded-full border-2 border-[#2d3139] border-t-terminal-amber animate-spin" />
+            <p className="text-xs text-terminal-amber animate-pulse leading-relaxed">
+              Reading setup state…
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const runBackendCheck = () => {
     setHealthChecking(true);
