@@ -78,6 +78,13 @@ def test_events_tools_advertised():
     assert "get_recent_announcements" in advertised
 
 
+def test_no_duplicate_tool_names():
+    """Antigravity rejects duplicate function declarations with 400."""
+    names = [t["function"]["name"] for t in BLM_TOOLS]
+    dupes = {n for n in names if names.count(n) > 1}
+    assert not dupes, f"duplicate tool declarations: {dupes}"
+
+
 # --- Freshness rule wording present in all three prompts (§3) -----------------
 
 def test_freshness_rules_present():
