@@ -64,6 +64,11 @@ export async function getFirstBootStatus(): Promise<{ reachable: boolean; onboar
   } catch {
     return UNKNOWN; // connection refused / timeout: backend cold, not "incomplete"
   }
+  // Only an explicit 2xx answer counts as reachable. A 502/504 (backend
+  // cold), 401 (token), 404 (old backend without the route), or 500 must
+  // NEVER read as "reachable + incomplete" — that flashes the setup wizard
+  // on every launch while the engine is still starting.
+  if (!res.ok) return UNKNOWN;
   const done = (data as { onboarding_completed?: unknown })?.onboarding_completed === true;
   return { reachable: true, onboardingCompleted: done };
 }
