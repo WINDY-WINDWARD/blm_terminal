@@ -31,6 +31,7 @@ from app.services.data_sync.intraday import (
 )
 from app.services.data_sync.fundamentals import _fundamentals_sync
 from app.services.data_sync.market import _market_data_sync
+from app.services.data_sync.market_caps import _market_caps_sync
 from app.services.data_sync.news import _news_sync, _watchlist_news_sync
 from app.services.data_sync.scores import _ticker_scores_sync
 from app.services.data_sync.universe import _stock_universe_sync
@@ -192,6 +193,16 @@ def register_all_jobs() -> None:
             category="data_sync",
             cron_expression="30 1 * * *",
             callable=_fundamentals_sync,
+            is_async=False,
+        ),
+        # --- Market caps (NSE tradeInfo fill for Analysis aggregates) ---
+        JobDefinition(
+            job_key="job.market_caps",
+            name="market_caps",
+            description="Fill missing StockUniverse.market_cap_cr from NSE tradeInfo (bounded batches, chains a market_data rebuild)",
+            category="data_sync",
+            cron_expression="30 2 * * *",
+            callable=_market_caps_sync,
             is_async=False,
         ),
         # --- News ---

@@ -382,8 +382,7 @@ export function AnalysisWidget() {
     );
   }
 
-  const sortedCategories = [...categories].sort((a, b) => {
-    if (sortKey === 'breadth') {
+  const sortedCategories = [...categories].sort((a, b) => {    if (sortKey === 'breadth') {
       const diff = breadthOf(a) - breadthOf(b);
       return sortDir === 'asc' ? diff : -diff;
     }
@@ -541,6 +540,13 @@ export function AnalysisWidget() {
           ))
         )}
       </div>
+
+      {activeTab !== 'heatmap' && categories.length > 0 &&
+        categories.every((c) => c.market_cap == null) && (
+        <div className="flex-shrink-0 px-3 py-1 border-t border-terminal-gray/60 text-[10px] text-white/40">
+          Market caps populate after the first full sync — trigger market_caps or fundamentals from Jobs.
+        </div>
+      )}
 
       {hoveredTile && typeof document !== 'undefined' && ReactDOM.createPortal(
         <div

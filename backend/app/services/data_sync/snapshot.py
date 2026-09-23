@@ -162,8 +162,9 @@ def _screener_snapshot_sync(
             StockUniverse.fair_value,
             StockUniverse.high_52w,
             StockUniverse.low_52w,
+            StockUniverse.market_cap_cr,
         ).where(StockUniverse.symbol.in_(symbols))
-        for sym, pe, industry, fv, h52, l52 in db.execute(stmt).all():
+        for sym, pe, industry, fv, h52, l52, mcap_cr in db.execute(stmt).all():
             # industry field stores the description (e.g. "Banks", "IT - Software");
             # treat it as the sector for TQL Sector filtering (legacy behavior).
             universe_meta[sym] = {
@@ -171,6 +172,7 @@ def _screener_snapshot_sync(
                 "sector": industry,  # TQL "Sector" maps to industry description
                 "industry": industry,
                 "fair_value": fv,
+                "market_cap_cr": mcap_cr,
             }
 
     # 5. Assemble snapshot rows
@@ -213,7 +215,7 @@ def _screener_snapshot_sync(
             "sector": meta.get("sector"),
             "industry": meta.get("industry"),
             "pe": meta.get("pe"),
-            "market_cap": None,  # Not in stock_universe; reserved for future
+            "market_cap": meta.get("market_cap_cr"),
             "fair_value": meta.get("fair_value"),
         }
 
