@@ -131,8 +131,8 @@ function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
   ];
 
   return (
-    <div className="flex gap-3 px-2 py-1 bg-zinc-900/60 text-[9px] border-b border-terminal-gray/30 font-mono min-w-[600px]">
-      <span className="flex-1 min-w-0" />
+    <div className="flex gap-3 px-2 py-1 bg-zinc-900/60 text-[9px] border-b border-terminal-gray/30 font-mono min-w-[760px]">
+      <span className="flex-1 min-w-[160px]" />
       {columns.slice(1).map((col) => (
         <button
           key={col.key}
@@ -163,13 +163,13 @@ interface CategoryAccordionProps {
 
 function CategoryAccordion({ category, expanded, onToggle, stockCount }: CategoryAccordionProps) {
   return (
-    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden min-w-[600px]">
+    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden min-w-[760px]">
       <button
         type="button"
         onClick={onToggle}
         className="w-full flex items-center justify-between px-2 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-left"
       >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        <div className="flex items-center gap-2 min-w-[160px] flex-1">
           <span className="text-terminal-amber font-bold text-[11px] truncate">
             {category.name}
           </span>
@@ -566,11 +566,10 @@ export function AnalysisWidget() {
         />
       </div>
 
-      {activeTab !== 'heatmap' && (
-        <SortHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-      )}
-
       <div className="flex-1 overflow-auto p-1 min-h-0">
+        {activeTab !== 'heatmap' && (
+          <SortHeader sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+        )}
         {activeTab === 'heatmap' ? (
           <div className="flex flex-wrap gap-1 p-1 bg-black/40 min-h-full content-start">
             {heatmapCategories.map((cat) => {
