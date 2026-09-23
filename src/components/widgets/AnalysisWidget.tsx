@@ -221,9 +221,10 @@ function CategoryAccordion({ category, expanded, onToggle, stockCount }: Categor
 interface StockListProps {
   categorySlug: string;
   categoryType: 'industry' | 'sector';
+  maxHeightClass?: string;
 }
 
-function StockList({ categorySlug, categoryType }: StockListProps) {
+function StockList({ categorySlug, categoryType, maxHeightClass = 'max-h-48' }: StockListProps) {
   const endpoint = categoryType === 'industry' 
     ? `/api/py/markets/industries/${categorySlug}/stocks`
     : `/api/py/markets/sectors/${categorySlug}/stocks`;
@@ -267,7 +268,7 @@ function StockList({ categorySlug, categoryType }: StockListProps) {
   }
 
   return (
-    <div className="bg-black/40 px-2 py-1 max-h-48 overflow-y-auto">
+    <div className={`bg-black/40 px-2 py-1 ${maxHeightClass} overflow-y-auto`}>
       <table className="w-full text-[9px]">
         <thead className="text-white/50 sticky top-0 bg-black/60">
           <tr>
@@ -311,6 +312,75 @@ function StockList({ categorySlug, categoryType }: StockListProps) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+interface CategoryStocksModalProps {
+  category: Category;
+  onClose: () => void;
+}
+
+function CategoryStocksModal({ category, onClose }: CategoryStocksModalProps) {
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  if (typeof document === 'undefined') return null;
+  return ReactDOM.createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded border border-[#2d3139] bg-[#121418] p-6 text-[#e1e4ea] shadow-2xl font-mono max-h-[90vh] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="rounded bg-[#1a1d23] border border-[#2d3139] p-3 flex items-center gap-3 mb-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-terminal-amber font-bold text-[13px] truncate">
+                {category.name}
+              </span>
+              <span className="shrink-0 text-[9px] uppercase px-1.5 py-0.5 rounded border border-[#2d3139] text-white/50">
+                {category.category_type}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 mt-1 text-[10px] text-white/60">
+              <span>MCap ₹{fmtCrore(category.market_cap)} Cr</span>
+              <span>
+                <span className="text-terminal-green">{category.advance || 0}▲</span>
+                {' / '}
+                <span className="text-terminal-red">{category.decline || 0}▼</span>
+              </span>
+              <span>P/E {category.pe ? `${category.pe.toFixed(1)}x` : '—'}</span>
+              <span className={getSentimentColor(category.sentiment)}>
+                {category.sentiment || '—'}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded px-2.5 py-1 text-xs text-[#9ca3af] hover:text-white bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139]"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="overflow-y-auto min-h-0 rounded border border-[#2d3139]">
+          <StockList
+            categorySlug={category.slug}
+            categoryType={category.category_type}
+            maxHeightClass="max-h-[50vh]"
+          />
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -363,6 +433,7 @@ export function AnalysisWidget() {
     item: Category;
     rect: DOMRect;
   } | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
 
   const isLoading = (activeTab === 'sector' || activeTab === 'heatmap') ? sectorsLoading : industriesLoading;
   const categories = activeTab === 'sector' ? sectors : industries;
@@ -506,6 +577,10 @@ export function AnalysisWidget() {
                     setHoveredTile({ item: cat, rect });
                   }}
                   onMouseLeave={() => setHoveredTile(null)}
+                  onClick={() => {
+                    setHoveredTile(null);
+                    setSelectedCategory(cat);
+                  }}
                   className={`flex-1 min-w-[76px] min-h-[64px] border border-white/10 rounded-sm p-1 flex flex-col justify-between cursor-pointer transition-all hover:border-terminal-amber/80 ${getTileBg(
                     cat,
                   )}`}
@@ -546,6 +621,13 @@ export function AnalysisWidget() {
         <div className="flex-shrink-0 px-3 py-1 border-t border-terminal-gray/60 text-[10px] text-white/40">
           Market caps populate after the first full sync — trigger market_caps or fundamentals from Jobs.
         </div>
+      )}
+
+      {selectedCategory && (
+        <CategoryStocksModal
+          category={selectedCategory}
+          onClose={() => setSelectedCategory(null)}
+        />
       )}
 
       {hoveredTile && typeof document !== 'undefined' && ReactDOM.createPortal(
