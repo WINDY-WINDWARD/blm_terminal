@@ -3,6 +3,8 @@
 import React, { useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useAtom } from 'jotai';
+import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 
 type Tab = 'sector' | 'industry' | 'heatmap';
 
@@ -225,6 +227,8 @@ interface StockListProps {
 }
 
 function StockList({ categorySlug, categoryType, maxHeightClass = 'max-h-48' }: StockListProps) {
+  const [, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const endpoint = categoryType === 'industry' 
     ? `/api/py/markets/industries/${categorySlug}/stocks`
     : `/api/py/markets/sectors/${categorySlug}/stocks`;
@@ -283,8 +287,17 @@ function StockList({ categorySlug, categoryType, maxHeightClass = 'max-h-48' }: 
         <tbody>
           {stocks.map((stock) => (
             <tr key={stock.id} className="border-b border-terminal-gray/30 last:border-0">
-              <td className="py-1 text-white/80 truncate max-w-[120px]" title={stock.company_name}>
-                {stock.company_name}
+              <td className="py-1 text-white/80 max-w-[120px]" title={`${stock.company_name} — set as active symbol`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveSymbol(stock.symbol);
+                    setActiveExchange(stock.exchange || 'NSE');
+                  }}
+                  className="truncate max-w-full text-left hover:text-terminal-amber hover:underline cursor-pointer"
+                >
+                  {stock.company_name}
+                </button>
               </td>
               <td className="text-right py-1 text-white/80 font-mono">
                 ₹{stock.curr_price?.toFixed(2) || '—'}
