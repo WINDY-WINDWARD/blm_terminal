@@ -118,6 +118,46 @@ class TestProvisionStatus:
         assert bh.get_browser_status()["state"] == "ready"
 
 
+class TestFetchLock:
+    def test_live_lock_returns_none(self, reset_provision_state: None,
+                                    monkeypatch: pytest.MonkeyPatch,
+                                    tmp_path) -> None:
+        monkeypatch.setattr(bh, "_fetch_lock_path", lambda: tmp_path / ".fetch.lock")
+        fd = bh._acquire_fetch_lock()
+        assert fd is not None and fd >= 0
+        try:
+            assert bh._acquire_fetch_lock() is None
+        finally:
+            bh._release_fetch_lock(fd)
+        assert not (tmp_path / ".fetch.lock").exists()
+
+    def test_stale_lock_takeover(self, reset_provision_state: None,
+                                 monkeypatch: pytest.MonkeyPatch,
+                                 tmp_path) -> None:
+        monkeypatch.setattr(bh, "_fetch_lock_path", lambda: tmp_path / ".fetch.lock")
+        (tmp_path / ".fetch.lock").write_text("999999:1")
+        fd = bh._acquire_fetch_lock()
+        assert fd is not None and fd >= 0
+        bh._release_fetch_lock(fd)
+        assert not (tmp_path / ".fetch.lock").exists()
+
+    def test_second_process_skips_install(self, reset_provision_state: None,
+                                          monkeypatch: pytest.MonkeyPatch,
+                                          tmp_path) -> None:
+        calls = _stub_camoufox(monkeypatch, present=False)
+        monkeypatch.setattr(bh, "_fetch_lock_path", lambda: tmp_path / ".fetch.lock")
+        # Simulate another backend process holding the lock.
+        holder = bh._acquire_fetch_lock()
+        assert holder is not None and holder >= 0
+        try:
+            bh.trigger_browser_fetch(manual=True)
+            t = bh._FETCH_THREAD
+            if t is not None:
+                t.join(timeout=10)
+            assert calls["installs"] == 0
+            assert bh.get_browser_status()["state"] == "downloading"
+        finally:
+            bh._release_fetch_lock(holder)
 class TestFrozenReadiness:
     def test_frozen_requires_installed_browser(self, reset_provision_state: None,
                                                monkeypatch: pytest.MonkeyPatch) -> None:

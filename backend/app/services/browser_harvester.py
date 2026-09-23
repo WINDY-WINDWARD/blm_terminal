@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -101,7 +102,115 @@ def get_browser_status() -> dict[str, Any]:
     return snapshot
 
 
+# ── Cross-process fetch lock ─────────────────────────────────────────────────
+# Two backend processes (the known double-spawn) must not download ~1GB each
+# into the same INSTALL_DIR. Exclusive-create gives us an atomic mutex.
+_FETCH_LOCK_NAME = ".fetch.lock"
+_STALE_LOCK_MAX_AGE = 2 * 3600
+
+
+def _fetch_lock_path() -> Path | None:
+    try:
+        from camoufox.pkgman import INSTALL_DIR
+
+        return Path(INSTALL_DIR) / _FETCH_LOCK_NAME
+    except Exception:
+        pass
+    try:
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return Path(base) / "camoufox" / _FETCH_LOCK_NAME
+    except Exception:
+        return None
+
+
+def _holder_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not h:
+                return False
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _acquire_fetch_lock() -> int | None:
+    """Atomically claim the cross-process fetch lock.
+
+    Returns an os fd (>= 0, must be passed to _release_fetch_lock), -1 to
+    proceed without a lock (no lock dir available), or None when another
+    live process already holds it.
+    """
+    path = _fetch_lock_path()
+    if path is None:
+        return -1
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return -1
+    for _ in range(2):  # one retry after clearing a stale lock
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, f"{os.getpid()}:{time.time():.0f}".encode())
+            except Exception:
+                pass
+            return fd
+        except FileExistsError:
+            pass
+        except Exception:
+            return -1
+        # Lock exists: take over only if the holder is dead or ancient.
+        try:
+            pid_s, _, ts_s = path.read_text().strip().partition(":")
+            pid, ts = int(pid_s), float(ts_s)
+            if _holder_alive(pid) and (time.time() - ts <= _STALE_LOCK_MAX_AGE):
+                return None
+        except Exception:
+            return None
+        try:
+            path.unlink()
+        except Exception:
+            return None
+    return None
+
+
+def _release_fetch_lock(fd: int | None) -> None:
+    if fd is None or fd < 0:
+        return
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+    try:
+        path = _fetch_lock_path()
+        if path is not None:
+            path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _fetch_worker() -> None:
+    """Thread body: claim the cross-process lock, then fetch."""
+    lock_fd = _acquire_fetch_lock()
+    if lock_fd is None:
+        logger.info("BrowserProvision: fetch already running in another process; skipping")
+        _set_browser_status("downloading")
+        return
+    try:
+        _fetch_worker_locked()
+    finally:
+        _release_fetch_lock(lock_fd)
+
+
+def _fetch_worker_locked() -> None:
     """Thread body: download + install the Camoufox browser, then warm it."""
     global _BINARY_CHECKED
     _set_browser_status("downloading")
