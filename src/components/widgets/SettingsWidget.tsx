@@ -320,6 +320,62 @@ export function SettingsWidget() {
   const [scrapingConsent, setScrapingConsent] = useAtom(advancedScrapingConsentAtom);
   const [consentSyncStatus, setConsentSyncStatus] = useState<string | null>(null);
 
+  // Headless-browser provisioning status (provision-on-consent fetch).
+  interface BrowserProvision {
+    state: 'unknown' | 'ready' | 'missing' | 'downloading' | 'failed';
+    downloaded: number;
+    total: number;
+    version: string | null;
+    error: string | null;
+  }
+  const [browserProvision, setBrowserProvision] = useState<BrowserProvision | null>(null);
+  const [browserFetchBusy, setBrowserFetchBusy] = useState(false);
+
+  const refreshBrowserStatus = async () => {
+    try {
+      const res = await fetch('/api/py/system_config/browser-status', { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setBrowserProvision({
+        state: data.state ?? 'unknown',
+        downloaded: data.downloaded ?? 0,
+        total: data.total ?? 0,
+        version: data.version ?? null,
+        error: data.error ?? null,
+      });
+    } catch {
+      /* backend cold — leave last known status */
+    }
+  };
+
+  const handleBrowserRetry = async () => {
+    setBrowserFetchBusy(true);
+    try {
+      await fetch('/api/py/system_config/browser-fetch', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      await refreshBrowserStatus();
+    } catch (e) {
+      console.error('Failed to trigger browser fetch:', e);
+    } finally {
+      setBrowserFetchBusy(false);
+    }
+  };
+
+  // Poll provisioning status while consented and not yet ready.
+  useEffect(() => {
+    if (scrapingConsent !== true) {
+      setBrowserProvision(null);
+      return;
+    }
+    void refreshBrowserStatus();
+    const t = setInterval(() => {
+      void refreshBrowserStatus();
+    }, 5000);
+    return () => clearInterval(t);
+  }, [scrapingConsent]);
+
   const handleUpdateConsent = async (val: boolean) => {
     setScrapingConsent(val);
     try {
@@ -1027,6 +1083,43 @@ export function SettingsWidget() {
         {consentSyncStatus && (
           <div className="text-[10px] text-terminal-amber animate-pulse mt-0.5">
             {consentSyncStatus}
+          </div>
+        )}
+        {scrapingConsent === true && browserProvision && browserProvision.state !== 'ready' && (
+          <div className="mt-1 rounded border border-zinc-700/60 bg-zinc-900/60 px-2.5 py-2 text-[10px] font-mono">
+            <div className="flex items-center justify-between gap-2">
+              <span className={
+                browserProvision.state === 'failed'
+                  ? 'text-red-400'
+                  : browserProvision.state === 'downloading'
+                  ? 'text-terminal-amber animate-pulse'
+                  : 'text-zinc-400'
+              }>
+                {browserProvision.state === 'downloading'
+                  ? `Downloading extraction browser${browserProvision.total > 0 ? ` — ${Math.round((browserProvision.downloaded / browserProvision.total) * 100)}%` : '…'}`
+                  : browserProvision.state === 'failed'
+                  ? `Browser download failed${browserProvision.error ? `: ${browserProvision.error}` : ''}`
+                  : 'Extraction browser not installed yet — starting download…'}
+              </span>
+              {(browserProvision.state === 'failed' || browserProvision.state === 'missing') && (
+                <button
+                  type="button"
+                  onClick={handleBrowserRetry}
+                  disabled={browserFetchBusy}
+                  className="shrink-0 px-2 py-0.5 rounded border border-blue-500 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60 cursor-pointer"
+                >
+                  {browserFetchBusy ? 'Starting…' : 'Retry'}
+                </button>
+              )}
+            </div>
+            {browserProvision.state === 'downloading' && browserProvision.total > 0 && (
+              <div className="mt-1.5 h-1 rounded bg-zinc-800 overflow-hidden">
+                <div
+                  className="h-full bg-terminal-amber transition-all"
+                  style={{ width: `${Math.min(100, Math.round((browserProvision.downloaded / browserProvision.total) * 100))}%` }}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

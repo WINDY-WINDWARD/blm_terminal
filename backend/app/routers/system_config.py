@@ -119,12 +119,14 @@ async def update_scraping_consent(
     invalidate_consent_cache()
 
     if body.consent:
-        # Trigger on-demand binary preparation in the background
+        # Trigger provision-on-consent browser fetching in the background,
+        # then start the warm browser (starts immediately when a browser is
+        # already installed, or once the fetch lands).
         from app.services.browser_harvester import (
             ensure_warm_browser,
-            trigger_harvester_download,
+            trigger_browser_fetch,
         )
-        trigger_harvester_download()
+        trigger_browser_fetch()
         try:
             ensure_warm_browser()
         except Exception:
@@ -140,6 +142,30 @@ async def update_scraping_consent(
             pass
 
     return {"status": "ok", "consent": body.consent}
+
+
+@router.get("/system_config/browser-status")
+@router.get("/system-config/browser-status")
+async def browser_status(user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """Live headless-browser provisioning status for the Settings UI."""
+    from app.services.browser_harvester import get_browser_status, get_consent_status
+
+    status = get_browser_status()
+    return {"consent": await get_consent_status(), **status}
+
+
+@router.post("/system_config/browser-fetch")
+@router.post("/system-config/browser-fetch")
+async def browser_fetch(user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """Manually (re)trigger the Camoufox browser download (Retry button)."""
+    from app.services.browser_harvester import ensure_warm_browser, trigger_browser_fetch
+
+    status = trigger_browser_fetch(manual=True)
+    try:
+        ensure_warm_browser()
+    except Exception:
+        pass
+    return status
 
 
 @router.post("/system-config/app-state")

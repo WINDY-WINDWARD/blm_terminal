@@ -28,6 +28,18 @@ if (-not $PyInstallerOk) {
     & $PythonCmd -m pip install pyinstaller
 }
 
+# The frozen exe must contain the camoufox Python package: provision-on-consent
+# fetching runs in-process via camoufox.pkgman (no pip/-m available frozen).
+$CamoufoxOk = $false
+try {
+    & $PythonCmd -c "from importlib.metadata import version; assert version('camoufox') == '0.5.6', version('camoufox')" 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { $CamoufoxOk = $true }
+} catch { $CamoufoxOk = $false }
+if (-not $CamoufoxOk) {
+    Write-Host "Installing camoufox==0.5.6 into the build environment..."
+    & $PythonCmd -m pip install "camoufox==0.5.6"
+}
+
 # Build the executable
 # NOTE (2026-09-22): always wipe the PyInstaller work dirs first so every
 # backend exe is built from current source. A reused backend/build/ cache is

@@ -41,6 +41,138 @@ _MEMORY_CACHE: dict[str, tuple[Any, float]] = {}
 _DOWNLOAD_TASK: asyncio.Task | None = None
 _BINARY_CHECKED = False
 
+# ── Browser provisioning state (provision-on-consent) ────────────────────────
+# A client machine has no Camoufox browser until it is fetched on demand.
+# States: "unknown" | "ready" | "missing" | "downloading" | "failed"
+_BROWSER_STATUS: dict[str, Any] = {
+    "state": "unknown",
+    "downloaded": 0,
+    "total": 0,
+    "version": None,
+    "error": None,
+    "updated_at": 0.0,
+}
+_STATUS_LOCK = threading.Lock()
+_FETCH_THREAD: threading.Thread | None = None
+_AUTO_FETCH_DONE = False
+
+
+def _set_browser_status(
+    state: str,
+    *,
+    downloaded: int = 0,
+    total: int = 0,
+    version: str | None = None,
+    error: str | None = None,
+) -> None:
+    with _STATUS_LOCK:
+        _BROWSER_STATUS["state"] = state
+        _BROWSER_STATUS["downloaded"] = downloaded
+        _BROWSER_STATUS["total"] = total
+        if version is not None:
+            _BROWSER_STATUS["version"] = version
+        _BROWSER_STATUS["error"] = error
+        _BROWSER_STATUS["updated_at"] = time.time()
+
+
+def _installed_browser_present() -> str | None:
+    """Return the active Camoufox browser path, or None if none is installed."""
+    try:
+        from camoufox.multiversion import get_active_path
+
+        p = get_active_path()
+        return str(p) if p else None
+    except Exception:
+        return None
+
+
+def get_browser_status() -> dict[str, Any]:
+    """Live browser provisioning status (safe to call from any thread)."""
+    with _STATUS_LOCK:
+        snapshot = dict(_BROWSER_STATUS)
+    present = _installed_browser_present()
+    # Reconcile stored state with ground truth so externally provisioned
+    # browsers (dev machines, manual `camoufox fetch`) report correctly.
+    if present and snapshot["state"] in ("unknown", "missing", "failed"):
+        snapshot["state"] = "ready"
+        snapshot["error"] = None
+    elif not present and snapshot["state"] == "ready":
+        snapshot["state"] = "missing"
+    return snapshot
+
+
+def _fetch_worker() -> None:
+    """Thread body: download + install the Camoufox browser, then warm it."""
+    global _BINARY_CHECKED
+    _set_browser_status("downloading")
+
+    def _progress(downloaded: int, total: int) -> None:
+        _set_browser_status("downloading", downloaded=downloaded, total=total)
+
+    try:
+        from camoufox.pkgman import CamoufoxFetcher, webdl
+
+        try:
+
+            class _ProgressFetcher(CamoufoxFetcher):  # type: ignore
+                @staticmethod
+                def download_file(file: Any, url: str) -> Any:
+                    return webdl(url, buffer=file, bar=False, progress_callback=_progress)
+
+            fetcher: Any = _ProgressFetcher()
+        except Exception:
+            # Fall back to the stock fetcher (rich bars go to the backend log).
+            fetcher = CamoufoxFetcher()
+        try:
+            verstr = fetcher.verstr
+        except Exception:
+            verstr = None
+        logger.info("BrowserProvision: fetching Camoufox browser%s...", f" v{verstr}" if verstr else "")
+        fetcher.install()
+        present = _installed_browser_present()
+        if present:
+            _BINARY_CHECKED = True
+            _set_browser_status("ready", version=verstr)
+            logger.info("BrowserProvision: Camoufox browser ready (%s)", present)
+            try:
+                ensure_warm_browser()
+            except Exception as exc:
+                logger.debug("BrowserProvision: warm start after fetch failed: %s", exc)
+        else:
+            _set_browser_status("failed", error="fetch completed but no active browser found")
+            logger.error("BrowserProvision: fetch completed but no active browser found")
+    except Exception as exc:
+        _set_browser_status("failed", error=str(exc)[:300])
+        logger.error("BrowserProvision: browser fetch failed: %s", exc)
+
+
+def trigger_browser_fetch(manual: bool = False) -> dict[str, Any]:
+    """Start a background Camoufox browser fetch unless already present/running.
+
+    Safe to call liberally: no-ops when a browser is installed, a fetch is
+    already running, or the one-shot auto-fetch already fired (manual retries
+    bypass the one-shot guard).
+    """
+    global _FETCH_THREAD, _AUTO_FETCH_DONE
+    with _STATUS_LOCK:
+        if _BROWSER_STATUS["state"] == "downloading":
+            return dict(_BROWSER_STATUS)
+    if _installed_browser_present():
+        _set_browser_status("ready")
+        return get_browser_status()
+    with _STATUS_LOCK:
+        if _AUTO_FETCH_DONE and not manual:
+            return dict(_BROWSER_STATUS)
+        _AUTO_FETCH_DONE = True
+        t = _FETCH_THREAD
+    if t is not None and t.is_alive():
+        return get_browser_status()
+    _set_browser_status("downloading")
+    _FETCH_THREAD = threading.Thread(target=_fetch_worker, daemon=True, name="camoufox-fetch")
+    _FETCH_THREAD.start()
+    logger.info("BrowserProvision: browser fetch started (manual=%s)", manual)
+    return get_browser_status()
+
 # ── Persistent warm browser (speed-first: keep one headless browser alive
 # for the whole app lifetime so harvests skip the 8-12s cold launch) ─────────
 # The sync Camoufox/Playwright API is blocking, so the browser lives on a
@@ -155,9 +287,18 @@ async def _ensure_browser_binaries() -> bool:
         return True
 
     def _sync_setup() -> bool:
-        # In the frozen desktop exe there is no pip / venv to install from —
-        # just test-launch and rely on PLAYWRIGHT_BROWSERS_PATH + bundled data.
+        # In the frozen desktop exe there is no pip / venv to install from.
+        # A bare `import camoufox` only proves the Python package was
+        # collected into the exe — NOT that a browser was fetched for this
+        # user. Verify an actual installed browser instead; when missing, the
+        # caller falls through to provision-on-consent fetching.
         is_frozen = getattr(sys, "frozen", False)
+        if is_frozen:
+            try:
+                import camoufox  # noqa: F401  # type: ignore
+            except ImportError:
+                return False
+            return _installed_browser_present() is not None
         # Check if camoufox or playwright is installed
         try:
             import camoufox  # type: ignore
@@ -208,6 +349,15 @@ async def _ensure_browser_binaries() -> bool:
     success = await asyncio.to_thread(_sync_setup)
     if success:
         _BINARY_CHECKED = True
+        _set_browser_status("ready")
+    else:
+        # No usable browser: kick off provision-on-consent fetching in the
+        # background (one-shot guarded) so a later harvest/warm-start finds
+        # it. This attempt still reports unavailable.
+        try:
+            trigger_browser_fetch()
+        except Exception:
+            pass
     return success
 
 
@@ -255,6 +405,12 @@ def _warm_launch() -> tuple[Any, Any, Any, Any] | None:
         pass
     except Exception as e:
         logger.warning("WarmBrowser: Camoufox launch failed: %s", e)
+        # Missing browser (or crashed one): trigger provision-on-consent
+        # fetching so the warm browser starts once the fetch lands.
+        try:
+            trigger_browser_fetch()
+        except Exception:
+            pass
 
     # 2. Fallback to Playwright chromium
     try:
@@ -543,6 +699,10 @@ async def harvest_local_storage(url: str, key: str, wait_selector: str | None = 
                 pass
             except Exception as e:
                 logger.warning("BrowserHarvester Camoufox error: %s", e)
+                try:
+                    trigger_browser_fetch()
+                except Exception:
+                    pass
 
             # 2. Fallback to Playwright
             try:
@@ -631,6 +791,10 @@ async def harvest_public_html(url: str, selector: str | None = None, ttl_seconds
                 pass
             except Exception as e:
                 logger.warning("BrowserHarvester Camoufox html error: %s", e)
+                try:
+                    trigger_browser_fetch()
+                except Exception:
+                    pass
 
             # 2. Fallback to Playwright
             try:
