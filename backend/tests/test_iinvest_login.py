@@ -59,11 +59,29 @@ def login_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(mod, "_iinvest_client", None, raising=False)
     client = mod.IinvestClient()
     client._refresh_ahead_seconds = 60
+    # Consent enforced: run as consented unless a test overrides.
+    monkeypatch.setattr(mod, "get_consent_status", AsyncMock(return_value=True))
     yield client
     try:
         asyncio.get_event_loop().run_until_complete(client.close())
     except Exception:
         pass
+
+
+class TestConsentGate:
+    @pytest.mark.asyncio
+    async def test_declined_consent_blocks_even_guest_login(self, login_client, monkeypatch):
+        """Safe Mode = no iinvest traffic: login fallback must not bypass consent."""
+        from app.services import iinvest_client as mod
+
+        monkeypatch.setattr(mod, "get_consent_status", AsyncMock(return_value=False))
+        post = AsyncMock()
+        login_client._http = MagicMock(post=post)
+
+        with pytest.raises(RuntimeError, match="consent"):
+            await login_client._fetch_jwt()
+        assert login_client.health()["healthy"] is False
+        post.assert_not_called()
 
 
 class TestDecrypt:

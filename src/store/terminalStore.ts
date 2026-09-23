@@ -302,7 +302,8 @@ const chartSymbolOverridesBaseAtom = atomWithStorage<ChartOverrides>(
 );
 /** Read-guarded view: corrupt localStorage (string/null/array from manual
  * edits or truncated writes) degrades to {} instead of throwing in every
- * chart/panel that indexes it. */
+ * chart/panel that indexes it. Cross-window policy is last-writer-wins
+ * (whole-blob overwrite, no live sync) — documented limitation. */
 export const chartSymbolOverridesAtom = atom(
   (get): ChartOverrides => {
     const v = get(chartSymbolOverridesBaseAtom);
@@ -310,7 +311,17 @@ export const chartSymbolOverridesAtom = atom(
     return {};
   },
   (_get, set, update: ChartOverridesUpdate) => {
-    set(chartSymbolOverridesBaseAtom, update as ChartOverrides);
+    // Sanitize the base too: a functional update over a corrupt blob would
+    // otherwise spread garbage (`{... "x"}` → `{0:"x", ...}`) back to disk.
+    const base = _get(chartSymbolOverridesBaseAtom);
+    const clean: ChartOverrides =
+      base !== null && typeof base === 'object' && !Array.isArray(base) ? base : {};
+    set(
+      chartSymbolOverridesBaseAtom,
+      typeof update === 'function'
+        ? (update as (prev: ChartOverrides) => ChartOverrides)(clean)
+        : update,
+    );
   },
 );
 

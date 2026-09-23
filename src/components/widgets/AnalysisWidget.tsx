@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
+import { useSetAtom } from 'jotai';
 import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 
 type Tab = 'sector' | 'industry' | 'heatmap';
@@ -227,8 +227,8 @@ interface StockListProps {
 }
 
 function StockList({ categorySlug, categoryType, maxHeightClass = 'max-h-48' }: StockListProps) {
-  const [, setActiveSymbol] = useAtom(activeSymbolAtom);
-  const [, setActiveExchange] = useAtom(activeExchangeAtom);
+  const setActiveSymbol = useSetAtom(activeSymbolAtom);
+  const setActiveExchange = useSetAtom(activeExchangeAtom);
   const endpoint = categoryType === 'industry' 
     ? `/api/py/markets/industries/${categorySlug}/stocks`
     : `/api/py/markets/sectors/${categorySlug}/stocks`;

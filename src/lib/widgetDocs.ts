@@ -166,7 +166,7 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'OHLC candlesticks for the panel symbol: linked panels follow the global active symbol, detached ([FREE]) panels hold their own per-panel override. Daily candles come from the backend ticker warehouse (/ticker/ohlcv); intraday/weekly/monthly from /ticker/intraday; live LTP overlays arrive via the market WebSocket.',
+        body: 'OHLC candlesticks for the panel symbol: linked panels follow the global active symbol, detached ([FREE]) panels hold their own per-panel override. Daily candles come from the backend ticker warehouse (/api/py/ticker/ohlcv); intraday/weekly/monthly from /api/py/ticker/intraday; live LTP overlays arrive via the market WebSocket.',
       },
       {
         heading: 'Candle anatomy',
@@ -193,7 +193,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Click any symbol in WATCH or TOP to update all linked charts (detached charts are unaffected).',
           'Searching or pressing GO inside a chart detaches that panel ([FREE]) so it keeps its own symbol.',
           'Use the [FREE]/[LINK] toggle in the panel header (CHART panels only) to re-link a detached chart to the global symbol.',
-          'Popping out ([POP]) a chart carries its symbol along via the home panel override; docking works from the popout titlebar.',
+          'Popping out ([POP]) a chart carries its symbol along: the popout gets its own override key seeded from the home panel, and docking ([SEND BACK]) moves it back. Each open popout is independent.',
           'Use timeframe selector to switch between intraday and daily views.',
           'Long upper wicks at highs = distribution. Long lower wicks at lows = accumulation.',
         ],
@@ -361,7 +361,7 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'Configuration areas',
         items: [
-          { name: 'Data Extraction & Privacy', desc: 'Advanced Extraction consent plus the headless-browser provisioning status (ready / missing / downloading / failed) with download progress and a Retry button. Granting consent auto-starts a background Camoufox browser fetch, then the warm browser; status polls every 5s while consented.' },
+          { name: 'Data Extraction & Privacy', desc: 'Advanced Extraction consent plus the headless-browser provisioning status (unknown / ready / missing / downloading / failed) with download progress and a Retry button (shown for failed/missing). Granting consent triggers a backend Camoufox fetch; the status poll runs every 5s while consented and stops once ready.' },
           { name: 'Watchlist Columns', desc: 'Toggle which columns appear in the WATCH widget (LTP, CHG, MSFV, returns, RESULTS, ALERTS).' },
           { name: 'Movers Columns', desc: 'Toggle which columns appear in the TOP widget.' },
           { name: 'Panel Layout', desc: 'Switch between 2, 4, 6, or 8 panel grid layouts.' },
@@ -450,7 +450,7 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           { name: 'Screener.in', desc: 'Primary source for ratios, quarterly results, and valuation inputs. Needs a session; ~1-day lag.' },
           { name: 'NSE Market Ratios', desc: '4 of 10 core ratios (P/E, sector P/E, 52W high/low) from NSE GetQuoteApi — no session needed, shown when screener is unavailable.' },
-          { name: 'iinvest Enrichment (6 sections)', desc: 'Announcements, board meetings, corporate actions, legal cases, capital history, and key ratios from iinvest. Authenticated automatically with a guest JWT via /api/login — no consent or browser needed. Sections render only while the token is live.' },
+          { name: 'iinvest Enrichment (6 sections)', desc: 'Announcements, board meetings, corporate actions, legal cases, capital history, and key ratios from iinvest. Requires Advanced Extraction consent (Safe Mode disables it); authenticated automatically with a guest JWT. Sections render only while the token is live.' },
         ] as DocField[],
       },
       {
@@ -640,7 +640,7 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'Locally built sector and industry aggregates (advance/decline breadth, PE, earnings, market cap). Rebuilt by the market_data job every 20 minutes during market hours. Provides top-down context for individual stock decisions.',
+        body: 'Locally built sector and industry aggregates (advance/decline breadth, PE, earnings, market cap). Rebuilt by the market_data job every 20 minutes. Provides top-down context for individual stock decisions.',
       },
       {
         heading: 'Fields',
@@ -660,7 +660,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Expand a sector to see constituent stocks; clicking a company name sets it as the global active symbol (CHART, ORDER, FDM follow).',
           'Click a heatmap tile to open that category\'s stock table in a modal (Esc/backdrop closes).',
           'Name column keeps a 160px floor; narrow panels scroll horizontally (header scrolls with rows).',
-          'If every market cap shows —, the universe has not synced yet: trigger job.market_caps or job.fundamentals from the Jobs page.',
+          'If every market cap shows —, the universe has not synced yet: trigger market_caps or fundamentals from the Jobs page.',
         ],
       },
     ],
@@ -702,7 +702,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Use the category tabs to focus on a class of signals (e.g. only TECHNICAL).',
           'Sub-filter bubbles let you narrow within a category to specific trigger types.',
           'Click an alert row to set that symbol globally — use with CHART for confirmation.',
-          'iinvest-backed enrichment needs no browser or consent: guest login supplies the token automatically.',
+          'iinvest-backed enrichment needs Advanced Extraction consent: with consent, guest login supplies the token automatically (no browser needed).',
           'CLEAR ALL marks all alerts as read; they are gone from the unread feed but kept in the database.',
           'Alerts are deduplicated daily — you will only see one RSI oversold alert per symbol per day.',
         ],
@@ -780,7 +780,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Use SCAN to discover stocks generating signals that are not in your watchlist.',
           'Filter to high-conviction trigger types: 52w_high_breakout + volume_breakout together are stronger than either alone.',
           'Click a symbol to set it globally — cross-reference with FDM, DEALS, and NEWS before acting.',
-          'iinvest-backed enrichment needs no browser or consent: guest login supplies the token automatically.',
+          'iinvest-backed enrichment needs Advanced Extraction consent: with consent, guest login supplies the token automatically (no browser needed).',
           'SCAN data is 30 minutes old — validate with current price and volume in CHART.',
         ],
       },
@@ -1075,7 +1075,7 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           { name: '← INDEX', desc: 'Clears the manual selection and returns to the full widget list (each row shows an 80-char summary).' },
           { name: '▸ TOUR', desc: 'Replays the guided first-run tour from the current layout.' },
-          { name: 'Popouts', desc: 'A popped-out DOCS follows the same focus rule against its own window focus.' },
+          { name: 'Popouts', desc: 'A popped-out DOCS shows the docs snapshot for the grid focus at load time; it does not track focus changes.' },
         ] as DocField[],
       },
     ],

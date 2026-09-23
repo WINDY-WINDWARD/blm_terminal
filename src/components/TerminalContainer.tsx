@@ -5,6 +5,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   activeCommandAtom,
   activePanelsAtom,
+  chartSymbolOverridesAtom,
   focusedPanelAtom,
   panelCountAtom,
   panelSizesAtom,
@@ -61,6 +62,7 @@ const VALID_WIDGETS = [
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);
   const setActivePanels = useSetAtom(activePanelsAtom);
+  const setChartOverrides = useSetAtom(chartSymbolOverridesAtom);
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
   const setPanelSizes = useSetAtom(panelSizesAtom);
@@ -170,6 +172,12 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
 
     if (activeCommand === 'CLEAR') {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: 'EMPTY' }));
+      setChartOverrides((prev) => {
+        if (prev[focusedPanel] === undefined) return prev;
+        const next = { ...prev };
+        delete next[focusedPanel];
+        return next;
+      });
       setActiveCommand('');
       return;
     }
@@ -273,6 +281,16 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     const isValid = VALID_WIDGETS.includes(targetCommand);
     if (isValid) {
       setActivePanels((prev) => ({ ...prev, [focusedPanel]: targetCommand }));
+      // Repurposing a slot drops its chart override: a fresh CHART here
+      // must start linked, never inherit a stale detached symbol.
+      if (targetCommand !== 'CHART') {
+        setChartOverrides((prev) => {
+          if (prev[focusedPanel] === undefined) return prev;
+          const next = { ...prev };
+          delete next[focusedPanel];
+          return next;
+        });
+      }
     }
     setActiveCommand('');
   }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue]);
@@ -284,12 +302,31 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
         const parts = e.newValue.split(':');
         if (parts.length < 3) return;
         const originPanelId = parts[0];
-        const widgetTitle = parts[1];
+        // reqId v2: origin:popoutKey:title:ts:rand — v1 (no popout key) falls
+        // back to sharing the origin slot's override.
+        const popoutKey = parts.length >= 5 ? parts[1] : null;
+        const widgetTitle = parts.length >= 5 ? parts[2] : parts[1];
+
+        const placeIn = (dest: string) => {
+          setActivePanels((prev) => ({ ...prev, [dest]: widgetTitle }));
+          // Carry the detached symbol home: move the popout's override to
+          // the destination slot, then drop the popout key (no leak).
+          if (popoutKey) {
+            setChartOverrides((prev) => {
+              const entry = prev[popoutKey];
+              if (entry === undefined) return prev;
+              const next = { ...prev };
+              delete next[popoutKey];
+              next[dest] = entry;
+              return next;
+            });
+          }
+          window.localStorage.setItem('__RESTORE_ACCEPTED', e.newValue ?? '');
+        };
 
         // Check if originPanelId is currently EMPTY
         if (!activePanels[originPanelId] || activePanels[originPanelId] === 'EMPTY') {
-          setActivePanels((prev) => ({ ...prev, [originPanelId]: widgetTitle }));
-          window.localStorage.setItem('__RESTORE_ACCEPTED', e.newValue);
+          placeIn(originPanelId);
           return;
         }
 
@@ -304,8 +341,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
         }
 
         if (availablePanelId) {
-          setActivePanels((prev) => ({ ...prev, [availablePanelId]: widgetTitle }));
-          window.localStorage.setItem('__RESTORE_ACCEPTED', e.newValue);
+          placeIn(availablePanelId);
         } else {
           // No empty slot available
           window.localStorage.setItem('__RESTORE_REJECTED', e.newValue);

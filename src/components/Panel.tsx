@@ -103,10 +103,9 @@ export function Panel({ id, title }: PanelProps) {
   const handlePopOut = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (title === 'EMPTY') return;
-    // The popout gets its own override key seeded from this panel, so the
-    // home slot can be cleaned: a fresh CHART opened here later starts
-    // linked instead of inheriting a stale detached symbol.
-    const popoutKey = `popout_${id}`;
+    // Every pop-out gets a unique override key: two pop-outs from the same
+    // slot must not share (and clobber) one entry.
+    const popoutKey = `popout_${id}_${Date.now().toString(36)}`;
     if (title === 'CHART') {
       setChartOverrides((prev) => {
         const next = { ...prev };
@@ -209,7 +208,7 @@ export function Panel({ id, title }: PanelProps) {
               <button
                 type="button"
                 onClick={handleChartLinkToggle}
-                title={chartDetached ? 'Re-link chart to global symbol' : 'Detached chart — click to re-link to global symbol'}
+                title={chartDetached ? 'Detached — click to re-link to the global symbol' : 'Linked to global symbol — click to detach at the current symbol'}
                 className={`px-1 text-[10px] tracking-wider rounded transition-colors ${
                   chartDetached
                     ? 'text-terminal-amber bg-terminal-amber/20 hover:text-white hover:bg-terminal-amber/40 font-bold'

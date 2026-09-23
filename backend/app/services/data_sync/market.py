@@ -23,6 +23,7 @@ A.13: migrated ``_bg_impl`` references to canonical imports.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -100,8 +101,16 @@ async def _refresh_market_data_async() -> None:
     await _local()
 
 
+# Serializes aggregate rebuilds: the */20 scheduler, the nightly pipeline
+# stage, manual triggers, and the market_caps chain all funnel through
+# _market_data_sync — without this two writers interleave category
+# delete/insert commits (last-writer-wins flap, torn aggregates).
+_MARKET_REBUILD_LOCK = threading.Lock()
+
+
 def _market_data_sync() -> None:
     """Build industry/sector aggregates locally from stock_universe (no network)."""
     from app.services.data_sync.market_local import _market_local_sync
 
-    _market_local_sync()
+    with _MARKET_REBUILD_LOCK:
+        _market_local_sync()

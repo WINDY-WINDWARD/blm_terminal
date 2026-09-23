@@ -195,8 +195,11 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const isIntraday = interval !== 'D';
     const isDaily = interval === 'D';
 
-  // Sync input fields when the effective symbol changes
+  // Sync input fields when the effective symbol changes — but never clobber
+  // text the user is actively typing in this chart's search box.
   useEffect(() => {
+    const active = document.activeElement;
+    if (searchContainerRef.current?.contains(active)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setInputSymbol(symbol);
     setInputExchange(exchange);

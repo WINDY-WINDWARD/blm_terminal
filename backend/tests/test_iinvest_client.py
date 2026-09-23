@@ -107,6 +107,8 @@ def fresh_client(monkeypatch):
     client = mod.IinvestClient()
     # Shorten the refresh window so tests can drive the cycle in ms
     client._refresh_ahead_seconds = 60
+    # Consent is enforced by _fetch_jwt: tests run as consented.
+    monkeypatch.setattr(mod, "get_consent_status", AsyncMock(return_value=True))
     # Mock harvest_local_storage by default so data tests acquire JWT smoothly
     monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=_make_jwt()))
     yield client

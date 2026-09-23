@@ -248,6 +248,17 @@ def _run_migrations_sync() -> None:
             finally:
                 sync_engine2.dispose()
 
+        elif "already exists" in err:
+            # Double-boot race: two backends on one DB_PATH ran check-then-
+            # create migrations concurrently and the loser hit an existing
+            # index/table. The winner already applied it — stamp at HEAD and
+            # continue instead of failing this instance's startup.
+            logger.warning(
+                "migrations: concurrent-boot collision (%s) — stamping at HEAD and continuing",
+                exc,
+            )
+            alembic_command.stamp(alembic_cfg, "head")
+
         else:
             logger.error("migrations: unhandled migration error: %s", exc)
             raise

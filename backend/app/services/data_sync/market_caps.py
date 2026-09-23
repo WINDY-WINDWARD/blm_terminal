@@ -73,6 +73,17 @@ def _chain_market_rebuild() -> None:
     _market_data_sync()
 
 
+def _flush_cursor(last_symbol: str | None) -> None:
+    """Persist the resume cursor (best-effort) — bounds re-fetch after a stop."""
+    if last_symbol is None:
+        return
+    try:
+        with _SyncSessionLocal() as session:
+            _write_cursor(session, last_symbol)
+    except Exception:
+        logger.debug("market_caps_sync: cursor flush failed", exc_info=True)
+
+
 def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
     """Fill missing ``StockUniverse.market_cap_cr`` from NSE tradeInfo.
 
@@ -86,16 +97,21 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
     started = time.monotonic()
     shutdown = _shutdown_event
 
-    with _SyncSessionLocal() as session:
-        cursor = _read_cursor(session)
-        stmt = (
-            select(StockUniverse.symbol)
-            .where(StockUniverse.market_cap_cr.is_(None))
-            .order_by(StockUniverse.symbol)
-        )
-        if cursor:
-            stmt = stmt.where(StockUniverse.symbol > cursor)
-        candidates = [r for r in session.execute(stmt.limit(max_symbols + 1)).scalars().all()]
+    try:
+        with _SyncSessionLocal() as session:
+            cursor = _read_cursor(session)
+            stmt = (
+                select(StockUniverse.symbol)
+                .where(StockUniverse.market_cap_cr.is_(None))
+                .order_by(StockUniverse.symbol)
+            )
+            if cursor:
+                stmt = stmt.where(StockUniverse.symbol > cursor)
+            candidates = [r for r in session.execute(stmt.limit(max_symbols + 1)).scalars().all()]
+    except Exception as exc:
+        logger.warning("market_caps_sync: candidate read failed: %s", exc)
+        _report("failed", 0, f"Candidate read failed: {exc}")
+        return total
 
     exhausted = len(candidates) <= max_symbols
     todo = candidates[:max_symbols]
@@ -119,10 +135,12 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
         if shutdown.is_set():
             logger.info("market_caps_sync: shutdown requested — exiting")
             stopped_early = True
+            _flush_cursor(last_symbol)
             break
         if time.monotonic() - started >= MAX_RUN_SECONDS:
             logger.info("market_caps_sync: runtime cap reached after %d symbols", i - 1)
             stopped_early = True
+            _flush_cursor(last_symbol)
             break
         total["processed"] += 1
         try:
@@ -138,6 +156,9 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
             total["failed"] += 1
             last_symbol = symbol
             continue
+        # Politeness: same 0.5s courtesy delay the universe sync uses —
+        # this path bypasses the shared NSE throttle (raw client.get).
+        time.sleep(0.5)
         if mcap:
             try:
                 with _SyncSessionLocal() as session:

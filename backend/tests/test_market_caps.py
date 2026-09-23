@@ -134,6 +134,17 @@ class TestMarketCapsSync:
         out = mc._market_caps_sync()
         assert out == {"processed": 1, "filled": 0, "skipped": 1, "failed": 0}
 
+    def test_job_registered_with_caps_callable(self):
+        from app.jobs.registry import JobRegistry
+        from app.services.data_sync.market_caps import _market_caps_sync
+        from app.workers.jobs import register_all_jobs
+
+        register_all_jobs()
+        job = JobRegistry.get("job.market_caps")
+        assert job is not None
+        assert job.callable is _market_caps_sync
+        assert job.is_async is False
+
     def test_no_chain_when_nothing_filled(self, memdb, monkeypatch: pytest.MonkeyPatch):
         _add_universe(memdb, {"AAA": 5.0})
         monkeypatch.setattr(mc, "nse_client", FakeNSE({}))

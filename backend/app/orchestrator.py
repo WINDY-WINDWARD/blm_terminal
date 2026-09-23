@@ -11,6 +11,7 @@ order for startup and nightly sync runs:
   Stage 5a → ticker_weekly_monthly_update  (nightly only; W/M candle backfill)
   Stage 5b → ticker_weekly_monthly_indicators  (nightly only; W/M indicator recompute)
   Stage 6  → global_scan + watchlist_notif  (concurrent, one immediate cycle)
+  Stage 6b → market_caps                    (nightly only; NSE tradeInfo cap fill)
   Stage 7  → market_data                    (always; last stage — sets startup gate)
 
 Independent workers (news, results calendar, fair value,
@@ -357,6 +358,7 @@ class Orchestrator:
         from app.services.data_sync.intraday import (
             _ticker_intraday_hourly_stale_check_sync, _ticker_intraday_update_sync)
         from app.services.data_sync.market import _market_data_sync
+        from app.services.data_sync.market_caps import _market_caps_sync
         from app.services.data_sync.scores import _ticker_scores_sync
         from app.services.data_sync.universe import _stock_universe_sync
         from app.workers.global_scan_cycle import _global_scan_cycle
@@ -503,6 +505,19 @@ class Orchestrator:
             if stage6_tasks:
                 await asyncio.gather(*stage6_tasks)
             logger.info("Orchestrator [%s] Stage 6 complete", mode.value)
+
+            # ── Stage 6b: market caps (nightly only) ─────────────────────
+            # Fills StockUniverse.market_cap_cr from NSE tradeInfo so the
+            # Stage 7 market_data rebuild aggregates real caps. Startup skips
+            # this (bounded NSE fetch would slow every launch); fresh clients
+            # heal on the first nightly run or a manual Jobs-UI trigger.
+            if not await _run_or_bail(dict(
+                stage_name="market_caps",
+                sub_jobs=[("job.market_caps", _market_caps_sync, True)],
+                progress_start=89, progress_end=91, stage_label="6b/8",
+                requires_mode={PipelineMode.NIGHTLY},
+            )):
+                return
 
             # ── Stage 7: market_data (always) — last stage ──────────────
             if not await _run_or_bail(dict(

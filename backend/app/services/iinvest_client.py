@@ -1,9 +1,13 @@
 """iinvest.cogencis.com data source client.
 
-Auto-acquires a guest JWT (no user action required) by reusing the AES-256
-key the iinvest frontend ships in its own JS bundle. All 18 read-only data
-endpoints + the news endpoint are exposed as typed methods; an aggregator
-hits all of them in parallel via ``asyncio.gather``.
+Auto-acquires a guest JWT (browser harvest first, `/api/login` guest flow
+as fallback) using the AES-256 key the iinvest frontend ships in its own JS
+bundle. All 18 read-only data endpoints + the news endpoint are exposed as
+typed methods; an aggregator hits all of them in parallel via
+``asyncio.gather``.
+
+Requires Advanced Extraction consent: Safe Mode (consent declined) means no
+iinvest traffic — every fetch raises before touching the network.
 
 Auth: iinvest's ``/api/login`` returns an OpenSSL ``Salted__<salt><ct>`` blob
 encrypted with a hardcoded passphrase. Decrypting yields a 24-hour HS256 JWT
@@ -24,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -63,6 +68,9 @@ DEFAULT_HEADERS = {
 
 # 24h JWT lifetime; refresh 4h early to leave slack.
 _JWT_REFRESH_AHEAD_SECONDS = 4 * 3600
+# Minimum gap between fetch attempts via _ensure_jwt (force re-fetches from
+# the 401 path bypass this): bounds per-call churn in the accept/refresh gap.
+_FETCH_COOLDOWN_S = 300.0
 
 # Harvested tokens expiring sooner than this are rejected (the 24h harvest
 # cache otherwise serves day-old tokens that 401 on every call).
@@ -127,7 +135,7 @@ def _decrypt_salted_blob(blob_b64: str, passphrase: str) -> dict[str, Any]:
 
 # ── Auth & Harvester ─────────────────────────────────────────────────────────
 
-from app.services.browser_harvester import harvest_local_storage
+from app.services.browser_harvester import get_consent_status, harvest_local_storage
 
 
 # ── Client ────────────────────────────────────────────────────────────────────
@@ -149,6 +157,7 @@ class IinvestClient:
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         # Override-able for tests
         self._refresh_ahead_seconds = _JWT_REFRESH_AHEAD_SECONDS
+        self._last_fetch_attempt_mono = 0.0
 
     def _get_lock(self) -> asyncio.Lock:
         """Return a lock bound to the current event loop (loop-mismatch safe)."""
@@ -202,6 +211,11 @@ class IinvestClient:
             and self._jwt_expires_at - now > timedelta(seconds=self._refresh_ahead_seconds)
         ):
             return
+        # Churn guard: a token inside the refresh-ahead window (but past the
+        # accept margin) would otherwise re-enter _fetch_jwt on EVERY call.
+        # Reuse the current token if a fetch was attempted moments ago.
+        if self._jwt and time.monotonic() - self._last_fetch_attempt_mono < _FETCH_COOLDOWN_S:
+            return
 
         async with self._get_lock():
             # Double check after acquiring lock
@@ -211,6 +225,9 @@ class IinvestClient:
                 and self._jwt_expires_at - now > timedelta(seconds=self._refresh_ahead_seconds)
             ):
                 return
+            if self._jwt and time.monotonic() - self._last_fetch_attempt_mono < _FETCH_COOLDOWN_S:
+                return
+            self._last_fetch_attempt_mono = time.monotonic()
             await self._fetch_jwt()
 
     @staticmethod
@@ -326,10 +343,14 @@ class IinvestClient:
             js = await self._http.get(IINVEST_SITE_URL + m.group(0))
             js.raise_for_status()
             km = re.search(r'AES\.decrypt\([^,]+,\s*["\']([A-Za-z0-9+/=]{44})["\']\)', js.text)
-            if not km or km.group(1) == _current_aes_key():
+            if not km:
                 return False
-            _AES_KEY_PASSPHRASE = km.group(1)
-            logger.warning("IinvestClient: AES key recovered from live bundle")
+            # Succeed when the bundle's key is what we already hold: a
+            # sibling loop may have recovered seconds ago — the caller then
+            # retries the decrypt with the now-correct key instead of failing.
+            if km.group(1) != _current_aes_key():
+                _AES_KEY_PASSPHRASE = km.group(1)
+                logger.warning("IinvestClient: AES key recovered from live bundle")
             return True
         except Exception as exc:
             logger.warning("IinvestClient: key recovery failed: %s", exc)
@@ -342,7 +363,13 @@ class IinvestClient:
         behavior on healthy machines; `/api/login` guest flow when harvest
         yields nothing usable. `force_fresh` bypasses the 24h harvest cache —
         used after a 401 where the cached token is known stale.
+
+        Advanced Extraction consent gates EVERYTHING (including guest login):
+        Safe Mode means no iinvest traffic at all.
         """
+        if not await get_consent_status():
+            self._last_error = "Advanced Extraction consent not granted (Safe Mode)"
+            raise RuntimeError(self._last_error)
         now = datetime.now(timezone.utc)
         raw_token = await harvest_local_storage(
             IINVEST_SITE_URL, "next-auth.token", force=force_fresh)

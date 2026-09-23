@@ -21,6 +21,7 @@ from app.services import browser_harvester as bh
 def reset_provision_state():
     bh._set_browser_status("unknown")
     bh._AUTO_FETCH_DONE = False
+    bh._LAST_AUTO_FETCH_AT = 0.0
     # Join any stray fetch thread from a previous test.
     t = bh._FETCH_THREAD
     if t is not None and t.is_alive():
@@ -33,6 +34,7 @@ def reset_provision_state():
     bh._FETCH_THREAD = None
     bh._set_browser_status("unknown")
     bh._AUTO_FETCH_DONE = False
+    bh._LAST_AUTO_FETCH_AT = 0.0
 
 
 def _stub_camoufox(monkeypatch: pytest.MonkeyPatch, present: bool) -> dict[str, Any]:
@@ -165,6 +167,51 @@ class TestFetchLock:
         fd = bh._acquire_fetch_lock()
         assert fd is not None and fd >= 0
         bh._release_fetch_lock(fd)
+
+    def test_stale_downloading_revives(self, reset_provision_state: None,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+        """A dead worker's `downloading` state must not park fetches or Retry."""
+        import threading
+
+        _stub_camoufox(monkeypatch, present=False)
+        dead = threading.Thread(target=lambda: None)
+        dead.start()
+        dead.join(timeout=10)
+        assert not dead.is_alive()
+        bh._FETCH_THREAD = dead
+        bh._set_browser_status("downloading")
+        # Reconcile keeps reporting downloading only while a worker lives.
+        assert bh.get_browser_status()["state"] == "downloading"
+        # Manual Retry must start a real new worker instead of no-op returning.
+        bh.trigger_browser_fetch(manual=True)
+        t = bh._FETCH_THREAD
+        assert t is not dead
+        if t is not None:
+            t.join(timeout=10)
+
+    def test_auto_refire_cooldown(self, reset_provision_state: None,
+                                  monkeypatch: pytest.MonkeyPatch) -> None:
+        """Auto refires after a dead worker only past the cooldown."""
+        import threading
+        import time
+
+        _stub_camoufox(monkeypatch, present=False)
+        dead = threading.Thread(target=lambda: None)
+        dead.start()
+        dead.join(timeout=10)
+        bh._FETCH_THREAD = dead
+        bh._AUTO_FETCH_DONE = True
+        bh._LAST_AUTO_FETCH_AT = time.time()
+        bh._set_browser_status("downloading")
+        first = bh._FETCH_THREAD
+        bh.trigger_browser_fetch(manual=False)
+        assert bh._FETCH_THREAD is first  # cooldown: no new thread
+        bh._LAST_AUTO_FETCH_AT = 0.0
+        bh.trigger_browser_fetch(manual=False)
+        assert bh._FETCH_THREAD is not first  # cooldown elapsed: refire
+        t = bh._FETCH_THREAD
+        if t is not None:
+            t.join(timeout=10)
 
     def test_second_process_skips_install(self, reset_provision_state: None,
                                           monkeypatch: pytest.MonkeyPatch,

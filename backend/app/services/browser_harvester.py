@@ -41,6 +41,9 @@ _MEMORY_CACHE: dict[str, tuple[Any, float]] = {}
 # Background download task handle
 _DOWNLOAD_TASK: asyncio.Task | None = None
 _BINARY_CHECKED = False
+# Auto refire after a dead worker: at most this often (manual Retry bypasses).
+_AUTO_REFIRE_COOLDOWN_S = 300.0
+_LAST_AUTO_FETCH_AT = 0.0
 
 # ── Browser provisioning state (provision-on-consent) ────────────────────────
 # A client machine has no Camoufox browser until it is fetched on demand.
@@ -87,16 +90,24 @@ def _installed_browser_present() -> str | None:
         return None
 
 
+def _fetch_thread_alive() -> bool:
+    t = _FETCH_THREAD
+    return t is not None and t.is_alive()
+
+
 def get_browser_status() -> dict[str, Any]:
     """Live browser provisioning status (safe to call from any thread)."""
     with _STATUS_LOCK:
         snapshot = dict(_BROWSER_STATUS)
     present = _installed_browser_present()
     # Reconcile stored state with ground truth so externally provisioned
-    # browsers (dev machines, manual `camoufox fetch`) report correctly.
-    if present and snapshot["state"] in ("unknown", "missing", "failed"):
-        snapshot["state"] = "ready"
-        snapshot["error"] = None
+    # browsers (dev machines, manual `camoufox fetch`) report correctly —
+    # including a `downloading` state whose worker died (thread kill,
+    # BaseException, sibling finished without us): ground truth wins.
+    if present and snapshot["state"] in ("unknown", "missing", "failed", "downloading"):
+        if snapshot["state"] != "downloading" or not _fetch_thread_alive():
+            snapshot["state"] = "ready"
+            snapshot["error"] = None
     elif not present and snapshot["state"] == "ready":
         snapshot["state"] = "missing"
     return snapshot
@@ -275,12 +286,18 @@ def trigger_browser_fetch(manual: bool = False) -> dict[str, Any]:
 
     Safe to call liberally: no-ops when a browser is installed, a fetch is
     already running, or the one-shot auto-fetch already fired (manual retries
-    bypass the one-shot guard).
+    bypass the one-shot guard; a dead worker demotes to missing so a later
+    auto call may refire, at most every few minutes).
     """
-    global _FETCH_THREAD, _AUTO_FETCH_DONE
+    global _FETCH_THREAD, _AUTO_FETCH_DONE, _LAST_AUTO_FETCH_AT
     with _STATUS_LOCK:
-        if _BROWSER_STATUS["state"] == "downloading":
+        if _BROWSER_STATUS["state"] == "downloading" and _fetch_thread_alive():
             return dict(_BROWSER_STATUS)
+        if _BROWSER_STATUS["state"] == "downloading":
+            # Stale worker (dead thread, daemon kill, sibling finished):
+            # demote so the guards below apply instead of parking here.
+            _BROWSER_STATUS["state"] = "missing"
+            _BROWSER_STATUS["updated_at"] = time.time()
     if _installed_browser_present():
         _set_browser_status("ready")
         # Whoever fetched it (possibly the sibling process) doesn't start
@@ -292,8 +309,12 @@ def trigger_browser_fetch(manual: bool = False) -> dict[str, Any]:
         return get_browser_status()
     with _STATUS_LOCK:
         if _AUTO_FETCH_DONE and not manual:
-            return dict(_BROWSER_STATUS)
+            # Dead-worker refire: allow auto to try again after a cooldown
+            # instead of parking until process restart.
+            if time.time() - _LAST_AUTO_FETCH_AT < _AUTO_REFIRE_COOLDOWN_S:
+                return dict(_BROWSER_STATUS)
         _AUTO_FETCH_DONE = True
+        _LAST_AUTO_FETCH_AT = time.time()
         if _FETCH_THREAD is not None and _FETCH_THREAD.is_alive():
             return dict(_BROWSER_STATUS)
         _FETCH_THREAD = threading.Thread(target=_fetch_worker, daemon=True, name="camoufox-fetch")

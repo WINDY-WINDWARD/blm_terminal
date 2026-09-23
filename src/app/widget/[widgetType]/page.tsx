@@ -3,8 +3,8 @@
 import React, { use, useState, useEffect, useRef } from 'react';
 import { WidgetRenderer } from '@/components/WidgetRenderer';
 import { useSearchParams } from 'next/navigation';
-import { useSetAtom } from 'jotai';
-import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom } from '@/store/terminalStore';
+import { useSetAtom, useAtomValue } from 'jotai';
+import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom } from '@/store/terminalStore';
 
 export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetType: string }> }) {
   const unwrappedParams = use(params);
@@ -13,6 +13,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
   const setSymbol = useSetAtom(activeSymbolAtom);
   const setWatchlistId = useSetAtom(activeWatchlistIdAtom);
   const setMoversCategory = useSetAtom(moversCategoryAtom);
+  const overrides = useAtomValue(chartSymbolOverridesAtom);
 
   const [isRestoring, setIsRestoring] = useState(false);
   const pendingReqIdRef = useRef<string | null>(null);
@@ -28,16 +29,18 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
   );
   const panelId = searchParams.get('popoutPanelId') || searchParams.get('originPanelId') || fallbackPanelId;
 
-  // Rehydrate Jotai state from URL on mount
+  // Rehydrate Jotai state from URL on mount. The global symbol is only
+  // set when this popout has no chart override of its own — otherwise a
+  // stale bookmark/reload would clobber the grid's newer global symbol.
   useEffect(() => {
     const symbol = searchParams.get('symbol');
     const watchlistId = searchParams.get('watchlistId');
     const category = searchParams.get('category');
 
-    if (symbol) setSymbol(symbol);
+    if (symbol && !(widgetTitle === 'CHART' && overrides[panelId] !== undefined)) setSymbol(symbol);
     if (watchlistId) setWatchlistId(Number(watchlistId));
     if (category) setMoversCategory(category);
-  }, [searchParams, setSymbol, setWatchlistId, setMoversCategory]);
+  }, [searchParams, setSymbol, setWatchlistId, setMoversCategory, widgetTitle, overrides, panelId]);
 
   // Listen for handshake response from main window
   useEffect(() => {
@@ -62,7 +65,9 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
 
   const handleSendBack = () => {
     setIsRestoring(true);
-    const reqId = `${originPanelId}:${widgetTitle}:${Date.now()}:${Math.random().toString(36).substring(2, 7)}`;
+    // v2 format carries the popout's own override key so the grid can move
+    // the detached symbol home: origin:popoutKey:title:ts:rand.
+    const reqId = `${originPanelId}:${panelId}:${widgetTitle}:${Date.now()}:${Math.random().toString(36).substring(2, 7)}`;
     pendingReqIdRef.current = reqId;
     window.localStorage.setItem('__REQUEST_RESTORE', reqId);
   };
