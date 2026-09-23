@@ -113,6 +113,8 @@ def ticker_daily_update_worker() -> None:
                 try:
                     update_job_status_sync("job.ticker_daily_update", "running", progress=0, message="Running daily update...")
                     _ticker_daily_update_sync()
+                    from app.jobs.runner import mark_job_success_sync
+                    mark_job_success_sync("job.ticker_daily_update")
                 finally:
                     _pipeline_idle.set()
 

@@ -60,6 +60,8 @@ def results_calendar_worker() -> None:
     if _is_first_run("results_calendar"):
         update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
         _results_calendar_sync()
+        from app.jobs.runner import mark_job_success_sync
+        mark_job_success_sync("job.results_calendar")
         _set_first_run_complete("results_calendar")
     else:
         logger.info("results_calendar_worker: first_run=False, skipping startup execution")
@@ -79,6 +81,8 @@ def results_calendar_worker() -> None:
                 _sleep_interruptible(60)
                 continue
             _results_calendar_sync()
+            from app.jobs.runner import mark_job_success_sync
+            mark_job_success_sync("job.results_calendar")
 
     update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
     logger.info("results_calendar_worker: stopped")

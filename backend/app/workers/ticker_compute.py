@@ -77,6 +77,8 @@ def ticker_scores_worker() -> None:
                 try:
                     update_job_status_sync("job.ticker_scores", "running", progress=0, message="Computing ticker scores...")
                     _ticker_scores_sync()
+                    from app.jobs.runner import mark_job_success_sync
+                    mark_job_success_sync("job.ticker_scores")
                 finally:
                     _pipeline_idle.set()
 
@@ -130,6 +132,8 @@ def ticker_indicators_worker() -> None:
                 try:
                     update_job_status_sync("job.ticker_indicators", "running", progress=0, message="Computing indicators...")
                     _ticker_indicators_sync()
+                    from app.jobs.runner import mark_job_success_sync
+                    mark_job_success_sync("job.ticker_indicators")
                 finally:
                     _pipeline_idle.set()
 

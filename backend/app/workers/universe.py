@@ -62,6 +62,8 @@ def stock_universe_worker() -> None:
                 continue
             update_job_status_sync("job.stock_universe", "running", progress=0, message="Syncing stock universe...")
             _stock_universe_sync()
+            from app.jobs.runner import mark_job_success_sync
+            mark_job_success_sync("job.stock_universe")
 
     update_job_status_sync("job.stock_universe", "idle", progress=0, message="Stopped")
     logger.info("stock_universe_worker: stopped")

@@ -13,9 +13,10 @@ throttled and nightly-bounded, so it cannot close the gap promptly.
 This pass fetches NSE tradeInfo (``totalMarketCap``) directly for the symbols
 still missing a cap and stores it in Rs Cr. Bounded per run with a
 ``SyncState`` cursor (``task_name = "market_caps"``) so nightly runs and
-manual triggers make steady resume-exact progress. A successful fill chains a
-``market_data`` rebuild so Analysis picks the new caps up immediately.
-"""
+manual triggers make steady resume-exact progress. Runs as Stage 6b of the
+nightly orchestrator pipeline (right before the market_data rebuild), so
+fresh fills aggregate the same night. A successful fill chains a
+``market_data`` rebuild so Analysis picks the new caps up immediately."""
 
 from __future__ import annotations
 

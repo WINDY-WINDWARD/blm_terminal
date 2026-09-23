@@ -69,6 +69,7 @@ async def update_job_status(
     last_completed: datetime | None = None,
     last_triggered: datetime | None = None,
     next_trigger: datetime | None = None,
+    last_success: datetime | None = None,
 ) -> None:
     """Update job status in database. Uses timezone-aware UTC datetime.
     
@@ -104,6 +105,8 @@ async def update_job_status(
             values["last_triggered_at"] = last_triggered
         if next_trigger is not None:
             values["next_trigger_at"] = next_trigger
+        if last_success is not None:
+            values["last_success_at"] = last_success
 
         stmt = update(Job).where(Job.job_key == job_key).values(**values)
         await db.execute(stmt)
@@ -119,6 +122,7 @@ def update_job_status_sync(
     last_completed: datetime | None = None,
     last_triggered: datetime | None = None,
     next_trigger: datetime | None = None,
+    last_success: datetime | None = None,
 ) -> None:
     """Synchronous version of update_job_status for use in worker threads.
 
@@ -169,6 +173,8 @@ def update_job_status_sync(
         values["last_error"] = error
     if next_trigger is not None:
         values["next_trigger_at"] = next_trigger
+    if last_success is not None:
+        values["last_success_at"] = last_success
 
     # Route ALL job updates through the write queue to eliminate EXCLUSIVE-lock contention.
     # Previously terminal (idle/failed/100%) wrote directly, but that still contended
@@ -239,6 +245,31 @@ async def sync_all_jobs_to_db() -> None:
         await sync_job_to_db(job_def.job_key)
 
 
+def mark_job_success_sync(job_key: str) -> None:
+    """Record a successful work completion (worker threads).
+
+    Unlike the waiting/idle bookkeeping that stamps last_completed_at on
+    every loop, this writes last_success_at ONLY — the signal the
+    missed-schedule catch-up uses to decide a job already ran.
+    """
+    try:
+        update_job_status_sync(job_key, "idle", progress=100,
+                               message="Completed",
+                               last_success=datetime.now(timezone.utc))
+    except Exception:
+        logger.debug("mark_job_success_sync failed for %s", job_key, exc_info=True)
+
+
+async def mark_job_success(job_key: str) -> None:
+    """Async variant of mark_job_success_sync (event-loop threads)."""
+    try:
+        await update_job_status(job_key, "idle", progress=100,
+                                message="Completed",
+                                last_success=datetime.now(timezone.utc))
+    except Exception:
+        logger.debug("mark_job_success failed for %s", job_key, exc_info=True)
+
+
 def report_progress(job_key: str, percent: int, message: str) -> None:
     """Thread-safe progress update. Called from worker threads."""
     try:
@@ -267,6 +298,7 @@ async def _execute_triggered_job(job_key: str, job_def: Any) -> None:
             progress=100,
             message="Completed",
             last_completed=now,
+            last_success=now,
         )
         logger.info(f"Job {job_key} completed successfully")
 
@@ -361,6 +393,7 @@ async def run_job_async(job_key: str) -> None:
             progress=100,
             message="Completed",
             last_completed=now,
+            last_success=now,
         )
         logger.info(f"Job {job_key} completed successfully")
 

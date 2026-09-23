@@ -20,7 +20,7 @@ started immediately and self-manage their own cron schedules — the orchestrato
 does not sequence them.  vacuum_worker runs Sunday 04:00 to reclaim space from
 news/intraday retention deletes.
 
-The orchestrator also owns the nightly pipeline trigger (23:00 IST) and the
+The orchestrator also owns the nightly pipeline trigger (16:00 IST) and the
 Morningstar fair value schedulers, previously scattered across main.py and
 backgroundtasks.py.
 """
@@ -39,8 +39,11 @@ logger = logging.getLogger(__name__)
 # IST timezone constant
 _IST = ZoneInfo("Asia/Kolkata")
 
-# Nightly pipeline trigger time (IST)
-_NIGHTLY_HOUR_IST = 23
+# Nightly pipeline trigger time (IST) — 16:00, right after the 15:30 close
+# while desktops are still on. (Bhavcopy for the day usually publishes in
+# the evening: the daily stage backfills missing dates, so a 16:00 run
+# completes prior days and today's partial finishes the next day.)
+_NIGHTLY_HOUR_IST = 16
 _NIGHTLY_MINUTE_IST = 0
 
 
@@ -269,7 +272,8 @@ class Orchestrator:
                     else:
                         await loop.run_in_executor(None, sync_fn)
                     await update_job_status(job_key, "idle", progress=100,
-                                            message=f"{stage_name} complete")
+                                            message=f"{stage_name} complete",
+                                            last_success=datetime.now(timezone.utc))
                 except Exception as e:
                     logger.warning("Orchestrator [%s] Stage %s error (proceeding with local cached data): %s", mode.value, stage_name, e)
                     await update_job_status(job_key, "idle", progress=100,
@@ -540,7 +544,8 @@ class Orchestrator:
 
             await update_job_status(pipeline_job_key, "idle", progress=100,
                                     message=f"{mode.value.capitalize()} pipeline complete",
-                                    last_completed=now, next_trigger=next_trig)
+                                    last_completed=now, next_trigger=next_trig,
+                                    last_success=now)
             logger.info("Orchestrator: %s pipeline finished successfully", mode.value)
 
         except Exception:
@@ -601,7 +606,7 @@ class Orchestrator:
             await self.run_pipeline(PipelineMode.STARTUP)
 
             # Opportunistic Nightly Trigger (Desktop Architecture):
-            # If the terminal was closed when the 23:00 IST nightly pipeline was supposed to run,
+            # If the terminal was closed when the 16:00 IST nightly pipeline was supposed to run,
             # and the market is currently closed, check if > 24 hours have elapsed since the last nightly run.
             # Only fire post-market (after 15:30 IST) or on weekends to avoid triggering the heavy
             # nightly pipeline on weekday mornings before the market has even opened.
@@ -632,6 +637,15 @@ class Orchestrator:
                     if should_run_nightly:
                         logger.info("Orchestrator: missed nightly pipeline run detected (>24h or first run). Triggering opportunistic catch-up...")
                         asyncio.create_task(self.run_pipeline(PipelineMode.NIGHTLY))
+            # Standalone missed-schedule catch-up (fire-and-forget): covers
+            # cron jobs the nightly pipeline doesn't own (fundamentals,
+            # vacuum, fair values, results calendar, ...). Runs serialized
+            # with stagger so boot never storms; no-ops when nothing missed.
+            try:
+                from app.workers.catchup import run_missed_catchup
+                asyncio.create_task(run_missed_catchup(), name="missed-catchup")
+            except Exception:
+                logger.exception("Orchestrator: missed-schedule catch-up failed to start")
         except Exception:
             logger.exception("Orchestrator: startup pipeline task raised an unhandled exception")
 
@@ -728,7 +742,7 @@ class Orchestrator:
         logger.info("market_data_scheduler: stopped")
 
     async def _run_nightly_pipeline_scheduler(self) -> None:
-        """Asyncio loop: sleep until 23:00 IST each day then run the nightly pipeline."""
+        """Asyncio loop: sleep until 16:00 IST each day then run the nightly pipeline."""
         nightly_cron = f"{_NIGHTLY_MINUTE_IST} {_NIGHTLY_HOUR_IST} * * *"
         await _cron_loop(
             cron_expr=nightly_cron,
@@ -751,6 +765,7 @@ class Orchestrator:
             compute_wait_secs=_seconds_until_next_cron,
             next_fire_label_fn=None,
             schedule_label="watchlist fair value",
+            mark_success=True,
         )
 
     async def _run_full_fair_value_scheduler(self) -> None:
@@ -764,6 +779,7 @@ class Orchestrator:
             compute_wait_secs=_seconds_until_next_cron_ist,
             next_fire_label_fn=_next_fire_time_ist,
             schedule_label="full fair value sync",
+            mark_success=True,
         )
 
 
@@ -816,6 +832,7 @@ async def _cron_loop(
     compute_wait_secs,
     next_fire_label_fn=None,
     schedule_label: str,
+    mark_success: bool = False,
 ) -> None:
     """Generic cron-driven job loop (audit B.11).
 
@@ -833,6 +850,8 @@ async def _cron_loop(
                — returns early on shutdown, raises TimeoutError on
                next fire
             4. on TimeoutError: run ``await target_fn()`` and repeat
+               (``mark_success=True`` additionally records last_success_at
+               for the missed-schedule catch-up)
             5. on early return: exit
 
     ``target_fn`` is awaited; pass ``lambda: sync_blocking_fn()`` if
@@ -841,6 +860,7 @@ async def _cron_loop(
     orchestrator's broader error handler will log it.
     """
     from app.backgroundtasks._runtime import get_async_shutdown_event
+    from app.jobs.runner import mark_job_success
 
     shutdown_event = get_async_shutdown_event()
     while not shutdown_event.is_set():
@@ -865,6 +885,8 @@ async def _cron_loop(
         if shutdown_event.is_set():
             break
         await target_fn()
+        if mark_success:
+            await mark_job_success(job_key)
     logger.info("Orchestrator: %s scheduler stopped", schedule_label)
 
 

@@ -23,6 +23,11 @@ class Job(Base):
     cron_expression: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Written ONLY on successful work completion (pipeline stages, triggered
+    # runs, daemon syncs) — never by waiting/idle bookkeeping. Drives the
+    # missed-schedule catch-up. last_completed_at cannot serve this: daemons
+    # stamp it on every waiting/idle transition.
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_trigger_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="idle")

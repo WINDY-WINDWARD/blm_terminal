@@ -6,8 +6,9 @@ with screener.in fundamentals. The actual sync work function
 
 Public worker:
 - ``fundamentals_worker()`` — daily cron at 01:30 IST. Startup execution is
-  skipped (first full pass takes hours); progress is made nightly in bounded
-  batches plus any manual trigger from the Jobs UI.
+  skipped (first full pass takes hours); progress is made by the nightly
+  run, the missed-schedule catch-up after boot, plus any manual trigger
+  from the Jobs UI.
 """
 from __future__ import annotations
 
@@ -55,6 +56,8 @@ def fundamentals_worker() -> None:
                 continue
             update_job_status_sync("job.fundamentals", "running", progress=0, message="Enriching fundamentals...")
             _fundamentals_sync()
+            from app.jobs.runner import mark_job_success_sync
+            mark_job_success_sync("job.fundamentals")
 
     update_job_status_sync("job.fundamentals", "idle", progress=0, message="Stopped")
     logger.info("fundamentals_worker: stopped")

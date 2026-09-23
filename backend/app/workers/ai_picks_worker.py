@@ -761,6 +761,8 @@ def _execute_morning_run(late: bool) -> None:
         update_job_status_sync("job.ai_picks_morning", "completed", progress=100,
                                message="Completed successfully" + (" (catch-up)" if late else ""),
                                last_completed=now)
+        from app.jobs.runner import mark_job_success_sync
+        mark_job_success_sync("job.ai_picks_morning")
     elif outcome == "empty":
         # Legitimate: no setups proposed or all rejected. Not a failure, but
         # the success date stays unwritten so the next boot scans afresh.
@@ -790,6 +792,8 @@ def _execute_evening_run(late: bool) -> None:
     update_job_status_sync("job.ai_picks_evening", "completed", progress=100,
                            message="Completed successfully" + (" (catch-up)" if late else ""),
                            last_completed=datetime.now(timezone.utc))
+    from app.jobs.runner import mark_job_success_sync
+    mark_job_success_sync("job.ai_picks_evening")
 
 
 def ai_picks_morning_worker() -> None:

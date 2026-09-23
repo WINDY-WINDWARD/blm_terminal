@@ -154,6 +154,8 @@ def vacuum_worker() -> None:
                 _sleep_interruptible(60)
                 continue
             _run_vacuum()
+            from app.jobs.runner import mark_job_success_sync
+            mark_job_success_sync("job.vacuum")
 
     update_job_status_sync("job.vacuum", "idle", progress=0, message="Stopped")
     logger.info("vacuum_worker: stopped")
