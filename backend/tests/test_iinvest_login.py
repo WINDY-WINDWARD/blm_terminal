@@ -156,6 +156,40 @@ class TestFetchOrder:
         login_client._jwt_expires_at = datetime.fromtimestamp(time.time() - 10, tz=timezone.utc)
         h = login_client.health()
         assert h["healthy"] is False
+        assert login_client.is_authenticated is False
+
+    @pytest.mark.asyncio
+    async def test_zulu_expiration_accepted(self, login_client, monkeypatch):
+        """An `expiration` ending in Z must parse, not condemn a fresh token."""
+        from app.services import iinvest_client as mod
+
+        jwt = _make_jwt(exp_offset_seconds=86400)
+        body = json.dumps({
+            "status": True, "message": "Successful",
+            "response": {"token": jwt, "expiration": "2099-01-01T00:00:00.000Z"},
+        }).encode()
+        blob = _encrypt_openssl(body, AES_KEY).decode()
+        client, _ = _make_fake_httpx([(200, {"data": blob})])
+        monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        monkeypatch.setattr(mod, "harvest_local_storage", AsyncMock(return_value=None))
+        login_client._http = client
+
+        await login_client._fetch_jwt()
+        assert login_client._jwt == jwt
+        assert login_client.is_authenticated is True
+
+    @pytest.mark.asyncio
+    async def test_empty_blob_fails_without_recovery_traffic(self, login_client, monkeypatch):
+        """A shape failure must not fire key-recovery GETs + a second login POST."""
+        from app.services import iinvest_client as mod
+
+        client, state = _make_fake_httpx([(200, {"data": ""})])
+        monkeypatch.setattr(mod.httpx, "AsyncClient", lambda *a, **kw: client)
+        login_client._http = client
+
+        with pytest.raises(RuntimeError, match="empty login blob"):
+            await login_client._guest_login()
+        assert state["idx"] == 1  # exactly the one login POST, nothing more
 
 
 class TestKeyRecovery:

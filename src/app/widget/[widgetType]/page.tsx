@@ -19,6 +19,14 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
 
   const originPanelId = searchParams.get('originPanelId') || 'panel-1';
   const widgetTitle = decodeURIComponent(unwrappedParams.widgetType).toUpperCase();
+  // Per-panel state (e.g. chart symbol overrides) lives under this key.
+  // A popout opened from the grid carries popoutPanelId (seeded copy of the
+  // home panel's state); a directly-opened URL gets a unique throwaway key
+  // so it can never hijack a home panel's state.
+  const [fallbackPanelId] = useState(
+    () => `popout_direct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+  );
+  const panelId = searchParams.get('popoutPanelId') || searchParams.get('originPanelId') || fallbackPanelId;
 
   // Rehydrate Jotai state from URL on mount
   useEffect(() => {
@@ -88,7 +96,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
       <div className="flex-1 min-h-0 relative overflow-hidden select-text">
         {/* originPanelId keeps per-panel state (e.g. chart symbol overrides)
             shared between the home panel and its popout. */}
-        <WidgetRenderer title={widgetTitle} panelId={originPanelId} />
+        <WidgetRenderer title={widgetTitle} panelId={panelId} />
       </div>
     </div>
   );

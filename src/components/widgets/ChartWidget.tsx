@@ -156,8 +156,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   // Per-panel independence: an override entry detaches this chart from the
   // global symbol; absent entry = linked, follows global.
   const override = overrides[panelId];
-  const symbol = override?.symbol ?? globalSymbol;
-  const exchange = override?.exchange ?? globalExchange;
+  // `||` (not `??`): a persisted empty-string exchange must also fall back,
+  // otherwise the tick key `SYM.` never matches the market feed.
+  const symbol = override?.symbol || globalSymbol;
+  const exchange = override?.exchange || globalExchange;
   const [focusedPanel] = useAtom(focusedPanelAtom);
   const [tickMap, setTickData] = useAtom(tickDataAtom);
   const [savedIndicators, setSavedIndicators] = useAtom(chartIndicatorsAtom);
@@ -705,7 +707,11 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     setInputSymbol(result.symbol);
     setShowDropdown(false);
     setAutocompleteResults([]);
-    const ex = inputExchange.trim().toUpperCase() || 'NSE';
+    // Suggestions come from the NSE stock-universe search, so the result is
+    // NSE even if the exchange box holds something else (e.g. BSE) — pin it
+    // instead of pairing an NSE symbol with the wrong exchange (dead ticks).
+    const ex = 'NSE';
+    setInputExchange(ex);
     // Loading from inside this chart detaches it from the global symbol.
     setOverrides((prev) => ({ ...prev, [panelId]: { symbol: result.symbol, exchange: ex } }));
   };

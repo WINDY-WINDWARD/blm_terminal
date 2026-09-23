@@ -141,6 +141,31 @@ class TestFetchLock:
         bh._release_fetch_lock(fd)
         assert not (tmp_path / ".fetch.lock").exists()
 
+    def test_release_keeps_new_owners_lock(self, reset_provision_state: None,
+                                             monkeypatch: pytest.MonkeyPatch,
+                                             tmp_path) -> None:
+        """A finishing holder must not delete a lock another process took over."""
+        import os
+
+        monkeypatch.setattr(bh, "_fetch_lock_path", lambda: tmp_path / ".fetch.lock")
+        fd = bh._acquire_fetch_lock()
+        assert fd is not None and fd >= 0
+        # Simulate process B taking over (stale takeover rewrites the file).
+        (tmp_path / ".fetch.lock").write_text(f"999999:{0.0}")
+        bh._release_fetch_lock(fd)
+        assert (tmp_path / ".fetch.lock").read_text().startswith("999999:")
+        (tmp_path / ".fetch.lock").unlink(missing_ok=True)
+
+    def test_torn_lock_is_taken_over(self, reset_provision_state: None,
+                                     monkeypatch: pytest.MonkeyPatch,
+                                     tmp_path) -> None:
+        """A 0-byte lock (crash between create and write) must not park fetching."""
+        monkeypatch.setattr(bh, "_fetch_lock_path", lambda: tmp_path / ".fetch.lock")
+        (tmp_path / ".fetch.lock").write_text("")
+        fd = bh._acquire_fetch_lock()
+        assert fd is not None and fd >= 0
+        bh._release_fetch_lock(fd)
+
     def test_second_process_skips_install(self, reset_provision_state: None,
                                           monkeypatch: pytest.MonkeyPatch,
                                           tmp_path) -> None:
@@ -158,6 +183,8 @@ class TestFetchLock:
             assert bh.get_browser_status()["state"] == "downloading"
         finally:
             bh._release_fetch_lock(holder)
+
+
 class TestFrozenReadiness:
     def test_frozen_requires_installed_browser(self, reset_provision_state: None,
                                                monkeypatch: pytest.MonkeyPatch) -> None:

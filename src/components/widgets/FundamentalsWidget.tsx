@@ -264,7 +264,7 @@ function IinvestSection({
   );
 }
 
-// ─── iinvest Enrichment Panel (13 collapsible sections) ──────────────────────
+// ─── iinvest Enrichment Panel (6 collapsible sections) ──────────────────────
 
 interface IinvestEnrichmentPanelProps {
   symbol: string;
@@ -286,7 +286,7 @@ function IinvestEnrichmentPanel(props: IinvestEnrichmentPanelProps) {
   return (
     <div className="border-t border-terminal-gray/40">
       <div className="px-2 py-1 bg-terminal-gray/20 text-[9px] text-terminal-amber uppercase tracking-widest font-mono">
-        iinvest enrichment (8)
+        iinvest enrichment (6)
       </div>
 
       <IinvestSection
@@ -537,7 +537,7 @@ export function FundamentalsWidget() {
     staleTime: 1000 * 60 * 30,
   });
 
-  // iinvest: 13 collapsible enrichment sections. iinvest is the automatic
+  // iinvest: 6 collapsible enrichment sections. iinvest is the automatic
   // fallback when screener.in is unavailable (HTTP 503). Each section uses
   // useQuery with `enabled: isOpen` for lazy fetch on first expand.
   const { data: tradingViewData } = useQuery({
@@ -1023,7 +1023,7 @@ export function FundamentalsWidget() {
           )}
         </div>
 
-        {/* ── iinvest Enrichment (13 collapsible sections) ────────────── */}
+        {/* ── iinvest Enrichment (6 collapsible sections) ────────────── */}
         {iinvestAvailable && (
           <IinvestEnrichmentPanel
             symbol={symbol}

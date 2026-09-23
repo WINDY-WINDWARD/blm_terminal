@@ -96,20 +96,33 @@ def _evp_bytes_to_key(password: bytes, salt: bytes, key_len: int = 32, iv_len: i
 
 
 def _decrypt_salted_blob(blob_b64: str, passphrase: str) -> dict[str, Any]:
-    """Decrypt an OpenSSL `Salted__` AES-256-CBC blob to a JSON dict."""
+    """Decrypt an OpenSSL `Salted__` AES-256-CBC blob to a JSON dict.
+
+    Raises ValueError with a classified message: shape problems (not
+    base64 / not a Salted__ blob / empty ciphertext) mean the endpoint
+    misbehaved and must NOT trigger key recovery; padding/JSON problems
+    mean the key is wrong and MAY trigger recovery. Callers rely on this
+    distinction.
+    """
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-    raw = base64.b64decode(blob_b64)
-    if len(raw) < 16 or raw[:8] != b"Salted__":
+    try:
+        raw = base64.b64decode(blob_b64)
+    except Exception as exc:
+        raise ValueError(f"login blob is not base64: {exc}") from exc
+    if len(raw) < 17 or raw[:8] != b"Salted__":
         raise ValueError("not an OpenSSL Salted__ blob")
     salt, ct = raw[8:16], raw[16:]
     key, iv = _evp_bytes_to_key(passphrase.encode("utf-8"), salt)
     decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
     padded = decryptor.update(ct) + decryptor.finalize()
     pad_len = padded[-1]
-    if pad_len < 1 or pad_len > 16:
+    if pad_len < 1 or pad_len > 16 or padded[-pad_len:] != bytes([pad_len]) * pad_len:
         raise ValueError("bad PKCS7 padding (wrong key?)")
-    return json.loads(padded[:-pad_len].decode("utf-8"))
+    try:
+        return json.loads(padded[:-pad_len].decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"decrypted payload is not JSON: {exc}") from exc
 
 
 # ── Auth & Harvester ─────────────────────────────────────────────────────────
@@ -253,7 +266,13 @@ class IinvestClient:
 
         try:
             payload = await _attempt()
-        except Exception as exc:
+        except ValueError as exc:
+            msg = str(exc)
+            # Shape problems (no blob / not a blob) mean the endpoint
+            # misbehaved — key recovery cannot help, fail fast without an
+            # extra login POST.
+            if "blob" in msg and ("empty" in msg or "not an OpenSSL" in msg or "not base64" in msg):
+                raise RuntimeError(f"iinvest guest login failed: {msg}") from exc
             logger.warning("IinvestClient: guest login failed (%s) — trying key recovery", exc)
             if not await self._recover_aes_key():
                 raise RuntimeError(f"iinvest guest login failed: {exc}") from exc
@@ -261,6 +280,10 @@ class IinvestClient:
                 payload = await _attempt()
             except Exception as exc2:
                 raise RuntimeError(f"iinvest guest login failed after key recovery: {exc2}") from exc2
+        except Exception as exc:
+            # Transport errors (DNS, timeout, HTTP 5xx): the key cannot fix
+            # these — surface immediately without recovery traffic.
+            raise RuntimeError(f"iinvest guest login request failed: {exc}") from exc
 
         try:
             token = payload["response"]["token"]
@@ -271,7 +294,10 @@ class IinvestClient:
         exp_at = self._token_live(token, now)
         if exp_at is None and exp_raw:
             try:
-                exp_at = datetime.fromisoformat(str(exp_raw))
+                iso = str(exp_raw).strip()
+                if iso.endswith("Z"):
+                    iso = iso[:-1] + "+00:00"
+                exp_at = datetime.fromisoformat(iso)
                 if exp_at.tzinfo is None:
                     exp_at = exp_at.replace(tzinfo=timezone.utc)
             except Exception:
@@ -337,7 +363,13 @@ class IinvestClient:
 
     @property
     def is_authenticated(self) -> bool:
-        return self._jwt is not None and self._jwt_expires_at is not None
+        # Liveness, not mere presence: a stored-but-expired JWT must read
+        # as unauthenticated so callers re-acquire instead of 401-looping.
+        return (
+            self._jwt is not None
+            and self._jwt_expires_at is not None
+            and self._jwt_expires_at > datetime.now(timezone.utc)
+        )
 
     @property
     def jwt(self) -> str | None:
@@ -422,8 +454,11 @@ class IinvestClient:
             if _retried:
                 self._last_error = f"401 on {endpoint_name} even after re-login"
                 raise RuntimeError(self._last_error) from None
-            # Force bypass of the harvest cache: the cached token just 401'd.
-            await self._fetch_jwt(force_fresh=True)
+            # Serialize re-logins: the get_all fan-out (19 parallel
+            # endpoints) expiring at once must not fire 19 harvests + logins.
+            # (Lock is free here — _ensure_jwt's lock was released before HTTP.)
+            async with self._get_lock():
+                await self._fetch_jwt(force_fresh=True)
             return await self._call(endpoint_name, method, url, params, json_body, _retried=True)
 
     # ── Path builder (public so the router and tests can use it) ───────────

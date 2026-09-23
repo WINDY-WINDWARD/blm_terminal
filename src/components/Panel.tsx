@@ -103,11 +103,25 @@ export function Panel({ id, title }: PanelProps) {
   const handlePopOut = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (title === 'EMPTY') return;
+    // The popout gets its own override key seeded from this panel, so the
+    // home slot can be cleaned: a fresh CHART opened here later starts
+    // linked instead of inheriting a stale detached symbol.
+    const popoutKey = `popout_${id}`;
+    if (title === 'CHART') {
+      setChartOverrides((prev) => {
+        const next = { ...prev };
+        // Seed the popout's own key, then drop the home slot's entry.
+        next[popoutKey] = prev[id] ?? { symbol: activeSymbol, exchange: activeExchange };
+        delete next[id];
+        return next;
+      });
+    }
     const query = new URLSearchParams({
       symbol: activeSymbol || '',
       watchlistId: String(activeWatchlistId || 1),
       category: moversCategory || 'allSec',
       originPanelId: id,
+      popoutPanelId: popoutKey,
     });
     const url = `/widget/${encodeURIComponent(title)}?${query.toString()}`;
     window.open(url, `blm_widget_${title}_${id}`, 'width=1000,height=700');

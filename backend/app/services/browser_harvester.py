@@ -106,7 +106,8 @@ def get_browser_status() -> dict[str, Any]:
 # Two backend processes (the known double-spawn) must not download ~1GB each
 # into the same INSTALL_DIR. Exclusive-create gives us an atomic mutex.
 _FETCH_LOCK_NAME = ".fetch.lock"
-_STALE_LOCK_MAX_AGE = 2 * 3600
+# Downloads take ~2-10 min; a live holder older than this is assumed hung.
+_STALE_LOCK_MAX_AGE = 30 * 60
 
 
 def _fetch_lock_path() -> Path | None:
@@ -167,14 +168,17 @@ def _acquire_fetch_lock() -> int | None:
             pass
         except Exception:
             return -1
-        # Lock exists: take over only if the holder is dead or ancient.
+        # Lock exists: take over when the holder is dead, ancient, or the
+        # content is torn (crash between create and write) — never park
+        # behind an unreadable lock forever.
         try:
             pid_s, _, ts_s = path.read_text().strip().partition(":")
             pid, ts = int(pid_s), float(ts_s)
             if _holder_alive(pid) and (time.time() - ts <= _STALE_LOCK_MAX_AGE):
                 return None
+            logger.info("BrowserProvision: taking over stale fetch lock (pid=%s)", pid_s)
         except Exception:
-            return None
+            logger.warning("BrowserProvision: unreadable fetch lock — taking over")
         try:
             path.unlink()
         except Exception:
@@ -191,8 +195,19 @@ def _release_fetch_lock(fd: int | None) -> None:
         pass
     try:
         path = _fetch_lock_path()
-        if path is not None:
-            path.unlink(missing_ok=True)
+        if path is None:
+            return
+        # Only remove our own lock: another process may have taken over
+        # while we were downloading — deleting its live lock would let a
+        # third process start a duplicate ~1GB download.
+        try:
+            pid_s, _, _ = path.read_text().strip().partition(":")
+            if int(pid_s) != os.getpid():
+                logger.debug("BrowserProvision: fetch lock now owned by pid %s; leaving it", pid_s)
+                return
+        except Exception:
+            return
+        path.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -268,17 +283,21 @@ def trigger_browser_fetch(manual: bool = False) -> dict[str, Any]:
             return dict(_BROWSER_STATUS)
     if _installed_browser_present():
         _set_browser_status("ready")
+        # Whoever fetched it (possibly the sibling process) doesn't start
+        # our warm browser — do it here so this process recovers too.
+        try:
+            ensure_warm_browser()
+        except Exception:
+            pass
         return get_browser_status()
     with _STATUS_LOCK:
         if _AUTO_FETCH_DONE and not manual:
             return dict(_BROWSER_STATUS)
         _AUTO_FETCH_DONE = True
-        t = _FETCH_THREAD
-    if t is not None and t.is_alive():
-        return get_browser_status()
-    _set_browser_status("downloading")
-    _FETCH_THREAD = threading.Thread(target=_fetch_worker, daemon=True, name="camoufox-fetch")
-    _FETCH_THREAD.start()
+        if _FETCH_THREAD is not None and _FETCH_THREAD.is_alive():
+            return dict(_BROWSER_STATUS)
+        _FETCH_THREAD = threading.Thread(target=_fetch_worker, daemon=True, name="camoufox-fetch")
+        _FETCH_THREAD.start()
     logger.info("BrowserProvision: browser fetch started (manual=%s)", manual)
     return get_browser_status()
 

@@ -334,7 +334,7 @@ export function SettingsWidget() {
   const refreshBrowserStatus = async () => {
     try {
       const res = await fetch('/api/py/system_config/browser-status', { credentials: 'include' });
-      if (!res.ok) return;
+      if (!res.ok) return false;
       const data = await res.json();
       setBrowserProvision({
         state: data.state ?? 'unknown',
@@ -343,37 +343,56 @@ export function SettingsWidget() {
         version: data.version ?? null,
         error: data.error ?? null,
       });
+      return (data.state ?? 'unknown') === 'ready';
     } catch {
       /* backend cold — leave last known status */
+      return false;
     }
   };
 
   const handleBrowserRetry = async () => {
     setBrowserFetchBusy(true);
     try {
-      await fetch('/api/py/system_config/browser-fetch', {
+      const res = await fetch('/api/py/system_config/browser-fetch', {
         method: 'POST',
         credentials: 'include',
       });
+      if (!res.ok) {
+        setConsentSyncStatus(`Browser fetch failed (HTTP ${res.status}) — will retry automatically`);
+        setTimeout(() => setConsentSyncStatus(null), 5000);
+      }
       await refreshBrowserStatus();
     } catch (e) {
       console.error('Failed to trigger browser fetch:', e);
+      setConsentSyncStatus('Could not reach backend to start browser fetch');
+      setTimeout(() => setConsentSyncStatus(null), 5000);
     } finally {
       setBrowserFetchBusy(false);
     }
   };
 
-  // Poll provisioning status while consented and not yet ready.
+  // Poll provisioning status while consented and not yet ready. Stops on
+  // `ready` so healthy clients don't poll the endpoint forever.
   useEffect(() => {
     if (scrapingConsent !== true) {
       setBrowserProvision(null);
       return;
     }
-    void refreshBrowserStatus();
-    const t = setInterval(() => {
-      void refreshBrowserStatus();
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const poll = async () => {
+      const ready = await refreshBrowserStatus();
+      if (ready && timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    void poll();
+    timer = setInterval(() => {
+      void poll();
     }, 5000);
-    return () => clearInterval(t);
+    return () => {
+      if (timer !== null) clearInterval(timer);
+    };
   }, [scrapingConsent]);
 
   const handleUpdateConsent = async (val: boolean) => {

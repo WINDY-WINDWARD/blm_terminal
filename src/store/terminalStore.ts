@@ -294,9 +294,24 @@ export interface ChartSymbolOverride {
   symbol: string;
   exchange: string;
 }
-export const chartSymbolOverridesAtom = atomWithStorage<Record<string, ChartSymbolOverride>>(
+type ChartOverrides = Record<string, ChartSymbolOverride>;
+type ChartOverridesUpdate = ChartOverrides | ((prev: ChartOverrides) => ChartOverrides);
+const chartSymbolOverridesBaseAtom = atomWithStorage<ChartOverrides>(
   'terminal.chartOverrides',
   {},
+);
+/** Read-guarded view: corrupt localStorage (string/null/array from manual
+ * edits or truncated writes) degrades to {} instead of throwing in every
+ * chart/panel that indexes it. */
+export const chartSymbolOverridesAtom = atom(
+  (get): ChartOverrides => {
+    const v = get(chartSymbolOverridesBaseAtom);
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) return v;
+    return {};
+  },
+  (_get, set, update: ChartOverridesUpdate) => {
+    set(chartSymbolOverridesBaseAtom, update as ChartOverrides);
+  },
 );
 
 // ─── Other Atoms ─────────────────────────────────────────────────────────────

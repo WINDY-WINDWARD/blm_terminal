@@ -38,6 +38,7 @@ def memdb(monkeypatch: pytest.MonkeyPatch):
     StockUniverse.__table__.create(engine)
     SyncState.__table__.create(engine)
     factory = sessionmaker(bind=engine)
+    factory.engine = engine  # test-only handle for ad-hoc table setup
 
     class _Ctx:
         def __init__(self):
@@ -142,3 +143,48 @@ class TestMarketCapsSync:
         out = mc._market_caps_sync()
         assert out["processed"] == 0
         assert chained == []
+
+    def test_snapshot_mirror_updates_only(self, memdb, monkeypatch: pytest.MonkeyPatch):
+        """Fills mirror into existing snapshot rows; never inserts stubs."""
+        from datetime import date, datetime
+
+        from app.models.ticker import TickerScreenerSnapshot
+
+        TickerScreenerSnapshot.__table__.create(memdb.engine)
+        _add_universe(memdb, {"AAA": None, "BBB": None})
+        session = memdb()
+        session.add(TickerScreenerSnapshot(
+            symbol="AAA", last_date=date(2026, 1, 1), compute_date=date(2026, 1, 1),
+            computed_at=datetime(2026, 1, 1), last_close=10.0, last_volume=100,
+            last_open=9.0, last_high=11.0, last_low=8.0, market_cap=None))
+        session.commit()
+        session.close()
+        monkeypatch.setattr(mc, "nse_client", FakeNSE({"AAA": 7.0, "BBB": 8.0}))
+        monkeypatch.setattr(mc, "_chain_market_rebuild", lambda: None)
+
+        out = mc._market_caps_sync(max_symbols=10)
+        assert out["filled"] == 2
+        session = memdb()
+        rows = dict(session.execute(
+            sa.select(TickerScreenerSnapshot.symbol, TickerScreenerSnapshot.market_cap)).all())
+        session.close()
+        # AAA updated in place; BBB untouched (no stub inserted).
+        assert rows == {"AAA": 7.0}
+
+    def test_time_cap_keeps_cursor(self, memdb, monkeypatch: pytest.MonkeyPatch):
+        """A runtime-cap stop must resume, not restart (no wrap-around reset)."""
+        _add_universe(memdb, {"AAA": None, "BBB": None, "CCC": None})
+        monkeypatch.setattr(mc, "nse_client", FakeNSE({"AAA": 1.0, "BBB": 2.0, "CCC": 3.0}))
+        monkeypatch.setattr(mc, "_chain_market_rebuild", lambda: None)
+        monkeypatch.setattr(mc, "MAX_RUN_SECONDS", -1)  # cap hit on first check
+
+        out = mc._market_caps_sync(max_symbols=10)
+        assert out["processed"] == 0
+        # 3 candidates <= 10 => exhausted, but the cap fired first: the
+        # wrap-around reset must be skipped so the next run resumes work.
+        session = memdb()
+        row = session.execute(sa.select(SyncState.last_symbol).where(
+            SyncState.task_name == mc.TASK_NAME)).scalar_one_or_none()
+        session.close()
+        assert row is None
+

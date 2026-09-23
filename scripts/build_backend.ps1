@@ -2,8 +2,10 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "Building BLM Backend using PyInstaller..."
 
-# Move into backend directory
-Set-Location -Path "$PSScriptRoot\..\backend"
+# Do not leak a changed working directory to the caller (fast-build jobs and
+# interactive shells alike): everything below runs from backend/.
+Push-Location -LiteralPath "$PSScriptRoot\..\backend"
+try {
 
 # Determine python and pyinstaller executable paths
 $PythonCmd = "python"
@@ -75,3 +77,6 @@ Remove-Item -Recurse -Force "dist" -ErrorAction SilentlyContinue
     main.py
 
 Write-Host "Build complete! Executable is at backend\dist\blm-backend.exe"
+} finally {
+    Pop-Location
+}

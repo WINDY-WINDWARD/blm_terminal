@@ -309,8 +309,16 @@ async def _refresh_market_data_local_async() -> None:
             for v in values_list:
                 deduped[(v["category_type"], v["slug"])] = v
             if len(deduped) != len(values_list):
-                logger.debug("market_local_sync: dropped %d slug-colliding category rows",
-                             len(values_list) - len(deduped))
+                seen: set[tuple[str, str]] = set()
+                dupes: list[str] = []
+                for v in values_list:
+                    k = (v["category_type"], v["slug"])
+                    if k in seen:
+                        dupes.append(f"{v['category_type']}/{v['name']}")
+                    seen.add(k)
+                logger.warning("market_local_sync: dropped %d slug-colliding category rows "
+                               "(last wins; dropped members keep orphan refs): %s",
+                               len(dupes), dupes[:5])
                 values_list = list(deduped.values())
             try:
                 await session.execute(delete(MarketCategory))

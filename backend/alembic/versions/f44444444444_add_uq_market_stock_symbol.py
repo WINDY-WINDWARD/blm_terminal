@@ -19,7 +19,13 @@ live DB). Only market_category_stocks is converged here.
 
 Pre-dedupe keeps the latest last_updated row per symbol so index creation
 cannot fail on installs that accumulated duplicates while the upsert was
-broken.
+broken. SQLite sorts NULLs last in DESC order, so a dated row always beats
+NULL last_updated; an all-NULL group keeps the highest id. The early-return
+when the index already exists is safe (a live unique index forbids dupes).
+
+Downgrade is LOSSY by nature: dropping the index cannot restore the
+deduplicated rows. Only downgrade to recover from a failed upgrade, never
+to "undo" this migration on a working DB.
 """
 from typing import Sequence, Union
 

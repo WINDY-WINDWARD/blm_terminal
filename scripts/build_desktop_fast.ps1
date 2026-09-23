@@ -104,6 +104,15 @@ if ($failed) { exit 1 }
 # linux/mac targets), so packaging speed cannot be tuned here. The fast wins
 # are parallel stages + skipping unchanged sides.
 Set-Location $RepoRoot
+# Stale-frontend guard (2026-09-23 lesson): a hash-skip miss once shipped an
+# installer whose .next CSS predated the sources (bulky native scrollbars in
+# the running app). Prove the packaged CSS came from current sources before
+# electron-builder runs — fail loudly instead of shipping stale UI.
+$cssHit = Get-ChildItem -Path (Join-Path $RepoRoot ".next\static\*") -Recurse -Include *.css -ErrorAction SilentlyContinue |
+    Select-String -Pattern "terminal-amber" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $cssHit) {
+    throw "Frontend CSS verification failed: no themed CSS (terminal-amber) under .next/static. The Next.js output is missing or stale — run with -Full, then re-run."
+}
 # Same stderr-drain discipline as above: builder warnings must not terminate.
 $prevPref = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'

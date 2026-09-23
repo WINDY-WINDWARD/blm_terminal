@@ -131,7 +131,7 @@ function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
   ];
 
   return (
-    <div className="flex gap-3 px-2 py-1 bg-zinc-900/60 text-[9px] border-b border-terminal-gray/30 font-mono min-w-[760px]">
+    <div className="sticky top-0 z-10 flex gap-3 px-2 py-1 bg-zinc-900 text-[9px] border-b border-terminal-gray/30 font-mono min-w-[760px]">
       <span className="flex-1 min-w-[160px]" />
       {columns.slice(1).map((col) => (
         <button

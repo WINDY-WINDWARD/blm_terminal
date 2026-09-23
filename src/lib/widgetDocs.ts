@@ -166,7 +166,7 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'OHLC candlesticks for the symbol set globally via WATCH or by clicking any symbol in the terminal. Data is fetched from OpenAlgo and refreshed on symbol change.',
+        body: 'OHLC candlesticks for the panel symbol: linked panels follow the global active symbol, detached ([FREE]) panels hold their own per-panel override. Daily candles come from the backend ticker warehouse (/ticker/ohlcv); intraday/weekly/monthly from /ticker/intraday; live LTP overlays arrive via the market WebSocket.',
       },
       {
         heading: 'Candle anatomy',
@@ -190,7 +190,10 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'How to use',
         items: [
-          'Click any symbol in WATCH or TOP to update the chart.',
+          'Click any symbol in WATCH or TOP to update all linked charts (detached charts are unaffected).',
+          'Searching or pressing GO inside a chart detaches that panel ([FREE]) so it keeps its own symbol.',
+          'Use the [FREE]/[LINK] toggle in the panel header (CHART panels only) to re-link a detached chart to the global symbol.',
+          'Popping out ([POP]) a chart carries its symbol along via the home panel override; docking works from the popout titlebar.',
           'Use timeframe selector to switch between intraday and daily views.',
           'Long upper wicks at highs = distribution. Long lower wicks at lows = accumulation.',
         ],
@@ -349,7 +352,7 @@ const DOCS_MAP: WidgetDoc[] = [
     command: 'SETTINGS',
     title: 'Settings',
     summary:
-      'Configure terminal preferences: visible columns, layout, and connection parameters.',
+      'Configure terminal preferences: data extraction and browser provisioning, visible columns, layout, AI providers, and connection parameters.',
     sections: [
       {
         heading: 'What it shows',
@@ -358,10 +361,12 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'Configuration areas',
         items: [
+          { name: 'Data Extraction & Privacy', desc: 'Advanced Extraction consent plus the headless-browser provisioning status (ready / missing / downloading / failed) with download progress and a Retry button. Granting consent auto-starts a background Camoufox browser fetch, then the warm browser; status polls every 5s while consented.' },
           { name: 'Watchlist Columns', desc: 'Toggle which columns appear in the WATCH widget (LTP, CHG, MSFV, returns, RESULTS, ALERTS).' },
           { name: 'Movers Columns', desc: 'Toggle which columns appear in the TOP widget.' },
           { name: 'Panel Layout', desc: 'Switch between 2, 4, 6, or 8 panel grid layouts.' },
-          { name: 'OpenAlgo', desc: 'API URL and key for broker connectivity (ORDER, POS, CHART data).' },
+          { name: 'AI Provider', desc: 'Engine, keys/OAuth, and model list for the AI widget (auto-saved to system-config ai.*).' },
+          { name: 'OpenAlgo', desc: 'API URL and key for broker connectivity (ORDER, POS execution).' },
         ] as DocField[],
       },
       {
@@ -379,7 +384,7 @@ const DOCS_MAP: WidgetDoc[] = [
     command: 'FDM',
     title: 'Fundamentals',
     summary:
-      'Key fundamental ratios and recent quarterly financial results for the active symbol, sourced from Screener.in.',
+      'Key fundamental ratios and recent quarterly financial results for the active symbol, sourced from Screener.in with NSE ratios and iinvest enrichment as fallbacks.',
     sections: [
       {
         heading: 'What it shows',
@@ -438,6 +443,14 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           { name: 'Weighted Average Cost of Capital', desc: 'The discount rate applied to future cash flows. A higher WACC reflects higher risk and lowers the present fair value.' },
           { name: 'Terminal Growth Rate', desc: 'The perpetual growth rate of cash flows after the 10-year forecast period. Changing these triggers a live re-calculation.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Data sources & enrichment',
+        items: [
+          { name: 'Screener.in', desc: 'Primary source for ratios, quarterly results, and valuation inputs. Needs a session; ~1-day lag.' },
+          { name: 'NSE Market Ratios', desc: '4 of 10 core ratios (P/E, sector P/E, 52W high/low) from NSE GetQuoteApi — no session needed, shown when screener is unavailable.' },
+          { name: 'iinvest Enrichment (6 sections)', desc: 'Announcements, board meetings, corporate actions, legal cases, capital history, and key ratios from iinvest. Authenticated automatically with a guest JWT via /api/login — no consent or browser needed. Sections render only while the token is live.' },
         ] as DocField[],
       },
       {
@@ -561,7 +574,7 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'Two tabs. Global shows a unified feed of all RSS and MoneyControl articles with source filtering, sentiment indicators, and threat badges. Company shows symbol-specific news scraped from MoneyControl stock quote pages. Articles are stored locally and refreshed every 5 minutes via background workers. A live WebSocket connection pushes new articles in real time as they are fetched.',
+        body: 'Two tabs. Global shows a unified feed of all RSS and MoneyControl articles with source filtering, sentiment indicators, and threat badges. Company defaults to merged coverage: iinvest full stories (/api/v1/news/stories) first with MoneyControl fallback for deep history; Safe Mode (Advanced Extraction declined) forces MoneyControl only. A source selector (auto / iinvest / moneycontrol / merged) and force-refresh (bypasses the 2h cache) sit in the Company header; responses tag source_used. Articles are stored locally. A live WebSocket connection pushes new articles in real time as they are fetched.',
       },
       {
         heading: 'Sources & coverage',
@@ -627,7 +640,7 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'Sector and industry-level aggregates from MoneyControl. Refreshed every 5 minutes. Provides top-down context for individual stock decisions.',
+        body: 'Locally built sector and industry aggregates (advance/decline breadth, PE, earnings, market cap). Rebuilt by the market_data job every 20 minutes during market hours. Provides top-down context for individual stock decisions.',
       },
       {
         heading: 'Fields',
@@ -644,7 +657,10 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           'Trade with the sector tailwind — a bullish sector amplifies individual stock moves.',
           'A/D ratio below 0.5 in your stock\'s sector signals broad weakness; raises the bar for longs.',
-          'Click a sector to drill down into its constituent stocks ranked by market cap.',
+          'Expand a sector to see constituent stocks; clicking a company name sets it as the global active symbol (CHART, ORDER, FDM follow).',
+          'Click a heatmap tile to open that category\'s stock table in a modal (Esc/backdrop closes).',
+          'Name column keeps a 160px floor; narrow panels scroll horizontally (header scrolls with rows).',
+          'If every market cap shows —, the universe has not synced yet: trigger job.market_caps or job.fundamentals from the Jobs page.',
         ],
       },
     ],
@@ -655,7 +671,7 @@ const DOCS_MAP: WidgetDoc[] = [
     command: 'NOTIF',
     title: 'Notifications',
     summary:
-      'Watchlist-scoped alerts generated every 5 minutes during market hours. Covers 26 trigger types across price, volume, deals, insider activity, and technicals.',
+      'Watchlist-scoped alerts generated every 5 minutes during market hours. Covers 29 trigger types across price, volume, deals, insider activity, and technicals.',
     sections: [
       {
         heading: 'What it shows',
@@ -686,6 +702,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Use the category tabs to focus on a class of signals (e.g. only TECHNICAL).',
           'Sub-filter bubbles let you narrow within a category to specific trigger types.',
           'Click an alert row to set that symbol globally — use with CHART for confirmation.',
+          'iinvest-backed enrichment needs no browser or consent: guest login supplies the token automatically.',
           'CLEAR ALL marks all alerts as read; they are gone from the unread feed but kept in the database.',
           'Alerts are deduplicated daily — you will only see one RSI oversold alert per symbol per day.',
         ],
@@ -734,7 +751,7 @@ const DOCS_MAP: WidgetDoc[] = [
     sections: [
       {
         heading: 'What it shows',
-        body: 'The same 26 trigger types as NOTIF, but applied to the full NSE stock universe. The backend scan runs every 30 minutes. Results are stored in a separate table (GlobalNotification) and are not watchlist-scoped.',
+        body: 'The same 29 trigger types as NOTIF, but applied to the full NSE stock universe. The backend scan runs every 30 minutes. Results are stored in a separate table (GlobalNotification) and are not watchlist-scoped.',
       },
       {
         heading: 'Difference from NOTIF',
@@ -763,6 +780,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Use SCAN to discover stocks generating signals that are not in your watchlist.',
           'Filter to high-conviction trigger types: 52w_high_breakout + volume_breakout together are stronger than either alone.',
           'Click a symbol to set it globally — cross-reference with FDM, DEALS, and NEWS before acting.',
+          'iinvest-backed enrichment needs no browser or consent: guest login supplies the token automatically.',
           'SCAN data is 30 minutes old — validate with current price and volume in CHART.',
         ],
       },
@@ -773,7 +791,7 @@ const DOCS_MAP: WidgetDoc[] = [
     command: 'AI',
     title: 'AI Chat',
     summary:
-      'Conversational AI assistant with live access to all NSE market data tools. Powered by MiniMax via OpenCode Zen.',
+      'Conversational AI assistant with live access to all NSE market data tools. Engine is the provider selected in Settings → AI Provider.',
     sections: [
       {
         heading: 'Overview',
@@ -806,10 +824,7 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'Models',
         items: [
-          { name: 'M2.5 Free', desc: 'Zero cost — for development and testing only. Do not use with sensitive data.' },
-          { name: 'M2.5', desc: 'Best for coding-style data queries and structured output. Fast.' },
-          { name: 'M2.7', desc: 'Highest quality reasoning. Slower and more verbose — use for complex analysis.' },
-          { name: 'M2.1', desc: 'Strong multilingual support. Lower cost than M2.7.' },
+          { name: 'Per-provider catalog', desc: 'Models are listed per provider via the provider-models endpoint — there is no fixed lineup. Pick the engine in Settings → AI Provider first.' },
         ] as DocField[],
       },
       {
@@ -821,7 +836,7 @@ const DOCS_MAP: WidgetDoc[] = [
           'Tool call badges appear while the AI is fetching data — green check when done.',
           'The AI follows an agentic loop: it can call multiple tools across turns to build a complete answer.',
           'Select a persona before asking for focused, disciplined analysis on a specific framework.',
-          'Set OPENCODE_ZEN_API_KEY in backend .env to enable this widget.',
+          'Configure the provider key/OAuth in Settings; check the AI status endpoint for Connected before troubleshooting.',
         ],
       },
     ],
@@ -1041,6 +1056,27 @@ const DOCS_MAP: WidgetDoc[] = [
           'Click any row to set that symbol as the active chart symbol.',
           'The screener cache refreshes every 5 minutes — click Refresh to force an update.',
         ],
+      },
+    ],
+  },
+  // ── DOCS ───────────────────────────────────────────────────────────────────
+  {
+    command: 'DOCS',
+    title: 'Documentation',
+    summary:
+      'Meta-widget: shows the docs for the focused panel, otherwise the full index.',
+    sections: [
+      {
+        heading: 'Auto-navigate',
+        body: 'Focusing any non-DOCS panel auto-loads its doc (badged (auto)); focusing DOCS itself or an empty slot shows the index instead.',
+      },
+      {
+        heading: 'Index & tour',
+        items: [
+          { name: '← INDEX', desc: 'Clears the manual selection and returns to the full widget list (each row shows an 80-char summary).' },
+          { name: '▸ TOUR', desc: 'Replays the guided first-run tour from the current layout.' },
+          { name: 'Popouts', desc: 'A popped-out DOCS follows the same focus rule against its own window focus.' },
+        ] as DocField[],
       },
     ],
   },

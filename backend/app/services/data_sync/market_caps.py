@@ -113,12 +113,16 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
     logger.info("market_caps_sync: starting (%d candidates%s)", len(todo),
                 f", cursor {cursor}" if cursor else "")
     last_symbol: str | None = cursor
+    stopped_early = False
+    filled_caps: dict[str, float] = {}
     for i, symbol in enumerate(todo, 1):
         if shutdown.is_set():
             logger.info("market_caps_sync: shutdown requested — exiting")
+            stopped_early = True
             break
         if time.monotonic() - started >= MAX_RUN_SECONDS:
             logger.info("market_caps_sync: runtime cap reached after %d symbols", i - 1)
+            stopped_early = True
             break
         total["processed"] += 1
         try:
@@ -144,6 +148,7 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
                     )
                     session.commit()
                 total["filled"] += 1
+                filled_caps[symbol] = mcap
             except Exception as exc:
                 logger.warning("market_caps_sync: DB write failed for %s: %s", symbol, exc)
                 total["failed"] += 1
@@ -161,7 +166,10 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
             _report("running", int(100 * i / len(todo)),
                     f"Filled {total['filled']}/{total['processed']} symbols")
 
-    if exhausted and not shutdown.is_set():
+    # Reset the cursor only on a genuinely complete pass: a time-cap or
+    # shutdown stop must resume where it left off, otherwise large NULL
+    # backlogs restart from zero every run (livelock).
+    if exhausted and not stopped_early and not shutdown.is_set():
         try:
             with _SyncSessionLocal() as session:
                 _write_cursor(session, None)
@@ -173,6 +181,7 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
                 total["processed"], total["filled"], total["skipped"], total["failed"])
 
     if total["filled"]:
+        _push_fills_to_snapshot(filled_caps)
         try:
             logger.info("market_caps_sync: chaining market_data rebuild")
             _chain_market_rebuild()
@@ -180,3 +189,29 @@ def _market_caps_sync(max_symbols: int = BATCH_LIMIT) -> dict[str, int]:
             logger.exception("market_caps_sync: chained market_data rebuild failed")
 
     return total
+
+
+def _push_fills_to_snapshot(filled_caps: dict[str, float]) -> None:
+    """Mirror this run's fills into ticker_screener_snapshot (UPDATE-only).
+
+    The snapshot writer only runs inside the nightly scores pipeline, so
+    without this the screener/TQL consumers keep serving stale NULL caps
+    until then. UPDATE-only: never insert stub rows (a stub last_close=0
+    would corrupt screener consumers) — same rule as the fundamentals
+    worker.
+    """
+    if not filled_caps:
+        return
+    try:
+        from app.models.ticker import TickerScreenerSnapshot
+
+        with _SyncSessionLocal() as session:
+            for symbol, mcap in filled_caps.items():
+                session.execute(
+                    update(TickerScreenerSnapshot)
+                    .where(TickerScreenerSnapshot.symbol == symbol)
+                    .values(market_cap=mcap)
+                )
+            session.commit()
+    except Exception as exc:
+        logger.warning("market_caps_sync: snapshot mirror failed: %s", exc)
