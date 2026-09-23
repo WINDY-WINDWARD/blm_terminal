@@ -71,7 +71,8 @@ input, button {
 
 /* App-wide slim scrollbars: quiet gray pill on black, amber on hover to
  * match the gutter-hover language. 10px keeps the grab target accessible
- * while reading slim against the terminal theme. */
+ * while reading slim against the terminal theme.
+ * blm-scrollbar-theme v1 (build sentinel — packaging greps for this) */
 * {
   scrollbar-width: thin;
   scrollbar-color: #3a3a3a transparent;
