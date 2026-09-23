@@ -284,6 +284,21 @@ export const activeSymbolAtom = atomWithStorage<string>('terminal.activeSymbol',
 /** The currently active exchange — global across tabs via localStorage */
 export const activeExchangeAtom = atomWithStorage<string>('terminal.activeExchange', 'NSE');
 
+/**
+ * Per-chart symbol overrides keyed by panelId. When a chart panel has an
+ * entry it renders that symbol/exchange independently of the global atoms
+ * (link toggle in the panel header / search inside the chart writes here).
+ * Absent entry = linked, follows global.
+ */
+export interface ChartSymbolOverride {
+  symbol: string;
+  exchange: string;
+}
+export const chartSymbolOverridesAtom = atomWithStorage<Record<string, ChartSymbolOverride>>(
+  'terminal.chartOverrides',
+  {},
+);
+
 // ─── Other Atoms ─────────────────────────────────────────────────────────────
 
 /** Live tick data keyed by "SYMBOL.EXCHANGE" — updated by marketWs */

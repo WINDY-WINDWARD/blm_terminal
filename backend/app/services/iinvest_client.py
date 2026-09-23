@@ -64,8 +64,52 @@ DEFAULT_HEADERS = {
 # 24h JWT lifetime; refresh 4h early to leave slack.
 _JWT_REFRESH_AHEAD_SECONDS = 4 * 3600
 
+# Harvested tokens expiring sooner than this are rejected (the 24h harvest
+# cache otherwise serves day-old tokens that 401 on every call).
+_JWT_ACCEPT_MARGIN_SECONDS = 15 * 60
+
+# Guest-login AES passphrase. PUBLIC — ships in iinvest's own JS bundle
+# (/_next/static/chunks/pages/_app-*.js); functionally a free-tier key, not a
+# secret. Env override exists for emergency rotation without a rebuild.
+# NOTE: CryptoJS `AES.decrypt(blob, key)` treats the base64 *string itself*
+# as the passphrase bytes (openssl `enc -k` semantics), so we feed the
+# literal 44-char string, NOT its base64-decoded bytes.
+_COGENCIS_AES_KEY_DEFAULT = "SQOZOt3Mx1Bouh7YgkJn1XwX2PcR8Sy6Q+q8A9rW6us="
+_AES_KEY_PASSPHRASE = os.environ.get("COGENCIS_AES_KEY", _COGENCIS_AES_KEY_DEFAULT)
+
 # Module-level singleton (mirrors screener_client / news_fetcher pattern).
 _iinvest_client: "IinvestClient | None" = None
+
+
+def _current_aes_key() -> str:
+    return _AES_KEY_PASSPHRASE
+
+
+def _evp_bytes_to_key(password: bytes, salt: bytes, key_len: int = 32, iv_len: int = 16) -> tuple[bytes, bytes]:
+    """OpenSSL EVP_BytesToKey (MD5, 1 iteration) — matches `openssl enc -k`."""
+    out = b""
+    prev = b""
+    while len(out) < key_len + iv_len:
+        prev = hashlib.md5(prev + password + salt).digest()
+        out += prev
+    return out[:key_len], out[key_len:key_len + iv_len]
+
+
+def _decrypt_salted_blob(blob_b64: str, passphrase: str) -> dict[str, Any]:
+    """Decrypt an OpenSSL `Salted__` AES-256-CBC blob to a JSON dict."""
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    raw = base64.b64decode(blob_b64)
+    if len(raw) < 16 or raw[:8] != b"Salted__":
+        raise ValueError("not an OpenSSL Salted__ blob")
+    salt, ct = raw[8:16], raw[16:]
+    key, iv = _evp_bytes_to_key(passphrase.encode("utf-8"), salt)
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    padded = decryptor.update(ct) + decryptor.finalize()
+    pad_len = padded[-1]
+    if pad_len < 1 or pad_len > 16:
+        raise ValueError("bad PKCS7 padding (wrong key?)")
+    return json.loads(padded[:-pad_len].decode("utf-8"))
 
 
 # ── Auth & Harvester ─────────────────────────────────────────────────────────
@@ -156,18 +200,11 @@ class IinvestClient:
                 return
             await self._fetch_jwt()
 
-    async def _fetch_jwt(self) -> None:
-        """Fetch token naturally from localStorage using the generic browser harvester,
-        or fallback to authenticated session if configured.
-        """
-        now = datetime.now(timezone.utc)
-        raw_token = await harvest_local_storage(IINVEST_SITE_URL, "next-auth.token")
+    @staticmethod
+    def _extract_token(raw_token: str | None) -> str | None:
+        """Unwrap the `next-auth.token` localStorage JSON-string form."""
         if not raw_token:
-            self._last_error = "Browser harvester unable to acquire next-auth.token (consent missing or harvester unavailable)"
-            raise RuntimeError(self._last_error)
-
-        # In iinvest localStorage, "next-auth.token" is stored as JSON string:
-        # e.g. {"token":"eyJhbGci...","expiration":"..."}
+            return None
         token = raw_token
         if raw_token.strip().startswith("{"):
             try:
@@ -175,21 +212,128 @@ class IinvestClient:
                 token = parsed.get("token", raw_token)
             except Exception:
                 token = raw_token
+        return token or None
 
-        self._jwt = token
-        # Parse expiry from the JWT itself
+    def _token_live(self, token: str, now: datetime) -> datetime | None:
+        """Return exp when the token is acceptable, else None.
+
+        Harvested tokens are validated, not trusted: the 24h harvest cache
+        otherwise serves day-old tokens that 401 on every data call.
+        """
         try:
             import jwt as pyjwt
             decoded = pyjwt.decode(token, options={"verify_signature": False})
             exp = decoded.get("exp")
         except Exception:
-            exp = None
-        if exp:
-            self._jwt_expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
-        else:
-            self._jwt_expires_at = now + timedelta(hours=24)
+            return None
+        if not exp:
+            return None
+        exp_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+        if exp_at - now < timedelta(seconds=_JWT_ACCEPT_MARGIN_SECONDS):
+            return None
+        return exp_at
+
+    async def _guest_login(self) -> None:
+        """Acquire a guest JWT via iinvest `/api/login` (no browser needed).
+
+        POSTs with no body, decrypts the `Salted__` blob with the public
+        bundle passphrase. Falls back to automatic key recovery (§2.5) once
+        when decryption fails (bundle rotated).
+        """
+        if self._http is None:
+            raise RuntimeError("IinvestClient not initialized")
+
+        async def _attempt() -> dict[str, Any]:
+            resp = await self._http.post(IINVEST_LOGIN_URL)
+            resp.raise_for_status()
+            blob = (resp.json() or {}).get("data", "")
+            if not blob:
+                raise ValueError("empty login blob")
+            return _decrypt_salted_blob(blob, _current_aes_key())
+
+        try:
+            payload = await _attempt()
+        except Exception as exc:
+            logger.warning("IinvestClient: guest login failed (%s) — trying key recovery", exc)
+            if not await self._recover_aes_key():
+                raise RuntimeError(f"iinvest guest login failed: {exc}") from exc
+            try:
+                payload = await _attempt()
+            except Exception as exc2:
+                raise RuntimeError(f"iinvest guest login failed after key recovery: {exc2}") from exc2
+
+        try:
+            token = payload["response"]["token"]
+            exp_raw = payload["response"].get("expiration")
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError(f"iinvest login payload malformed: {exc}") from exc
+        now = datetime.now(timezone.utc)
+        exp_at = self._token_live(token, now)
+        if exp_at is None and exp_raw:
+            try:
+                exp_at = datetime.fromisoformat(str(exp_raw))
+                if exp_at.tzinfo is None:
+                    exp_at = exp_at.replace(tzinfo=timezone.utc)
+            except Exception:
+                exp_at = None
+        if exp_at is None or exp_at - now < timedelta(seconds=_JWT_ACCEPT_MARGIN_SECONDS):
+            raise RuntimeError("iinvest login returned an expired/expiring token")
+        self._jwt = token
+        self._jwt_expires_at = exp_at
         self._last_error = None
-        logger.info("IinvestClient: JWT acquired via harvester (expires %s)", self._jwt_expires_at.isoformat())
+        logger.info("IinvestClient: guest JWT acquired via /api/login (expires %s)",
+                    self._jwt_expires_at.isoformat())
+
+    async def _recover_aes_key(self) -> bool:
+        """Auto key recovery (§2.5): re-extract the passphrase from the live bundle."""
+        global _AES_KEY_PASSPHRASE
+        import re
+
+        try:
+            if self._http is None:
+                return False
+            home = await self._http.get(IINVEST_SITE_URL + "/")
+            home.raise_for_status()
+            m = re.search(r"/_next/static/chunks/pages/_app-[\w.-]+\.js", home.text)
+            if not m:
+                return False
+            js = await self._http.get(IINVEST_SITE_URL + m.group(0))
+            js.raise_for_status()
+            km = re.search(r'AES\.decrypt\([^,]+,\s*["\']([A-Za-z0-9+/=]{44})["\']\)', js.text)
+            if not km or km.group(1) == _current_aes_key():
+                return False
+            _AES_KEY_PASSPHRASE = km.group(1)
+            logger.warning("IinvestClient: AES key recovered from live bundle")
+            return True
+        except Exception as exc:
+            logger.warning("IinvestClient: key recovery failed: %s", exc)
+            return False
+
+    async def _fetch_jwt(self, *, force_fresh: bool = False) -> None:
+        """Fetch token via browser harvest, falling back to guest login.
+
+        Order: harvest (needs consent + browser) first to preserve current
+        behavior on healthy machines; `/api/login` guest flow when harvest
+        yields nothing usable. `force_fresh` bypasses the 24h harvest cache —
+        used after a 401 where the cached token is known stale.
+        """
+        now = datetime.now(timezone.utc)
+        raw_token = await harvest_local_storage(
+            IINVEST_SITE_URL, "next-auth.token", force=force_fresh)
+        token = self._extract_token(raw_token)
+        if token is not None:
+            exp_at = self._token_live(token, now)
+            if exp_at is not None:
+                self._jwt = token
+                self._jwt_expires_at = exp_at
+                self._last_error = None
+                logger.info("IinvestClient: JWT acquired via harvester (expires %s)",
+                            self._jwt_expires_at.isoformat())
+                return
+            logger.info("IinvestClient: harvested token expired/expiring — trying guest login")
+        else:
+            self._last_error = "Browser harvester unable to acquire next-auth.token (consent missing or harvester unavailable)"
+        await self._guest_login()
 
     @property
     def is_authenticated(self) -> bool:
@@ -200,9 +344,16 @@ class IinvestClient:
         return self._jwt
 
     def health(self) -> dict[str, Any]:
+        # Healthy only with a live (non-expired) token — presence alone
+        # previously reported healthy while every call 401'd on stale JWTs.
+        live = (
+            self._jwt is not None
+            and self._jwt_expires_at is not None
+            and self._jwt_expires_at > datetime.now(timezone.utc)
+        )
         return {
             "configured": True,
-            "healthy": self.is_authenticated,
+            "healthy": live,
             "expires_at": self._jwt_expires_at.isoformat() if self._jwt_expires_at else None,
             "last_error": self._last_error,
         }
@@ -271,7 +422,8 @@ class IinvestClient:
             if _retried:
                 self._last_error = f"401 on {endpoint_name} even after re-login"
                 raise RuntimeError(self._last_error) from None
-            await self._fetch_jwt()
+            # Force bypass of the harvest cache: the cached token just 401'd.
+            await self._fetch_jwt(force_fresh=True)
             return await self._call(endpoint_name, method, url, params, json_body, _retried=True)
 
     # ── Path builder (public so the router and tests can use it) ───────────

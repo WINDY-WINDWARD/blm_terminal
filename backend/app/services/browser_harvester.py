@@ -748,12 +748,13 @@ async def _warm_submit(kind: str, url: str, key: str | None, wait_selector: str 
     return await asyncio.to_thread(_wait)
 
 
-async def harvest_local_storage(url: str, key: str, wait_selector: str | None = None, ttl_seconds: int = 86400) -> str | None:
+async def harvest_local_storage(url: str, key: str, wait_selector: str | None = None, ttl_seconds: int = 86400, force: bool = False) -> str | None:
     """Boot headless browser, navigate to URL, wait for network idle/selector, and extract localStorage key.
-    
+
     Guarded by:
     1. User consent check (aborts if not consented)
-    2. Cache check (returns cached value if valid)
+    2. Cache check (returns cached value if valid; skipped when force=True,
+       e.g. re-login after a 401 where the cached token is known stale)
     3. asyncio.Lock to avoid concurrent browser instances
     """
     if not await get_consent_status():
@@ -761,10 +762,11 @@ async def harvest_local_storage(url: str, key: str, wait_selector: str | None = 
         return None
 
     cache_key = _get_cache_key("ls", url, key)
-    cached = await get_cached_item(cache_key)
-    if cached is not None:
-        logger.debug("BrowserHarvester: returned cached local_storage for %s [%s]", url, key)
-        return str(cached)
+    if not force:
+        cached = await get_cached_item(cache_key)
+        if cached is not None:
+            logger.debug("BrowserHarvester: returned cached local_storage for %s [%s]", url, key)
+            return str(cached)
 
     # Fast path: persistent warm browser (no 8-12s launch).
     if _WARM_READY.is_set():
@@ -778,10 +780,11 @@ async def harvest_local_storage(url: str, key: str, wait_selector: str | None = 
             logger.debug("BrowserHarvester: warm path failed, falling back to cold: %s", e)
 
     async with _BROWSER_LOCK:
-        # Double-check cache inside lock
-        cached = await get_cached_item(cache_key)
-        if cached is not None:
-            return str(cached)
+        # Double-check cache inside lock (skipped on force, same as above)
+        if not force:
+            cached = await get_cached_item(cache_key)
+            if cached is not None:
+                return str(cached)
 
         ready = await _ensure_browser_binaries()
         if not ready:

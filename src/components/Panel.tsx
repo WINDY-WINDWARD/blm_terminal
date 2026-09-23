@@ -8,9 +8,11 @@ import {
   openAlgoAvailableAtom,
   selectedPanelsAtom,
   activeSymbolAtom,
+  activeExchangeAtom,
   activeWatchlistIdAtom,
   moversCategoryAtom,
   activePanelsAtom,
+  chartSymbolOverridesAtom,
 } from '@/store/terminalStore';
 import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
@@ -75,9 +77,28 @@ export function Panel({ id, title }: PanelProps) {
 
   const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
   const activeSymbol = useAtomValue(activeSymbolAtom);
+  const activeExchange = useAtomValue(activeExchangeAtom);
   const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
   const moversCategory = useAtomValue(moversCategoryAtom);
   const setActivePanels = useSetAtom(activePanelsAtom);
+  const [chartOverrides, setChartOverrides] = useAtom(chartSymbolOverridesAtom);
+  const chartDetached = title === 'CHART' && chartOverrides[id] !== undefined;
+
+  const handleChartLinkToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (title !== 'CHART') return;
+    setChartOverrides((prev) => {
+      const next = { ...prev };
+      if (next[id] !== undefined) {
+        // Re-link: drop the override, chart falls back to global.
+        delete next[id];
+      } else {
+        // Detach at the current global symbol.
+        next[id] = { symbol: activeSymbol, exchange: activeExchange };
+      }
+      return next;
+    });
+  };
 
   const handlePopOut = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -169,14 +190,30 @@ export function Panel({ id, title }: PanelProps) {
       >
         <span className="truncate">{title}</span>
         {title !== 'EMPTY' && (
-          <button
-            type="button"
-            onClick={handlePopOut}
-            title={`Pop out ${title} widget`}
-            className="ml-2 px-1 text-[10px] tracking-wider text-terminal-amber/70 hover:text-white hover:bg-terminal-amber/20 rounded transition-colors"
-          >
-            [POP]
-          </button>
+          <span className="ml-2 flex items-center gap-1">
+            {title === 'CHART' && (
+              <button
+                type="button"
+                onClick={handleChartLinkToggle}
+                title={chartDetached ? 'Re-link chart to global symbol' : 'Detached chart — click to re-link to global symbol'}
+                className={`px-1 text-[10px] tracking-wider rounded transition-colors ${
+                  chartDetached
+                    ? 'text-terminal-amber bg-terminal-amber/20 hover:text-white hover:bg-terminal-amber/40 font-bold'
+                    : 'text-terminal-amber/70 hover:text-white hover:bg-terminal-amber/20'
+                }`}
+              >
+                {chartDetached ? '[FREE]' : '[LINK]'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handlePopOut}
+              title={`Pop out ${title} widget`}
+              className="px-1 text-[10px] tracking-wider text-terminal-amber/70 hover:text-white hover:bg-terminal-amber/20 rounded transition-colors"
+            >
+              [POP]
+            </button>
+          </span>
         )}
       </div>
       <div className="flex-1 relative overflow-hidden">

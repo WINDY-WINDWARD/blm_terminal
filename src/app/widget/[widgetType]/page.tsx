@@ -19,7 +19,6 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
 
   const originPanelId = searchParams.get('originPanelId') || 'panel-1';
   const widgetTitle = decodeURIComponent(unwrappedParams.widgetType).toUpperCase();
-  const uniqueId = `popout_${widgetTitle}`;
 
   // Rehydrate Jotai state from URL on mount
   useEffect(() => {
@@ -87,7 +86,9 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
 
       {/* Widget Content */}
       <div className="flex-1 min-h-0 relative overflow-hidden select-text">
-        <WidgetRenderer title={widgetTitle} panelId={uniqueId} />
+        {/* originPanelId keeps per-panel state (e.g. chart symbol overrides)
+            shared between the home panel and its popout. */}
+        <WidgetRenderer title={widgetTitle} panelId={originPanelId} />
       </div>
     </div>
   );
