@@ -129,7 +129,7 @@ function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
   ];
 
   return (
-    <div className="flex gap-3 px-2 py-1 bg-zinc-900/60 text-[9px] border-b border-terminal-gray/30 font-mono">
+    <div className="flex gap-3 px-2 py-1 bg-zinc-900/60 text-[9px] border-b border-terminal-gray/30 font-mono min-w-[600px]">
       <span className="flex-1 min-w-0" />
       {columns.slice(1).map((col) => (
         <button
@@ -161,7 +161,7 @@ interface CategoryAccordionProps {
 
 function CategoryAccordion({ category, expanded, onToggle, stockCount }: CategoryAccordionProps) {
   return (
-    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden">
+    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden min-w-[600px]">
       <button
         type="button"
         onClick={onToggle}

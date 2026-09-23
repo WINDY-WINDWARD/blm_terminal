@@ -47,7 +47,7 @@ function SectionBlock({ section }: { section: { heading: string; body?: string; 
 
 function DocView({ doc }: { doc: WidgetDoc }) {
   return (
-    <div className="h-full overflow-y-auto px-3 py-2 scrollbar-thin scrollbar-thumb-terminal-gray">
+    <div className="h-full overflow-y-auto px-3 py-2">
       {/* Header */}
       <div className="mb-3">
         <div className="text-white font-bold text-xs uppercase tracking-widest">
@@ -69,7 +69,7 @@ function DocView({ doc }: { doc: WidgetDoc }) {
 
 function IndexView({ onSelect }: { onSelect: (cmd: string) => void }) {
   return (
-    <div className="h-full overflow-y-auto px-3 py-2 scrollbar-thin scrollbar-thumb-terminal-gray">
+    <div className="h-full overflow-y-auto px-3 py-2">
       <div className="text-terminal-amber font-bold text-[10px] uppercase tracking-widest mb-2 border-b border-terminal-gray/40 pb-0.5">
         Widget Reference
       </div>

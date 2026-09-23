@@ -68,3 +68,34 @@ input, button {
 .gutter:hover {
   background: var(--color-terminal-amber);
 }
+
+/* App-wide slim scrollbars: quiet gray pill on black, amber on hover to
+ * match the gutter-hover language. 10px keeps the grab target accessible
+ * while reading slim against the terminal theme. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3a transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border: 2px solid #000000;
+  border-radius: 6px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-terminal-amber);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
