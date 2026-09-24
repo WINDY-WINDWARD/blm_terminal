@@ -26,6 +26,39 @@ import {
 } from '@/lib/scripts/cardStash';
 import { cn } from '@/lib/utils';
 
+/**
+ * Defense-in-depth: no backend path should ever leak a raw JSON blob into
+ * the chat. If a provider error arrives looking like serialized JSON,
+ * substitute a generic line (full detail stays in the backend log).
+ */
+export function sanitizeAiErrorMessage(message: string): string {
+  const t = message.trim();
+  // Catches both bare blobs (`{ "error": ... }`) and prefixed ones
+  // (`Antigravity API 429: { "error": ... }`). Friendly messages never
+  // contain a serialized `"error"` object.
+  if (/\{\s*"error"/.test(t)) {
+    return 'The AI provider returned an unreadable error — please retry, or check the backend log for details.';
+  }
+  return message;
+}
+
+/**
+ * Mode-toggle hue contract (Issue 5): the active mode is a solid pill and
+ * each mode owns a hue — amber = Research, emerald = Script. Exported for
+ * tests so the toggle can never silently regress to two dim buttons.
+ */
+export function modeToggleClass(mode: AiMode, sessionMode: AiMode): string {
+  const active = sessionMode === mode;
+  if (!active) return 'inactive';
+  return mode === 'script'
+    ? 'bg-emerald-400 text-black font-bold'
+    : 'bg-terminal-amber text-black font-bold';
+}
+
+export function modeChipClass(sessionMode: AiMode): string {
+  return sessionMode === 'script' ? 'bg-emerald-400 text-black' : 'bg-terminal-amber text-black';
+}
+
 // ─── Personas ─────────────────────────────────────────────────────────────────
 
 const PERSONAS = [
@@ -894,9 +927,10 @@ export function AiWidget() {
               ],
             });
           } else if (event.type === 'error') {
+            const clean = sanitizeAiErrorMessage(event.message);
             assistantContent += assistantContent
-              ? `\n\n⚠ ${event.message}`
-              : `⚠ ${event.message}`;
+              ? `\n\n⚠ ${clean}`
+              : `⚠ ${clean}`;
             writeStreamState({
               messages: [
                 ...historyWithUser,
@@ -1197,23 +1231,30 @@ export function AiWidget() {
             ctx: {symbol}.{exchange}
           </span>
 
-          {/* Research | Script mode — per session, sent with every chat POST */}
+          {/* Research | Script mode — per session, sent with every chat POST.
+              Distinct hues so the active mode is unmistakable at a glance:
+              amber = Research, emerald = Script. */}
           <div className="flex rounded overflow-hidden border border-terminal-amber/20 shrink-0" title="Research answers questions; Script writes versioned chart scripts (Script Lab)">
-            {(['research', 'script'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => patchSession(activeKey, { mode: m })}
-                disabled={isStreaming}
-                className={cn(
-                  'px-1.5 py-0.5 text-[10px] font-mono transition-colors disabled:opacity-50',
-                  sessionMode === m
-                    ? 'bg-terminal-amber text-black font-bold'
-                    : 'text-terminal-amber/40 hover:text-terminal-amber/70',
-                )}
-              >
-                {m === 'research' ? 'Research' : 'Σ Script'}
-              </button>
-            ))}
+            {(['research', 'script'] as const).map((m) => {
+              const active = sessionMode === m;
+              return (
+                <button
+                  key={m}
+                  data-testid={`ai-mode-${m}`}
+                  data-active={active ? 'true' : 'false'}
+                  onClick={() => patchSession(activeKey, { mode: m })}
+                  disabled={isStreaming}
+                  className={cn(
+                    'px-1.5 py-0.5 text-[10px] font-mono transition-colors disabled:opacity-50',
+                    !active
+                      ? 'text-terminal-amber/40 hover:text-terminal-amber/70'
+                      : modeToggleClass(m, sessionMode),
+                  )}
+                >
+                  {m === 'research' ? 'Research' : 'Σ Script'}
+                </button>
+              );
+            })}
           </div>
 
           {/* Streaming indicator in header when viewing a streaming session */}
@@ -1289,6 +1330,18 @@ export function AiWidget() {
 
         {/* Input area */}
         <div className="shrink-0 border-t border-terminal-amber/10 px-2 py-1.5 flex gap-2 items-end bg-terminal-gray/5">
+          {/* Mode chip — mirrors the header toggle so the active mode is
+              visible right where you type. */}
+          <span
+            data-testid="ai-mode-chip"
+            title={sessionMode === 'script' ? 'Script mode — AI writes chart scripts' : 'Research mode — AI answers questions'}
+            className={cn(
+              'shrink-0 self-center px-1.5 py-0.5 text-[10px] font-mono font-bold rounded',
+              modeChipClass(sessionMode),
+            )}
+          >
+            {sessionMode === 'script' ? 'Σ SCRIPT' : 'RESEARCH'}
+          </span>
           <textarea
             ref={inputRef}
             value={input}

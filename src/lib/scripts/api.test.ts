@@ -12,14 +12,18 @@ import {
   setChartSlot,
 } from './api';
 
-const calls: Array<{ url: string; method: string }> = [];
+const calls: Array<{ url: string; method: string; body?: string }> = [];
 
 beforeEach(() => {
   calls.length = 0;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
-      calls.push({ url, method: init?.method ?? 'GET' });
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : undefined,
+      });
       return {
         ok: true,
         json: async () => (Array.isArray(url) ? [] : {}),
@@ -41,12 +45,25 @@ describe('scripts api contract', () => {
   it('chart-state hits TOP-LEVEL /api/py/chart-state, never nested', async () => {
     await fetchChartState('panel-1');
     await setChartSlot('panel-1', { script_id: 3, enabled: true, param_values: {} });
-    expect(calls).toEqual([
+    expect(calls.map((c) => ({ url: c.url, method: c.method }))).toEqual([
       { url: '/api/py/chart-state?panel_id=panel-1', method: 'GET' },
       { url: '/api/py/chart-state?panel_id=panel-1', method: 'POST' },
     ]);
     for (const c of calls) {
       expect(c.url).not.toContain('/scripts/chart-state');
     }
+  });
+
+  it('omitted param_values stays out of the POST body (backend keeps stored params)', async () => {
+    await setChartSlot('panel-1', { script_id: 3, enabled: true });
+    const sent = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>;
+    expect(sent.script_id).toBe(3);
+    expect('param_values' in sent).toBe(false);
+  });
+
+  it('explicit param_values are sent through', async () => {
+    await setChartSlot('panel-1', { script_id: 3, enabled: true, param_values: { len: 5 } });
+    const sent = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>;
+    expect(sent.param_values).toEqual({ len: 5 });
   });
 });

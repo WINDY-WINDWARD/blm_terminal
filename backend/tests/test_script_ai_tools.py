@@ -81,6 +81,14 @@ class TestScriptModePrompt:
         assert "Graham" in prompt  # persona kept
         assert "Script Lab Mode" in prompt
 
+    def test_prompt_documents_per_bar_color(self):
+        # Doc-lock: the AI must never again claim per-bar line colors are
+        # unsupported — the engine colors each segment from its start bar.
+        from app.services.ai_chat_service import _get_system_prompt
+        prompt = _get_system_prompt("TCS", "NSE", None, "script")
+        assert "{value, color" in prompt
+        assert "never claim it is not" in prompt
+
 
 class TestToolRegistration:
     NAMES = {"list_scripts", "get_script", "validate_script_code", "create_script", "revise_script"}

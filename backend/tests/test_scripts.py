@@ -252,6 +252,20 @@ class TestChartState:
         rows = client.get("/api/chart-state?panel_id=p1").json()
         assert rows[0]["param_values"] == {"len1": 10}
 
+    def test_omitted_params_keep_existing(self, client):
+        code = SEEDS[0][2].replace('"SMA-20/50"', '"Keep"')
+        sid = client.post("/api/scripts", json={"name": "Keep", "code": code}).json()["id"]
+        client.post("/api/chart-state?panel_id=p2",
+                    json={"script_id": sid, "param_values": {"len1": 33}})
+        # Omitted param_values = keep (AI-accept re-enable path).
+        kept = client.post("/api/chart-state?panel_id=p2",
+                           json={"script_id": sid, "enabled": True}).json()
+        assert kept["param_values"] == {"len1": 33}
+        # Explicit empty dict still replaces (opt-out wipe).
+        wiped = client.post("/api/chart-state?panel_id=p2",
+                            json={"script_id": sid, "param_values": {}}).json()
+        assert wiped["param_values"] == {}
+
 
 class TestTransport:
     def test_export_import_roundtrip(self, client):

@@ -308,7 +308,8 @@ async def set_chart_state(
     if head is None:
         raise HTTPException(status_code=422, detail="script has no revisions")
     valid_keys = {p.get("key") for p in head.manifest.get("params", []) if isinstance(p, dict)}
-    unknown = set(body.param_values) - valid_keys
+    incoming = body.param_values if body.param_values is not None else None
+    unknown = set(incoming or {}) - valid_keys
     if unknown:
         raise HTTPException(status_code=422, detail=f"unknown params: {sorted(unknown)}")
     q = select(ScriptChartState).where(
@@ -320,13 +321,14 @@ async def set_chart_state(
     if st is None:
         st = ScriptChartState(
             user_id=current_user.id, panel_id=panel_id, script_id=script.id,
-            enabled=body.enabled, param_values=dict(body.param_values),
+            enabled=body.enabled, param_values=dict(incoming or {}),
             added_at=_now_ms(),
         )
         db.add(st)
     else:
         st.enabled = body.enabled
-        st.param_values = dict(body.param_values)
+        if incoming is not None:
+            st.param_values = dict(incoming)
     await db.commit()
     return ChartStateOut(
         script_id=script.id, enabled=bool(st.enabled),

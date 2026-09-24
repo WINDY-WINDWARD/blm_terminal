@@ -240,13 +240,18 @@ export interface ScriptedOverlaysArgs {
 
 function toLineData(
   times: number[],
-  vals: (number | null)[],
-): { time: Time; value: number }[] {
-  return times.flatMap((t, i) =>
-    vals[i] == null || !Number.isFinite(vals[i] as number)
-      ? []
-      : [{ time: t as Time, value: vals[i] as number }],
-  );
+  vals: (number | null | { value?: number | null; color?: string })[],
+): { time: Time; value: number; color?: string }[] {
+  return times.flatMap((t, i) => {
+    const raw = vals[i];
+    const value = typeof raw === 'object' && raw !== null ? raw.value : raw;
+    if (value == null || !Number.isFinite(value)) return [];
+    const color =
+      typeof raw === 'object' && raw !== null && typeof raw.color === 'string'
+        ? raw.color
+        : undefined;
+    return [{ time: t as Time, value, ...(color ? { color } : {}) }];
+  });
 }
 
 export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
@@ -523,7 +528,7 @@ function paintOutputs(
           lastValueVisible: false,
           crosshairMarkerVisible: false,
         }, targetPane);
-        s.setData(toLineData(times, v as (number | null)[]));
+        s.setData(toLineData(times, v as (number | null | { value?: number | null; color?: string })[]));
         bags.series.push(s);
         if (targetPane !== undefined && !paneHost) paneHost = s;
         break;

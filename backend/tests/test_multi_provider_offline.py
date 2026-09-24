@@ -202,3 +202,38 @@ def test_provider_registry_allowlist_consistency():
         "codex",
     ):
         assert prov in ALL_PROVIDERS
+
+_QUOTA_BODY = """{ "error": { "code": 429, "message": "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 19h56m16s.", "status": "RESOURCE_EXHAUSTED", "details": [ { "@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "QUOTA_EXHAUSTED" } ] } }"""
+
+
+def test_gateway_quota_message_with_reset():
+    from app.services.llm_provider import _friendly_gateway_error
+
+    msg = _friendly_gateway_error("Antigravity API", 429, _QUOTA_BODY)
+    assert "quota" in msg.lower()
+    assert "19h56m16s" in msg
+    assert "Settings" in msg
+    assert "QUOTA_EXHAUSTED" not in msg
+
+
+def test_gateway_quota_without_reset_window():
+    from app.services.llm_provider import _friendly_gateway_error
+
+    msg = _friendly_gateway_error("X", 429, "rate limit exceeded, slow down")
+    assert "quota" in msg.lower()
+    assert "{" not in msg
+
+
+def test_gateway_auth_message():
+    from app.services.llm_provider import _friendly_gateway_error
+
+    msg = _friendly_gateway_error("Antigravity API", 401, "invalid token")
+    assert "Settings" in msg
+    assert "invalid token" not in msg
+
+
+def test_gateway_generic_keeps_short_body():
+    from app.services.llm_provider import _friendly_gateway_error
+
+    msg = _friendly_gateway_error("Antigravity API", 503, "upstream exploded")
+    assert msg.startswith("Antigravity API 503")

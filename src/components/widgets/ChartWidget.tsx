@@ -884,14 +884,19 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   });
 
   // AI → chart handoff: enabling the accepted script on this panel.
+  // param_values omitted → backend keeps tuned params; the detail query is
+  // invalidated so the NEW head rev paints instead of the 60s-stale one.
   useEffect(() => {
     if (!scriptHandoff || scriptHandoff.panelId !== panelId) return;
     setChartSlot(panelId, {
       script_id: scriptHandoff.scriptId,
       enabled: true,
-      param_values: {},
     })
-      .then(() => refetchSlots())
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: ['script-detail', scriptHandoff.scriptId] });
+        void queryClient.invalidateQueries({ queryKey: ['scripts-catalog'] });
+        void refetchSlots();
+      })
       .catch(() => {
         /* menu surfaces retry; handoff still consumed below */
       });

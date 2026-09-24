@@ -91,7 +91,13 @@ export interface ScriptMarker {
   color?: string;
 }
 
-export type ScriptSeriesValues = (number | null)[];
+export type ScriptSeriesValues = (number | null | ScriptLinePoint)[];
+
+/** Per-bar line point: value + optional segment color (#rrggbb). */
+export interface ScriptLinePoint {
+  value: number | null;
+  color?: string;
+}
 export type ScriptMarkerValues = ScriptMarker[][];
 
 export type ScriptOutputValues =

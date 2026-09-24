@@ -140,6 +140,15 @@ describe('validateScript dry-run', () => {
     expect(v.valid).toBe(false);
     expect(v.errors[0]).toMatch(/^E_LENGTH/);
   });
+
+  it('accepts a two-color line through the full dry-run', async () => {
+    const twoColor = GOOD.replace(
+      'return { a: BLM.sma(ctx.bars.map(function (b) { return b.c; }), ctx.params.len) };',
+      'return { a: BLM.sma(ctx.bars.map(function (b) { return b.c; }), ctx.params.len).map(function (x, i) { return x == null ? null : { value: x, color: i % 2 ? "#26a69a" : "#ef5350" }; }) };',
+    );
+    const v = await validateScript(twoColor);
+    expect(v.valid).toBe(true);
+  });
 });
 
 describe('checkOutputShape', () => {
@@ -148,6 +157,20 @@ describe('checkOutputShape', () => {
     expect(checkOutputShape(manifest, { a: new Array(10).fill(1) }, 10)).toBeNull();
     expect(checkOutputShape(manifest, { a: [1] }, 10)).toMatch(/^E_LENGTH/);
     expect(checkOutputShape(manifest, { a: [], zzz: [] }, 0)).toMatch(/unexpected output/);
+  });
+
+  it('accepts {value, color} line points, rejects bad colors with E_COLOR', () => {
+    const colored = new Array(10).fill(0).map((_, i) => ({
+      value: i,
+      color: i % 2 ? '#26a69a' : '#ef5350',
+    }));
+    expect(checkOutputShape(manifest, { a: colored }, 10)).toBeNull();
+    const badColor = new Array(10).fill({ value: 1, color: 'red' });
+    expect(checkOutputShape(manifest, { a: badColor }, 10)).toMatch(/^E_COLOR/);
+    const badValue = new Array(10).fill({ value: NaN });
+    expect(checkOutputShape(manifest, { a: badValue }, 10)).toMatch(/^E_COLOR/);
+    const junk = new Array(10).fill([1, 2]);
+    expect(checkOutputShape(manifest, { a: junk }, 10)).toMatch(/^E_COLOR/);
   });
 });
 

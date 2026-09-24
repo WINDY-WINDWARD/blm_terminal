@@ -320,6 +320,24 @@ def _friendly_gateway_error(api_label: str, status_code: int, body_text: str) ->
             f"{api_label} hit an internal error (likely free-tier capacity). "
             f"Retry in a bit or switch provider. (Raw: {raw})"
         )
+    # Quota exhaustion (Google RESOURCE_EXHAUSTED / QUOTA_EXHAUSTED, or
+    # "Individual quota reached" style messages). Extract the reset window
+    # ("Resets in 19h56m16s") when the provider includes one.
+    if status_code == 429 or "resource_exhausted" in low or "quota" in low:
+        reset = ""
+        m = re.search(r"[Rr]esets? in ([0-9hms. ]+)", body_text)
+        if m:
+            reset = f" — resets in ~{m.group(1).strip()}"
+        return (
+            f"⏳ {api_label} daily quota reached{reset}. Upgrade the "
+            "subscription for higher limits, or switch provider in "
+            "Settings → AI."
+        )
+    if status_code in (401, 403):
+        return (
+            f"{api_label} rejected the credentials ({status_code}). "
+            "Reconnect the provider in Settings → AI."
+        )
     return f"{api_label} {status_code}: {body_text[:300]}"
 
 # Mirrors the plugin's getRandomizedHeaders() from constants.js
@@ -901,7 +919,8 @@ async def _run_antigravity_loop(
                 if response.status_code != 200:
                     body = await response.aread()
                     logger.error("Antigravity API error %s: %s", response.status_code, body.decode()[:500])
-                    yield json.dumps({"type": "error", "message": f"Antigravity API {response.status_code}: {body.decode()[:300]}"})
+                    msg = _friendly_gateway_error("Antigravity API", response.status_code, body.decode(errors="replace"))
+                    yield json.dumps({"type": "error", "message": msg})
                     yield json.dumps({"type": "done"})
                     return
 

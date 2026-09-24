@@ -1102,11 +1102,15 @@ Script format (spec v1 — nothing else is accepted):
   `shape` arrowUp|arrowDown|circle|square, `text` <= 8 chars), priceline
   (single number), band (`{upper:<lineId>, lower:<lineId>}` naming two line
   outputs of the same script).
-- `calculate(ctx)` is pure and synchronous: only `ctx`, frozen `BLM`, and
+-   `calculate(ctx)` is pure and synchronous: only `ctx`, frozen `BLM`, and
   `Math`. No imports, fetch, timers, randomness, or DOM. `async`/classes
   are rejected. Return EXACTLY the manifest's output ids; every series
   array MUST have length === `ctx.bars.length` (`number|null` per bar,
-  `null` = gap; markers = array per bar, usually empty).
+  `null` = gap; markers = array per bar, usually empty). Line points may
+  instead be `{value, color:"#rrggbb"}` objects — the engine colors each
+  segment from its start bar, so ONE line series can flip color at regime
+  changes (e.g. Supertrend: `{value: st, color: up ? "#26a69a" :
+  "#ef5350"}`). Per-bar color IS supported; never claim it is not.
 - `ctx.bars`: ascending `{time (sec), o,h,l,c, v}` (volume flat on the live
   edge). `ctx.params`: values by key. `ctx.symbol/exchange/interval`: the
   host chart's (scripts always run on the host chart — never take

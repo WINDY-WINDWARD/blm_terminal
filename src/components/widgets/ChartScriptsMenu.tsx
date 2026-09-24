@@ -7,6 +7,7 @@
  * enabled:false) and invalidate the slots query.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
@@ -29,6 +30,7 @@ import {
   type ChartSlotSet,
 } from '@/lib/scripts/api';
 import { ScriptParamForm } from '@/lib/scripts/paramForm';
+import { computePopoverPos } from '@/lib/scripts/popoverPos';
 
 interface ChartScriptsMenuProps {
   panelId: string;
@@ -58,14 +60,45 @@ export function ChartScriptsMenu({
 }: ChartScriptsMenuProps) {
   const [open, setOpen] = useState(false);
   const [paramScriptId, setParamScriptId] = useState<number | null>(null);
-  // Popover anchoring: flip to right-anchored when left-anchored would run
-  // off the viewport (right-side chart panels clipped the ⚙ column).
+  // Popover anchoring: the popover is portaled to document.body with
+  // `position: fixed` so it escapes the chart Panel's `overflow-hidden`
+  // clipping. Position is derived from the button rect on open.
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const [alignRight, setAlignRight] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
     const rect = buttonRef.current.getBoundingClientRect();
-    setAlignRight(rect.left + 288 > window.innerWidth);
+    setPopPos(
+      computePopoverPos(rect, { width: window.innerWidth, height: window.innerHeight }),
+    );
+  }, [open]);
+
+  // Dismiss the portaled popover: outside click (button excluded — it
+  // toggles), Esc, scroll, resize.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (popoverRef.current?.contains(t)) return;
+      if (buttonRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    const onScrollResize = () => setOpen(false);
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScrollResize, true);
+    window.addEventListener('resize', onScrollResize);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScrollResize, true);
+      window.removeEventListener('resize', onScrollResize);
+    };
   }, [open]);
   const queryClient = useQueryClient();
   const panels = useAtomValue(activePanelsAtom);
@@ -123,8 +156,10 @@ export function ChartScriptsMenu({
 
   const mutate = useMutation({
     mutationFn: (slot: ChartSlotSet) => setChartSlot(panelId, slot),
-    onSuccess: () => {
+    onSuccess: (_data, slot) => {
       void queryClient.invalidateQueries({ queryKey: ['script-slots', panelId] });
+      void queryClient.invalidateQueries({ queryKey: ['script-detail', slot.script_id] });
+      void queryClient.invalidateQueries({ queryKey: ['scripts-catalog'] });
       refetchSlots();
     },
   });
@@ -173,7 +208,9 @@ export function ChartScriptsMenu({
     mutate.mutate({
       script_id: row.id,
       enabled: !row.enabled,
-      param_values: row.slot?.param_values ?? {},
+      // Omit on fresh enable so the backend keeps any stored params;
+      // explicit dict only when re-sending known values.
+      ...(row.slot ? { param_values: row.slot.param_values } : {}),
     });
   };
 
@@ -211,8 +248,14 @@ export function ChartScriptsMenu({
         Σ{enabledCount > 0 ? ` ${enabledCount}` : ''}
       </button>
 
-      {open && (
-        <div className={`absolute z-50 top-full mt-0.5 w-72 max-h-96 overflow-y-auto bg-black border border-terminal-gray shadow-lg text-xs font-mono ${alignRight ? 'right-0' : 'left-0'}`}>
+      {open &&
+        popPos &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="fixed z-[90] w-72 max-h-96 overflow-y-auto bg-black border border-terminal-gray shadow-lg text-xs font-mono"
+            style={{ top: popPos.top, left: popPos.left }}
+          >
           {lastError && (
             <div className="px-2 py-1 text-terminal-red border-b border-terminal-gray/40 text-[10px]">
               {lastError}
@@ -293,8 +336,9 @@ export function ChartScriptsMenu({
             <span>＋</span>
             <span>New script via AI…</span>
           </button>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
 
       {paramRow && (
         <div

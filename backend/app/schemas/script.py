@@ -246,7 +246,9 @@ class ScriptRollbackIn(BaseModel):
 class ChartStateSetIn(BaseModel):
     script_id: int
     enabled: bool = True
-    param_values: dict[str, Any] = Field(default_factory=dict)
+    # Omitted (None) = keep existing stored params (e.g. AI-accept re-enable).
+    # An explicit dict (possibly empty) replaces them.
+    param_values: dict[str, Any] | None = None
 
 
 class ChartStateOut(BaseModel):

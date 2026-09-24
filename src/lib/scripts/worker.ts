@@ -92,6 +92,30 @@ export function checkOutputShape(
     if (!Array.isArray(v) || v.length !== barCount) {
       return `E_LENGTH: output ${o.id} length ${Array.isArray(v) ? v.length : '?'} !== bars ${barCount}`;
     }
+    // Line points may be plain values or {value, color} objects (per-bar
+    // segment color — the engine colors each segment from its start bar).
+    if (o.kind === 'line') {
+      for (let i = 0; i < v.length; i++) {
+        const item = v[i] as unknown;
+        if (item == null || typeof item === 'number') continue;
+        if (typeof item !== 'object' || Array.isArray(item)) {
+          return `E_COLOR: line ${o.id}[${i}] must be a number, null, or {value, color}`;
+        }
+        const pt = item as { value?: unknown; color?: unknown };
+        if (
+          pt.value != null &&
+          (typeof pt.value !== 'number' || !Number.isFinite(pt.value))
+        ) {
+          return `E_COLOR: line ${o.id}[${i}].value must be a finite number or null`;
+        }
+        if (
+          pt.color !== undefined &&
+          (typeof pt.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(pt.color))
+        ) {
+          return `E_COLOR: line ${o.id}[${i}].color must be #rrggbb`;
+        }
+      }
+    }
   }
   return null;
 }

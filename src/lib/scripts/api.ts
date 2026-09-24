@@ -44,7 +44,8 @@ export function fetchChartState(panelId: string): Promise<ScriptChartSlot[]> {
 export interface ChartSlotSet {
   script_id: number;
   enabled: boolean;
-  param_values: Record<string, number | boolean | string>;
+  /** Omitted = keep existing stored params (accept path). Explicit dict replaces. */
+  param_values?: Record<string, number | boolean | string>;
 }
 
 export function setChartSlot(panelId: string, slot: ChartSlotSet): Promise<ScriptChartSlot> {

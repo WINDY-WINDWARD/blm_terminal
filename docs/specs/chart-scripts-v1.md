@@ -69,7 +69,7 @@ and MUST appear as a key in the object returned by `calculate`.
 
 | Kind        | Placement                              | Value shape per bar                              |
 |-------------|----------------------------------------|--------------------------------------------------|
-| `line`      | `overlay: true` (default) or `pane: "new"` | `number \| null` (null = gap)              |
+| `line`      | `overlay: true` (default) or `pane: "new"` | `number \| null` (null = gap), or `{value, color?}` per bar for segment colors |
 | `histogram` | overlay w/ own scale, or `pane: "new"` | `number \| null`                                 |
 | `markers`   | on price                               | `Marker[]` (empty = none), see §3.1              |
 | `priceline` | horizontal line                        | single `number` (const) — or the last value rule |
@@ -89,6 +89,15 @@ type Marker = {
 ```
 
 Returned as `{[outputId]: Marker[][]}` — an array per bar (usually empty).
+
+### 3.2 Line segment colors
+
+A `line` output may return `{value: number|null, color?: "#rrggbb"}`
+objects instead of plain numbers. The chart engine colors each line
+segment from its start bar, so a single series can change color at regime
+flips (e.g. Supertrend up = green, down = red). `color` MUST be `#rrggbb`
+(anything else is `E_COLOR`); omitted `color` uses the output's series
+color. This is engine-native — never claim per-bar colors are unsupported.
 
 ## 4. `calculate(ctx)` contract
 
