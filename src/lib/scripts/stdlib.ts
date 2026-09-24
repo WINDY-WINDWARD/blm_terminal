@@ -308,14 +308,44 @@ const BLM_FNS: Record<string, unknown> = {
 /**
  * Build the worker-injected source for the frozen BLM global.
  * Serializes the actual engine functions above, so worker semantics are
- * identical to main-thread semantics by construction. Each function is bound
- * as a scope-level const (parenthesized: works for declarations and arrows)
- * because the bodies reference each other + isFiniteNum by bare name.
+ * identical to main-thread semantics by construction.
+ *
+ * MINIFICATION WARNING: each function is bound under its RUNTIME `.name`,
+ * not its source name. The production minifier renames module-scope bindings
+ * (e.g. `isFiniteNum` → `r`), and `fn.toString()` captures the minified
+ * bodies — so bodies calling a sibling by bare name reference the MINIFIED
+ * name. Binding by source name leaves those references dangling
+ * ("r is not defined" in prod while dev/vitest stays green). In unminified
+ * builds `.name` equals the source name, so the output is identical there.
+ * Any future `fn.toString()` codegen MUST follow this runtime-name path.
  */
+/** One serialized function: its export name (null for scope-internal
+ * helpers), its runtime `.name` (the minified name in prod), and its source. */
+export interface NamedFnBody {
+  exportName: string | null;
+  runtimeName: string;
+  body: string;
+}
+
+/**
+ * Assemble the worker-injected BLM source from serialized functions.
+ * Pure — the minified-name mapping (`runtimeName` ≠ `exportName`) is
+ * unit-testable here with synthetic minified input.
+ */
+export function assembleBlmSource(fns: NamedFnBody[], exportNames: readonly string[]): string {
+  const defs = fns.map((f) => `const ${f.runtimeName} = (${f.body});`);
+  const byExport = new Map(fns.filter((f) => f.exportName !== null).map((f) => [f.exportName as string, f.runtimeName]));
+  const alias = exportNames.map((name) => `${name}: ${byExport.get(name) ?? name}`);
+  return `${defs.join('\n')}\nconst BLM = Object.freeze({ ${alias.join(', ')} });`;
+}
+
 export function buildBlmSource(): string {
-  const defs = ['isFiniteNum', ...BLM_EXPORT_NAMES].map((name) => {
-    const fn = (name === 'isFiniteNum' ? isFiniteNum : BLM_FNS[name]) as (...args: never[]) => unknown;
-    return `const ${name} = (${fn.toString()});`;
-  });
-  return `${defs.join('\n')}\nconst BLM = Object.freeze({ ${BLM_EXPORT_NAMES.join(', ')} });`;
+  const all: NamedFnBody[] = [
+    { exportName: null, runtimeName: isFiniteNum.name || 'isFiniteNum', body: isFiniteNum.toString() },
+    ...BLM_EXPORT_NAMES.map((name) => {
+      const fn = BLM_FNS[name] as (...args: never[]) => unknown;
+      return { exportName: name as string, runtimeName: fn.name || (name as string), body: fn.toString() };
+    }),
+  ];
+  return assembleBlmSource(all, BLM_EXPORT_NAMES);
 }

@@ -6,7 +6,7 @@
  * Mutations go through POST /chart-state (per-slot upsert; detach =
  * enabled:false) and invalidate the slots query.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
@@ -58,6 +58,15 @@ export function ChartScriptsMenu({
 }: ChartScriptsMenuProps) {
   const [open, setOpen] = useState(false);
   const [paramScriptId, setParamScriptId] = useState<number | null>(null);
+  // Popover anchoring: flip to right-anchored when left-anchored would run
+  // off the viewport (right-side chart panels clipped the ⚙ column).
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [alignRight, setAlignRight] = useState(false);
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    setAlignRight(rect.left + 288 > window.innerWidth);
+  }, [open]);
   const queryClient = useQueryClient();
   const panels = useAtomValue(activePanelsAtom);
   const setFocusedPanel = useSetAtom(focusedPanelAtom);
@@ -188,6 +197,7 @@ export function ChartScriptsMenu({
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
@@ -202,7 +212,7 @@ export function ChartScriptsMenu({
       </button>
 
       {open && (
-        <div className="absolute z-50 left-0 top-full mt-0.5 w-72 max-h-96 overflow-y-auto bg-black border border-terminal-gray shadow-lg text-xs font-mono">
+        <div className={`absolute z-50 top-full mt-0.5 w-72 max-h-96 overflow-y-auto bg-black border border-terminal-gray shadow-lg text-xs font-mono ${alignRight ? 'right-0' : 'left-0'}`}>
           {lastError && (
             <div className="px-2 py-1 text-terminal-red border-b border-terminal-gray/40 text-[10px]">
               {lastError}
