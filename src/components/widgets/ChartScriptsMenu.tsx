@@ -7,7 +7,15 @@
  */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
+import {
+  activePanelsAtom,
+  aiPrefillAtom,
+  focusedPanelAtom,
+  AI_REFINE_REQUEST_KEY,
+} from '@/store/terminalStore';
+import { buildRefinePrompt, findAiPanel } from '@/lib/scripts/handoff';
 import type {
   SavedScriptDetail,
   SavedScriptSummary,
@@ -37,6 +45,34 @@ export function ChartScriptsMenu({
 }: ChartScriptsMenuProps) {
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
+  const panels = useAtomValue(activePanelsAtom);
+  const setFocusedPanel = useSetAtom(focusedPanelAtom);
+  const setPrefill = useSetAtom(aiPrefillAtom);
+
+  /**
+   * Refine-with-AI handoff (focus-or-popout). Prefills the AI input with a
+   * script-scoped prompt: same-window AI panel → atom + focus; no AI panel
+   * on the grid → localStorage bridge + AI popout (consumed on mount).
+   */
+  const refineWithAi = (scriptId: number, name: string, revNo: number | null) => {
+    const prompt = buildRefinePrompt(name, scriptId, revNo);
+    const aiPanelId = findAiPanel(panels);
+    if (aiPanelId) {
+      setPrefill({ text: prompt, ts: Date.now() });
+      setFocusedPanel(aiPanelId);
+    } else {
+      try {
+        window.localStorage.setItem(
+          AI_REFINE_REQUEST_KEY,
+          JSON.stringify({ text: prompt, ts: Date.now() }),
+        );
+      } catch {
+        /* private-mode quota — popout still opens, prompt is lost */
+      }
+      window.open('/widget/AI', '_blank', 'width=1000,height=700');
+    }
+    setOpen(false);
+  };
 
   const catalogQuery = useQuery({
     queryKey: ['scripts-catalog'],
@@ -104,6 +140,17 @@ export function ChartScriptsMenu({
                     {detail?.name ?? `#${slot.script_id}`}
                   </span>
                   <span className="text-white/30 text-[10px]">r{detail?.head_rev_no ?? '?'}</span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      refineWithAi(slot.script_id, detail?.name ?? `#${slot.script_id}`, detail?.head_rev_no ?? null)
+                    }
+                    className="text-white/50 hover:text-terminal-amber text-[10px] disabled:opacity-40"
+                    title="Refine this script with AI (prefills the AI input)"
+                  >
+                    ✎
+                  </button>
                   <button
                     type="button"
                     disabled={busy}

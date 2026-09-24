@@ -139,12 +139,17 @@ Use get_global_news with threat_level filters to identify macro risks. Be explic
 }
 
 
-def _get_system_prompt(symbol: str, exchange: str, persona: str | None) -> str:
-    """Build the system prompt, optionally prepending a persona definition."""
+def _get_system_prompt(symbol: str, exchange: str, persona: str | None, mode: str | None = None) -> str:
+    """Build the system prompt, optionally prepending a persona definition
+    and/or appending the Script Lab instructions."""
     if persona and persona in PERSONA_SYSTEM_PROMPTS:
-        return PERSONA_SYSTEM_PROMPTS[persona] + f"\n\nCurrent symbol context: {symbol} on {exchange}."
-    # No persona — fall back to the rich default system prompt
-    return _build_system_prompt(symbol, exchange)
+        base = PERSONA_SYSTEM_PROMPTS[persona] + f"\n\nCurrent symbol context: {symbol} on {exchange}."
+    else:
+        # No persona — fall back to the rich default system prompt
+        base = _build_system_prompt(symbol, exchange)
+    if (mode or "research") == "script":
+        base += "\n\n" + SCRIPT_LAB_PROMPT
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -850,6 +855,75 @@ BLM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_scripts",
+            "description": "List the user's saved chart scripts (id, name, head revision). Builtin examples are included. Call this first when the user refers to an existing script by name.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_script",
+            "description": "Fetch a script's head revision manifest and full code plus the list of revision numbers. Always read the current code with this before writing a revision.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script_id": {"type": "integer", "description": "Numeric script ID from list_scripts()."},
+                },
+                "required": ["script_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_script_code",
+            "description": "Schema + static validation for chart-script code (manifest, params, outputs, forbidden syntax). Returns valid/errors plus parsed name/outputs/params. The backend never executes JS. ALWAYS validate new or revised code with this before create_script / revise_script.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Full script source including the // @blm-script JSON header and function calculate(ctx)."},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_script",
+            "description": "Save NEW chart-script code as revision 1 under a unique name. Validate first with validate_script_code. Emits an accept/discard card in the chat UI — the script reaches the chart only if the user accepts it there. Do NOT paste the full code into your chat reply; summarize what it does.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Unique script name, 1-64 chars (e.g. 'RSI Divergence')."},
+                    "description": {"type": "string", "description": "One-line plain-language description (max 280 chars)."},
+                    "code": {"type": "string", "description": "Full validated script source."},
+                    "note": {"type": "string", "description": "Short revision note describing this version (max 280 chars)."},
+                },
+                "required": ["name", "code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "revise_script",
+            "description": "Save a NEW revision of an existing user script (builtins cannot be revised — import a copy concept via create_script instead). Read current code with get_script first, validate with validate_script_code, then revise. Emits an accept/discard card; user acceptance puts it on the chart. Do NOT paste the full code into your chat reply.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script_id": {"type": "integer", "description": "Numeric script ID from list_scripts()."},
+                    "code": {"type": "string", "description": "Full validated script source for the new revision."},
+                    "note": {"type": "string", "description": "Short note describing what changed (max 280 chars)."},
+                },
+                "required": ["script_id", "code"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -919,6 +993,13 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         get_upcoming_events,
         get_recent_announcements,
     )
+    from app.services.script_ai_tools import (
+        list_scripts,
+        get_script,
+        validate_script_code,
+        create_script,
+        revise_script,
+    )
 
     dispatch: dict[str, Any] = {
         "add_watchlist_item": add_watchlist_item,
@@ -965,6 +1046,11 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "update_position_leg": update_position_leg,
         "delete_position_leg": delete_position_leg,
         "delete_position": delete_position,
+        "list_scripts": list_scripts,
+        "get_script": get_script,
+        "validate_script_code": validate_script_code,
+        "create_script": create_script,
+        "revise_script": revise_script,
     }
 
     fn = dispatch.get(name)
@@ -983,6 +1069,63 @@ def _truncate_tool_result(result: Any, max_chars: int = 8000) -> str:
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
+
+
+SCRIPT_LAB_PROMPT = """## Script Lab Mode (chart scripts)
+
+The user is asking for a custom chart indicator/overlay. You own the code;
+the user owns intent + parameters. There is no user-facing code surface —
+never ask the user to write or paste code.
+
+Workflow per request:
+1. If the user names an existing script, call `list_scripts` (then
+   `get_script` for its code) before writing anything.
+2. Write the full script source: a `// @blm-script {...}` single-line JSON
+   header followed by a top-level synchronous `function calculate(ctx)`.
+3. ALWAYS call `validate_script_code` on the code first. Fix every error it
+   returns and re-validate until `valid: true`.
+4. Save with `create_script` (new) or `revise_script` (existing user script;
+   builtins cannot be revised — recreate the idea via `create_script`).
+   This emits an accept/discard card in the chat — the ONLY path to the
+   chart. Nothing goes live until the user presses Accept there.
+5. Do NOT paste the full code in your reply. Summarize what it plots, its
+   parameters, and how to tweak it in plain language (under 500 words total).
+
+Script format (spec v1 — nothing else is accepted):
+- Header: `// @blm-script {"name":"...","version":1,"description":"...",
+  "params":[...],"outputs":[...],"needs_fundamentals":false}`
+- Params (max 24, every key MUST be referenced by the code): int/number
+  (`min/max/step` + default), bool, select (`options` >= 2), color (hex),
+  source (one of open/high/low/close/hlc3/hl2/ohlc4/volume).
+- Outputs (1-8, ids MUST match keys returned by calculate): line
+  (`overlay` default true), histogram, markers (`pos` aboveBar|belowBar,
+  `shape` arrowUp|arrowDown|circle|square, `text` <= 8 chars), priceline
+  (single number), band (`{upper:<lineId>, lower:<lineId>}` naming two line
+  outputs of the same script).
+- `calculate(ctx)` is pure and synchronous: only `ctx`, frozen `BLM`, and
+  `Math`. No imports, fetch, timers, randomness, or DOM. `async`/classes
+  are rejected. Return EXACTLY the manifest's output ids; every series
+  array MUST have length === `ctx.bars.length` (`number|null` per bar,
+  `null` = gap; markers = array per bar, usually empty).
+- `ctx.bars`: ascending `{time (sec), o,h,l,c, v}` (volume flat on the live
+  edge). `ctx.params`: values by key. `ctx.symbol/exchange/interval`: the
+  host chart's (scripts always run on the host chart — never take
+  symbol/timeframe as params). `ctx.fundamentals` exists ONLY when
+  `needs_fundamentals: true` (quarterly step-filled + pe/roe/roce/
+  marketCapCr); Safe-Mode users have no fundamentals — keep scripts
+  price-based unless the user explicitly wants fundamentals.
+- Stdlib `BLM.*` (same semantics as the terminal's indicator engine, null
+  warmup, never throws on short input): `sma(values,period)`,
+  `ema(values,period)`, `rsi(closes,period)`, `macd(closes,fast,slow,signal)`
+  → `{macdLine,signalLine,hist}`, `bb(closes,period,mult)` →
+  `{basis,upper,lower}`, `atr(highs,lows,closes,period)`,
+  `stoch(highs,lows,closes,k,slowing,d)` → `{k,d}`, `obv(closes,volumes)`,
+  `vwap(highs,lows,closes,volumes)`, `highest/lowest(values,period)`,
+  `change(values)`, `nz(value,fallback=0)`.
+- Limits: code ≤ 64KB, exec ≤ 2000ms, bars ≤ 2000. Warmup nulls: guard
+  `null` before arithmetic or propagate it.
+- Revision notes: `note` should say what changed (shown in history).
+"""
 
 
 def _build_system_prompt(symbol: str, exchange: str) -> str:
@@ -1039,10 +1182,11 @@ Be an analyst, not a search engine — synthesize and interpret the data, don't 
 async def _run_tools_parallel(
     tool_calls: list[dict[str, Any]],
     seen_calls: set[str],
+    session_id: int | str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Execute tool calls in parallel. Returns (sse_events, tool_result_messages) in OpenAI format."""
 
-    async def _call(tc: dict[str, Any]) -> tuple[str, str, str]:
+    async def _call(tc: dict[str, Any]) -> tuple[str, str, str, str | None]:
         tool_name = tc["name"]
         args = tc["args"]
         raw_args = json.dumps(args)
@@ -1051,11 +1195,29 @@ async def _run_tools_parallel(
         already_seen = call_key in seen_calls
         seen_calls.add(call_key)
 
+        # Script mutations are attributed to this chat session (revision links).
+        if (
+            tool_name in ("create_script", "revise_script")
+            and session_id is not None
+            and "chat_session_id" not in args
+        ):
+            try:
+                args = {**args, "chat_session_id": int(session_id)}
+            except (TypeError, ValueError):
+                pass
+
+        extra_event: str | None = None
         if already_seen:
             content_str = json.dumps({"error": "Duplicate call — data already retrieved. Use it directly."})
         else:
             try:
                 result = await asyncio.wait_for(_execute_tool(tool_name, args), timeout=120.0)
+                # Script mutations carry a UI card: pop it out of the LLM
+                # payload and emit it as its own SSE event (Accept/Discard).
+                if tool_name in ("create_script", "revise_script") and isinstance(result, dict):
+                    card = result.pop("script_card", None)
+                    if isinstance(card, dict):
+                        extra_event = json.dumps({"type": "script_card", **card})
                 content_str = _truncate_tool_result(result)
             except asyncio.TimeoutError:
                 content_str = json.dumps({"error": f"{tool_name} timed out after 120s"})
@@ -1063,15 +1225,17 @@ async def _run_tools_parallel(
                 logger.warning("Tool %s failed: %s", tool_name, exc)
                 content_str = json.dumps({"error": str(exc)})
 
-        return tool_name, tc["id"], content_str
+        return tool_name, tc["id"], content_str, extra_event
 
     results = await asyncio.gather(*[_call(tc) for tc in tool_calls])
 
     sse_events = []
     tool_msgs = []
-    for tool_name, tool_id, content_str in results:
+    for tool_name, tool_id, content_str, extra_event in results:
         preview = content_str[:120] + "..." if len(content_str) > 120 else content_str
         sse_events.append(json.dumps({"type": "tool_result", "name": tool_name, "preview": preview}))
+        if extra_event is not None:
+            sse_events.append(extra_event)
         tool_msgs.append({"id": tool_id, "name": tool_name, "content": content_str})
 
     return sse_events, tool_msgs
@@ -1097,12 +1261,13 @@ async def run_chat_agent(
     model: str = "kimi-k2.5",
     persona: str | None = None,
     session_id: str | int | None = None,
+    mode: str | None = None,
 ) -> AsyncGenerator[str, None]:
-    system_prompt = _get_system_prompt(symbol, exchange, persona)
-    
+    system_prompt = _get_system_prompt(symbol, exchange, persona, mode)
+
     seen_calls = set()
     async def executor(tool_calls: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
-        return await _run_tools_parallel(tool_calls, seen_calls)
+        return await _run_tools_parallel(tool_calls, seen_calls, session_id)
 
     tools = BLM_TOOLS if model not in {"minimax-m2.5", "minimax-m2.7"} else BLM_TOOLS_ANTHROPIC
 

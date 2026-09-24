@@ -2,11 +2,20 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { unstable_batchedUpdates } from 'react-dom';
-import { useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
+import {
+  activeExchangeAtom,
+  activePanelsAtom,
+  activeSymbolAtom,
+  aiPrefillAtom,
+  focusedPanelAtom,
+  scriptChartHandoffAtom,
+  AI_REFINE_REQUEST_KEY,
+} from '@/store/terminalStore';
+import { resolveChartPanel } from '@/lib/scripts/handoff';
 import { cn } from '@/lib/utils';
 
 // ─── Personas ─────────────────────────────────────────────────────────────────
@@ -22,11 +31,27 @@ type PersonaId = (typeof PERSONAS)[number]['id'];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/** AI chat mode — per session. Script mode adds the Script Lab system prompt. */
+type AiMode = 'research' | 'script';
+
+/** Script Lab mutation card — emitted by the backend as an extra SSE event
+ *  right after the tool_result of create_script / revise_script. The card is
+ *  the sole path to the chart: Accept writes the handoff atom. */
+interface ScriptCard {
+  action: 'created' | 'revised';
+  script_id: number;
+  name: string;
+  rev_no: number;
+  accepted?: boolean;
+  dismissed?: boolean;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: string[];
   isError?: boolean;
+  card?: ScriptCard;
 }
 
 interface ModelOption {
@@ -66,6 +91,7 @@ type StreamEvent =
   | { type: 'token'; text: string }
   | { type: 'tool_call'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; preview: string }
+  | { type: 'script_card'; action: 'created' | 'revised'; script_id: number; name: string; rev_no: number }
   | { type: 'error'; message: string }
   | { type: 'done' };
 
@@ -77,16 +103,18 @@ interface SessionState {
   toolsDone: boolean;
   input: string;
   model: string;
+  mode: AiMode;
   abortController: AbortController | null;
 }
 
-function emptySessionState(defaultModel = ''): SessionState {
+function emptySessionState(defaultModel = '', mode: AiMode = 'research'): SessionState {
   return {
     messages: [],
     isStreaming: false,
     toolsDone: false,
     input: '',
     model: defaultModel,
+    mode,
     abortController: null,
   };
 }
@@ -120,11 +148,58 @@ function ToolCallBadge({ name, done }: ToolCallBadgeProps) {
   );
 }
 
+interface ScriptCardViewProps {
+  card: ScriptCard;
+  onAccept: (card: ScriptCard) => void;
+  onDiscard: (card: ScriptCard) => void;
+}
+
+/** Script Lab mutation card — Accept is the sole path onto the chart. */
+function ScriptCardView({ card, onAccept, onDiscard }: ScriptCardViewProps) {
+  return (
+    <div className="mt-1 rounded border border-terminal-amber/30 bg-black/40 px-2 py-1.5 max-w-full">
+      <div className="flex items-center gap-1.5">
+        <span className="text-terminal-amber font-bold">Σ</span>
+        <span className="text-terminal-amber truncate flex-1" title={card.name}>
+          {card.name}
+        </span>
+        <span className="text-[10px] text-terminal-amber/50 shrink-0">
+          {card.action === 'created' ? 'created' : `revised · rev ${card.rev_no}`}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 mt-1">
+        {card.accepted ? (
+          <span className="text-[10px] text-green-400/80">✓ on chart — tune params in the Σ menu</span>
+        ) : (
+          <>
+            <button
+              onClick={() => onAccept(card)}
+              className="text-[10px] font-mono px-1.5 py-0.5 border border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/10 rounded transition-colors"
+              title="Enable this script revision on the chart"
+            >
+              Accept → chart
+            </button>
+            <button
+              onClick={() => onDiscard(card)}
+              className="text-[10px] font-mono px-1.5 py-0.5 border border-white/10 text-white/40 hover:text-white/70 hover:border-white/25 rounded transition-colors"
+              title="Dismiss this card (script stays saved)"
+            >
+              Discard
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface MessageBubbleProps {
   msg: ChatMessage;
   isLastAssistant?: boolean;
   toolsDone?: boolean;
   onRetry?: () => void;
+  onAcceptCard?: (card: ScriptCard) => void;
+  onDiscardCard?: (card: ScriptCard) => void;
 }
 
 function MarkdownContent({ content }: { content: string }) {
@@ -195,7 +270,7 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry }: MessageBubbleProps) {
+function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard, onDiscardCard }: MessageBubbleProps) {
   const isUser = msg.role === 'user';
   const toolCalls = msg.toolCalls ?? [];
   const hasError = !isUser && msg.isError;
@@ -224,6 +299,9 @@ function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry }: MessageBubb
           <MarkdownContent content={msg.content} />
         ) : (
           <span className="opacity-40 animate-pulse">▋</span>
+        )}
+        {!isUser && msg.card && !msg.card.dismissed && onAcceptCard && onDiscardCard && (
+          <ScriptCardView card={msg.card} onAccept={onAcceptCard} onDiscard={onDiscardCard} />
         )}
       </div>
       <div className="flex items-center gap-2 px-1">
@@ -275,7 +353,7 @@ function SessionSidebar({
           History
         </span>
         <button
-          onClick={onNewChat}
+          onClick={() => onNewChat()}
           className="text-[10px] font-mono text-terminal-amber/50 hover:text-terminal-amber px-1.5 py-0.5 border border-terminal-amber/15 hover:border-terminal-amber/40 rounded transition-colors"
           title="New chat"
         >
@@ -420,7 +498,7 @@ export function AiWidget() {
 
   // Derive current session's state for rendering — always safe to destructure
   const current = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
-  const { messages, isStreaming, toolsDone, input, model } = current;
+  const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research' } = current;
 
   // Once models load, back-fill the default model into any session that has ''
   useEffect(() => {
@@ -533,7 +611,19 @@ export function AiWidget() {
           return;
         }
         const data: SessionDetail = await res.json();
-        // Always apply DB state so completed replies are reflected after re-visiting
+        // Always apply DB state so completed replies are reflected after re-visiting.
+        // Cards themselves are in-session only, but a session whose turns called
+        // script tools reopens in Script mode so the workflow continues.
+        const SCRIPT_TOOL_NAMES = new Set([
+          'list_scripts',
+          'get_script',
+          'validate_script_code',
+          'create_script',
+          'revise_script',
+        ]);
+        const hasScriptActivity = data.messages.some((m) =>
+          (m.tool_calls ?? []).some((t) => SCRIPT_TOOL_NAMES.has(t)),
+        );
         patchSession(id, {
           model: data.model,
           messages: data.messages.map((m) => ({
@@ -541,6 +631,7 @@ export function AiWidget() {
             content: m.content,
             toolCalls: m.tool_calls ?? undefined,
           })),
+          ...(hasScriptActivity ? { mode: 'script' as const } : {}),
         });
       } catch (err) {
         console.error('loadSession error:', err);
@@ -572,11 +663,11 @@ export function AiWidget() {
   );
 
   /** Create a fresh scratch session and switch to it. Does not abort others. */
-  const startNewChat = useCallback(() => {
+  const startNewChat = useCallback((mode: AiMode = 'research') => {
     // Reset the scratch slot and switch to it
     setSessionMap((prev) => {
       const next = new Map(prev);
-      next.set(NEW_CHAT_KEY, emptySessionState(defaultModel));
+      next.set(NEW_CHAT_KEY, emptySessionState(defaultModel, mode));
       return next;
     });
     setActiveKey(NEW_CHAT_KEY);
@@ -632,6 +723,7 @@ export function AiWidget() {
       isStreaming: true,
       toolsDone: false,
       model: sessionState.model || defaultModel,
+      mode: sessionState.mode ?? 'research',
       abortController: abort,
     };
 
@@ -664,6 +756,7 @@ export function AiWidget() {
           model: sessionState.model || defaultModel,
           session_id: sessionKey, // null for new chats — backend creates the session
           persona: activePersona,
+          mode: sessionState.mode ?? 'research',
         }),
       });
 
@@ -758,6 +851,25 @@ export function AiWidget() {
                 },
               ],
             });
+          } else if (event.type === 'script_card') {
+            // Script Lab mutation card — attach to the in-flight assistant turn.
+            const card: ScriptCard = {
+              action: event.action,
+              script_id: event.script_id,
+              name: event.name,
+              rev_no: event.rev_no,
+            };
+            writeStreamState({
+              messages: [
+                ...historyWithUser,
+                {
+                  role: 'assistant',
+                  content: assistantContent,
+                  toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                  card,
+                },
+              ],
+            });
           } else if (event.type === 'error') {
             assistantContent += assistantContent
               ? `\n\n⚠ ${event.message}`
@@ -828,6 +940,87 @@ export function AiWidget() {
     if (!lastUser) return;
     void sendMessage(lastUser.content, true);
   }, [activeKey, sessionMap, defaultModel, sendMessage]);
+
+  // ── Script Lab: card accept/discard + refine prefill ─────────────────────
+
+  const panels = useAtomValue(activePanelsAtom);
+  const focusedPanel = useAtomValue(focusedPanelAtom);
+  const setFocusedPanel = useSetAtom(focusedPanelAtom);
+  const setChartHandoff = useSetAtom(scriptChartHandoffAtom);
+  const [prefill, setPrefill] = useAtom(aiPrefillAtom);
+
+  /** Stamp one card (matched by script+rev) with a patch, scoped to a session key. */
+  const patchCard = useCallback(
+    (key: number | null, card: ScriptCard, patch: Partial<ScriptCard>) => {
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const state = next.get(key);
+        if (!state) return prev;
+        next.set(key, {
+          ...state,
+          messages: state.messages.map((m) =>
+            m.card && m.card.script_id === card.script_id && m.card.rev_no === card.rev_no
+              ? { ...m, card: { ...m.card, ...patch } }
+              : m,
+          ),
+        });
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * Accept is the sole path from a card onto the chart: enable the script on
+   * the focused CHART panel (else the first CHART panel found) and focus it
+   * so the user sees the overlay land. The ChartWidget handoff consumer does
+   * the actual slot enable.
+   */
+  const acceptCard = useCallback(
+    (card: ScriptCard) => {
+      const target = resolveChartPanel(panels, focusedPanel);
+      setChartHandoff({ scriptId: card.script_id, panelId: target, ts: Date.now() });
+      setFocusedPanel(target);
+      patchCard(activeKey, card, { accepted: true });
+    },
+    [focusedPanel, panels, setChartHandoff, setFocusedPanel, patchCard, activeKey],
+  );
+
+  const discardCard = useCallback(
+    (card: ScriptCard) => {
+      patchCard(activeKey, card, { dismissed: true });
+    },
+    [patchCard, activeKey],
+  );
+
+  // Same-window refine path: the chart Scripts menu sets aiPrefillAtom.
+  // Consume into the active session (switching it to Script mode) and focus input.
+  const consumedPrefillRef = useRef(0);
+  useEffect(() => {
+    if (!prefill || prefill.ts <= consumedPrefillRef.current) return;
+    consumedPrefillRef.current = prefill.ts;
+    patchSession(activeKey, { input: prefill.text, mode: 'script' });
+    setPrefill(null);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, [prefill, activeKey, patchSession, setPrefill]);
+
+  // Popout refine path: the menu wrote localStorage then opened /widget/AI.
+  // This window is fresh, so the scratch session is the safe consume target.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(AI_REFINE_REQUEST_KEY);
+      if (!raw) return;
+      window.localStorage.removeItem(AI_REFINE_REQUEST_KEY);
+      const req = JSON.parse(raw) as { text?: string; ts?: number };
+      if (!req?.text) return;
+      patchSession(NEW_CHAT_KEY, { input: req.text, mode: 'script' });
+      setActiveKey(NEW_CHAT_KEY);
+    } catch {
+      /* corrupt bridge payload — ignore */
+    }
+    // Mount-only: the bridge key is consumed once by whoever mounts first.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -975,13 +1168,32 @@ export function AiWidget() {
             ctx: {symbol}.{exchange}
           </span>
 
+          {/* Research | Script mode — per session, sent with every chat POST */}
+          <div className="flex rounded overflow-hidden border border-terminal-amber/20 shrink-0" title="Research answers questions; Script writes versioned chart scripts (Script Lab)">
+            {(['research', 'script'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => patchSession(activeKey, { mode: m })}
+                disabled={isStreaming}
+                className={cn(
+                  'px-1.5 py-0.5 text-[10px] font-mono transition-colors disabled:opacity-50',
+                  sessionMode === m
+                    ? 'bg-terminal-amber/20 text-terminal-amber'
+                    : 'text-terminal-amber/40 hover:text-terminal-amber/70',
+                )}
+              >
+                {m === 'research' ? 'Research' : 'Σ Script'}
+              </button>
+            ))}
+          </div>
+
           {/* Streaming indicator in header when viewing a streaming session */}
           {isStreaming && (
             <span className="text-[10px] text-blue-400/70 animate-pulse shrink-0">thinking…</span>
           )}
 
           <button
-            onClick={startNewChat}
+            onClick={() => startNewChat(sessionMode)}
             className="text-[10px] text-terminal-amber/40 hover:text-terminal-amber/70 px-1.5 py-0.5 border border-terminal-amber/10 hover:border-terminal-amber/30 rounded transition-colors shrink-0"
           >
             + new
@@ -992,10 +1204,16 @@ export function AiWidget() {
         <div className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-3 min-h-0">
           {!hasSentRef.current && messages.length === 0 && (
             <div className="flex-1 flex flex-col items-center justify-center gap-2 text-terminal-amber/25 text-[11px]">
-              <span className="text-2xl opacity-20">◈</span>
-              <span>BLM AI — ask anything about NSE markets</span>
+              <span className="text-2xl opacity-20">{sessionMode === 'script' ? 'Σ' : '◈'}</span>
+              <span>
+                {sessionMode === 'script'
+                  ? 'Script Lab — describe a chart overlay'
+                  : 'BLM AI — ask anything about NSE markets'}
+              </span>
               <span className="text-[10px] opacity-60">
-                Has access to live prices, fundamentals, news, deals, alerts &amp; more
+                {sessionMode === 'script'
+                  ? 'AI writes, validates & saves versioned scripts — accept the card to put it on the chart'
+                  : 'Has access to live prices, fundamentals, news, deals, alerts & more'}
               </span>
             </div>
           )}
@@ -1008,6 +1226,8 @@ export function AiWidget() {
                 isLastAssistant={isLastAssistant}
                 toolsDone={isLastAssistant ? toolsDone : undefined}
                 onRetry={isLastAssistant ? retryLastMessage : undefined}
+                onAcceptCard={acceptCard}
+                onDiscardCard={discardCard}
               />
             );
           })}
@@ -1049,7 +1269,9 @@ export function AiWidget() {
             placeholder={
               isStreaming
                 ? 'AI is thinking — you can switch to another chat while waiting…'
-                : 'Ask about NSE markets… (Enter to send, Shift+Enter for newline)'
+                : sessionMode === 'script'
+                  ? 'Describe a chart script… e.g. "RSI bands with 70/30 lines" (Enter to send)'
+                  : 'Ask about NSE markets… (Enter to send, Shift+Enter for newline)'
             }
             rows={1}
             className={cn(

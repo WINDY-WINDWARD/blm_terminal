@@ -841,10 +841,48 @@ const DOCS_MAP: WidgetDoc[] = [
       },
     ],
   },
+  // ─── Script Lab ──────────────────────────────────────────────────────────────
+  {
+    command: 'SCRIPTS',
+    title: 'Script Lab — AI chart scripts',
+    summary:
+      'Pine-like but plain-JS chart overlays written by the AI in Script mode. You describe intent, the AI saves a versioned script, and Accept puts it on the chart. There is no code editor — you never author code.',
+    sections: [
+      {
+        heading: 'Overview',
+        body: 'Scripts are small calculate(ctx) programs: declared params, up to 8 outputs (line, histogram, markers, priceline, band). They run in a Web Worker with a 2s watchdog over the chart bars plus optional fundamentals context, and paint through the same overlay path as built-in indicators. User scripts are private to your login; 5 builtin seeds ship read-only.',
+      },
+      {
+        heading: 'AI Script mode',
+        items: [
+          { name: 'Research | Σ Script toggle', desc: 'Per-session switch in the AI header, sent with every chat POST. Script mode adds the Script Lab system prompt (manifest format, BLM stdlib, limits).' },
+          { name: 'Workflow', desc: 'Ask in plain words ("RSI bands with 70/30 lines"). The AI lists/gets prior scripts, validates the code with validate_script_code, then create_script / revise_script. Validation is static + fixture dry-run — you accept before anything renders.' },
+          { name: 'Script card', desc: 'Each create/revise emits a Σ card in the turn (name, created vs revised + rev number). Accept → chart enables that revision on the focused chart panel; Discard only hides the card — the script stays saved.' },
+          { name: 'Revisions', desc: 'Revises are immutable and append-only. Roll back from history, tune params live in the chart Σ menu (params survive revises and rollback). Nothing renders until you Accept.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Chart side',
+        items: [
+          { name: 'Σ menu', desc: 'Chart toolbar popover: ON THIS CHART (enabled scripts, per-slot param forms, ✕ detach, ✎ refine-with-AI) and BROWSE (enable any saved script).' },
+          { name: 'Refine handoff', desc: '✎ prefills the AI input with a script-scoped prompt and focuses the AI panel — or opens an AI popout when no AI panel is on the grid.' },
+          { name: 'Failure policy', desc: 'A script that errors 3 runs in a row is auto-disabled with the message shown in the Σ menu; Retry via Browse. Fundamentals-backed scripts wait for consent + quarterly/ratios fetch.' },
+        ] as DocField[],
+      },
+      {
+        heading: 'Limits (v1)',
+        items: [
+          'Main pane only — no separate oscillator panes; histograms get their own scale.',
+          'Line cap 2000 bars per run; 24 params and 8 outputs max; 64KB code max.',
+          'No custom drawings (markers cover the v1 cases), no alerts, no backtesting.',
+          'Scripts needing fundamentals require Advanced Extraction consent (Safe Mode hides them).',
+        ],
+      },
+    ],
+  },
   // ─── Portfolio Optimizer ───────────────────────────────────────────────────────
   {
-    command: 'PORTFOLIO',
-    title: 'Portfolio Optimizer',
+    command: 'PORTFOLIO',    title: 'Portfolio Optimizer',
     summary:
       'Modern Portfolio Theory optimizer using PyPortfolioOpt. Select watchlist stocks, choose an objective, and receive optimal allocation weights.',
     sections: [

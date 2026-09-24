@@ -83,6 +83,7 @@ class ChatRequest(BaseModel):
     model: str = Field(default="kimi-k2.5", description="Model ID on OpenCode Go.")
     session_id: int | None = Field(default=None, description="Existing session ID to continue; null to create new.")
     persona: str | None = Field(default=None, description="Optional analyst persona key: value | earnings | fno | macro")
+    mode: Literal["research", "script"] | None = Field(default=None, description="Chat mode: research (default) or script (Script Lab — AI writes chart scripts).")
 
 
 class SessionSummary(BaseModel):
@@ -773,6 +774,7 @@ async def chat(
     - `{"type": "token", "text": "..."}` — LLM output chunk
     - `{"type": "tool_call", "name": "...", "args": {...}}` — tool being invoked
     - `{"type": "tool_result", "name": "...", "preview": "..."}` — tool completed
+    - `{"type": "script_card", "action": "created"|"revised", "script_id": N, "name": "...", "rev_no": N}` — script saved; UI renders Accept/Discard
     - `{"type": "error", "message": "..."}` — error (non-fatal if possible)
     - `{"type": "done"}` — stream finished
     """
@@ -841,6 +843,7 @@ async def chat(
                 model=request.model,
                 persona=request.persona,
                 session_id=session_id,
+                mode=request.mode,
             ):
                 # Track content and tool calls for persistence
                 try:

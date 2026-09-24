@@ -508,3 +508,22 @@ export interface ScriptLastError {
   ts: number;
 }
 export const scriptLastErrorAtom = atom<ScriptLastError | null>(null);
+
+/**
+ * Chart → AI refine request. Set by the chart Scripts menu ("refine with
+ * AI"); consumed by AiWidget into the active session's input (same window).
+ * Ephemeral — never persisted.
+ */
+export interface AiPrefill {
+  text: string;
+  ts: number;
+}
+export const aiPrefillAtom = atom<AiPrefill | null>(null);
+
+/**
+ * localStorage bridge for the grid → AI-popout refine path. The menu writes
+ * this key then opens /widget/AI; the popout AiWidget consumes it on mount
+ * and deletes it. Same key must not be used for same-window flow (the
+ * storage event does not fire in the writing window).
+ */
+export const AI_REFINE_REQUEST_KEY = '__AI_REFINE_REQUEST';
