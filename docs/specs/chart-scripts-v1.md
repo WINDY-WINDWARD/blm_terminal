@@ -100,8 +100,12 @@ function calculate(ctx) {
 ```
 
 - MUST be a top-level `function calculate(ctx)`. No imports, no `require`,
-  no access to anything outside `ctx`, frozen `BLM`, and `Math`.
-- MUST be synchronous. `async`, generators, and classes are rejected (static check).
+  no access to anything outside `ctx`, frozen `BLM`, and `Math`. The worker
+  additionally shadows `self/postMessage/fetch/importScripts/XMLHttpRequest/
+  WebSocket/timers/...` with `undefined`, so network/exfiltration/loader
+  globals are unreachable even if referenced.
+- MUST be synchronous. `async`, generators, classes, `eval`, and the
+  `Function` constructor are rejected (static check).
 - MUST return an object with exactly the manifest's output ids (extra keys rejected).
 - Series arrays MUST have length === `ctx.bars.length` (`number|null` per bar;
   markers: array per bar). Length mismatch is a runtime error.
@@ -186,7 +190,7 @@ on short input. `na` handling follows the existing engine: propagate `null`.
 | `E_V2_KIND`             | `drawings\|alerts\|strategy` etc → "requires spec v2" |
 | `E_PARAM`               | bad default / unreferenced param / dup key       |
 | `E_OUTPUT`              | unknown kind / bad band refs / count exceeded    |
-| `E_STATIC`              | `async`/class/import/`calculate` missing         |
+| `E_STATIC`              | `async`/class/import/`eval`/`Function`/`calculate` missing |
 | `E_LENGTH`              | returned series length ≠ bars length             |
 | `E_RUNTIME`             | throw during calculate (message + line)          |
 | `E_TIMEOUT`             | exceeded 2000ms                                  |
@@ -200,3 +204,12 @@ on short input. `na` handling follows the existing engine: propagate `null`.
   head, never deletes history.
 - Param auto-migration: surviving keys keep their values across revisions;
   new keys take manifest defaults; removed keys are dropped.
+
+## 9. Dev fixtures (dev-only, excluded from release)
+
+- `src/app/dev-scripts/page.tsx` renders 7 visual fixtures (one per output
+  kind: line, histogram, markers, priceline, band; plus a
+  `needs_fundamentals` script and an `E_RUNTIME` error script), each executed
+  via `validateScript` against the 120-bar seeded fixture.
+- The page calls `notFound()` when `NODE_ENV === 'production'`, so release
+  builds (production Next build) serve a 404; fixtures never ship to users.

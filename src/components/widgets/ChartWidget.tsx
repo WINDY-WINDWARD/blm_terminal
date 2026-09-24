@@ -29,6 +29,12 @@ import { useScriptSlots, useScriptedOverlays } from './ScriptedOverlays';
 import type { ScriptBar } from '@/lib/scripts/types';
 import { setChartSlot } from '@/lib/scripts/api';
 import { useScriptFundamentals } from '@/lib/scripts/fundamentalsCtx';
+import {
+  brewDaily,
+  brewIntraday,
+  LIVE_STALE_MS,
+  type BrewInput,
+} from '@/lib/scripts/liveBar';
 import type { ActiveIndicator, IndicatorCandle } from '@/lib/indicators/types';
 import { clampIndicators } from '@/lib/indicators/presets';
 import {
@@ -147,6 +153,19 @@ async function fetchIntradayOHLCV(
   return res.json() as Promise<IntradayOHLCVResponse>;
 }
 
+/** Candlestick-series shape for a brew-friendly server bar row. */
+function toChartBars(
+  bars: BrewInput[],
+): { time: Time; open: number; high: number; low: number; close: number }[] {
+  return bars.map((b) => ({
+    time: b.time as Time,
+    open: b.o,
+    high: b.h,
+    low: b.l,
+    close: b.c,
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -157,6 +176,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
   const indicatorSeriesRef = useRef<ISeriesApi<'Line' | 'Histogram', Time>[]>([]);
   const liveLineRef = useRef<IPriceLine | null>(null);
+  // L3: fitContent only when the symbol/interval key changes, never on polls.
+  const fitKeyRef = useRef('');
+  // Tracks whether a brewing bar is currently painted (for stale-drop).
+  const brewActiveRef = useRef(false);
   const [globalSymbol] = useAtom(activeSymbolAtom);
   const [globalExchange] = useAtom(activeExchangeAtom);
   const [overrides, setOverrides] = useAtom(chartSymbolOverridesAtom);
@@ -341,54 +364,76 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     }
   }, [symbol, exchange, interval]);
 
+  // ---------- Server bars in brew-friendly shape ----------
+  // Single source for the candle render, the brewing bar, and (via the
+  // ScriptBar memo below) the script runner. Null = no paintable data.
+  const dailyServerBars: BrewInput[] | null = useMemo(() => {
+    if (!isDaily || !histData?.candles?.length || histData._symbol !== symbol) return null;
+    return histData.candles
+      .map((candle) => ({
+        time: new Date(candle.Date + 'T00:00:00Z').getTime() / 1000,
+        o: candle.open,
+        h: candle.high,
+        l: candle.low,
+        c: candle.close,
+        v: candle.volume,
+      }))
+      .sort((a, b) => a.time - b.time);
+  }, [isDaily, histData, symbol]);
+
+  const intradayServerBars: BrewInput[] | null = useMemo(() => {
+    if (!isIntraday || !intradayData?.candles?.length || intradayData._symbol !== symbol)
+      return null;
+    return intradayData.candles
+      .map((candle) => ({
+        // NSE charting timestamps are Unix ms – divide by 1000 for lightweight-charts
+        time: Math.floor(candle.timestamp / 1000),
+        o: candle.open,
+        h: candle.high,
+        l: candle.low,
+        c: candle.close,
+        v: candle.volume,
+      }))
+      .sort((a, b) => a.time - b.time);
+  }, [isIntraday, intradayData, symbol]);
+
   // ---------- Render daily bars ----------
   useEffect(() => {
     if (!seriesRef.current) return;
     if (!isDaily) return;
-    if (!histData?.candles?.length) {
+    if (!dailyServerBars?.length) {
       seriesRef.current.setData([]);
       return;
     }
-    if (histData._symbol !== symbol) return;
 
-    const bars = histData.candles
-      .map((candle) => ({
-        time: (new Date(candle.Date + 'T00:00:00Z').getTime() / 1000) as Time,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }))
-      .sort((a, b) => (a.time as number) - (b.time as number));
-
-    seriesRef.current.setData(bars);
-    chartRef.current?.timeScale().fitContent();
-  }, [histData, symbol, isDaily]);
+    seriesRef.current.setData(toChartBars(dailyServerBars));
+    // L3: repaint on every poll, but re-fit the viewport only when the
+    // symbol or interval changes — fitContent on every 60s poll yanks the
+    // user's scroll/zoom back to the full range.
+    const key = `${symbol}|${interval}`;
+    if (fitKeyRef.current !== key) {
+      fitKeyRef.current = key;
+      chartRef.current?.timeScale().fitContent();
+    }
+  }, [dailyServerBars, symbol, interval, isDaily]);
 
   // ---------- Render intraday / W / M bars ----------
     useEffect(() => {
       if (!seriesRef.current) return;
       if (!isIntraday) return;
-      if (!intradayData?.candles?.length) {
+      if (!intradayServerBars?.length) {
         seriesRef.current.setData([]);
         return;
       }
-      if (intradayData._symbol !== symbol) return;
-  
-      const bars = intradayData.candles
-        .map((candle) => ({
-          // NSE charting timestamps are Unix ms – divide by 1000 for lightweight-charts
-          time: Math.floor(candle.timestamp / 1000) as Time,
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-        }))
-        .sort((a, b) => (a.time as number) - (b.time as number));
-  
-      seriesRef.current.setData(bars);
-      chartRef.current?.timeScale().fitContent();
-    }, [intradayData, symbol, isIntraday]);
+
+      seriesRef.current.setData(toChartBars(intradayServerBars));
+      // L3: same no-yank rule as daily.
+      const key = `${symbol}|${interval}`;
+      if (fitKeyRef.current !== key) {
+        fitKeyRef.current = key;
+        chartRef.current?.timeScale().fitContent();
+      }
+    }, [intradayServerBars, symbol, interval, isIntraday]);
 
   // ---------- Live tick: self-sufficient subscription (shared atom writer) ----------
   const tick = tickMap[`${symbol}.${exchange}`];
@@ -436,6 +481,9 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
 
   const tickAgeMs = tick?.updatedAt ? Date.now() - tick.updatedAt : Number.POSITIVE_INFINITY;
   const tickFresh = tick != null && tickAgeMs < 5 * 60_000 && isMarketHours();
+  // Brewing-grade freshness (L4): ticks older than 2 minutes never paint —
+  // the chart falls back to pure server data instead of a frozen live bar.
+  const tickLive = tick != null && tickAgeMs <= LIVE_STALE_MS && isMarketHours();
   const isStale = isDaily ? histData?.is_stale === true : false;
   const liveVsEodPct =
     tickFresh && tick && eodInfo && eodInfo.close !== 0
@@ -445,6 +493,54 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     () => new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
     [],
   );
+
+  // ---------- Live brewing bar (Addendum L) ----------
+  // Merges the latest WS tick into the candle series in memory via
+  // series.update (no viewport yank). Server data always wins (L2): every
+  // 60s poll repaints via setData in the render effects above, then this
+  // effect — declared after them — re-applies the brewing bar, or drops it
+  // once the tick goes stale so no frozen live bar lingers.
+  useEffect(() => {
+    const main = seriesRef.current;
+    if (!main) return;
+    const server = isDaily ? dailyServerBars : intradayServerBars;
+    if (!server?.length) {
+      brewActiveRef.current = false;
+      return;
+    }
+    const t = tick;
+    if (!tickLive || t == null || !Number.isFinite(t.ltp) || t.ltp <= 0) {
+      if (brewActiveRef.current) {
+        main.setData(toChartBars(server));
+        brewActiveRef.current = false;
+      }
+      return;
+    }
+    const now = Date.now();
+    const brewed = isDaily
+      ? brewDaily(server, t.ltp, now)
+      : brewIntraday(server, t.ltp, now, interval);
+    const last = brewed[brewed.length - 1];
+    if (!last) return;
+    main.update({
+      time: last.time as Time,
+      open: last.o,
+      high: last.h,
+      low: last.l,
+      close: last.c,
+    });
+    brewActiveRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tick?.ltp,
+    tick?.updatedAt,
+    tickLive,
+    dailyServerBars,
+    intradayServerBars,
+    symbol,
+    interval,
+    isDaily,
+  ]);
 
   // ---------- Indicators + LIVE price line (one combined overlay effect) ----------
   useEffect(() => {
@@ -708,6 +804,21 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     return out.sort((a, b) => a.time - b.time);
   }, [isDaily, histData, intradayData, symbol]);
 
+  // Scripts see the same brewing bar as the candles, flagged live:true
+  // (L5) — so script outputs track the forming bar instead of stopping at
+  // the last settled server bar. Falls back to pure server bars when stale.
+  const liveScriptBars: ScriptBar[] = useMemo(() => {
+    const t = tick;
+    if (!tickLive || t == null || !Number.isFinite(t.ltp) || t.ltp <= 0) return scriptBars;
+    const now = Date.now();
+    const brewed = isDaily
+      ? brewDaily(scriptBars, t.ltp, now)
+      : brewIntraday(scriptBars, t.ltp, now, interval);
+    // v is always present: server volume survives in-place updates and
+    // fresh forming bars are stamped v: 0 — never undefined (NaN guard).
+    return brewed as ScriptBar[];
+  }, [scriptBars, tick?.ltp, tick?.updatedAt, tickLive, isDaily, interval]);
+
   const needsFundamentals = useMemo(
     () =>
       scriptSlots.some(
@@ -738,7 +849,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     symbol,
     exchange,
     interval,
-    bars: scriptBars,
+    bars: liveScriptBars,
     slots: scriptSlots,
     details: scriptDetails,
     fundamentals: fundState.state === 'ready' ? fundState.data : undefined,

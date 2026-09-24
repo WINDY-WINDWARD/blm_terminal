@@ -141,6 +141,14 @@ class TestValidate:
         ))
         assert any(e.startswith("E_STATIC") for e in errors)
 
+    def test_eval_function_banned(self):
+        for body in (
+            'function calculate(ctx) { return eval("1"); }',
+            'function calculate(ctx) { const F = Function("return 1"); return { a: [] }; }',
+        ):
+            _, errors = validate_script(_code(_good_header(params=[]), body))
+            assert any(e.startswith("E_STATIC") for e in errors), body
+
     def test_missing_calculate(self):
         _, errors = validate_script(_code(_good_header(params=[]), "function nope() { return {}; }"))
         assert any("calculate" in e for e in errors)

@@ -151,9 +151,9 @@ export function validateManifest(code: string): { manifest: ScriptManifest | nul
   if (!/\bfunction\s+calculate\s*\(\s*ctx\s*\)/.test(code)) {
     errors.push('E_STATIC: top-level function calculate(ctx) not found');
   }
-  for (const pat of [/\basync\b/, /\bawait\b/, /\bimport\b/, /\brequire\s*\(/, /\bclass\b/, /function\s*\*/]) {
+  for (const pat of [/\basync\b/, /\bawait\b/, /\bimport\b/, /\brequire\s*\(/, /\bclass\b/, /\bgenerator\b/, /function\s*\*/, /\beval\b/, /\bFunction\b/]) {
     if (pat.test(code)) {
-      errors.push('E_STATIC: forbidden construct (async/import/class/generator)');
+      errors.push('E_STATIC: forbidden construct (async/import/class/generator/eval/Function)');
       break;
     }
   }

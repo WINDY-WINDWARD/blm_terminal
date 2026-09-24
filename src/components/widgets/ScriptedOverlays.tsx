@@ -180,7 +180,10 @@ export function useScriptSlots(panelId: string): {
     staleTime: 30_000,
     retry: 1,
   });
-  const slots = useMemo(() => slotsQuery.data ?? [], [slotsQuery.data]);
+  const slots = useMemo(
+    () => (Array.isArray(slotsQuery.data) ? slotsQuery.data : []),
+    [slotsQuery.data],
+  );
   const detailsQueries = useQueries({
     queries: slots.map((s) => ({
       queryKey: ['script-detail', s.script_id],

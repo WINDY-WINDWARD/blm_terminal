@@ -167,6 +167,33 @@ describe('runScript timeout', () => {
   }, 10000);
 });
 
+describe('sandbox', () => {
+  it('bans eval and Function constructor statically', () => {
+    const withEval = GOOD.replace('function calculate(ctx) {', 'function calculate(ctx) { eval("1");');
+    expect(validateManifest(withEval).errors.some((e) => e.startsWith('E_STATIC'))).toBe(true);
+    const withFunc = GOOD.replace('function calculate(ctx) {', 'function calculate(ctx) { const F = Function("return 1");');
+    expect(validateManifest(withFunc).errors.some((e) => e.startsWith('E_STATIC'))).toBe(true);
+  });
+
+  it('shadows network globals at runtime', async () => {
+    const exfil = GOOD.replace(
+      'return { a: BLM.sma(ctx.bars.map(function (b) { return b.c; }), ctx.params.len) };',
+      'fetch("http://127.0.0.1:1/x"); return { a: BLM.sma(ctx.bars.map(function (b) { return b.c; }), ctx.params.len) };',
+    );
+    const v = await validateScript(exfil);
+    expect(v.valid).toBe(false);
+    expect(v.errors[0]).toMatch(/^E_RUNTIME/);
+  });
+
+  it('drops unsafe keys from stored JSON', () => {
+    const stored = JSON.parse('{"a":1,"__proto__":{"polluted":true}}') as Record<string, number | boolean | string>;
+    const oldM = { params: [{ key: 'a' }] } as never;
+    const newM = { params: [{ key: 'a' }] } as never;
+    expect(migrateParamValues(oldM, newM, stored)).toEqual({ a: 1 });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
 describe('param migration', () => {
   it('keeps survivors, drops removed', () => {
     const oldM = { params: [{ key: 'a' }, { key: 'b' }] } as never;

@@ -154,7 +154,8 @@ def static_code_checks(code: str, manifest: ScriptManifest) -> list[str]:
     if not re.search(r"\bfunction\s+calculate\s*\(\s*ctx\s*\)", code):
         errors.append("E_STATIC: top-level function calculate(ctx) not found")
     for banned in (r"\basync\b", r"\bawait\b", r"\bimport\b", r"\brequire\s*\(",
-                   r"\bclass\b", r"\bgenerator\b", r"function\s*\*"):
+                   r"\bclass\b", r"\bgenerator\b", r"function\s*\*",
+                   r"\beval\b", r"\bFunction\b"):
         if re.search(banned, code):
             errors.append(f"E_STATIC: forbidden construct ({banned.strip(chr(92)+'b')})")
             break

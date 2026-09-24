@@ -38,7 +38,7 @@ async function fetchJson(url: string): Promise<unknown> {
 export function normalizeQuarterly(payload: unknown): ScriptQuarterlyRow[] {
   const root = payload as { quarterly_results?: Record<string, Record<string, Record<string, unknown>>> };
   const years = root?.quarterly_results;
-  if (!years || typeof years !== 'object') return [];
+  if (!years || typeof years !== 'object' || Array.isArray(years)) return [];
   const rows: ScriptQuarterlyRow[] = [];
   for (const [year, months] of Object.entries(years)) {
     if (!months || typeof months !== 'object') continue;

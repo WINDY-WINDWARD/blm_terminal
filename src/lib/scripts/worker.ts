@@ -13,13 +13,42 @@ export interface RunRequest {
   ctx: ScriptCtx;
 }
 
+/**
+ * Worker globals that user code must NOT see (network/exfiltration/loader
+ * surface). They are shadowed with `undefined` parameters on the user factory,
+ * so AI-generated scripts stay pure compute: Math/Date/JSON + frozen BLM only.
+ * Static checks additionally ban eval/Function (which would re-open globals).
+ */
+const SANDBOXED_GLOBALS = [
+  'self',
+  'postMessage',
+  'onmessage',
+  'onerror',
+  'fetch',
+  'XMLHttpRequest',
+  'WebSocket',
+  'EventSource',
+  'importScripts',
+  'caches',
+  'indexedDB',
+  'navigator',
+  'location',
+  'close',
+  'setTimeout',
+  'setInterval',
+  'clearTimeout',
+  'clearInterval',
+  'queueMicrotask',
+] as const;
+
 function buildWorkerSource(code: string): string {
+  const shadow = SANDBOXED_GLOBALS.map((g) => `'${g}'`).join(',');
   return `
 ${buildBlmSource()}
 const __userCode = ${JSON.stringify(code)};
 let calculate;
 try {
-  const factory = new Function('BLM', 'Math', __userCode + '\\nreturn calculate;');
+  const factory = new Function('BLM', 'Math', ${shadow}, __userCode + '\\nreturn calculate;');
   calculate = factory(BLM, Math);
 } catch (e) {
   postMessage({ ok: false, code: 'E_STATIC', message: String((e && e.message) || e) });
@@ -77,8 +106,11 @@ function runInThread(code: string, manifest: ScriptManifest, ctx: ScriptCtx): Sc
   try {
     const nsFactory = new Function(`${buildBlmSource()}\nreturn BLM;`);
     const BLM = nsFactory() as Record<string, unknown>;
-    const factory = new Function('BLM', 'Math', code + '\nreturn calculate;');
-    const calculate = factory(BLM, Math) as ((c: ScriptCtx) => Record<string, ScriptOutputValues>) | undefined;
+    const shadowArgs = [...SANDBOXED_GLOBALS, 'window', 'document', 'localStorage', 'process', 'require', 'globalThis'];
+    const factory = new Function('BLM', 'Math', ...shadowArgs, code + '\nreturn calculate;');
+    const calculate = (factory as (...a: unknown[]) => unknown)(BLM, Math) as
+      | ((c: ScriptCtx) => Record<string, ScriptOutputValues>)
+      | undefined;
     if (typeof calculate !== 'function') {
       return { ok: false, code: 'E_STATIC', message: 'calculate is not a function' };
     }
@@ -124,7 +156,9 @@ export function runScript(req: RunRequest): Promise<ScriptRunResult> {
     const clear = () => clearTimeout(timer);
     try {
       const blob = new Blob([buildWorkerSource(req.code)], { type: 'text/javascript' });
-      worker = new Worker(URL.createObjectURL(blob));
+      const url = URL.createObjectURL(blob);
+      worker = new Worker(url);
+      URL.revokeObjectURL(url); // only needed at construction; frees the blob
     } catch (e) {
       clear();
       resolve({
