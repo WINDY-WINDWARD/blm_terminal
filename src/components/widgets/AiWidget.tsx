@@ -16,6 +16,14 @@ import {
   AI_REFINE_REQUEST_KEY,
 } from '@/store/terminalStore';
 import { resolveChartPanel } from '@/lib/scripts/handoff';
+import {
+  getStashedCards,
+  migrateStash,
+  pruneStashedSession,
+  reattachStashedCards,
+  stampStashedCard,
+  stashCard,
+} from '@/lib/scripts/cardStash';
 import { cn } from '@/lib/utils';
 
 // ─── Personas ─────────────────────────────────────────────────────────────────
@@ -626,11 +634,14 @@ export function AiWidget() {
         );
         patchSession(id, {
           model: data.model,
-          messages: data.messages.map((m) => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-            toolCalls: m.tool_calls ?? undefined,
-          })),
+          messages: reattachStashedCards(
+            data.messages.map((m) => ({
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+              toolCalls: m.tool_calls ?? undefined,
+            })),
+            getStashedCards(id),
+          ),
           ...(hasScriptActivity ? { mode: 'script' as const } : {}),
         });
       } catch (err) {
@@ -651,6 +662,7 @@ export function AiWidget() {
         console.error(`Failed to delete session ${id}: ${res.status}`);
         return;
       }
+      pruneStashedSession(id);
       setSessionMap((prev) => {
         const next = new Map(prev);
         next.delete(id);
@@ -727,9 +739,12 @@ export function AiWidget() {
       abortController: abort,
     };
 
-    // Accumulated content for the current streaming turn
+    // Accumulated content for the current streaming turn. assistantCard
+    // survives across token/tool_call rebuilds of the in-flight turn — every
+    // rebuild must carry it or the card vanishes mid-stream.
     let assistantContent = '';
     let assistantToolCalls: string[] = [];
+    let assistantCard: ScriptCard | undefined;
 
     /** Write streaming progress to whichever key this stream owns. */
     const writeStreamState = (patch: Partial<SessionState>) => {
@@ -810,6 +825,8 @@ export function AiWidget() {
             // Migrate the map entry from null/old-key → assigned real session ID
             const assignedId = event.id;
             if (liveKey !== assignedId) {
+              const fromKey = liveKey;
+              migrateStash(fromKey, assignedId);
               unstable_batchedUpdates(() => {
                 setSessionMap((prev) => {
                   const next = new Map(prev);
@@ -836,6 +853,7 @@ export function AiWidget() {
                   role: 'assistant',
                   content: assistantContent,
                   toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                  ...(assistantCard ? { card: assistantCard } : {}),
                 },
               ],
             });
@@ -848,17 +866,22 @@ export function AiWidget() {
                   role: 'assistant',
                   content: assistantContent,
                   toolCalls: [...assistantToolCalls],
+                  ...(assistantCard ? { card: assistantCard } : {}),
                 },
               ],
             });
           } else if (event.type === 'script_card') {
-            // Script Lab mutation card — attach to the in-flight assistant turn.
+            // Script Lab mutation card — attach to the in-flight assistant turn
+            // and stash for reload survival (cards are SSE-only; the DB keeps
+            // tool names, never the card itself).
             const card: ScriptCard = {
               action: event.action,
               script_id: event.script_id,
               name: event.name,
               rev_no: event.rev_no,
             };
+            assistantCard = card;
+            stashCard(liveKey, { ...card, ts: Date.now() });
             writeStreamState({
               messages: [
                 ...historyWithUser,
@@ -952,6 +975,12 @@ export function AiWidget() {
   /** Stamp one card (matched by script+rev) with a patch, scoped to a session key. */
   const patchCard = useCallback(
     (key: number | null, card: ScriptCard, patch: Partial<ScriptCard>) => {
+      if (patch.accepted !== undefined || patch.dismissed !== undefined) {
+        stampStashedCard(key, card, {
+          accepted: patch.accepted,
+          dismissed: patch.dismissed,
+        });
+      }
       setSessionMap((prev) => {
         const next = new Map(prev);
         const state = next.get(key);
@@ -1178,7 +1207,7 @@ export function AiWidget() {
                 className={cn(
                   'px-1.5 py-0.5 text-[10px] font-mono transition-colors disabled:opacity-50',
                   sessionMode === m
-                    ? 'bg-terminal-amber/20 text-terminal-amber'
+                    ? 'bg-terminal-amber text-black font-bold'
                     : 'text-terminal-amber/40 hover:text-terminal-amber/70',
                 )}
               >

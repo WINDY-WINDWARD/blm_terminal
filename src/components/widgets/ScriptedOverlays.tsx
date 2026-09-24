@@ -184,21 +184,29 @@ export function useScriptSlots(panelId: string): {
     () => (Array.isArray(slotsQuery.data) ? slotsQuery.data : []),
     [slotsQuery.data],
   );
+  // Stable id list: the `queries` array below is a fresh literal every
+  // render, so the details Map must NOT depend on it (or any array built
+  // from it) — otherwise the Map identity churns each render and the
+  // overlay effect's 1s debounce perpetually resets, never painting.
+  const slotIds = useMemo(() => slots.map((s) => s.script_id), [slots]);
   const detailsQueries = useQueries({
-    queries: slots.map((s) => ({
-      queryKey: ['script-detail', s.script_id],
-      queryFn: () => fetchScriptDetail(s.script_id),
+    queries: slotIds.map((id) => ({
+      queryKey: ['script-detail', id],
+      queryFn: () => fetchScriptDetail(id),
       staleTime: 60_000,
       retry: 1,
     })),
   });
+  const detailsData = detailsQueries.map((q) => q.data);
   const details = useMemo(() => {
     const m = new Map<number, SavedScriptDetail>();
-    detailsQueries.forEach((q, i) => {
-      if (q.data) m.set(slots[i].script_id, q.data);
+    detailsData.forEach((d, i) => {
+      if (d) m.set(slotIds[i], d);
     });
     return m;
-  }, [detailsQueries, slots]);
+    // Deps are element-wise stable (ids + data refs), never array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slotIds, ...detailsData]);
   return {
     slots,
     details,
@@ -374,23 +382,33 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
             };
           }
           if (epoch !== epochRef.current) return;
-          if (!result.ok) {
+          const strike = (message: string) => {
             const n = (strikesRef.current.get(slot.script_id) ?? 0) + 1;
             if (n >= SCRIPT_STRIKE_LIMIT) {
               strikesRef.current.delete(slot.script_id);
-              onStrikeOutRef.current(slot, result.message);
+              onStrikeOutRef.current(slot, message);
             } else {
               strikesRef.current.set(slot.script_id, n);
             }
+          };
+          if (!result.ok) {
+            strike(result.message);
             continue;
           }
           strikesRef.current.delete(slot.script_id);
-          paintOutputs(chart, main, runTimes, manifest, result.values, {
-            series: ownedSeries.current,
-            markers: ownedMarkers.current,
-            primitives: ownedPrimitives.current,
-            lines: ownedLines.current,
-          });
+          try {
+            paintOutputs(chart, main, runTimes, manifest, result.values, {
+              series: ownedSeries.current,
+              markers: ownedMarkers.current,
+              primitives: ownedPrimitives.current,
+              lines: ownedLines.current,
+            });
+          } catch (e) {
+            // A throwing paint must not leave a torn-down chart with no
+            // output and no error: count it as a run failure so the 3-strike
+            // path surfaces it in the UI.
+            strike(e instanceof Error ? `paint failed: ${e.message}` : 'paint failed');
+          }
         }
       })();
     }, SCRIPT_RENDER_DEBOUNCE_MS);

@@ -1,11 +1,12 @@
 'use client';
 /**
  * BLM Script Lab v1 — Scripts popover for the chart toolbar.
- * "On this chart" (enabled slots + param forms + remove) and "Browse"
- * (all saved scripts + enable). Mutations go through POST /chart-state
- * (per-slot upsert; detach = enabled:false) and invalidate the slots query.
+ * Single Fx-style checkbox list (checked = on this chart): checkbox toggles
+ * attach/detach, ⚙ opens the params modal (live-apply), ✎ refines with AI.
+ * Mutations go through POST /chart-state (per-slot upsert; detach =
+ * enabled:false) and invalidate the slots query.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { cn } from '@/lib/utils';
@@ -20,6 +21,7 @@ import type {
   SavedScriptDetail,
   SavedScriptSummary,
   ScriptChartSlot,
+  ScriptParam,
 } from '@/lib/scripts/types';
 import {
   fetchScripts,
@@ -36,6 +38,17 @@ interface ChartScriptsMenuProps {
   lastError: string | null;
 }
 
+interface Row {
+  id: number;
+  name: string;
+  description?: string | null;
+  isBuiltin: boolean;
+  enabled: boolean;
+  revNo: number | null;
+  params: ScriptParam[];
+  slot: ScriptChartSlot | undefined;
+}
+
 export function ChartScriptsMenu({
   panelId,
   slots,
@@ -44,6 +57,7 @@ export function ChartScriptsMenu({
   lastError,
 }: ChartScriptsMenuProps) {
   const [open, setOpen] = useState(false);
+  const [paramScriptId, setParamScriptId] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const panels = useAtomValue(activePanelsAtom);
   const setFocusedPanel = useSetAtom(focusedPanelAtom);
@@ -106,15 +120,70 @@ export function ChartScriptsMenu({
     },
   });
 
-  const enabled = slots.filter((s) => s.enabled);
-  const enabledIds = new Set(enabled.map((s) => s.script_id));
-  const catalog: SavedScriptSummary[] = catalogQuery.data ?? [];
-  const available = catalog.filter((c) => !enabledIds.has(c.id));
   const busy = mutate.isPending;
+  const enabledIds = new Set(slots.filter((s) => s.enabled).map((s) => s.script_id));
+  const slotById = new Map(slots.map((s) => [s.script_id, s]));
+  const catalog: SavedScriptSummary[] = catalogQuery.data ?? [];
 
-  const setParams = (slot: ScriptChartSlot, values: Record<string, number | boolean | string>) => {
-    mutate.mutate({ script_id: slot.script_id, enabled: true, param_values: values });
+  // Merged rows: every known script exactly once. Enabled-but-absent-from-
+  // catalog slots (stale cache) render as a fallback row so they stay
+  // detachable.
+  const rows: Row[] = [
+    ...catalog.map((c) => {
+      const slot = slotById.get(c.id);
+      const detail = details.get(c.id);
+      return {
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        isBuiltin: c.is_builtin,
+        enabled: enabledIds.has(c.id),
+        revNo: detail?.head_rev_no ?? null,
+        params: detail?.head?.manifest?.params ?? [],
+        slot,
+      };
+    }),
+    ...slots
+      .filter((s) => !catalog.some((c) => c.id === s.script_id))
+      .map((s) => {
+        const detail = details.get(s.script_id);
+        return {
+          id: s.script_id,
+          name: detail?.name ?? `#${s.script_id}`,
+          description: null,
+          isBuiltin: false,
+          enabled: s.enabled,
+          revNo: detail?.head_rev_no ?? null,
+          params: detail?.head?.manifest?.params ?? [],
+          slot: s,
+        };
+      }),
+  ];
+
+  const toggle = (row: Row) => {
+    mutate.mutate({
+      script_id: row.id,
+      enabled: !row.enabled,
+      param_values: row.slot?.param_values ?? {},
+    });
   };
+
+  const setParams = (row: Row, values: Record<string, number | boolean | string>) => {
+    mutate.mutate({ script_id: row.id, enabled: true, param_values: values });
+  };
+
+  // Esc closes the params modal.
+  useEffect(() => {
+    if (paramScriptId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setParamScriptId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [paramScriptId]);
+
+  const paramRow = paramScriptId !== null ? rows.find((r) => r.id === paramScriptId) : undefined;
+  const enabledCount = enabledIds.size;
 
   return (
     <div className="relative">
@@ -123,13 +192,13 @@ export function ChartScriptsMenu({
         onClick={() => setOpen((v) => !v)}
         className={cn(
           'px-1.5 py-0.5 text-[10px] font-mono border transition-colors',
-          open || enabled.length > 0
+          open || enabledCount > 0
             ? 'border-terminal-amber text-terminal-amber bg-black'
             : 'border-terminal-gray text-white/70 hover:text-terminal-amber hover:border-terminal-amber bg-black',
         )}
-        title="Chart scripts (Script Lab v1) — enable saved scripts on this chart"
+        title="Chart scripts (Script Lab v1) — check to show, uncheck to hide"
       >
-        Σ{enabled.length > 0 ? ` ${enabled.length}` : ''}
+        Σ{enabledCount > 0 ? ` ${enabledCount}` : ''}
       </button>
 
       {open && (
@@ -141,61 +210,7 @@ export function ChartScriptsMenu({
           )}
 
           <div className="px-2 py-1 text-white/40 text-[10px] tracking-wider">
-            ON THIS CHART
-          </div>
-          {enabled.length === 0 && (
-            <div className="px-2 py-1 text-white/40 text-[11px]">No scripts enabled.</div>
-          )}
-          {enabled.map((slot) => {
-            const detail = details.get(slot.script_id);
-            const manifest = detail?.head?.manifest;
-            return (
-              <div key={slot.script_id} className="border-b border-terminal-gray/40 last:border-b-0 px-2 py-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-terminal-amber truncate flex-1" title={detail?.name ?? `#${slot.script_id}`}>
-                    {detail?.name ?? `#${slot.script_id}`}
-                  </span>
-                  <span className="text-white/30 text-[10px]">r{detail?.head_rev_no ?? '?'}</span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      refineWithAi(slot.script_id, detail?.name ?? `#${slot.script_id}`, detail?.head_rev_no ?? null)
-                    }
-                    className="text-white/50 hover:text-terminal-amber text-[10px] disabled:opacity-40"
-                    title="Refine this script with AI (prefills the AI input)"
-                  >
-                    ✎
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      mutate.mutate({
-                        script_id: slot.script_id,
-                        enabled: false,
-                        param_values: slot.param_values ?? {},
-                      })
-                    }
-                    className="text-white/50 hover:text-terminal-red text-[10px] disabled:opacity-40"
-                    title="Remove script from this chart"
-                  >
-                    ✕
-                  </button>
-                </div>
-                {manifest && (manifest.params ?? []).length > 0 && (
-                  <ScriptParamForm
-                    params={manifest.params ?? []}
-                    values={slot.param_values ?? {}}
-                    onChange={(values) => setParams(slot, values)}
-                  />
-                )}
-              </div>
-            );
-          })}
-
-          <div className="px-2 py-1 text-white/40 text-[10px] tracking-wider border-t border-terminal-gray/60">
-            BROWSE
+            SCRIPTS — CHECK TO SHOW
           </div>
           {catalogQuery.isPending && (
             <div className="px-2 py-1 text-white/40 text-[11px]">Loading…</div>
@@ -203,24 +218,61 @@ export function ChartScriptsMenu({
           {catalogQuery.isError && (
             <div className="px-2 py-1 text-terminal-red text-[11px]">Catalog unavailable</div>
           )}
-          {catalogQuery.data && available.length === 0 && (
-            <div className="px-2 py-1 text-white/40 text-[11px]">All scripts enabled.</div>
+          {catalogQuery.data && rows.length === 0 && (
+            <div className="px-2 py-1 text-white/40 text-[11px]">No scripts yet — create one via AI below.</div>
           )}
-          {available.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                mutate.mutate({ script_id: c.id, enabled: true, param_values: {} })
-              }
-              className="w-full text-left px-2 py-1 flex items-center gap-2 text-white/80 hover:bg-zinc-800 disabled:opacity-40"
-              title={c.description ?? c.name}
-            >
-              <span className="text-terminal-amber">+</span>
-              <span className="truncate flex-1">{c.name}</span>
-              {c.is_builtin && <span className="text-white/30 text-[10px]">builtin</span>}
-            </button>
+          {rows.map((row) => (
+            <div key={row.id} className="border-b border-terminal-gray/40 last:border-b-0">
+              <div
+                className="w-full text-left px-2 py-1 flex items-center gap-2 text-white/80"
+                title={row.description ?? row.name}
+              >
+                <input
+                  type="checkbox"
+                  checked={row.enabled}
+                  disabled={busy}
+                  onChange={() => toggle(row)}
+                  className="accent-[#FFB900] w-3 h-3 flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                  title={row.enabled ? `Hide ${row.name}` : `Show ${row.name}`}
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => toggle(row)}
+                  className="truncate flex-1 text-left cursor-pointer hover:text-terminal-amber disabled:cursor-not-allowed"
+                >
+                  {row.name}
+                </button>
+                {row.isBuiltin && <span className="text-white/30 text-[10px]">builtin</span>}
+                {row.revNo !== null && (
+                  <span
+                    className="text-white/30 text-[10px]"
+                    title={`Head revision ${row.revNo} — each AI edit saves a new revision`}
+                  >
+                    rev {row.revNo}
+                  </span>
+                )}
+                {row.params.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setParamScriptId(row.id)}
+                    className="text-white/50 hover:text-terminal-amber px-0.5"
+                    title="Parameters"
+                  >
+                    ⚙
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => refineWithAi(row.id, row.name, row.revNo)}
+                  className="text-white/50 hover:text-terminal-amber text-[10px] disabled:opacity-40"
+                  title="Refine this script with AI (prefills the AI input)"
+                >
+                  ✎
+                </button>
+              </div>
+            </div>
           ))}
           <button
             type="button"
@@ -231,6 +283,47 @@ export function ChartScriptsMenu({
             <span>＋</span>
             <span>New script via AI…</span>
           </button>
+        </div>
+      )}
+
+      {paramRow && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70"
+          onClick={() => setParamScriptId(null)}
+        >
+          <div
+            className="w-80 max-h-[80vh] overflow-y-auto bg-black border border-terminal-amber shadow-lg text-xs font-mono"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-terminal-gray/60">
+              <span className="text-terminal-amber truncate flex-1" title={paramRow.name}>
+                {paramRow.name}
+              </span>
+              {paramRow.revNo !== null && (
+                <span
+                  className="text-white/30 text-[10px]"
+                  title={`Head revision ${paramRow.revNo} — each AI edit saves a new revision`}
+                >
+                  rev {paramRow.revNo}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setParamScriptId(null)}
+                className="text-white/50 hover:text-terminal-red"
+                title="Close (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="px-3 py-2">
+              <ScriptParamForm
+                params={paramRow.params}
+                values={paramRow.slot?.param_values ?? {}}
+                onChange={(values) => setParams(paramRow, values)}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
