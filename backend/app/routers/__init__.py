@@ -23,6 +23,7 @@ from app.routers.portfolio import router as portfolio_router
 from app.routers.valuation import router as valuation_router
 from app.routers.watchlist import router as watchlist_router
 from app.routers.layout import router as layout_router
+from app.routers.scripts import router as scripts_router
 
 from app.routers.auth import router as auth_router
 from app.routers.gemini_auth import router as gemini_auth_router
@@ -55,6 +56,7 @@ __all__ = [
     "portfolio_router",
     "watchlist_router",
     "layout_router",
+    "scripts_router",
     "auth_router",
     "gemini_auth_router",
     "codex_auth_router",

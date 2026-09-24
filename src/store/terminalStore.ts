@@ -485,3 +485,26 @@ export const chartIndicatorsAtom = atomWithStorage<{ v: number; items: ActiveInd
   'terminal.chartIndicators',
   { v: 1, items: [] },
 );
+
+// ─── Script Lab v1 ─────────────────────────────────────────────────────────
+
+/**
+ * AI → chart handoff. Set by the AI Script mode when the user accepts a
+ * script_card; consumed by the matching ChartWidget (enables the slot),
+ * which clears it. Ephemeral — never persisted.
+ */
+export interface ScriptChartHandoff {
+  scriptId: number;
+  panelId: string;
+  ts: number;
+}
+export const scriptChartHandoffAtom = atom<ScriptChartHandoff | null>(null);
+
+/** Last script run error per panel (strike-outs, gating) — display only. */
+export interface ScriptLastError {
+  panelId: string;
+  scriptId: number;
+  message: string;
+  ts: number;
+}
+export const scriptLastErrorAtom = atom<ScriptLastError | null>(null);

@@ -19,9 +19,16 @@ import {
   focusedPanelAtom,
   tickDataAtom,
   chartIndicatorsAtom,
+  scriptChartHandoffAtom,
+  scriptLastErrorAtom,
 } from '@/store/terminalStore';
 import { marketDataService } from '@/lib/nseFetch';
 import { ChartIndicatorMenu } from './ChartIndicatorMenu';
+import { ChartScriptsMenu } from './ChartScriptsMenu';
+import { useScriptSlots, useScriptedOverlays } from './ScriptedOverlays';
+import type { ScriptBar } from '@/lib/scripts/types';
+import { setChartSlot } from '@/lib/scripts/api';
+import { useScriptFundamentals } from '@/lib/scripts/fundamentalsCtx';
 import type { ActiveIndicator, IndicatorCandle } from '@/lib/indicators/types';
 import { clampIndicators } from '@/lib/indicators/presets';
 import {
@@ -672,6 +679,90 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [histData, intradayData, symbol, interval, indicators, tick?.ltp, tick?.updatedAt]);
 
+  // ---------- Script Lab v1 ----------
+  // Declared AFTER the main overlay effect: same-component hook order
+  // guarantees script painting runs after indicator teardown/rebuild, and
+  // all script artifacts live in the hook's own refs.
+  const { slots: scriptSlots, details: scriptDetails, refetchSlots } =
+    useScriptSlots(panelId);
+  const [scriptHandoff, setScriptHandoff] = useAtom(scriptChartHandoffAtom);
+  const [scriptLastError, setScriptLastError] = useAtom(scriptLastErrorAtom);
+
+  // Bars in ScriptBar shape — same mapping as the overlay effect above.
+  const scriptBars: ScriptBar[] = useMemo(() => {
+    const map = (time: number, o: number, h: number, l: number, c: number, v: number): ScriptBar => ({
+      time, o, h, l, c, v,
+    });
+    let out: ScriptBar[] = [];
+    if (isDaily) {
+      if (!histData?.candles?.length || histData._symbol !== symbol) return [];
+      out = histData.candles.map((cc) =>
+        map(new Date(cc.Date + 'T00:00:00Z').getTime() / 1000, cc.open, cc.high, cc.low, cc.close, cc.volume),
+      );
+    } else {
+      if (!intradayData?.candles?.length || intradayData._symbol !== symbol) return [];
+      out = intradayData.candles.map((cc) =>
+        map(Math.floor(cc.timestamp / 1000), cc.open, cc.high, cc.low, cc.close, cc.volume),
+      );
+    }
+    return out.sort((a, b) => a.time - b.time);
+  }, [isDaily, histData, intradayData, symbol]);
+
+  const needsFundamentals = useMemo(
+    () =>
+      scriptSlots.some(
+        (s) =>
+          s.enabled &&
+          scriptDetails.get(s.script_id)?.head?.manifest?.needs_fundamentals === true,
+      ),
+    [scriptSlots, scriptDetails],
+  );
+  const fundState = useScriptFundamentals({ symbol, needed: needsFundamentals });
+
+  // 3-strike auto-disable persists enabled:false so the slot stays off.
+  const handleScriptStrikeOut = (slot: { script_id: number; param_values: Record<string, number | boolean | string> }, message: string) => {
+    setScriptLastError({ panelId, scriptId: slot.script_id, message, ts: Date.now() });
+    setChartSlot(panelId, {
+      script_id: slot.script_id,
+      enabled: false,
+      param_values: slot.param_values,
+    })
+      .then(() => refetchSlots())
+      .catch(() => {
+        /* slots refetch on next poll; error atom already shows the cause */
+      });
+  };
+
+  useScriptedOverlays({
+    panelId,
+    symbol,
+    exchange,
+    interval,
+    bars: scriptBars,
+    slots: scriptSlots,
+    details: scriptDetails,
+    fundamentals: fundState.state === 'ready' ? fundState.data : undefined,
+    chartRef,
+    mainRef: seriesRef,
+    onStrikeOut: handleScriptStrikeOut,
+  });
+
+  // AI → chart handoff: enabling the accepted script on this panel.
+  useEffect(() => {
+    if (!scriptHandoff || scriptHandoff.panelId !== panelId) return;
+    setChartSlot(panelId, {
+      script_id: scriptHandoff.scriptId,
+      enabled: true,
+      param_values: {},
+    })
+      .then(() => refetchSlots())
+      .catch(() => {
+        /* menu surfaces retry; handoff still consumed below */
+      });
+    setScriptHandoff(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scriptHandoff, panelId]);
+
   // ---------- Toolbar / form handlers ----------
   const handleSymbolChange = (value: string) => {
     setInputSymbol(value);
@@ -829,6 +920,20 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
                 interval={interval}
                 active={indicators}
                 onChange={(next) => setSavedIndicators({ v: 1, items: next })}
+              />
+            </div>
+
+            <div className="ml-1">
+              <ChartScriptsMenu
+                panelId={panelId}
+                slots={scriptSlots}
+                details={scriptDetails}
+                refetchSlots={refetchSlots}
+                lastError={
+                  scriptLastError && scriptLastError.panelId === panelId
+                    ? scriptLastError.message
+                    : null
+                }
               />
             </div>
 
