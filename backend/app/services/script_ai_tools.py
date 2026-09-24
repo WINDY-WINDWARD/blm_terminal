@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 
 async def _user_id() -> int:
     uid = current_user_id.get()
-    return uid if uid is not None else 1
+    if uid is None:
+        raise RuntimeError(
+            "current_user_id is not set; script AI tools require a chat request context"
+        )
+    return uid
 
 
 def _compact_manifest(manifest: dict[str, Any]) -> dict[str, Any]:

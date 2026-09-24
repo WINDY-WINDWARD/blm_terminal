@@ -886,8 +886,14 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   // AI → chart handoff: enabling the accepted script on this panel.
   // param_values omitted → backend keeps tuned params; the detail query is
   // invalidated so the NEW head rev paints instead of the 60s-stale one.
+  // Stale handoffs (>60s, e.g. accepted with no chart open) are dropped so a
+  // later mount with the same panel id never auto-enables a stale script.
   useEffect(() => {
     if (!scriptHandoff || scriptHandoff.panelId !== panelId) return;
+    if (Date.now() - scriptHandoff.ts > 60000) {
+      setScriptHandoff(null);
+      return;
+    }
     setChartSlot(panelId, {
       script_id: scriptHandoff.scriptId,
       enabled: true,

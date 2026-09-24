@@ -20,11 +20,21 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
-  const data = (await res.json().catch(() => ({}))) as { error?: string } & T;
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: unknown;
+    detail?: unknown;
+  } & T;
   if (!res.ok) {
-    throw new Error(
-      typeof data?.error === 'string' ? data.error : `scripts API ${res.status}`,
-    );
+    // FastAPI validation errors arrive as {detail: ...} (string or array),
+    // while our own handlers use {error: ...} — surface whichever is present.
+    const raw = data?.error ?? data?.detail;
+    const msg =
+      typeof raw === 'string'
+        ? raw
+        : raw != null
+          ? JSON.stringify(raw)
+          : `scripts API ${res.status}`;
+    throw new Error(msg);
   }
   return data as T;
 }

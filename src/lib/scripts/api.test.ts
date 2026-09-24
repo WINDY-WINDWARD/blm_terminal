@@ -67,3 +67,32 @@ describe('scripts api contract', () => {
     expect(sent.param_values).toEqual({ len: 5 });
   });
 });
+
+describe('scripts api errors', () => {
+  function stubFailure(status: number, body: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status, json: async () => body }) as Response),
+    );
+  }
+
+  it('surfaces backend {error} verbatim', async () => {
+    stubFailure(409, { error: 'duplicate script name' });
+    await expect(fetchScripts()).rejects.toThrow('duplicate script name');
+  });
+
+  it('surfaces FastAPI {detail} string instead of a bare status', async () => {
+    stubFailure(404, { detail: 'script not found' });
+    await expect(fetchScriptDetail(9)).rejects.toThrow('script not found');
+  });
+
+  it('stringifies FastAPI {detail} arrays', async () => {
+    stubFailure(422, { detail: [{ loc: ['x'], msg: 'bad', type: 'x' }] });
+    await expect(fetchChartState('p')).rejects.toThrow('bad');
+  });
+
+  it('falls back to status when the body is empty', async () => {
+    stubFailure(500, {});
+    await expect(fetchScripts()).rejects.toThrow('scripts API 500');
+  });
+});

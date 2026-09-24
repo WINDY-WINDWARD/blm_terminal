@@ -109,6 +109,15 @@ class TestToolRegistration:
 
 
 class TestValidateTool:
+    async def test_unset_user_raises_instead_of_defaulting(self, mem_db):
+        from app.services.script_ai_tools import list_scripts
+        token = current_user_id.set(None)
+        try:
+            with pytest.raises(RuntimeError, match="current_user_id is not set"):
+                await list_scripts()
+        finally:
+            current_user_id.reset(token)
+
     async def test_valid_seed(self, mem_db):
         from app.services.script_ai_tools import validate_script_code
         out = await validate_script_code(VALID)

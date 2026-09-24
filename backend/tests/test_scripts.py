@@ -238,6 +238,32 @@ class TestCrud:
         rows = client.get("/api/chart-state?panel_id=panel-1").json()
         assert rows[0]["param_values"] == {"len1": 7}  # len2 dropped, len1 kept
 
+    def test_rollback_migrates_chart_params(self, client):
+        v1 = SEEDS[0][2].replace('"SMA-20/50"', '"RBM"')
+        sid = client.post("/api/scripts", json={"name": "RBM", "code": v1}).json()["id"]
+        # Revise swapping len2 for len3 (mirrors test_revise_migrates_chart_params),
+        # then store a value for len3 (valid against rev 2).
+        v2 = v1.replace(
+            '"params":[',
+            '"params":[{"key":"len3","label":"Extra","type":"int","default":5,"min":1,"max":9},',
+        ).replace(
+            ',{"key":"len2","label":"Slow length","type":"int","default":50,"min":2,"max":200}', ""
+        ).replace("ctx.params.len2", "ctx.params.len3")
+        r = client.post(f"/api/scripts/{sid}/revise", json={"code": v2})
+        assert r.status_code == 200, r.text
+        client.post("/api/chart-state?panel_id=panel-1",
+                    json={"script_id": sid, "param_values": {"len1": 7, "len3": 5}})
+        # Rollback to rev 1 (no len3): stored values migrate, len3 dropped.
+        rb = client.post(f"/api/scripts/{sid}/rollback", json={"rev_no": 1})
+        assert rb.status_code == 200, rb.text
+        rows = client.get("/api/chart-state?panel_id=panel-1").json()
+        assert rows[0]["param_values"] == {"len1": 7}
+        # The reviewer's sequence: rollback-then-disable must not 422.
+        off = client.post("/api/chart-state?panel_id=panel-1",
+                          json={"script_id": sid, "enabled": False,
+                                "param_values": rows[0]["param_values"]})
+        assert off.status_code == 200, off.text
+
 
 class TestChartState:
     def test_set_get_rejects_unknown_params(self, client):

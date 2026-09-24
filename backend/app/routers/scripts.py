@@ -73,10 +73,15 @@ async def _head_rev(db: AsyncSession, script: SavedScript) -> ScriptRevision | N
 
 def _migrate_params(old_manifest: dict, new_manifest: dict, values: dict) -> dict:
     """Param auto-migration: surviving keys keep values, new keys dropped
-    (host fills manifest defaults), removed keys dropped."""
+    (host fills manifest defaults), removed keys dropped. Prototype-polluting
+    keys are never carried over (frontend params.ts parity)."""
     old_keys = {p.get("key") for p in old_manifest.get("params", []) if isinstance(p, dict)}
     new_keys = {p.get("key") for p in new_manifest.get("params", []) if isinstance(p, dict)}
-    return {k: v for k, v in values.items() if k in old_keys and k in new_keys}
+    return {
+        k: v
+        for k, v in values.items()
+        if k in old_keys and k in new_keys and k not in ("__proto__", "constructor", "prototype")
+    }
 
 
 @router.get("/scripts", response_model=list[ScriptSummaryOut], tags=["scripts"])
@@ -117,7 +122,6 @@ async def get_script(
     )
     revs = (await db.execute(q)).scalars().all()
     history = [_rev_out(r) for r in revs]
-    head = next((h for h in history if h.rev_no == (history[-1].rev_no if history else None)), None)
     head_rev = await _head_rev(db, script)
     head = _rev_out(head_rev) if head_rev else None
     return ScriptDetailOut(
@@ -265,7 +269,24 @@ async def rollback_script(
     rev = (await db.execute(q)).scalar_one_or_none()
     if rev is None:
         raise HTTPException(status_code=404, detail="revision not found")
+    # Rollback re-points the head, so stored chart params must migrate the
+    # same way revise does — otherwise a later disable 422s on unknown keys.
+    old_head = await _head_rev(db, script)
+    old_manifest = old_head.manifest if old_head is not None else {"params": []}
+    new_manifest = rev.manifest or {}
     script.head_rev_id = rev.id
+    rows = (
+        await db.execute(
+            select(ScriptChartState).where(
+                ScriptChartState.user_id == current_user.id,
+                ScriptChartState.script_id == script.id,
+            )
+        )
+    ).scalars().all()
+    for st in rows:
+        st.param_values = _migrate_params(
+            old_manifest, new_manifest, dict(st.param_values or {})
+        )
     await db.commit()
     return await get_script(script.id, current_user, db)
 
