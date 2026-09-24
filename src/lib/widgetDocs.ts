@@ -855,7 +855,7 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'AI Script mode',
         items: [
-          { name: 'Research | Σ Script toggle', desc: 'Per-session switch in the AI header, sent with every chat POST. Script mode adds the Script Lab system prompt (manifest format, BLM stdlib, limits).' },
+          { name: 'Research | Σ Script sliding switch', desc: 'Per-session sliding switch in the AI header, sent with every chat POST. Script mode adds the Script Lab system prompt (manifest format, BLM stdlib, limits). The model pill next to the input switches models.' },
           { name: 'Workflow', desc: 'Ask in plain words ("RSI bands with 70/30 lines"). The AI lists/gets prior scripts, validates the code with validate_script_code, then create_script / revise_script. Validation is static + fixture dry-run — you accept before anything renders.' },
           { name: 'Script card', desc: 'Each create/revise emits a Σ card in the turn (name, created vs revised + rev number). Accept → chart enables that revision on the focused chart panel; Discard only hides the card — the script stays saved.' },
           { name: 'Revisions', desc: 'Revises are immutable and append-only. Roll back from history, tune params live in the chart Σ menu (params survive revises and rollback). Nothing renders until you Accept.' },

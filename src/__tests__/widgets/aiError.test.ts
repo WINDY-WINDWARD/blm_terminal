@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modeChipClass, modeToggleClass, sanitizeAiErrorMessage } from '@/components/widgets/AiWidget';
+import { modeKnobClass, modeTrackClass, sanitizeAiErrorMessage, shortModelLabel } from '@/components/widgets/AiWidget';
 
 describe('sanitizeAiErrorMessage', () => {
   it('replaces raw JSON error blobs with a generic line', () => {
@@ -20,23 +20,31 @@ describe('sanitizeAiErrorMessage', () => {
   });
 });
 
-describe('AI mode hues (Issue 5)', () => {
-  it('active mode is a solid pill with a per-mode hue', () => {
-    expect(modeToggleClass('research', 'research')).toContain('bg-terminal-amber');
-    expect(modeToggleClass('script', 'script')).toContain('bg-emerald-400');
-    for (const cls of [modeToggleClass('research', 'research'), modeToggleClass('script', 'script')]) {
+describe('AI sliding mode-switch hues', () => {
+  it('track is tinted with the active hue', () => {
+    expect(modeTrackClass('research')).toContain('bg-terminal-amber');
+    expect(modeTrackClass('script')).toContain('bg-emerald-400');
+    expect(modeTrackClass('research')).not.toContain('emerald');
+    expect(modeTrackClass('script')).not.toContain('terminal-amber');
+  });
+
+  it('knob is a solid pill parked on the active side', () => {
+    const r = modeKnobClass('research');
+    const s = modeKnobClass('script');
+    for (const cls of [r, s]) {
       expect(cls).toContain('text-black');
       expect(cls).toContain('font-bold');
     }
+    expect(r).toContain('bg-terminal-amber');
+    expect(r).toContain('left-[2px]');
+    expect(s).toContain('bg-emerald-400');
+    expect(s).toContain('left-[calc(50%+1px)]');
   });
+});
 
-  it('inactive mode is dim, never a solid pill', () => {
-    expect(modeToggleClass('research', 'script')).not.toContain('bg-');
-    expect(modeToggleClass('script', 'research')).not.toContain('bg-');
-  });
-
-  it('input chip mirrors the toggle hues', () => {
-    expect(modeChipClass('research')).toContain('bg-terminal-amber');
-    expect(modeChipClass('script')).toContain('bg-emerald-400');
+describe('shortModelLabel', () => {
+  it('strips [Provider] prefixes, leaves plain labels', () => {
+    expect(shortModelLabel('[Zen] kimi-k2.5')).toBe('kimi-k2.5');
+    expect(shortModelLabel('gpt-4o')).toBe('gpt-4o');
   });
 });

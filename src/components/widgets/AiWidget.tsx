@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { unstable_batchedUpdates } from 'react-dom';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -25,6 +26,7 @@ import {
   stashCard,
 } from '@/lib/scripts/cardStash';
 import { cn } from '@/lib/utils';
+import { computePopoverPos } from '@/lib/scripts/popoverPos';
 
 /**
  * Defense-in-depth: no backend path should ever leak a raw JSON blob into
@@ -43,20 +45,26 @@ export function sanitizeAiErrorMessage(message: string): string {
 }
 
 /**
- * Mode-toggle hue contract (Issue 5): the active mode is a solid pill and
- * each mode owns a hue — amber = Research, emerald = Script. Exported for
- * tests so the toggle can never silently regress to two dim buttons.
+ * Sliding mode-switch contract: a single track tinted with the active hue,
+ * one solid knob carrying the active label — amber = Research, emerald =
+ * Script. Exported for tests so the switch can never silently regress to
+ * two dim buttons again.
  */
-export function modeToggleClass(mode: AiMode, sessionMode: AiMode): string {
-  const active = sessionMode === mode;
-  if (!active) return 'inactive';
-  return mode === 'script'
-    ? 'bg-emerald-400 text-black font-bold'
-    : 'bg-terminal-amber text-black font-bold';
+export function modeTrackClass(sessionMode: AiMode): string {
+  return sessionMode === 'script'
+    ? 'bg-emerald-400/15 border-emerald-400/50'
+    : 'bg-terminal-amber/15 border-terminal-amber/40';
 }
 
-export function modeChipClass(sessionMode: AiMode): string {
-  return sessionMode === 'script' ? 'bg-emerald-400 text-black' : 'bg-terminal-amber text-black';
+export function modeKnobClass(sessionMode: AiMode): string {
+  return sessionMode === 'script'
+    ? 'left-[calc(50%+1px)] bg-emerald-400 text-black font-bold'
+    : 'left-[2px] bg-terminal-amber text-black font-bold';
+}
+
+/** Short label for the model pill — strips any "[Provider]" prefix. */
+export function shortModelLabel(label: string): string {
+  return label.replace(/^\[[^\]]+\]\s*/, '');
 }
 
 // ─── Personas ─────────────────────────────────────────────────────────────────
@@ -509,6 +517,72 @@ export function AiWidget() {
   });
   const availableModels: ModelOption[] = modelsData ?? [];
   const defaultModel = availableModels[0]?.id ?? '';
+
+  // Model-picker groups for the input-area pill — same grouping the old
+  // header <select> used: Free/Paid when is_free is known, otherwise split
+  // "[Provider]" label prefixes into sections.
+  const modelGroups = React.useMemo(() => {
+    if (availableModels.some((m) => m.is_free !== undefined)) {
+      return [
+        { label: 'Free Models', items: availableModels.filter((m) => m.is_free) },
+        { label: 'Paid Models', items: availableModels.filter((m) => !m.is_free) },
+      ].filter((g) => g.items.length > 0);
+    }
+    const groups = new Map<string, ModelOption[]>();
+    const ungrouped: ModelOption[] = [];
+    for (const m of availableModels) {
+      const match = /^\[([^\]]+)\]\s*/.exec(m.label);
+      if (match) {
+        const g = groups.get(match[1]) ?? [];
+        g.push(m);
+        groups.set(match[1], g);
+      } else {
+        ungrouped.push(m);
+      }
+    }
+    const out = [...groups.entries()].map(([label, items]) => ({ label, items }));
+    if (ungrouped.length > 0) out.push({ label: '', items: ungrouped });
+    return out;
+  }, [availableModels]);
+
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelMenuPos, setModelMenuPos] = useState({ top: 0, left: 0 });
+  const modelPillRef = useRef<HTMLButtonElement>(null);
+
+  const openModelMenu = useCallback(() => {
+    const r = modelPillRef.current?.getBoundingClientRect();
+    if (r) {
+      // Anchored at the input pill (bottom of widget): no room below, so
+      // the shared anchor math flips it into a drop-up automatically.
+      const pos = computePopoverPos(
+        r,
+        { width: window.innerWidth, height: window.innerHeight },
+        220,
+        280,
+      );
+      setModelMenuPos({ top: pos.top, left: pos.left });
+    }
+    setModelMenuOpen(true);
+  }, []);
+
+  // Dismiss the model menu on outside pointer-down or Esc.
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('[data-model-menu]') || t?.closest?.('[data-testid="ai-model-pill"]')) return;
+      setModelMenuOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setModelMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [modelMenuOpen]);
 
   // ── Session map — the core of the isolation model ─────────────────────────
   // Keys: real session IDs (number) OR null for the unsent scratch chat.
@@ -1147,115 +1221,39 @@ export function AiWidget() {
             ☰
           </button>
 
-          <select
-            value={model || defaultModel}
-            onChange={(e) => patchSession(activeKey, { model: e.target.value })}
-            disabled={isStreaming}
-            className="bg-terminal-bg border border-terminal-amber/20 text-terminal-amber/70 text-[10px] font-mono px-1 py-0.5 rounded outline-none focus:border-terminal-amber/50 disabled:opacity-50 max-w-[170px]"
-          >
-            {availableModels.length > 0 ? (
-              availableModels.some((m) => m.is_free !== undefined) ? (
-                <>
-                  {availableModels.some((m) => m.is_free) && (
-                    <optgroup label="Free Models" className="bg-[#121418] text-terminal-amber font-bold">
-                      {availableModels
-                        .filter((m) => m.is_free)
-                        .map((m) => (
-                          <option key={m.id} value={m.id} className="text-white font-normal">
-                            {m.label}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                  {availableModels.some((m) => !m.is_free) && (
-                    <optgroup label="Paid Models" className="bg-[#121418] text-white/50 font-bold">
-                      {availableModels
-                        .filter((m) => !m.is_free)
-                        .map((m) => (
-                          <option key={m.id} value={m.id} className="text-white font-normal">
-                            {m.label}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                </>
-              ) : (
-                // Group by [Provider] label prefix when present (multi-provider
-                // catalogs); flat list otherwise.
-                (() => {
-                  const groups = new Map<string, ModelOption[]>();
-                  const ungrouped: ModelOption[] = [];
-                  for (const m of availableModels) {
-                    const match = /^\[([^\]]+)\]\s*/.exec(m.label);
-                    if (match) {
-                      const g = groups.get(match[1]) ?? [];
-                      g.push(m);
-                      groups.set(match[1], g);
-                    } else {
-                      ungrouped.push(m);
-                    }
-                  }
-                  if (groups.size === 0) {
-                    return availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ));
-                  }
-                  return (
-                    <>
-                      {[...groups.entries()].map(([name, items]) => (
-                        <optgroup key={name} label={name} className="bg-[#121418] text-terminal-amber font-bold">
-                          {items.map((m) => (
-                            <option key={m.id} value={m.id} className="text-white font-normal">
-                              {m.label}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                      {ungrouped.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </>
-                  );
-                })()
-              )
-            ) : (
-              <option value="">Loading models…</option>
-            )}
-          </select>
-
           <span className="text-terminal-amber/30 text-[10px] truncate flex-1">
             ctx: {symbol}.{exchange}
           </span>
 
-          {/* Research | Script mode — per session, sent with every chat POST.
-              Distinct hues so the active mode is unmistakable at a glance:
-              amber = Research, emerald = Script. */}
-          <div className="flex rounded overflow-hidden border border-terminal-amber/20 shrink-0" title="Research answers questions; Script writes versioned chart scripts (Script Lab)">
-            {(['research', 'script'] as const).map((m) => {
-              const active = sessionMode === m;
-              return (
-                <button
-                  key={m}
-                  data-testid={`ai-mode-${m}`}
-                  data-active={active ? 'true' : 'false'}
-                  onClick={() => patchSession(activeKey, { mode: m })}
-                  disabled={isStreaming}
-                  className={cn(
-                    'px-1.5 py-0.5 text-[10px] font-mono transition-colors disabled:opacity-50',
-                    !active
-                      ? 'text-terminal-amber/40 hover:text-terminal-amber/70'
-                      : modeToggleClass(m, sessionMode),
-                  )}
-                >
-                  {m === 'research' ? 'Research' : 'Σ Script'}
-                </button>
-              );
-            })}
-          </div>
+          {/* Sliding Research | Script switch — per session, sent with every
+              chat POST. Single track tinted with the active hue, one solid
+              knob carrying the active label: amber = Research, emerald = Script. */}
+          <button
+            role="switch"
+            aria-checked={sessionMode === 'script'}
+            data-testid="ai-mode-toggle"
+            data-mode={sessionMode}
+            onClick={() => patchSession(activeKey, { mode: sessionMode === 'script' ? 'research' : 'script' })}
+            disabled={isStreaming}
+            title="Research answers questions; Script writes versioned chart scripts (Script Lab)"
+            className={cn(
+              'relative w-[112px] h-[22px] rounded-full border transition-colors shrink-0 disabled:opacity-50',
+              modeTrackClass(sessionMode),
+            )}
+          >
+            <span className="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-mono text-terminal-amber/40 pointer-events-none">
+              <span>Research</span>
+              <span>Σ</span>
+            </span>
+            <span
+              className={cn(
+                'absolute top-[2px] bottom-[2px] w-[calc(50%-3px)] rounded-full text-[10px] font-mono flex items-center justify-center transition-all',
+                modeKnobClass(sessionMode),
+              )}
+            >
+              {sessionMode === 'script' ? 'Σ Script' : 'Research'}
+            </span>
+          </button>
 
           {/* Streaming indicator in header when viewing a streaming session */}
           {isStreaming && (
@@ -1330,18 +1328,49 @@ export function AiWidget() {
 
         {/* Input area */}
         <div className="shrink-0 border-t border-terminal-amber/10 px-2 py-1.5 flex gap-2 items-end bg-terminal-gray/5">
-          {/* Mode chip — mirrors the header toggle so the active mode is
-              visible right where you type. */}
-          <span
-            data-testid="ai-mode-chip"
-            title={sessionMode === 'script' ? 'Script mode — AI writes chart scripts' : 'Research mode — AI answers questions'}
-            className={cn(
-              'shrink-0 self-center px-1.5 py-0.5 text-[10px] font-mono font-bold rounded',
-              modeChipClass(sessionMode),
-            )}
+          {/* Model pill — shows the session's model; click to switch. The
+              header sliding switch owns the Research/Script mode now. */}
+          <button
+            ref={modelPillRef}
+            data-testid="ai-model-pill"
+            title={`Model: ${availableModels.find((m) => m.id === (model || defaultModel))?.label ?? 'loading…'} — click to switch`}
+            onClick={() => (modelMenuOpen ? setModelMenuOpen(false) : openModelMenu())}
+            disabled={isStreaming || availableModels.length === 0}
+            className="shrink-0 self-center max-w-[110px] truncate px-1.5 py-0.5 text-[10px] font-mono font-bold rounded bg-terminal-amber/15 border border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/25 transition-colors disabled:opacity-50"
           >
-            {sessionMode === 'script' ? 'Σ SCRIPT' : 'RESEARCH'}
-          </span>
+            ▾ {shortModelLabel(availableModels.find((m) => m.id === (model || defaultModel))?.label ?? 'model…')}
+          </button>
+          {modelMenuOpen && createPortal(
+            <div
+              data-model-menu
+              className="fixed z-[90] w-[220px] max-h-[280px] overflow-y-auto rounded border border-terminal-amber/30 bg-[#121418] py-1 shadow-xl"
+              style={{ top: modelMenuPos.top, left: modelMenuPos.left }}
+            >
+              {modelGroups.map((g) => (
+                <div key={g.label || 'all'}>
+                  {g.label && (
+                    <div className="px-2 pt-1 text-[9px] font-mono font-bold text-terminal-amber/60">{g.label}</div>
+                  )}
+                  {g.items.map((m) => {
+                    const current = m.id === (model || defaultModel);
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => { patchSession(activeKey, { model: m.id }); setModelMenuOpen(false); }}
+                        className={cn(
+                          'w-full text-left px-2 py-1 text-[10px] font-mono truncate transition-colors',
+                          current ? 'text-terminal-amber font-bold' : 'text-white/70 hover:bg-terminal-amber/10 hover:text-white',
+                        )}
+                      >
+                        {current ? '✓ ' : ''}{shortModelLabel(m.label)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>,
+            document.body,
+          )}
           <textarea
             ref={inputRef}
             value={input}
