@@ -9,9 +9,14 @@ import type {
 } from './types';
 
 const BASE = '/api/py/scripts';
+// NOTE: chart-state lives at the top level of the backend scripts router
+// (/api/chart-state), NOT nested under /scripts — /api/scripts/chart-state
+// would bind {script_id}="chart-state" and 422 on int parsing.
+const STATE_BASE = '/api/py/chart-state';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const url = path.startsWith('/api/') ? path : `${BASE}${path}`;
+  const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
@@ -33,7 +38,7 @@ export function fetchScriptDetail(id: number): Promise<SavedScriptDetail> {
 }
 
 export function fetchChartState(panelId: string): Promise<ScriptChartSlot[]> {
-  return req<ScriptChartSlot[]>(`/chart-state?panel_id=${encodeURIComponent(panelId)}`);
+  return req<ScriptChartSlot[]>(`${STATE_BASE}?panel_id=${encodeURIComponent(panelId)}`);
 }
 
 export interface ChartSlotSet {
@@ -43,7 +48,7 @@ export interface ChartSlotSet {
 }
 
 export function setChartSlot(panelId: string, slot: ChartSlotSet): Promise<ScriptChartSlot> {
-  return req<ScriptChartSlot>(`/chart-state?panel_id=${encodeURIComponent(panelId)}`, {
+  return req<ScriptChartSlot>(`${STATE_BASE}?panel_id=${encodeURIComponent(panelId)}`, {
     method: 'POST',
     body: JSON.stringify(slot),
   });

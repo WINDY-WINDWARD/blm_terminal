@@ -50,12 +50,11 @@ export function ChartScriptsMenu({
   const setPrefill = useSetAtom(aiPrefillAtom);
 
   /**
-   * Refine-with-AI handoff (focus-or-popout). Prefills the AI input with a
-   * script-scoped prompt: same-window AI panel → atom + focus; no AI panel
-   * on the grid → localStorage bridge + AI popout (consumed on mount).
+   * AI handoff delivery (focus-or-popout). Prefills the AI input (which
+   * switches it to Script mode): same-window AI panel → atom + focus;
+   * no AI panel on the grid → localStorage bridge + AI popout.
    */
-  const refineWithAi = (scriptId: number, name: string, revNo: number | null) => {
-    const prompt = buildRefinePrompt(name, scriptId, revNo);
+  const deliverToAi = (prompt: string) => {
     const aiPanelId = findAiPanel(panels);
     if (aiPanelId) {
       setPrefill({ text: prompt, ts: Date.now() });
@@ -72,6 +71,23 @@ export function ChartScriptsMenu({
       window.open('/widget/AI', '_blank', 'width=1000,height=700');
     }
     setOpen(false);
+  };
+
+  /**
+   * Refine-with-AI handoff: prefill with a script-scoped prompt.
+   */
+  const refineWithAi = (scriptId: number, name: string, revNo: number | null) => {
+    deliverToAi(buildRefinePrompt(name, scriptId, revNo));
+  };
+
+  /**
+   * New-script-via-AI handoff: the AI asks what to build, writes it,
+   * validates it, and returns an Accept card that attaches here.
+   */
+  const createWithAi = () => {
+    deliverToAi(
+      'Create a new chart script for me. Ask what it should compute and show, then write it.',
+    );
   };
 
   const catalogQuery = useQuery({
@@ -206,6 +222,15 @@ export function ChartScriptsMenu({
               {c.is_builtin && <span className="text-white/30 text-[10px]">builtin</span>}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={createWithAi}
+            className="w-full text-left px-2 py-1.5 flex items-center gap-2 text-terminal-amber hover:bg-zinc-800 border-t border-terminal-gray/60"
+            title="Describe a new script to the AI — it writes, validates and saves it, then you Accept it onto this chart"
+          >
+            <span>＋</span>
+            <span>New script via AI…</span>
+          </button>
         </div>
       )}
     </div>
