@@ -75,6 +75,8 @@ Remove-Item -Recurse -Force "dist" -ErrorAction SilentlyContinue
     --collect-all "apify_fingerprint_datapoints" `
     --collect-all "language_tags" `
     main.py
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE — refusing to package without a backend." }
+if (-not (Test-Path "dist\blm-backend.exe")) { throw "PyInstaller reported success but dist\blm-backend.exe is missing — refusing to package without a backend." }
 
 Write-Host "Build complete! Executable is at backend\dist\blm-backend.exe"
 } finally {
