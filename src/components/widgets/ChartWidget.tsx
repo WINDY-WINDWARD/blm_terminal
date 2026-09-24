@@ -9,7 +9,7 @@ import {
   HistogramSeries,
   LineStyle,
 } from 'lightweight-charts';
-import type { IChartApi, IPriceLine, ISeriesApi, Time } from 'lightweight-charts';
+import type { IChartApi, IPaneApi, IPriceLine, ISeriesApi, Time } from 'lightweight-charts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import {
@@ -175,6 +175,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
   const indicatorSeriesRef = useRef<ISeriesApi<'Line' | 'Histogram', Time>[]>([]);
+  // Panes created by the indicator rebuild, tracked by object identity so
+  // teardown removes ONLY these — script-owned panes (Script Lab) must
+  // survive indicator rebuilds on every tick.
+  const indicatorPanesRef = useRef<IPaneApi<Time>[]>([]);
   const liveLineRef = useRef<IPriceLine | null>(null);
   // L3: fitContent only when the symbol/interval key changes, never on polls.
   const fitKeyRef = useRef('');
@@ -565,9 +569,19 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       }
     }
     indicatorSeriesRef.current = [];
-    while (chart.panes().length > 1) {
-      chart.removePane(chart.panes().length - 1);
+    // Remove only indicator-owned panes (by identity) — the script pane and
+    // any other foreign pane survive.
+    for (const p of indicatorPanesRef.current) {
+      const idx = chart.panes().indexOf(p);
+      if (idx > 0) {
+        try {
+          chart.removePane(idx);
+        } catch {
+          /* already removed */
+        }
+      }
     }
+    indicatorPanesRef.current = [];
 
     // Rebuild bars with the same mapping as the render effects above.
     let bars: IndicatorCandle[] = [];
@@ -640,6 +654,15 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       return chart.panes().length;
     };
 
+    /** Record a pane created by addSeries-at-end so teardown owns it. */
+    const trackOscPane = () => {
+      const panes = chart.panes();
+      const created = panes[panes.length - 1];
+      if (created && !indicatorPanesRef.current.includes(created)) {
+        indicatorPanesRef.current.push(created);
+      }
+    };
+
     const addOscLine = (
       vals: (number | null)[],
       color: string,
@@ -659,6 +682,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       );
       s.setData(toLineData(vals));
       chart.panes()[paneIndex]?.setStretchFactor(0.35);
+      trackOscPane();
       if (bands) {
         for (const level of bands) {
           s.createPriceLine({
@@ -738,6 +762,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
             ),
           );
           chart.panes()[paneIndex]?.setStretchFactor(0.35);
+          trackOscPane();
           indicatorSeriesRef.current.push(histS);
           addOscLine(m.macdLine, ind.color, paneIndex);
           addOscLine(m.signalLine, '#FF6D00', paneIndex);

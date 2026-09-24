@@ -19,6 +19,7 @@ import {
 } from 'lightweight-charts';
 import type {
   IChartApi,
+  IPaneApi,
   IPrimitivePaneRenderer,
   IPrimitivePaneView,
   IPriceLine,
@@ -267,6 +268,10 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
   const ownedMarkers = useRef<ISeriesMarkersPluginApi<Time>[]>([]);
   const ownedPrimitives = useRef<ISeriesPrimitive<Time>[]>([]);
   const ownedLines = useRef<IPriceLine[]>([]);
+  // One shared pane for all overlay:false script outputs (oscillator-style,
+  // like the Fx RSI pane). Tracked by object identity: the indicator rebuild
+  // removes only its own panes, so this one survives ticks.
+  const ownedPaneRef = useRef<IPaneApi<Time> | null>(null);
   const epochRef = useRef(0);
   const strikesRef = useRef(new Map<number, number>());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -277,6 +282,20 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
   const teardown = () => {
     const chart = chartRef.current;
     const main = mainRef.current;
+    // Remove the script pane first — its series die with it; the bags are
+    // cleared below (stale removes are try/catch-guarded).
+    const pane = ownedPaneRef.current;
+    if (pane && chart) {
+      const idx = chart.panes().indexOf(pane);
+      if (idx > 0) {
+        try {
+          chart.removePane(idx);
+        } catch {
+          /* already removed */
+        }
+      }
+      ownedPaneRef.current = null;
+    }
     for (const s of ownedSeries.current) {
       try {
         chart?.removeSeries(s);
@@ -310,6 +329,26 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
     }
     ownedLines.current = [];
   };
+
+  /** Lazily create (or reuse) the shared script oscillator pane. */
+  const ensureScriptPane = (chart: IChartApi): number => {
+    const existing = ownedPaneRef.current;
+    if (existing) {
+      const idx = chart.panes().indexOf(existing);
+      if (idx > 0) return idx;
+      ownedPaneRef.current = null;
+    }
+    chart.addPane();
+    const panes = chart.panes();
+    const created = panes[panes.length - 1];
+    created.setStretchFactor(0.35);
+    ownedPaneRef.current = created;
+    return panes.length - 1;
+  };
+
+  /** Outputs that belong on the script pane (Fx-style separate graph). */
+  const isPaneOutput = (o: { kind: string; overlay?: boolean }): boolean =>
+    o.overlay === false && (o.kind === 'line' || o.kind === 'histogram' || o.kind === 'priceline');
 
   // Unmount: never leave script artifacts on a dead chart.
   useEffect(
@@ -353,6 +392,13 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
         if (epoch !== epochRef.current) return;
         // Single swap: drop the previous render before painting the new one.
         teardown();
+        // One shared oscillator pane for all overlay:false outputs. Computed
+        // across every active slot so the pane persists while any slot needs
+        // it (markers/band stay on main in v1 even when overlay:false).
+        const needPane = active.some(({ detail }) =>
+          ((detail.head?.manifest as ScriptManifest | undefined)?.outputs ?? []).some(isPaneOutput),
+        );
+        const paneIdx = needPane ? ensureScriptPane(chart) : null;
         const runBars = bars.slice(-MAX_BARS_PER_RUN);
         const runTimes = runBars.map((b) => b.time);
         for (const { slot, detail } of active) {
@@ -402,7 +448,7 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
               markers: ownedMarkers.current,
               primitives: ownedPrimitives.current,
               lines: ownedLines.current,
-            });
+            }, paneIdx);
           } catch (e) {
             // A throwing paint must not leave a torn-down chart with no
             // output and no error: count it as a run failure so the 3-strike
@@ -434,11 +480,38 @@ function paintOutputs(
   manifest: ScriptManifest,
   values: Record<string, ScriptOutputValues>,
   bags: OwnedBags,
+  paneIdx: number | null,
 ): void {
+  const onPane = (o: { kind: string; overlay?: boolean }): boolean =>
+    paneIdx !== null &&
+    o.overlay === false &&
+    (o.kind === 'line' || o.kind === 'histogram' || o.kind === 'priceline');
+  // Host series for pane pricelines: first pane line wins; a hidden anchor
+  // covers pane-priceline-only outputs (e.g. bare levels).
+  let paneHost: ISeriesApi<'Line', Time> | null = null;
+  const ensurePaneHost = (): ISeriesApi<'Line', Time> => {
+    if (!paneHost) {
+      paneHost = chart.addSeries(
+        LineSeries,
+        {
+          color: '#00000000',
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          visible: false,
+        },
+        paneIdx as number,
+      );
+      bags.series.push(paneHost);
+    }
+    return paneHost;
+  };
   for (const o of manifest.outputs) {
     const v = values[o.id];
     if (v === undefined) continue;
     const color = o.color ?? '#FFB900';
+    const targetPane = onPane(o) ? (paneIdx as number) : undefined;
     switch (o.kind) {
       case 'line': {
         if (!Array.isArray(v)) break;
@@ -449,9 +522,10 @@ function paintOutputs(
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
-        });
+        }, targetPane);
         s.setData(toLineData(times, v as (number | null)[]));
         bags.series.push(s);
+        if (targetPane !== undefined && !paneHost) paneHost = s;
         break;
       }
       case 'histogram': {
@@ -459,7 +533,7 @@ function paintOutputs(
         const s = chart.addSeries(HistogramSeries, {
           priceScaleId: '',
           priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
-        });
+        }, targetPane);
         s.setData(
           (v as (number | null)[]).flatMap((val, i) =>
             val == null || !Number.isFinite(val)
@@ -490,8 +564,9 @@ function paintOutputs(
       }
       case 'priceline': {
         if (typeof v !== 'number' || !Number.isFinite(v)) break;
+        const host = targetPane !== undefined ? ensurePaneHost() : main;
         bags.lines.push(
-          main.createPriceLine({
+          host.createPriceLine({
             price: v,
             color,
             lineWidth: 1,
