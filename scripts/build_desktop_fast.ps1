@@ -111,7 +111,7 @@ Set-Location $RepoRoot
 $cssHit = Get-ChildItem -Path (Join-Path $RepoRoot ".next\static\*") -Recurse -Include *.css -ErrorAction SilentlyContinue |
     Select-String -Pattern "terminal-amber" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $cssHit) {
-    throw "Frontend CSS verification failed: no themed CSS (terminal-amber) under .next/static. The Next.js output is missing or stale — run with -Full, then re-run."
+    throw "Frontend CSS verification failed: no themed CSS (terminal-amber) under .next/static. The Next.js output is missing or stale -- run with -Full, then re-run."
 }
 # Same stderr-drain discipline as above: builder warnings must not terminate.
 $prevPref = $ErrorActionPreference
