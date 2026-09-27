@@ -2,8 +2,24 @@ import { expect, test, type Page } from '@playwright/test';
 
 const MODAL = 'div.fixed.inset-0.z-50:has-text("FIRST-TIME SETUP")';
 
-async function mockBackend(page: Page, opts: { needsSetup: boolean; authed: boolean }) {
+async function mockBackend(
+  page: Page,
+  opts: { needsSetup: boolean; authed: boolean; eulaAccepted?: boolean },
+) {
   let authed = opts.authed;
+  // Stateful: flips to true when the app POSTs /eula/accept so a post-wizard
+  // reload sees the agreement persisted (mirrors the DB-backed endpoint).
+  let eulaAccepted = opts.eulaAccepted ?? true;
+  await page.route('**/api/py/eula-status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { accepted: eulaAccepted, version: 'eula-v1', accepted_at: eulaAccepted ? 123 : null },
+    });
+  });
+  await page.route('**/api/py/eula/accept', async (route) => {
+    eulaAccepted = true;
+    await route.fulfill({ status: 200, json: { accepted: true, version: 'eula-v1', accepted_at: 123 } });
+  });
   await page.route('**/api/py/auth/setup-status', async (route) => {
     await route.fulfill({ status: 200, json: { needs_setup: opts.needsSetup && !authed } });
   });
@@ -63,20 +79,31 @@ async function finishTour(page: Page) {
 test('fresh boot: wizard → create admin → consent → skip AI → tour → done persists', async ({
   page,
 }) => {
-  await mockBackend(page, { needsSetup: true, authed: false });
+  await mockBackend(page, { needsSetup: true, authed: false, eulaAccepted: false });
   await page.goto('/');
 
-  // Step 1: welcome
+  // Step 1: EULA (must agree before anything else)
   await expect(page.locator(MODAL)).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(MODAL)).toContainText('End-User License Agreement');
+  await expect(
+    page.locator(`${MODAL} button:has-text("Continue")`),
+  ).toBeDisabled();
+  await page.locator(`${MODAL} input[type="checkbox"]`).check();
+  await expect(
+    page.locator(`${MODAL} button:has-text("Continue")`),
+  ).toBeEnabled();
+  await clickContinue(page);
+
+  // Step 2: welcome
   await expect(page.locator(MODAL)).toContainText('Welcome to BLM Terminal.');
   await clickContinue(page);
 
-  // Step 2: backend (mocked 401 = alive)
+  // Step 3: backend (mocked 401 = alive)
   await expect(page.locator(MODAL)).toContainText('Checking engine status');
   await expect(page.locator(MODAL)).toContainText('Engine active', { timeout: 10_000 });
   await clickContinue(page);
 
-  // Step 3: create admin
+  // Step 4: create admin
   await expect(page.locator(MODAL)).toContainText('Create your administrator account');
   await page.locator(`${MODAL} input[type="text"]`).fill('admin');
   const passwords = page.locator(`${MODAL} input[type="password"]`);
@@ -86,16 +113,16 @@ test('fresh boot: wizard → create admin → consent → skip AI → tour → d
   await expect(page.locator(MODAL)).toContainText('Signed in as admin', { timeout: 10_000 });
   await clickContinue(page);
 
-  // Step 4: consent (agree immediately transitions to AI)
+  // Step 5: consent (agree immediately transitions to AI)
   await expect(page.locator(MODAL)).toContainText('Data extraction & privacy');
   await page.locator(`${MODAL} button:has-text("I Agree, Enable")`).click();
 
-  // Step 5: AI — skip
+  // Step 6: AI — skip
   await expect(page.locator(MODAL)).toContainText('AI assistant (optional)');
   await expect(page.locator(MODAL)).toContainText('generous free tier');
   await page.locator(`${MODAL} button:has-text("Set up later")`).click();
 
-  // Step 6: done → finish launches the tour
+  // Step 7: done → finish launches the tour
   await expect(page.locator(MODAL)).toContainText('Setup complete');
   await page.locator(`${MODAL} button:has-text("Finish & start tour")`).click();
   await expect(page.locator(MODAL)).toBeHidden({ timeout: 5000 });

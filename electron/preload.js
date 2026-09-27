@@ -29,4 +29,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setStoredItem: (key, value) => ipcRenderer.invoke('storage-set', key, value),
   removeStoredItem: (key) => ipcRenderer.invoke('storage-remove', key),
   getAllStoredItems: () => ipcRenderer.invoke('storage-get-all'),
+  // Close the whole app (EULA declined). fire-and-forget.
+  quitApp: () => ipcRenderer.send('eula-decline'),
 });

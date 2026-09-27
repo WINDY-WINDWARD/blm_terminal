@@ -81,6 +81,49 @@ export async function completeFirstBoot(): Promise<void> {
   if (!res.ok) throw new Error(`First-boot persist failed (HTTP ${res.status})`);
 }
 
+// ─── EULA (config table, one-way acceptance, re-checked every launch) ──────
+// The server's EULA_VERSION is the source of truth: only an exact stored
+// match reads as accepted, so a tampered/older row re-prompts. Unknown
+// (backend cold / 404 old backend) must NEVER read as accepted.
+
+export interface EulaStatus {
+  reachable: boolean;
+  accepted: boolean;
+  version: string | null;
+  acceptedAt: number | null;
+}
+
+export async function getEulaStatus(): Promise<EulaStatus> {
+  const UNKNOWN: EulaStatus = { reachable: false, accepted: false, version: null, acceptedAt: null };
+  let res: Response;
+  let data: unknown;
+  try {
+    ({ res, data } = await fetchJson('/api/py/eula-status', undefined, 5000));
+  } catch {
+    return UNKNOWN;
+  }
+  if (!res.ok) return UNKNOWN;
+  const d = data as { accepted?: unknown; version?: unknown; accepted_at?: unknown };
+  return {
+    reachable: true,
+    accepted: d.accepted === true,
+    version: typeof d.version === 'string' ? d.version : null,
+    acceptedAt: typeof d.accepted_at === 'number' ? d.accepted_at : null,
+  };
+}
+
+export async function acceptEula(version: string): Promise<void> {
+  const { res, data } = await fetchJson('/api/py/eula/accept', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version }),
+  }, 5000);
+  if (!res.ok) {
+    const detail = (data as { detail?: unknown })?.detail;
+    throw new Error(typeof detail === 'string' ? detail : `Could not record EULA acceptance (HTTP ${res.status})`);
+  }
+}
+
 // ─── Admin bootstrap / login ────────────────────────────────────────────────
 
 export async function setupFirstAdmin(username: string, password: string): Promise<AuthState> {

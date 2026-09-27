@@ -1,5 +1,6 @@
 """FastAPI router for editable system configuration values."""
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,64 @@ router = APIRouter(tags=["system-config"], dependencies=[Depends(get_current_use
 first_boot_router = APIRouter(tags=["first-boot"])
 
 ONBOARDING_COMPLETED_KEY = "app.onboarding_completed"
+
+# EULA acceptance: one-way record in the same config table. The API only ever
+# accepts agreement — there is deliberately no un-accept route. The stored
+# value is "<version>|<unix-ms>"; any mismatch/absence (including a hand-edited
+# or deleted row) reads as NOT accepted and re-prompts on the next launch.
+EULA_KEY = "app.eula_accepted"
+EULA_VERSION = "eula-v1"
+
+
+class EulaAcceptRequest(BaseModel):
+    version: str = Field(..., description="EULA version the user was shown")
+
+
+def _parse_eula(raw: str | None) -> tuple[bool, int | None]:
+    if not raw:
+        return False, None
+    version, _, ts = raw.partition("|")
+    if version != EULA_VERSION:
+        return False, None
+    try:
+        return True, int(ts)
+    except ValueError:
+        return True, None
+
+
+@first_boot_router.get("/eula-status")
+async def get_eula_status(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Whether the CURRENT EULA version has been accepted. Token-gated, pre-login.
+
+    Only an exact stored match counts — tampered/stale rows re-prompt."""
+    stmt = select(SystemConfig.value).where(SystemConfig.key == EULA_KEY)
+    row = (await db.execute(stmt)).first()
+    accepted, accepted_at = _parse_eula(row[0] if row else None)
+    return {
+        "accepted": accepted,
+        "version": EULA_VERSION,
+        "accepted_at": accepted_at,
+    }
+
+
+@first_boot_router.post("/eula/accept")
+async def accept_eula(
+    body: EulaAcceptRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Record EULA agreement. Idempotent, one-way (no inverse endpoint).
+    Rejects a version mismatch so a stale client can't accept unseen text."""
+    if body.version != EULA_VERSION:
+        raise HTTPException(status_code=409, detail=f"EULA version mismatch: current is {EULA_VERSION}")
+    now_ms = int(time.time() * 1000)
+    stmt = sqlite_insert(SystemConfig).values(key=EULA_KEY, value=f"{EULA_VERSION}|{now_ms}")
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["key"],
+        set_={"value": stmt.excluded.value},
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"accepted": True, "version": EULA_VERSION, "accepted_at": now_ms}
 
 
 @first_boot_router.get("/first-boot")

@@ -795,6 +795,14 @@ async function startApp() {
     ipcMain.on('storage-get-all-sync', (event) => {
       event.returnValue = terminalStorageData;
     });
+    // EULA declined: the renderer asks us to close the app. Nothing is
+    // recorded, so the next launch prompts again.
+    ipcMain.on('eula-decline', () => {
+      log('EULA declined — quitting app.');
+      isQuitting = true;
+      cleanupProcesses();
+      app.quit();
+    });
     ipcMain.handle('check-for-updates', async () => {
       log('IPC check-for-updates triggered');
       try {

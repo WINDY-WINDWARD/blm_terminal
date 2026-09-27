@@ -10,11 +10,13 @@ import {
   tutorialStatusAtom,
 } from '@/store/terminalStore';
 import {
+  acceptEula,
   checkAiStatus,
   checkBackendHealth,
   checkGeminiOAuthStatus,
   completeFirstBoot,
   fetchProviderModels,
+  getEulaStatus,
   getFirstBootStatus,
   getSetupStatus,
   initiateGeminiOAuth,
@@ -31,9 +33,10 @@ import { ENGINE_WARM_LIMIT, useWarmupMessage } from '@/components/EngineWarmup';
 import { ModelCombobox } from '@/components/ModelCombobox';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
 
-type StepId = 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'models' | 'done';
+type StepId = 'eula' | 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'models' | 'done';
 
 const STEPS: { id: StepId; label: string }[] = [
+  { id: 'eula', label: 'EULA' },
   { id: 'welcome', label: 'Welcome' },
   { id: 'backend', label: 'Backend' },
   { id: 'admin', label: 'Admin' },
@@ -81,6 +84,17 @@ export function FirstLaunchModal() {
   const [adminPass, setAdminPass] = useState('');
   const [adminPass2, setAdminPass2] = useState('');
   const [adminBusy, setAdminBusy] = useState(false);
+
+  // eula step — DB (system_config.app.eula_accepted) is the source of truth,
+  // re-checked every launch; localStorage is never trusted for this.
+  const [eulaStatus, setEulaStatus] = useState<{
+    reachable: boolean;
+    accepted: boolean;
+    version: string | null;
+  } | null>(null);
+  const [eulaAgreed, setEulaAgreed] = useState(false);
+  const [eulaBusy, setEulaBusy] = useState(false);
+  const [eulaError, setEulaError] = useState('');
 
   // consent step
   const [consentChoice, setConsentChoice] = useState<boolean | null>(null);
@@ -233,6 +247,48 @@ export function FirstLaunchModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
 
+  // EULA resolution (every launch): poll the DB-backed status like the
+  // first-boot flag above. Only an explicit accepted:true passes — unknown
+  // (cold backend/404) reads as NOT accepted so the agreement is re-flashed,
+  // which is also what makes a hand-edited/reverted DB row re-prompt.
+  // - reachable + false -> force the wizard open at the EULA step even when
+  //   onboarding was already completed (tamper re-flash path)
+  // - reachable + true  -> skip straight past the EULA to 'welcome'
+  // - unreachable -> keep polling (5s, ~5min cap), then resolve NOT accepted
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 60;
+    const pollEula = async () => {
+      if (cancelled || !isMountedRef.current) return;
+      attempts += 1;
+      let s;
+      try {
+        s = await getEulaStatus();
+      } catch {
+        s = { reachable: false, accepted: false, version: null, acceptedAt: null };
+      }
+      if (cancelled || !isMountedRef.current) return;
+      if (!s.reachable) {
+        if (attempts < MAX_ATTEMPTS) {
+          setTimeout(() => { void pollEula(); }, 5000);
+        } else {
+          setEulaStatus({ reachable: false, accepted: false, version: null });
+        }
+        return;
+      }
+      setEulaStatus({ reachable: true, accepted: s.accepted, version: s.version });
+      if (s.accepted) {
+        setEulaAgreed(true);
+        setStepIdx((i) => (i === 0 ? 1 : i)); // already agreed: start at 'welcome'
+      } else {
+        setStepIdx(0);
+      }
+    };
+    void pollEula();
+    return () => { cancelled = true; };
+  }, [mounted]);
+
   // Auto-retry the engine probe while it keeps failing. The packaged
   // backend can take 30-90s to boot on first launch, and the one-shot
   // probe above never refires on its own (health stays non-null), which
@@ -252,7 +308,10 @@ export function FirstLaunchModal() {
     return () => clearTimeout(t);
   }, [mounted, completed, step, health, healthChecking]);
 
-  if (!mounted || completed) return null;
+  // EULA overrides a completed onboarding: if the DB says the current EULA
+  // version was NOT accepted (fresh install, declined, or tampered row), the
+  // wizard re-opens regardless of `completed` — until then stay invisible.
+  if (!mounted || (completed && eulaStatus?.accepted !== false)) return null;
 
   // Loading gate: while the backend flag is unread, show a spinner instead
   // of the wizard. The wizard used to render immediately on mount while the
@@ -499,6 +558,7 @@ export function FirstLaunchModal() {
   };
 
   const canContinue =
+    (step === 'eula' && eulaStatus !== null && eulaAgreed && !eulaBusy) ||
     step === 'welcome' ||
     (step === 'backend' && health?.ok === true) ||
     (step === 'admin' && auth !== null) ||
@@ -506,6 +566,33 @@ export function FirstLaunchModal() {
     step === 'ai' ||
     step === 'models' ||
     step === 'done';
+
+  const handleEulaContinue = async () => {
+    if (step !== 'eula') return;
+    if (!eulaStatus || !eulaAgreed) return;
+    if (eulaStatus.accepted || !eulaStatus.version) {
+      next();
+      return;
+    }
+    setEulaBusy(true);
+    setEulaError('');
+    try {
+      await acceptEula(eulaStatus.version);
+      setEulaStatus((s) => (s ? { ...s, accepted: true } : s));
+      next();
+    } catch (err: unknown) {
+      setEulaError(errText(err, 'Could not record your agreement — please retry.'));
+    } finally {
+      setEulaBusy(false);
+    }
+  };
+
+  // Decline closes the whole app; nothing is written, so the next launch
+  // prompts again. Web dev fallback: close the tab.
+  const handleEulaDecline = () => {
+    if (window.electronAPI?.quitApp) window.electronAPI.quitApp();
+    else window.close();
+  };
 
   const next = () => setStepIdx((i) => Math.min(i + 1, STEPS.length - 1));
   const back = () => setStepIdx((i) => Math.max(i - 1, 0));
@@ -528,12 +615,119 @@ export function FirstLaunchModal() {
           ))}
         </div>
 
+        {step === 'eula' && (
+          <div className="space-y-3 text-sm">
+            <p className="text-base text-white font-semibold">End-User License Agreement</p>
+            {eulaStatus === null ? (
+              <p className="text-xs text-terminal-muted animate-pulse">Checking agreement status…</p>
+            ) : (
+              <>
+                <div className="rounded bg-[#1a1d23] border border-[#2d3139] p-3 max-h-[45vh] overflow-y-auto select-text text-[11px] leading-relaxed text-[#d1d5db] space-y-3">
+                  <p>
+                    This End-User License Agreement (&quot;Agreement&quot;) is a legal agreement
+                    between you and the creator of BLM Terminal (&quot;Creator&quot;) for the use of
+                    BLM Terminal software (the &quot;Software&quot;). By clicking &quot;I Agree&quot;,
+                    you confirm that you have read, understood, and accept all terms below. If you
+                    decline, the Software will close and you may not use it.
+                  </p>
+                  <p>
+                    <strong className="text-white">1. No investment advice.</strong> The Software
+                    provides market data, analytics, screeners, and AI-generated commentary for
+                    informational and educational purposes only. Nothing in the Software is an
+                    investment recommendation, an offer, or a solicitation. The Creator is not a
+                    SEBI-registered investment adviser, research analyst, or broker and does not
+                    provide advisory services of any kind.
+                  </p>
+                  <p>
+                    <strong className="text-white">2. You are solely responsible.</strong> You alone
+                    are responsible for every decision and action you take using the Software,
+                    including all trades, investments, and resulting profits or losses. You must
+                    independently verify all information before acting on it. The Creator does not
+                    guarantee any outcome.
+                  </p>
+                  <p>
+                    <strong className="text-white">3. Provided &quot;AS-IS&quot;.</strong> The
+                    Software is provided &quot;AS IS&quot; without warranties of any kind, whether
+                    express, implied, or statutory, including warranties of accuracy, timeliness,
+                    merchantability, fitness for a particular purpose, and non-infringement. Market
+                    data may be delayed, incomplete, or incorrect.
+                  </p>
+                  <p>
+                    <strong className="text-white">4. No liability.</strong> To the maximum extent
+                    permitted by law, the Creator and contributors shall not be liable for any
+                    direct, indirect, incidental, special, consequential, or punitive damages,
+                    including lost profits, lost capital, trading losses, business interruption,
+                    or data loss, arising out of or related to your use of (or inability to use)
+                    the Software, even if advised of the possibility of such damages.
+                  </p>
+                  <p>
+                    <strong className="text-white">5. Third-party data.</strong> Market data and
+                    other content are supplied by third parties (including exchanges such as NSE)
+                    and are subject to those third parties&apos; terms, licenses, and acceptable-use
+                    policies. Your use of that data is your responsibility.
+                  </p>
+                  <p>
+                    <strong className="text-white">6. Your accounts and credentials.</strong> You
+                    are solely responsible for API keys, credentials, session cookies, and license
+                    keys you provide to the Software, and for keeping them confidential. You are
+                    also solely responsible for ensuring your data extraction and use comply with
+                    all applicable laws and the terms of each data source.
+                  </p>
+                  <p>
+                    <strong className="text-white">7. Alpha software.</strong> The Software is
+                    alpha-stage and may contain bugs, change without notice, or experience data
+                    loss. You use it at your own risk.
+                  </p>
+                  <p>
+                    <strong className="text-white">8. Indemnity.</strong> You agree to indemnify,
+                    defend, and hold harmless the Creator and contributors from and against any
+                    claims, damages, losses, liabilities, costs, and expenses (including reasonable
+                    legal fees) arising from your use of the Software or breach of this Agreement.
+                  </p>
+                  <p>
+                    <strong className="text-white">9. Waiver.</strong> To the extent permitted by
+                    law, you waive any claim, recourse, or right of action against the Creator and
+                    contributors relating to your use of the Software.
+                  </p>
+                  <p className="text-terminal-muted">Version eula-v1</p>
+                </div>
+
+                {eulaError && (
+                  <div className="p-2 text-xs border bg-red-900/50 border-red-500 text-red-200">
+                    {eulaError}
+                  </div>
+                )}
+
+                <label className="flex items-start gap-2 text-xs text-[#d1d5db] cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={eulaAgreed}
+                    onChange={(e) => setEulaAgreed(e.target.checked)}
+                    className="mt-0.5 accent-[#f59e0b]"
+                  />
+                  <span>
+                    I have read and agree to the End-User License Agreement (Version eula-v1).
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleEulaDecline}
+                  className="rounded px-4 py-2 text-xs font-medium text-red-300 hover:text-red-100 bg-[#1a1d23] hover:bg-[#252830] transition border border-[#2d3139]"
+                >
+                  Decline &amp; Exit
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {step === 'welcome' && (
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">Welcome to BLM Terminal.</p>
             <p className="text-xs text-terminal-muted leading-relaxed">
               Welcome to the future of financial intelligence. In a few quick steps,
-              we'll activate your real-time analytics engine.
+              we&apos;ll activate your real-time analytics engine.
             </p>
           </div>
         )}
@@ -858,11 +1052,11 @@ export function FirstLaunchModal() {
               )}
               <button
                 type="button"
-                onClick={next}
+                onClick={step === 'eula' ? () => void handleEulaContinue() : next}
                 disabled={!canContinue}
                 className="rounded px-4 py-2 text-xs font-semibold text-white bg-[#2563eb] hover:bg-[#1d4ed8] transition shadow-sm disabled:opacity-40"
               >
-                Continue
+                {step === 'eula' && eulaBusy ? 'Recording…' : 'Continue'}
               </button>
             </div>
           ) : (

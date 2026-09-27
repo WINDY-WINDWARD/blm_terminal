@@ -30,6 +30,7 @@ declare global {
       setStoredItem?: (key: string, value: unknown) => Promise<boolean>;
       removeStoredItem?: (key: string) => Promise<boolean>;
       getAllStoredItems?: () => Promise<Record<string, unknown>>;
+      quitApp?: () => void;
     };
   }
 }
