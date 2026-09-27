@@ -891,6 +891,14 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   useEffect(() => {
     if (!scriptHandoff || scriptHandoff.panelId !== panelId) return;
     if (Date.now() - scriptHandoff.ts > 60000) {
+      // Card already reads "accepted", so a silent drop leaves the user
+      // guessing — flag it through the same surface as other script errors.
+      setScriptLastError({
+        panelId,
+        scriptId: scriptHandoff.scriptId,
+        message: 'Script handoff expired (>60s) — accept the card again or enable it from the script menu.',
+        ts: Date.now(),
+      });
       setScriptHandoff(null);
       return;
     }
