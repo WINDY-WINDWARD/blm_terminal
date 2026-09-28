@@ -51,16 +51,18 @@ DB_REFRESH_TOKEN_KEY = "ai.codex_refresh_token"
 # so this is maintained by hand from OpenAI's Codex models doc
 # (developers.openai.com/codex/models). Tier hints in labels tell users
 # what their ChatGPT plan unlocks; retired IDs (gpt-5.1-codex-* shut down
-# Jul 2026, gpt-5.2 / gpt-5.4 / gpt-5.4-mini retired Aug 2026) are dropped
-# because the backend 400s them with "model is not supported".
+# Jul 2026, gpt-5.2 / gpt-5.4 / gpt-5.4-mini retired Aug 2026,
+# gpt-5.3-codex / gpt-5.3-codex-spark deprecated per models doc Sep 2026)
+# are dropped because the backend 400s them with "model is not supported".
+# gpt-5.5 retires Oct 14 2026 — kept until then.
 CODEX_MODELS: list[dict[str, str]] = [
     {"id": "gpt-6-astra", "label": "[Codex] gpt-6-astra (newest)"},
+    {"id": "gpt-6-sol", "label": "[Codex] gpt-6-sol (complex coding, Plus and up)"},
+    {"id": "gpt-6-luna", "label": "[Codex] gpt-6-luna (fast, all plans)"},
     {"id": "gpt-5.6-sol", "label": "[Codex] gpt-5.6-sol (flagship, Plus and up)"},
     {"id": "gpt-5.6-terra", "label": "[Codex] gpt-5.6-terra (balanced, all plans)"},
     {"id": "gpt-5.6-luna", "label": "[Codex] gpt-5.6-luna (fast, Plus and up)"},
-    {"id": "gpt-5.5", "label": "[Codex] gpt-5.5"},
-    {"id": "gpt-5.3-codex", "label": "[Codex] gpt-5.3-codex (coding)"},
-    {"id": "gpt-5.3-codex-spark", "label": "[Codex] gpt-5.3-codex-spark (Pro only preview)"},
+    {"id": "gpt-5.5", "label": "[Codex] gpt-5.5 (retires Oct 14 2026)"},
 ]
 
 
