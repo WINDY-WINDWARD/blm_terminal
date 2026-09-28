@@ -1256,7 +1256,12 @@ export function AiWidget() {
               modeTrackClass(sessionMode),
             )}
           >
-            <span className="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-mono text-terminal-amber/60 pointer-events-none">
+            <span
+              className={cn(
+                'absolute inset-0 flex items-center justify-between px-2 text-[10px] font-mono font-bold pointer-events-none',
+                sessionMode === 'script' ? 'text-emerald-300/85' : 'text-terminal-amber/85',
+              )}
+            >
               <span>Research</span>
               <span>Σ</span>
             </span>
