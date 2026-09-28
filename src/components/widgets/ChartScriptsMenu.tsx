@@ -25,10 +25,12 @@ import type {
   ScriptParam,
 } from '@/lib/scripts/types';
 import {
+  deleteScript,
   fetchScripts,
   setChartSlot,
   type ChartSlotSet,
 } from '@/lib/scripts/api';
+import { pruneStashedScript } from '@/lib/scripts/cardStash';
 import { ScriptParamForm } from '@/lib/scripts/paramForm';
 import { computePopoverPos } from '@/lib/scripts/popoverPos';
 
@@ -164,7 +166,28 @@ export function ChartScriptsMenu({
     },
   });
 
-  const busy = mutate.isPending;
+  const delMutate = useMutation({
+    mutationFn: (scriptId: number) => deleteScript(scriptId),
+    onSuccess: (_data, scriptId) => {
+      pruneStashedScript(scriptId);
+      void queryClient.invalidateQueries({ queryKey: ['script-slots', panelId] });
+      void queryClient.invalidateQueries({ queryKey: ['script-detail', scriptId] });
+      void queryClient.invalidateQueries({ queryKey: ['scripts-catalog'] });
+      refetchSlots();
+      setParamScriptId(null);
+    },
+    onError: (err: unknown) => {
+      alert(err instanceof Error ? err.message : 'Delete failed');
+    },
+  });
+
+  const busy = mutate.isPending || delMutate.isPending;
+
+  const handleDelete = (row: Row) => {
+    if (row.isBuiltin) return;
+    if (!confirm(`Delete script "${row.name}"? It will be lost forever.`)) return;
+    delMutate.mutate(row.id);
+  };
   const enabledIds = new Set(slots.filter((s) => s.enabled).map((s) => s.script_id));
   const slotById = new Map(slots.map((s) => [s.script_id, s]));
   const catalog: SavedScriptSummary[] = catalogQuery.data ?? [];
@@ -377,6 +400,19 @@ export function ChartScriptsMenu({
                 onChange={(values) => setParams(paramRow, values)}
               />
             </div>
+            {!paramRow.isBuiltin && (
+              <div className="px-3 py-2 border-t border-terminal-gray/60 flex justify-end">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleDelete(paramRow)}
+                  className="text-[11px] text-terminal-red/80 hover:text-terminal-red border border-terminal-red/30 hover:border-terminal-red/60 rounded px-2 py-1 transition-colors disabled:opacity-50"
+                  title="Delete this script permanently"
+                >
+                  {delMutate.isPending ? 'Deleting…' : 'Delete script'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

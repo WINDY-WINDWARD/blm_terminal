@@ -7,7 +7,6 @@ export const SCRIPT_SPEC_VERSION = 1;
 export const MAX_CODE_BYTES = 64 * 1024;
 export const MAX_PARAMS = 24;
 export const MAX_OUTPUTS = 8;
-export const MAX_BARS_PER_RUN = 2000;
 export const EXEC_TIMEOUT_MS = 2000;
 
 export type ScriptParamType = 'int' | 'number' | 'bool' | 'select' | 'color' | 'source';

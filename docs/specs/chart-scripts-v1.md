@@ -119,13 +119,13 @@ function calculate(ctx) {
 - Series arrays MUST have length === `ctx.bars.length` (`number|null` per bar;
   markers: array per bar). Length mismatch is a runtime error.
 - Execution budget: ≤2000ms wall (watchdog terminates the worker).
-- Code size ≤64KB. Bars supplied ≤2000 (host truncates).
+- Code size ≤64KB. Bars supplied = full loaded chart history (no truncation).
 
 ### 4.1 `ctx` shape
 
 ```ts
 type Ctx = {
-  bars: Bar[];            // ascending time, ≤2000
+  bars: Bar[];            // ascending time, full loaded history
   params: Record<string, number | boolean | string>;
   fundamentals?: {
     quarterly: Array<{      // ascending by period, step-filled across bars
@@ -186,7 +186,7 @@ on short input. `na` handling follows the existing engine: propagate `null`.
 | code size        | ≤64KB  | validator (static)   |
 | params           | ≤24    | validator (manifest) |
 | outputs          | ≤8     | validator (manifest) |
-| bars per run     | ≤2000  | host (truncates)     |
+| bars per run     | full loaded history | host (no truncation) |
 | exec time        | ≤2000ms| worker watchdog      |
 
 ## 7. Error taxonomy

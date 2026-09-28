@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  deleteScript,
   fetchChartState,
   fetchScriptDetail,
   fetchScripts,
@@ -65,6 +66,11 @@ describe('scripts api contract', () => {
     await setChartSlot('panel-1', { script_id: 3, enabled: true, param_values: { len: 5 } });
     const sent = JSON.parse(calls[0].body ?? '{}') as Record<string, unknown>;
     expect(sent.param_values).toEqual({ len: 5 });
+  });
+
+  it('delete hits POST /api/py/scripts/:id/delete', async () => {
+    await deleteScript(9);
+    expect(calls).toEqual([{ url: '/api/py/scripts/9/delete', method: 'POST' }]);
   });
 });
 

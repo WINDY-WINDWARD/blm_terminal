@@ -1,5 +1,11 @@
 import { vi } from 'vitest';
 
+export type VisibleRange = { from: number; to: number };
+export type VisibleRangeHandler = (lr: VisibleRange | null) => void;
+
+/** Captured subscribeVisibleLogicalRangeChange handlers (tests fire these). */
+export const visibleRangeHandlers = new Set<VisibleRangeHandler>();
+
 const makeSeries = () => ({
   setData: vi.fn(),
   update: vi.fn(),
@@ -41,6 +47,14 @@ export const createChart = vi.fn(() => {
     timeScale: vi.fn(() => ({
       fitContent: vi.fn(),
       setVisibleRange: vi.fn(),
+      getVisibleLogicalRange: vi.fn(() => ({ from: 60, to: 120 })),
+      setVisibleLogicalRange: vi.fn(),
+      subscribeVisibleLogicalRangeChange: vi.fn((h: VisibleRangeHandler) => {
+        visibleRangeHandlers.add(h);
+      }),
+      unsubscribeVisibleLogicalRangeChange: vi.fn((h: VisibleRangeHandler) => {
+        visibleRangeHandlers.delete(h);
+      }),
     })),
     subscribeCrosshairMove: vi.fn(),
     unsubscribeCrosshairMove: vi.fn(),

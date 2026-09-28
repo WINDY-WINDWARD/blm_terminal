@@ -5,7 +5,7 @@
  */
 import { buildBlmSource, BLM_EXPORT_NAMES } from './stdlib';
 import type { ScriptCtx, ScriptManifest, ScriptOutputValues, ScriptRunResult } from './types';
-import { EXEC_TIMEOUT_MS, MAX_BARS_PER_RUN } from './types';
+import { EXEC_TIMEOUT_MS } from './types';
 
 export interface RunRequest {
   code: string;
@@ -156,8 +156,9 @@ function runInThread(code: string, manifest: ScriptManifest, ctx: ScriptCtx): Sc
 
 /** Execute a script off the main thread. Never rejects — errors are values. */
 export function runScript(req: RunRequest): Promise<ScriptRunResult> {
-  const bars = req.ctx.bars.slice(-MAX_BARS_PER_RUN);
-  const ctx: ScriptCtx = { ...req.ctx, bars };
+  // Full loaded history: scripts compute over every bar the chart holds.
+  // EXEC_TIMEOUT_MS remains the runaway guard for pathological scripts.
+  const ctx: ScriptCtx = { ...req.ctx };
   if (typeof Worker === 'undefined') {
     return Promise.resolve(runInThread(req.code, req.manifest, ctx));
   }
@@ -199,7 +200,7 @@ export function runScript(req: RunRequest): Promise<ScriptRunResult> {
         finish(data);
         return;
       }
-      const shapeErr = checkOutputShape(req.manifest, data.values, bars.length);
+      const shapeErr = checkOutputShape(req.manifest, data.values, req.ctx.bars.length);
       clear();
       if (shapeErr) {
         finish({ ok: false, code: shapeErr.split(':')[0], message: shapeErr });

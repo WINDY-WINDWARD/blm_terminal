@@ -204,6 +204,16 @@ class TestCrud:
         assert client.get(f"/api/scripts/{sid}").status_code == 404
         assert all(i["name"] != "Tmp2" for i in client.get("/api/scripts").json())
 
+    def test_deleted_name_stays_reserved(self, client):
+        code = SEEDS[0][2].replace('"SMA-20/50"', '"Gone"')
+        sid = client.post("/api/scripts", json={"name": "Gone", "code": code}).json()["id"]
+        assert client.post(f"/api/scripts/{sid}/delete").json() == {"ok": True}
+        # Soft-deleted rows keep the unique (user, name) slot: reusing the
+        # name 409s with the standard message (surfaced, not silent).
+        r = client.post("/api/scripts", json={"name": "Gone", "code": code})
+        assert r.status_code == 409
+        assert "already exists" in r.json()["detail"]
+
     def test_builtin_protected(self, client):
         builtin = client.get("/api/scripts").json()[0]["id"]
         assert client.post(f"/api/scripts/{builtin}/delete").status_code == 403

@@ -35,6 +35,18 @@ import {
   LIVE_STALE_MS,
   type BrewInput,
 } from '@/lib/scripts/liveBar';
+import {
+  EMPTY_STOP_STREAK,
+  HISTORY_MAX_AGE_S,
+  dailyBackfillRange,
+  historyCache,
+  historyCacheKey,
+  intradayBackfillRange,
+  mapDailyCandles,
+  mapIntradayCandles,
+  mergeHistoryBars,
+  shouldBackfill,
+} from '@/lib/chartHistory';
 import type { ActiveIndicator, IndicatorCandle } from '@/lib/indicators/types';
 import { clampIndicators } from '@/lib/indicators/presets';
 import {
@@ -145,9 +157,14 @@ async function fetchBackendOHLCV(
 async function fetchIntradayOHLCV(
   symbol: string,
   interval: Interval,
+  fromTsMs?: number,
+  toTsMs?: number,
 ): Promise<IntradayOHLCVResponse> {
+  const params = new URLSearchParams({ interval });
+  if (fromTsMs !== undefined) params.set('from_ts', String(Math.floor(fromTsMs)));
+  if (toTsMs !== undefined) params.set('to_ts', String(Math.floor(toTsMs)));
   const res = await fetch(
-    `/api/py/ticker/intraday/${encodeURIComponent(symbol)}?interval=${interval}`,
+    `/api/py/ticker/intraday/${encodeURIComponent(symbol)}?${params.toString()}`,
   );
   if (!res.ok) throw new Error(`Backend error ${res.status}`);
   return res.json() as Promise<IntradayOHLCVResponse>;
@@ -184,6 +201,28 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const fitKeyRef = useRef('');
   // Tracks whether a brewing bar is currently painted (for stale-drop).
   const brewActiveRef = useRef(false);
+  // --- Scroll-back history (memory-only, never persisted) ---
+  // Extra older bars merged under the query windows below. Cleared on
+  // symbol/interval switch; the shared historyCache adds a 2h TTL.
+  const extraBarsRef = useRef<BrewInput[]>([]);
+  const [extraVer, setExtraVer] = useState(0);
+  const bfStateRef = useRef({ epoch: 0, inFlight: false, emptyStreak: 0, exhausted: false, suppress: false });
+  // Fresh-per-render feed for the stable range-change handler.
+  const feedRef = useRef<{ symbol: string; interval: Interval; isDaily: boolean; oldestSec: number }>({
+    symbol: '',
+    interval: 'D',
+    isDaily: true,
+    oldestSec: 0,
+  });
+  const lastRangeRef = useRef(0);
+
+  const resetBackfill = () => {
+    bfStateRef.current.epoch += 1;
+    bfStateRef.current.inFlight = false;
+    bfStateRef.current.emptyStreak = 0;
+    bfStateRef.current.exhausted = false;
+    extraBarsRef.current = [];
+  };
   const [globalSymbol] = useAtom(activeSymbolAtom);
   const [globalExchange] = useAtom(activeExchangeAtom);
   const [overrides, setOverrides] = useAtom(chartSymbolOverridesAtom);
@@ -301,6 +340,10 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['backend-ohlcv', symbol] });
     void queryClient.invalidateQueries({ queryKey: ['intraday-ohlcv', symbol] });
+    // Refresh restarts history from the head window (backfill re-fetches on scroll).
+    resetBackfill();
+    historyCache.clearPrefix(`${symbol}|${interval}|`);
+    setExtraVer((v) => v + 1);
   };
 
   // ---------- Build chart (once on mount) ----------
@@ -353,53 +396,145 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     };
     window.addEventListener('resize', handleResize);
 
+    // Scroll-back history: fetch older windows as the user pans left.
+    // Memory-only (historyCache 2h TTL + per-chart ref) — never persisted.
+    // The suppress flag breaks the re-entrancy loop: our own
+    // setVisibleLogicalRange restore would otherwise re-trigger a fetch.
+    // One timeScale handle: the mock (and v5 impl) may hand out a fresh
+    // wrapper per call, so subscribe + restore must share this instance.
+    const timeScale = chart.timeScale();
+    const doBackfill = async (savedFrom: number, savedTo: number) => {
+      const st = bfStateRef.current;
+      if (st.inFlight || st.exhausted) return;
+      const feed = feedRef.current;
+      const epoch = st.epoch;
+      if (!feed.oldestSec) return;
+      if (feed.oldestSec < Date.now() / 1000 - HISTORY_MAX_AGE_S) {
+        st.exhausted = true;
+        return;
+      }
+      st.inFlight = true;
+      try {
+        let fetched: BrewInput[] | null = null;
+        let key = '';
+        if (feed.isDaily) {
+          const { fromDate, toDate } = dailyBackfillRange(feed.oldestSec);
+          key = historyCacheKey(feed.symbol, feed.interval, fromDate);
+          fetched = historyCache.get(key);
+          if (!fetched) {
+            const res = await fetchBackendOHLCV(feed.symbol, fromDate, toDate);
+            fetched = mapDailyCandles(res.candles ?? []);
+            historyCache.set(key, fetched);
+          }
+        } else {
+          const win = intradayBackfillRange(feed.oldestSec, feed.interval);
+          if (!win) {
+            // W/M load full history up front — nothing to backfill.
+            st.exhausted = true;
+            return;
+          }
+          key = historyCacheKey(feed.symbol, feed.interval, String(win.fromTsMs));
+          fetched = historyCache.get(key);
+          if (!fetched) {
+            const res = await fetchIntradayOHLCV(feed.symbol, feed.interval, win.fromTsMs, win.toTsMs);
+            fetched = mapIntradayCandles(res.candles ?? []);
+            historyCache.set(key, fetched);
+          }
+        }
+        if (st.epoch !== epoch) return;
+        if (fetched.length === 0) {
+          st.emptyStreak += 1;
+          if (st.emptyStreak >= EMPTY_STOP_STREAK) st.exhausted = true;
+          return;
+        }
+        st.emptyStreak = 0;
+        const prevLen = extraBarsRef.current.length;
+        extraBarsRef.current = mergeHistoryBars(extraBarsRef.current, fetched);
+        const added = extraBarsRef.current.length - prevLen;
+        setExtraVer((v) => v + 1);
+        if (added > 0) {
+          // Prepending shifts logical indices right: restore the viewport.
+          st.suppress = true;
+          try {
+            timeScale.setVisibleLogicalRange({ from: savedFrom + added, to: savedTo + added });
+          } finally {
+            st.suppress = false;
+          }
+        }
+      } catch {
+        // Silent: a failed window retries on the next scroll nudge.
+      } finally {
+        st.inFlight = false;
+      }
+    };
+
+    const onVisibleRange = (lr: { from: number; to: number } | null) => {
+      const st = bfStateRef.current;
+      if (st.suppress) return;
+      const now = Date.now();
+      if (now - lastRangeRef.current < 300) return;
+      lastRangeRef.current = now;
+      const range = lr ?? timeScale.getVisibleLogicalRange();
+      const from = range?.from;
+      if (!shouldBackfill(typeof from === 'number' ? from : null)) return;
+      const to = range?.to ?? (typeof from === 'number' ? from + 100 : 0);
+      void doBackfill(typeof from === 'number' ? from : 0, to);
+    };
+    timeScale.subscribeVisibleLogicalRangeChange(onVisibleRange);
+
     return () => {
       window.removeEventListener('resize', handleResize);
+      timeScale.unsubscribeVisibleLogicalRangeChange(onVisibleRange);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
     };
   }, []);
 
-  // Clear chart when symbol, exchange, or interval changes
+  // Clear chart when symbol, exchange, or interval changes. Backfill
+  // state resets too: extra bars, guards, and this pair's cache entries.
+  // (Other pairs' entries linger until the 2h TTL sweeps them.)
   useEffect(() => {
     if (seriesRef.current) {
       seriesRef.current.setData([]);
     }
+    resetBackfill();
+    historyCache.clearPrefix(`${symbol}|${interval}|`);
+    setExtraVer((v) => v + 1);
   }, [symbol, exchange, interval]);
 
   // ---------- Server bars in brew-friendly shape ----------
   // Single source for the candle render, the brewing bar, and (via the
   // ScriptBar memo below) the script runner. Null = no paintable data.
+  // Scroll-back bars (memory-only, never persisted) merge UNDER the query
+  // window so polls, brew, indicators, and scripts all share one array.
   const dailyServerBars: BrewInput[] | null = useMemo(() => {
     if (!isDaily || !histData?.candles?.length || histData._symbol !== symbol) return null;
-    return histData.candles
-      .map((candle) => ({
-        time: new Date(candle.Date + 'T00:00:00Z').getTime() / 1000,
-        o: candle.open,
-        h: candle.high,
-        l: candle.low,
-        c: candle.close,
-        v: candle.volume,
-      }))
-      .sort((a, b) => a.time - b.time);
-  }, [isDaily, histData, symbol]);
+    const base = mapDailyCandles(histData.candles);
+    return mergeHistoryBars(base, extraBarsRef.current);
+    // extraVer is a version tick for extraBarsRef mutations (refs are invisible to deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDaily, histData, symbol, extraVer]);
 
   const intradayServerBars: BrewInput[] | null = useMemo(() => {
     if (!isIntraday || !intradayData?.candles?.length || intradayData._symbol !== symbol)
       return null;
-    return intradayData.candles
-      .map((candle) => ({
-        // NSE charting timestamps are Unix ms – divide by 1000 for lightweight-charts
-        time: Math.floor(candle.timestamp / 1000),
-        o: candle.open,
-        h: candle.high,
-        l: candle.low,
-        c: candle.close,
-        v: candle.volume,
-      }))
-      .sort((a, b) => a.time - b.time);
-  }, [isIntraday, intradayData, symbol]);
+    const base = mapIntradayCandles(intradayData.candles);
+    return mergeHistoryBars(base, extraBarsRef.current);
+    // extraVer is a version tick for extraBarsRef mutations (refs are invisible to deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isIntraday, intradayData, symbol, extraVer]);
+
+  // Fresh-per-render feed (oldest loaded bar) for the stable scroll-back handler.
+  useEffect(() => {
+    const server = isDaily ? dailyServerBars : intradayServerBars;
+    feedRef.current = {
+      symbol,
+      interval,
+      isDaily,
+      oldestSec: server?.length ? server[0].time : 0,
+    };
+  });
 
   // ---------- Render daily bars ----------
   useEffect(() => {
@@ -583,33 +718,18 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     }
     indicatorPanesRef.current = [];
 
-    // Rebuild bars with the same mapping as the render effects above.
+    // Rebuild bars from the merged server memos (scroll-back included).
     let bars: IndicatorCandle[] = [];
-    if (isDaily) {
-      if (!histData?.candles?.length || histData._symbol !== symbol) return;
-      bars = histData.candles
-        .map((c) => ({
-          time: new Date(c.Date + 'T00:00:00Z').getTime() / 1000,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-        }))
-        .sort((a, b) => a.time - b.time);
-    } else {
-      if (!intradayData?.candles?.length || intradayData._symbol !== symbol) return;
-      bars = intradayData.candles
-        .map((c) => ({
-          time: Math.floor(c.timestamp / 1000),
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-        }))
-        .sort((a, b) => a.time - b.time);
-    }
+    const server = isDaily ? dailyServerBars : intradayServerBars;
+    if (!server?.length) return;
+    bars = server.map((b) => ({
+      time: b.time,
+      open: b.o,
+      high: b.h,
+      low: b.l,
+      close: b.c,
+      volume: b.v,
+    }));
     if (bars.length === 0) return;
 
     // LIVE line on all intervals — dashed amber, history untouched.
@@ -798,7 +918,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [histData, intradayData, symbol, interval, indicators, tick?.ltp, tick?.updatedAt]);
+  }, [dailyServerBars, intradayServerBars, symbol, interval, indicators, tick?.ltp, tick?.updatedAt]);
 
   // ---------- Script Lab v1 ----------
   // Declared AFTER the main overlay effect: same-component hook order
@@ -809,25 +929,13 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const [scriptHandoff, setScriptHandoff] = useAtom(scriptChartHandoffAtom);
   const [scriptLastError, setScriptLastError] = useAtom(scriptLastErrorAtom);
 
-  // Bars in ScriptBar shape — same mapping as the overlay effect above.
+  // Bars in ScriptBar shape — the merged server memos above, so scripts
+  // see scroll-back history too (full loaded history, Part C).
   const scriptBars: ScriptBar[] = useMemo(() => {
-    const map = (time: number, o: number, h: number, l: number, c: number, v: number): ScriptBar => ({
-      time, o, h, l, c, v,
-    });
-    let out: ScriptBar[] = [];
-    if (isDaily) {
-      if (!histData?.candles?.length || histData._symbol !== symbol) return [];
-      out = histData.candles.map((cc) =>
-        map(new Date(cc.Date + 'T00:00:00Z').getTime() / 1000, cc.open, cc.high, cc.low, cc.close, cc.volume),
-      );
-    } else {
-      if (!intradayData?.candles?.length || intradayData._symbol !== symbol) return [];
-      out = intradayData.candles.map((cc) =>
-        map(Math.floor(cc.timestamp / 1000), cc.open, cc.high, cc.low, cc.close, cc.volume),
-      );
-    }
-    return out.sort((a, b) => a.time - b.time);
-  }, [isDaily, histData, intradayData, symbol]);
+    const server = isDaily ? dailyServerBars : intradayServerBars;
+    if (!server?.length) return [];
+    return server.map((b) => ({ time: b.time, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }));
+  }, [isDaily, dailyServerBars, intradayServerBars]);
 
   // Scripts see the same brewing bar as the candles, flagged live:true
   // (L5) — so script outputs track the forming bar instead of stopping at

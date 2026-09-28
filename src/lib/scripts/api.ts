@@ -64,3 +64,7 @@ export function setChartSlot(panelId: string, slot: ChartSlotSet): Promise<Scrip
     body: JSON.stringify(slot),
   });
 }
+
+export function deleteScript(id: number): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>(`/${id}/delete`, { method: 'POST' });
+}

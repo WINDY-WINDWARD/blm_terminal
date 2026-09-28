@@ -32,7 +32,6 @@ import type {
 } from 'lightweight-charts';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import {
-  MAX_BARS_PER_RUN,
   type SavedScriptDetail,
   type ScriptBar,
   type ScriptChartSlot,
@@ -404,7 +403,7 @@ export function useScriptedOverlays(args: ScriptedOverlaysArgs): void {
           ((detail.head?.manifest as ScriptManifest | undefined)?.outputs ?? []).some(isPaneOutput),
         );
         const paneIdx = needPane ? ensureScriptPane(chart) : null;
-        const runBars = bars.slice(-MAX_BARS_PER_RUN);
+        const runBars = bars;
         const runTimes = runBars.map((b) => b.time);
         for (const { slot, detail } of active) {
           if (epoch !== epochRef.current) return;

@@ -118,6 +118,22 @@ export function pruneStashedSession(sessionId: SessionKey): void {
   writeStash(stash);
 }
 
+/** Drop all stashed cards for a deleted script, across every session. */
+export function pruneStashedScript(scriptId: number): void {
+  const stash = readStash();
+  let touched = false;
+  for (const key of Object.keys(stash)) {
+    const list = stash[key];
+    if (!Array.isArray(list)) continue;
+    const kept = list.filter((c) => c.script_id !== scriptId);
+    if (kept.length !== list.length) {
+      stash[key] = kept;
+      touched = true;
+    }
+  }
+  if (touched) writeStash(stash);
+}
+
 const SCRIPT_MUTATION_TOOLS = new Set(['create_script', 'revise_script']);
 
 /** Minimal message shape needed for card re-attachment. */

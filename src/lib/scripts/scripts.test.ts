@@ -149,6 +149,28 @@ describe('validateScript dry-run', () => {
     const v = await validateScript(twoColor);
     expect(v.valid).toBe(true);
   });
+
+  it('runScript computes over the full loaded history (no 2000-bar truncation)', async () => {
+    const manifest = validateManifest(GOOD).manifest!;
+    const many = sampleBars(2500);
+    const r = await runScript({
+      code: GOOD,
+      manifest,
+      ctx: {
+        bars: many,
+        params: { len: 20 },
+        symbol: 'X',
+        exchange: 'NSE',
+        interval: '1d',
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.stats.bars).toBe(2500);
+      const series = r.values.a as unknown[];
+      expect(series.length).toBe(2500);
+    }
+  });
 });
 
 describe('checkOutputShape', () => {

@@ -121,6 +121,56 @@ async def get_ohlcv(
     candles = await asyncio.to_thread(
         ticker_warehouse.get_ohlcv, symbol, from_date_obj, to_date_obj
     )
+
+    # 2b. No-store backfill: if the requested window starts before stored
+    # history, fetch the missing older span from NSE Charting and prepend it
+    # WITHOUT persisting (extended history is memory-only on the client).
+    # The forward on-demand backfill above is untouched.
+    if from_date_obj is not None:
+        earliest_stored = candles[0]["date"] if candles else (to_date_obj or date.today())
+        if from_date_obj < earliest_stored:
+            try:
+                span_from = from_date_obj
+                # Clamp a single no-store fetch to ~3 years server-side.
+                clamp = earliest_stored - timedelta(days=3 * 365)
+                if span_from < clamp:
+                    span_from = clamp
+                span_to = earliest_stored - timedelta(days=1)
+                f_from = int(datetime.combine(span_from, datetime.min.time(), tzinfo=timezone.utc).timestamp())
+                f_to = int(datetime.combine(span_to, datetime.max.time(), tzinfo=timezone.utc).timestamp())
+                if f_to >= f_from:
+                    raw_old = await fetch_candles_async(symbol, "D", from_ts=f_from, to_ts=f_to)
+                    seen_dates = {c["date"] for c in candles}
+                    extra = []
+                    for c in raw_old or []:
+                        ts_ms = c.get("time_ms")
+                        if not ts_ms:
+                            continue
+                        dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+                        if dt < span_from or dt > span_to or dt in seen_dates:
+                            continue
+                        seen_dates.add(dt)
+                        close_val = float(c.get("close", 0))
+                        volume_val = int(c.get("volume", 0))
+                        extra.append({
+                            "symbol": symbol,
+                            "date": dt,
+                            "series": c.get("series", "EQ"),
+                            "open": float(c.get("open", 0)),
+                            "high": float(c.get("high", 0)),
+                            "low": float(c.get("low", 0)),
+                            "close": close_val,
+                            "volume": volume_val,
+                            "value": close_val * volume_val,
+                            "source": "nse_charting_nostore",
+                        })
+                    extra.sort(key=lambda r: r["date"])
+                    candles = extra + candles
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "[get_ohlcv] No-store backfill failed for %s: %s", symbol, exc
+                )
+
     candle_rows = [_row_to_schema(c) for c in candles]
 
     return TickerOHLCVResponse(
@@ -622,6 +672,39 @@ async def get_intraday_ohlcv(
         except ValueError as exc:
             logging.getLogger(__name__).warning("[intraday] Delta live fetch failed for %s/%s: %s - serving from cache", symbol, interval, exc)
 
+        # No-store backward fill (1h only): the cached delta above only
+        # fetches forward, so an explicit from_ts older than the standard
+        # 90d seed window is served straight from NSE WITHOUT upserting.
+        # Extended history is memory-only on the client, never persisted.
+        nostore_rows: list = []
+        if interval == "1h" and valid_from_ts:
+            seed_cutoff_ms = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000)
+            if valid_from_ts < seed_cutoff_ms:
+                try:
+                    back_to_s = int(valid_from_ts / 1000)
+                    back_from = max(back_to_s, int((datetime.now(timezone.utc) - timedelta(days=3 * 365)).timestamp()))
+                    back_to = int(valid_to_ts / 1000) if valid_to_ts else now_ts
+                    if back_to > back_from:
+                        raw_old = await fetch_candles_async(symbol, interval, from_ts=back_from, to_ts=back_to)
+                        seen_ts = set()
+                        for c in raw_old or []:
+                            ts_ms = c.get("time_ms")
+                            if not ts_ms or ts_ms in seen_ts:
+                                continue
+                            if ts_ms < valid_from_ts or (valid_to_ts and ts_ms > valid_to_ts):
+                                continue
+                            seen_ts.add(ts_ms)
+                            nostore_rows.append(IntradayCandleRow(
+                                timestamp=ts_ms,
+                                open=c["open"],
+                                high=c["high"],
+                                low=c["low"],
+                                close=c["close"],
+                                volume=c["volume"],
+                            ))
+                except ValueError as exc:
+                    logging.getLogger(__name__).warning("[intraday] No-store backward fill failed for %s/%s: %s", symbol, interval, exc)
+
         candles = await asyncio.to_thread(
             ticker_warehouse.get_intraday, symbol, interval, from_ts=valid_from_ts, to_ts=valid_to_ts
         )
@@ -636,6 +719,11 @@ async def get_intraday_ohlcv(
             )
             for c in candles
         ]
+        if nostore_rows:
+            have = {r.timestamp for r in candle_rows}
+            merged = [r for r in nostore_rows if r.timestamp not in have] + candle_rows
+            merged.sort(key=lambda r: r.timestamp)
+            candle_rows = merged
 
     return IntradayOHLCVResponse(
         symbol=symbol,

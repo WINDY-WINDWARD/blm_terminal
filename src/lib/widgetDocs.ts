@@ -873,7 +873,7 @@ const DOCS_MAP: WidgetDoc[] = [
         heading: 'Limits (v1)',
         items: [
           'Main pane only — no separate oscillator panes; histograms get their own scale.',
-          'Line cap 2000 bars per run; 24 params and 8 outputs max; 64KB code max.',
+          'Runs over the full loaded chart history; 24 params and 8 outputs max; 64KB code max; 2s execution budget.',
           'No custom drawings (markers cover the v1 cases), no alerts, no backtesting.',
           'Scripts needing fundamentals require Advanced Extraction consent (Safe Mode hides them).',
         ],
