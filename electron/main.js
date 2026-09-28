@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, screen, clipboard } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -632,6 +632,7 @@ async function startApp() {
       });
 
       widgetWindow.loadURL(targetUrl);
+      attachLinkGuards(widgetWindow);
       return widgetWindow;
     }
 
@@ -654,16 +655,37 @@ async function startApp() {
       });
 
       logsWindow.loadURL(targetUrl);
+      attachLinkGuards(logsWindow);
       return logsWindow;
     }
 
-    // Multi-Window Pop-out Interceptor
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // ---- External-link policy: everything leaves to the system browser
+    // except same-origin app routes and the news/announcement reader below.
+    // News rows Ctrl+Click / right-click into the system browser through the
+    // same shell.openExternal path.
+    function isHttpUrl(url) {
+      try {
+        const proto = new URL(url).protocol;
+        return proto === 'http:' || proto === 'https:';
+      } catch {
+        return false;
+      }
+    }
+
+    function isSameOrigin(url) {
+      try {
+        return new URL(url).origin === new URL(mainWindow.webContents.getURL()).origin;
+      } catch {
+        return false;
+      }
+    }
+
+    function openUrlPolicy({ url }) {
       log(`window.open intercepted: ${url}`);
       // If the frontend calls window.open (e.g. for popped out widgets or OAuth)
       if (url.includes('/widget/')) {
         createWidgetWindow(url);
-        return { action: 'deny' }; // Prevent default pop-up
+        return { action: 'deny' };
       }
 
       // Backend logs popout — create a lightweight BrowserWindow
@@ -671,15 +693,87 @@ async function startApp() {
         createLogsWindow(url);
         return { action: 'deny' };
       }
-      
+
       if (url.includes('accounts.google.com/o/oauth2')) {
         // Open OAuth in default system browser
         shell.openExternal(url);
         return { action: 'deny' };
       }
 
-      return { action: 'allow' };
-    });
+      if (isSameOrigin(url)) return { action: 'allow' };
+      if (isHttpUrl(url)) {
+        // YouTube walkthrough, provider/API-key pages, filing originals,
+        // publisher sites — all open in the user's own browser.
+        void shell.openExternal(url);
+        return { action: 'deny' };
+      }
+      return { action: 'deny' };
+    }
+
+    // Same-window navigations can't be trusted to stay internal when the
+    // target is data-driven (article URLs): bounce externals out.
+    function guardNavigation(win) {
+      win.webContents.on('will-navigate', (event, url) => {
+        if (!isSameOrigin(url) && isHttpUrl(url)) {
+          event.preventDefault();
+          void shell.openExternal(url);
+        }
+      });
+    }
+
+    // Right-click on a real <a> offers "Open Link in Browser" (+ copy).
+    // Plain divs get no menu — same as today.
+    function attachLinkMenu(win) {
+      win.webContents.on('context-menu', (_event, params) => {
+        const link = params && params.linkURL;
+        if (!link || !isHttpUrl(link)) return;
+        const menu = Menu.buildFromTemplate([
+          { label: 'Open Link in Browser', click: () => { void shell.openExternal(link); } },
+          { label: 'Copy Link Address', click: () => { clipboard.writeText(link); } },
+        ]);
+        menu.popup({ window: win });
+      });
+    }
+
+    function attachLinkGuards(win) {
+      win.webContents.setWindowOpenHandler(openUrlPolicy);
+      guardNavigation(win);
+      attachLinkMenu(win);
+    }
+
+    // Lightweight reader for news/announcement articles (in-app default;
+    // Ctrl+Click / right-click from the row goes to the system browser).
+    function createReaderWindow(targetUrl) {
+      const readerWindow = new BrowserWindow({
+        width: 1000,
+        height: 700,
+        titleBarStyle: 'hidden',
+        titleBarOverlay: {
+          color: '#121212',
+          symbolColor: '#ffb000',
+          height: 32
+        },
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: path.join(__dirname, 'preload.js')
+        }
+      });
+
+      readerWindow.webContents.on('before-input-event', (event, input) => {
+        if (input.key === 'F12') {
+          readerWindow.webContents.toggleDevTools();
+          event.preventDefault();
+        }
+      });
+
+      attachLinkGuards(readerWindow);
+      readerWindow.loadURL(targetUrl);
+      return readerWindow;
+    }
+
+    // Multi-Window Pop-out Interceptor
+    mainWindow.webContents.setWindowOpenHandler(openUrlPolicy);
 
     // Add F12 DevTools toggle for main window
     mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -802,6 +896,18 @@ async function startApp() {
       isQuitting = true;
       cleanupProcesses();
       app.quit();
+    });
+    // External links (YouTube walkthrough, provider pages, article
+    // Ctrl+Click / right-click): renderer asks, main opens the browser.
+    ipcMain.handle('open-external', async (_event, url) => {
+      if (typeof url !== 'string' || !isHttpUrl(url)) return { ok: false };
+      await shell.openExternal(url);
+      return { ok: true };
+    });
+    ipcMain.handle('open-in-app', async (_event, url) => {
+      if (typeof url !== 'string' || !isHttpUrl(url)) return { ok: false };
+      createReaderWindow(url);
+      return { ok: true };
     });
     ipcMain.handle('check-for-updates', async () => {
       log('IPC check-for-updates triggered');

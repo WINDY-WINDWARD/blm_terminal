@@ -163,3 +163,60 @@ class TestIntraday1hNoStore:
         # Forward delta fetch returned [] so nothing upserted at all, while
         # the backward window was still served: proof of no-store.
         assert upserts == []
+
+    def test_backward_fetch_capped_at_seed_cutoff(self, client, monkeypatch):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        old_ts = now_ms - 200 * 86400 * 1000
+
+        monkeypatch.setattr(warehouse, "get_intraday_latest", lambda s, i, n: {})
+        monkeypatch.setattr(warehouse, "get_intraday", lambda s, i, **k: [])
+
+        calls: list = []
+
+        async def _recording_fetch(symbol, interval, from_ts=0, to_ts=0):
+            calls.append((from_ts, to_ts))
+            return []
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _recording_fetch)
+
+        r = client.get(
+            f"/api/ticker/intraday/RELIANCE?interval=1h&from_ts={old_ts}&to_ts={now_ms}"
+        )
+        assert r.status_code == 200, r.text
+        # The no-store call is the one reaching into the pre-seed window;
+        # its upper bound must not exceed the ~90d seed cutoff even though
+        # the request asked up to now (the DB delta covers the recent part).
+        cutoff_s = int(datetime.now(timezone.utc).timestamp()) - 90 * 86400
+        old_calls = [c for c in calls if c[0] < cutoff_s - 86400]
+        assert old_calls, f"expected a pre-seed fetch, got {calls}"
+        for _, to_ts in old_calls:
+            assert to_ts <= cutoff_s + 60, f"no-store fetch overruns seed: {calls}"
+
+    def test_malformed_rows_degrade_not_500(self, client, monkeypatch):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        old_ts = now_ms - 200 * 86400 * 1000
+
+        monkeypatch.setattr(warehouse, "get_intraday_latest", lambda s, i, n: {})
+        monkeypatch.setattr(warehouse, "get_intraday", lambda s, i, **k: [])
+
+        async def _mixed_fetch(symbol, interval, from_ts=0, to_ts=0):
+            now_s = int(datetime.now(timezone.utc).timestamp())
+            if from_ts < now_s - 100 * 86400:
+                return [
+                    {"time_ms": old_ts},  # missing OHLC -> zero-filled
+                    {"time_ms": None, "open": 1},  # skipped
+                    {"nope": 1},  # skipped
+                    None,  # skipped, not a crash
+                    _nse_row(old_ts + 3600000, 44.0),
+                ]
+            return []
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _mixed_fetch)
+
+        r = client.get(
+            f"/api/ticker/intraday/TCS?interval=1h&from_ts={old_ts}&to_ts={now_ms}"
+        )
+        assert r.status_code == 200, r.text
+        closes = [c["close"] for c in r.json()["candles"]]
+        assert 44.5 in closes
+        assert 0 in closes  # zero-filled row survived instead of 500ing

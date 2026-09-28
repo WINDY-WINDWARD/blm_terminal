@@ -5,6 +5,8 @@ export interface ElectronAPI {
   installUpdate: () => Promise<void>;
   onUpdaterMessage: (callback: (msg: { status: string; data?: unknown }) => void) => void;
   quitApp: () => void;
+  openExternal: (url: string) => Promise<{ ok: boolean }>;
+  openInApp: (url: string) => Promise<{ ok: boolean }>;
 }
 
 declare global {

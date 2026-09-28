@@ -31,6 +31,8 @@ declare global {
       removeStoredItem?: (key: string) => Promise<boolean>;
       getAllStoredItems?: () => Promise<Record<string, unknown>>;
       quitApp?: () => void;
+      openExternal?: (url: string) => Promise<{ ok: boolean }>;
+      openInApp?: (url: string) => Promise<{ ok: boolean }>;
     };
   }
 }

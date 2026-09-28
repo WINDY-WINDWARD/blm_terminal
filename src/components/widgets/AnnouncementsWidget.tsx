@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { watchlistsAtom, Watchlist } from '@/store/terminalStore';
 import type { EventCalendarItem } from '@/app/api/event-calendar/route';
+import { isExternalClick, openLink } from '@/lib/openLink';
 
 interface Announcement {
   title: string;
@@ -149,26 +150,26 @@ function AnnouncementRow({
   announcement: Announcement;
   isWatched: boolean;
 }) {
-  const handleClick = () => {
+  const openTarget = (event?: React.MouseEvent) => {
     if (!announcement.link) return;
+    // Ctrl+Click / Cmd+Click → system browser (even for .xml: raw file).
+    if (event && isExternalClick(event)) {
+      event.preventDefault();
+      openLink(announcement.link, 'external');
+      return;
+    }
     const isXml = announcement.link.toLowerCase().endsWith('.xml');
     if (isXml) {
       const viewerUrl = `/filing?url=${encodeURIComponent(announcement.link)}`;
       window.open(viewerUrl, '_blank');
     } else {
-      window.open(announcement.link, '_blank');
+      openLink(announcement.link, 'app');
     }
   };
 
   const badgeClass = getBadgeColor(announcement.subject);
 
-  return (
-    <div
-      onClick={handleClick}
-      className={`px-2 py-1.5 border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-pointer transition-colors ${
-        !announcement.link && 'cursor-default'
-      }`}
-    >
+  const rowBody = (
       <div className="flex items-start gap-2">
         <span className="text-[10px] text-white/40 font-mono w-10 shrink-0 pt-0.5">
           {formatTime(announcement.pubDate)}
@@ -201,7 +202,37 @@ function AnnouncementRow({
           </div>
         </div>
       </div>
-    </div>
+  );
+
+  if (!announcement.link) {
+    return (
+      <div
+        className="px-2 py-1.5 border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-default transition-colors"
+      >
+        {rowBody}
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={announcement.link}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => {
+        event.preventDefault();
+        openTarget(event);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openTarget();
+        }
+      }}
+      className="block px-2 py-1.5 border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-pointer transition-colors"
+    >
+      {rowBody}
+    </a>
   );
 }
 
@@ -212,27 +243,25 @@ function EventCalendarRow({
   item: EventCalendarItem;
   isWatched: boolean;
 }) {
-  const handleClick = () => {
-    if (item.attachment) {
-      const isXml = item.attachment.toLowerCase().endsWith('.xml');
-      if (isXml) {
-        window.open(`/filing?url=${encodeURIComponent(item.attachment)}`, '_blank');
-      } else {
-        window.open(item.attachment, '_blank');
-      }
+  const openTarget = (event?: React.MouseEvent) => {
+    if (!item.attachment) return;
+    if (event && isExternalClick(event)) {
+      event.preventDefault();
+      openLink(item.attachment, 'external');
+      return;
+    }
+    const isXml = item.attachment.toLowerCase().endsWith('.xml');
+    if (isXml) {
+      window.open(`/filing?url=${encodeURIComponent(item.attachment)}`, '_blank');
+    } else {
+      openLink(item.attachment, 'app');
     }
   };
 
   const badgeClass = getCalendarBadgeColor(item.purpose);
   const purposeShort = item.purpose.length > 40 ? item.purpose.slice(0, 38) + '…' : item.purpose;
 
-  return (
-    <div
-      onClick={item.attachment ? handleClick : undefined}
-      className={`px-2 py-1.5 border-b border-terminal-gray/30 transition-colors ${
-        isWatched ? 'bg-zinc-900/60' : ''
-      } ${item.attachment ? 'hover:bg-zinc-900 cursor-pointer' : 'cursor-default'}`}
-    >
+  const rowBody = (
       <div className="flex items-start gap-2">
         {/* Date badge */}
         <span className="text-[10px] text-white/40 font-mono w-16 shrink-0 pt-0.5">
@@ -271,7 +300,41 @@ function EventCalendarRow({
           )}
         </div>
       </div>
-    </div>
+  );
+
+  if (!item.attachment) {
+    return (
+      <div
+        className={`px-2 py-1.5 border-b border-terminal-gray/30 transition-colors ${
+          isWatched ? 'bg-zinc-900/60' : ''
+        } cursor-default`}
+      >
+        {rowBody}
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={item.attachment}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => {
+        event.preventDefault();
+        openTarget(event);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openTarget();
+        }
+      }}
+      className={`block px-2 py-1.5 border-b border-terminal-gray/30 transition-colors ${
+        isWatched ? 'bg-zinc-900/60' : ''
+      } hover:bg-zinc-900 cursor-pointer`}
+    >
+      {rowBody}
+    </a>
   );
 }
 

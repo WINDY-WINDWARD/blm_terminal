@@ -681,28 +681,37 @@ async def get_intraday_ohlcv(
             seed_cutoff_ms = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000)
             if valid_from_ts < seed_cutoff_ms:
                 try:
-                    back_to_s = int(valid_from_ts / 1000)
-                    back_from = max(back_to_s, int((datetime.now(timezone.utc) - timedelta(days=3 * 365)).timestamp()))
-                    back_to = int(valid_to_ts / 1000) if valid_to_ts else now_ts
+                    back_from_s = int(valid_from_ts / 1000)
+                    floor_s = int((datetime.now(timezone.utc) - timedelta(days=3 * 365)).timestamp())
+                    back_from = max(back_from_s, floor_s)
+                    # Cap at the seed cutoff: the DB-backed delta above
+                    # already covers everything newer, so only fetch the
+                    # pre-seed prefix from NSE (daily-path parity).
+                    seed_cutoff_s = int(seed_cutoff_ms / 1000)
+                    req_to_s = int(valid_to_ts / 1000) if valid_to_ts else now_ts
+                    back_to = min(req_to_s, seed_cutoff_s)
                     if back_to > back_from:
                         raw_old = await fetch_candles_async(symbol, interval, from_ts=back_from, to_ts=back_to)
                         seen_ts = set()
                         for c in raw_old or []:
-                            ts_ms = c.get("time_ms")
-                            if not ts_ms or ts_ms in seen_ts:
+                            try:
+                                ts_ms = c.get("time_ms")
+                                if not ts_ms or ts_ms in seen_ts:
+                                    continue
+                                if ts_ms < valid_from_ts or (valid_to_ts and ts_ms > valid_to_ts):
+                                    continue
+                                seen_ts.add(ts_ms)
+                                nostore_rows.append(IntradayCandleRow(
+                                    timestamp=int(ts_ms),
+                                    open=c.get("open", 0),
+                                    high=c.get("high", 0),
+                                    low=c.get("low", 0),
+                                    close=c.get("close", 0),
+                                    volume=c.get("volume", 0),
+                                ))
+                            except Exception:
                                 continue
-                            if ts_ms < valid_from_ts or (valid_to_ts and ts_ms > valid_to_ts):
-                                continue
-                            seen_ts.add(ts_ms)
-                            nostore_rows.append(IntradayCandleRow(
-                                timestamp=ts_ms,
-                                open=c["open"],
-                                high=c["high"],
-                                low=c["low"],
-                                close=c["close"],
-                                volume=c["volume"],
-                            ))
-                except ValueError as exc:
+                except Exception as exc:
                     logging.getLogger(__name__).warning("[intraday] No-store backward fill failed for %s/%s: %s", symbol, interval, exc)
 
         candles = await asyncio.to_thread(

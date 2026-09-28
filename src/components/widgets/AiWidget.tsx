@@ -306,9 +306,14 @@ function MarkdownContent({ content }: { content: string }) {
         ),
         tr: ({ children }) => <tr className="even:bg-terminal-amber/3">{children}</tr>,
         a: ({ children, href }) => (
-          <span className="text-blue-400/70 underline underline-offset-2 cursor-default" title={href ?? ''}>
+          <a
+            href={href ?? '#'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400/70 underline underline-offset-2 hover:text-blue-300"
+          >
             {children}
-          </span>
+          </a>
         ),
       }}
     >

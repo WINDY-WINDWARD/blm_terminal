@@ -31,4 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAllStoredItems: () => ipcRenderer.invoke('storage-get-all'),
   // Close the whole app (EULA declined). fire-and-forget.
   quitApp: () => ipcRenderer.send('eula-decline'),
+  // Links: system browser vs in-app reader window.
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  openInApp: (url) => ipcRenderer.invoke('open-in-app', url),
 });

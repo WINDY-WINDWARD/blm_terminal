@@ -13,6 +13,7 @@ import {
 } from '@/store/terminalStore';
 import { newsSocketService } from '@/lib/newsSocket';
 import type { NewsArticle } from '@/lib/newsSocket';
+import { isExternalClick, openLink } from '@/lib/openLink';
 
 interface NewsPaginatedResponse {
   articles: NewsArticle[];
@@ -270,18 +271,27 @@ function EntityChips({
         }
 
         return (
-          <button
+          <span
             key={chipLabel}
-            type="button"
+            role="button"
+            tabIndex={0}
             onClick={(event) => {
               event.stopPropagation();
+              event.preventDefault();
               onClick(value);
             }}
-            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono leading-none transition-colors hover:bg-terminal-amber hover:text-black ${className}`}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.stopPropagation();
+                event.preventDefault();
+                onClick(value);
+              }
+            }}
+            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono leading-none transition-colors hover:bg-terminal-amber hover:text-black cursor-pointer ${className}`}
             title={`Set active symbol to ${value}`}
           >
             {chipLabel}
-          </button>
+          </span>
         );
       })}
       {overflow > 0 && (
@@ -314,15 +324,27 @@ function ArticleRow({
   const people = getEntityValues(article, 'people');
   const countries = getEntityValues(article, 'countries');
 
-  const handleOpenArticle = () => {
-    window.open(article.url, '_blank', 'noopener,noreferrer');
+  const handleOpenArticle = (event?: React.MouseEvent) => {
+    // Ctrl+Click / Cmd+Click → system browser; plain click/Enter/Space →
+    // in-app reader. Always preventDefault: a native anchor navigation would
+    // otherwise escape to the system browser via the external-link policy.
+    if (event && isExternalClick(event)) {
+      event.preventDefault();
+      openLink(article.url, 'external');
+      return;
+    }
+    openLink(article.url, 'app');
   };
 
   return (
-    <div
-      role="link"
-      tabIndex={0}
-      onClick={handleOpenArticle}
+    <a
+      href={article.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => {
+        event.preventDefault();
+        handleOpenArticle(event);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -385,7 +407,7 @@ function ArticleRow({
           </div>
         </div>
       </div>
-    </div>
+    </a>
   );
 }
 

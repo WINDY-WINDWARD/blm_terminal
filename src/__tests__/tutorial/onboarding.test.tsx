@@ -173,8 +173,7 @@ describe('FirstLaunchModal gating', () => {
     expect(mockedAcceptEula).toHaveBeenCalledWith('eula-v1');
   });
 
-  it('declining the EULA quits the app via electronAPI.quitApp', async () => {
-    const quitApp = vi.fn();
+  it('declining the EULA quits the app via electronAPI.quitApp', async () => {    const quitApp = vi.fn();
     (window as unknown as { electronAPI?: unknown }).electronAPI = { quitApp };
     mockedGetFirstBootStatus.mockResolvedValue({ reachable: true, onboardingCompleted: false });
     mockedGetEulaStatus.mockResolvedValue({
@@ -189,5 +188,16 @@ describe('FirstLaunchModal gating', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Decline & Exit' }));
     expect(quitApp).toHaveBeenCalledTimes(1);
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it('shows the setup-video link on the welcome step (opens externally)', async () => {
+    mockedGetFirstBootStatus.mockResolvedValue({ reachable: true, onboardingCompleted: false });
+    render(<FirstLaunchModal />, {
+      wrapperProps: { initialAtomValues: [[onboardingCompletedAtom, false]] },
+    });
+    expect(await screen.findByText('Welcome to BLM Terminal.')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /setup video/i });
+    expect(link).toHaveAttribute('href', 'https://youtu.be/wmbhDGowNbM');
+    expect(link).toHaveAttribute('target', '_blank');
   });
 });

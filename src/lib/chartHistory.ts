@@ -149,11 +149,10 @@ function toBackendDate(d: Date): string {
   return `${day}-${month}-${d.getFullYear()}`;
 }
 
-/** 2-year daily window ending the day before the oldest loaded bar. */
+/** Daily backfill window (DAILY_CHUNK_DAYS) ending the day before the oldest loaded bar. */
 export function dailyBackfillRange(oldestSec: number): { fromDate: string; toDate: string } {
   const to = new Date((oldestSec - 86_400) * 1000);
-  const from = new Date(to.getTime());
-  from.setFullYear(from.getFullYear() - 2);
+  const from = new Date(to.getTime() - DAILY_CHUNK_DAYS * 86_400_000);
   return { fromDate: toBackendDate(from), toDate: toBackendDate(to) };
 }
 

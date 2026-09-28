@@ -120,6 +120,9 @@ function calculate(ctx) {
   markers: array per bar). Length mismatch is a runtime error.
 - Execution budget: ≤2000ms wall (watchdog terminates the worker).
 - Code size ≤64KB. Bars supplied = full loaded chart history (no truncation).
+  Note: scroll-back backfill grows this array (up to ~2y daily / 360d hourly
+  per the chart-history policy), so deep-history + heavy overlays share the
+  same 2000ms budget — by design, no hard bar cap.
 
 ### 4.1 `ctx` shape
 

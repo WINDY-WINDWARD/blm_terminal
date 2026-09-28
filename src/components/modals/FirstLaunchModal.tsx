@@ -751,6 +751,23 @@ export function FirstLaunchModal() {
               Welcome to the future of financial intelligence. In a few quick steps,
               we&apos;ll activate your real-time analytics engine.
             </p>
+            <div className="rounded bg-[#1a1d23] border border-[#2d3139] p-3">
+              <p className="text-xs text-white font-semibold">
+                New here? Watch the setup walkthrough.
+              </p>
+              <p className="text-xs text-terminal-muted leading-relaxed mt-1">
+                A short video covering install, license activation, and your first
+                chart — recommended before you continue.
+              </p>
+              <a
+                href="https://youtu.be/wmbhDGowNbM"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block mt-2 text-xs font-medium text-terminal-amber hover:text-amber-300 underline"
+              >
+                Watch the setup video on YouTube
+              </a>
+            </div>
           </div>
         )}
 
