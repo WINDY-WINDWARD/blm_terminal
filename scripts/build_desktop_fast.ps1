@@ -14,15 +14,53 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $HashFile = Join-Path $RepoRoot "dist-desktop/.build-hashes.json"
 
-$BackendInputs = @("backend/**/*.py", "backend/alembic.ini", "backend/requirements*.txt")
-$FrontendInputs = @("src/**/*", "electron/**/*", "server.js", "server/**/*", "public/**/*",
-    "package.json", "package-lock.json", "electron-builder.json", "next.config.*", "tsconfig*.json")
+# Input sets. PowerShell 5.1 does NOT understand '**' globs — the previous
+# 'backend/**/*.py' pattern silently matched (almost) nothing, which froze the
+# hash and shipped stale builds (2026-09-28 EULA incident). Enumerate real
+# directories with -Filter/-Recurse instead. Each set: Root (+ optional Filter,
+# TopOnly for files directly in Root). Excluded path segments keep venvs and
+# build outputs out of the hash.
+$ExcludeDirs = @('.venv', 'dist', '__pycache__', 'node_modules', '.git', '.next')
 
-function Get-InputHash([string[]]$Patterns) {
-    $files = foreach ($p in $Patterns) {
-        Get-ChildItem -Path (Join-Path $RepoRoot $p) -File -Recurse -ErrorAction SilentlyContinue
+$BackendInputs = @(
+    @{ Root = 'backend'; Filter = '*.py' },
+    @{ Root = 'backend'; Filter = 'alembic.ini'; TopOnly = $true },
+    @{ Root = 'backend'; Filter = 'requirements*.txt'; TopOnly = $true }
+)
+$FrontendInputs = @(
+    @{ Root = 'src' },
+    @{ Root = 'electron' },
+    @{ Root = 'server' },
+    @{ Root = 'public' },
+    @{ Root = '.'; Filter = 'server.js'; TopOnly = $true },
+    @{ Root = '.'; Filter = 'package.json'; TopOnly = $true },
+    @{ Root = '.'; Filter = 'package-lock.json'; TopOnly = $true },
+    @{ Root = '.'; Filter = 'electron-builder.json'; TopOnly = $true },
+    @{ Root = '.'; Filter = 'next.config.*'; TopOnly = $true },
+    @{ Root = '.'; Filter = 'tsconfig*.json'; TopOnly = $true }
+)
+
+function Test-Excluded([System.IO.FileInfo]$f) {
+    $rel = $f.FullName.Substring($RepoRoot.Length + 1)
+    foreach ($seg in ($rel -split '[\\/]')) {
+        if ($ExcludeDirs -contains $seg) { return $true }
     }
-    $files = $files | Sort-Object FullName -Unique
+    return $false
+}
+
+function Get-InputHash([object[]]$Sets) {
+    $files = foreach ($set in $Sets) {
+        $root = Join-Path $RepoRoot $set.Root
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $filter = $set.Filter
+        if (-not $filter) { $filter = '*' }
+        if ($set.TopOnly) {
+            Get-ChildItem -LiteralPath $root -Filter $filter -File -ErrorAction SilentlyContinue
+        } else {
+            Get-ChildItem -LiteralPath $root -Filter $filter -File -Recurse -ErrorAction SilentlyContinue
+        }
+    }
+    $files = $files | Where-Object { -not (Test-Excluded $_) } | Sort-Object FullName -Unique
     if (-not $files) { return "empty" }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     foreach ($f in $files) {

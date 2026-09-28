@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { unstable_batchedUpdates } from 'react-dom';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -26,7 +25,6 @@ import {
   stashCard,
 } from '@/lib/scripts/cardStash';
 import { cn } from '@/lib/utils';
-import { computePopoverPos } from '@/lib/scripts/popoverPos';
 
 /**
  * Defense-in-depth: no backend path should ever leak a raw JSON blob into
@@ -230,7 +228,7 @@ function ScriptCardView({ card, onAccept, onDiscard }: ScriptCardViewProps) {
             </button>
             <button
               onClick={() => onDiscard(card)}
-              className="text-[10px] font-mono px-1.5 py-0.5 border border-white/10 text-white/40 hover:text-white/70 hover:border-white/25 rounded transition-colors"
+              className="text-[10px] font-mono px-1.5 py-0.5 border border-white/10 text-white/60 hover:text-white/90 hover:border-white/25 rounded transition-colors"
               title="Dismiss this card (script stays saved)"
             >
               Discard
@@ -280,12 +278,12 @@ function MarkdownContent({ content }: { content: string }) {
         ol: ({ children }) => <ol className="list-decimal list-inside pl-1 mb-1.5 space-y-0.5">{children}</ol>,
         li: ({ children }) => (
           <li className="flex gap-1.5 leading-relaxed">
-            <span className="text-terminal-amber/40 shrink-0">-</span>
+              <span className="text-terminal-amber/60 shrink-0">-</span>
             <span className="flex-1">{children}</span>
           </li>
         ),
         blockquote: ({ children }) => (
-          <blockquote className="border-l-2 border-terminal-amber/30 pl-2 my-1 text-terminal-amber/70 italic">
+            <blockquote className="border-l-2 border-terminal-amber/30 pl-2 my-1 text-terminal-amber/80 italic">
             {children}
           </blockquote>
         ),
@@ -354,7 +352,7 @@ function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard,
         )}
       </div>
       <div className="flex items-center gap-2 px-1">
-        <span className="text-[10px] text-terminal-amber/30">
+              <span className="text-[10px] text-terminal-amber/50">
           {isUser ? 'you' : 'blm ai'}
         </span>
         {hasError && isLastAssistant && onRetry && (
@@ -403,7 +401,7 @@ function SessionSidebar({
         </span>
         <button
           onClick={() => onNewChat()}
-          className="text-[10px] font-mono text-terminal-amber/50 hover:text-terminal-amber px-1.5 py-0.5 border border-terminal-amber/15 hover:border-terminal-amber/40 rounded transition-colors"
+          className="text-[10px] font-mono text-terminal-amber/60 hover:text-terminal-amber px-1.5 py-0.5 border border-terminal-amber/15 hover:border-terminal-amber/40 rounded transition-colors"
           title="New chat"
         >
           + new
@@ -412,7 +410,7 @@ function SessionSidebar({
 
       <div className="flex-1 overflow-y-auto">
         {sessions.length === 0 ? (
-          <div className="px-2 py-4 text-[10px] text-terminal-amber/25 text-center">
+          <div className="px-2 py-4 text-[10px] text-terminal-amber/50 text-center">
             No past chats
           </div>
         ) : (
@@ -454,11 +452,11 @@ function SessionSidebar({
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-[9px] text-terminal-amber/30">{s.symbol}</span>
-                  <span className="text-[9px] text-terminal-amber/20">·</span>
-                  <span className="text-[9px] text-terminal-amber/30">{s.message_count} msgs</span>
-                  <span className="text-[9px] text-terminal-amber/20">·</span>
-                  <span className="text-[9px] text-terminal-amber/25">{fmt(s.updated_at)}</span>
+                  <span className="text-[9px] text-terminal-amber/60">{s.symbol}</span>
+                  <span className="text-[9px] text-terminal-amber/45">·</span>
+                  <span className="text-[9px] text-terminal-amber/60">{s.message_count} msgs</span>
+                  <span className="text-[9px] text-terminal-amber/45">·</span>
+                  <span className="text-[9px] text-terminal-amber/50">{fmt(s.updated_at)}</span>
                 </div>
               </div>
             );
@@ -517,72 +515,6 @@ export function AiWidget() {
   });
   const availableModels: ModelOption[] = modelsData ?? [];
   const defaultModel = availableModels[0]?.id ?? '';
-
-  // Model-picker groups for the input-area pill — same grouping the old
-  // header <select> used: Free/Paid when is_free is known, otherwise split
-  // "[Provider]" label prefixes into sections.
-  const modelGroups = React.useMemo(() => {
-    if (availableModels.some((m) => m.is_free !== undefined)) {
-      return [
-        { label: 'Free Models', items: availableModels.filter((m) => m.is_free) },
-        { label: 'Paid Models', items: availableModels.filter((m) => !m.is_free) },
-      ].filter((g) => g.items.length > 0);
-    }
-    const groups = new Map<string, ModelOption[]>();
-    const ungrouped: ModelOption[] = [];
-    for (const m of availableModels) {
-      const match = /^\[([^\]]+)\]\s*/.exec(m.label);
-      if (match) {
-        const g = groups.get(match[1]) ?? [];
-        g.push(m);
-        groups.set(match[1], g);
-      } else {
-        ungrouped.push(m);
-      }
-    }
-    const out = [...groups.entries()].map(([label, items]) => ({ label, items }));
-    if (ungrouped.length > 0) out.push({ label: '', items: ungrouped });
-    return out;
-  }, [availableModels]);
-
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [modelMenuPos, setModelMenuPos] = useState({ top: 0, left: 0 });
-  const modelPillRef = useRef<HTMLButtonElement>(null);
-
-  const openModelMenu = useCallback(() => {
-    const r = modelPillRef.current?.getBoundingClientRect();
-    if (r) {
-      // Anchored at the input pill (bottom of widget): no room below, so
-      // the shared anchor math flips it into a drop-up automatically.
-      const pos = computePopoverPos(
-        r,
-        { width: window.innerWidth, height: window.innerHeight },
-        220,
-        280,
-      );
-      setModelMenuPos({ top: pos.top, left: pos.left });
-    }
-    setModelMenuOpen(true);
-  }, []);
-
-  // Dismiss the model menu on outside pointer-down or Esc.
-  useEffect(() => {
-    if (!modelMenuOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest?.('[data-model-menu]') || t?.closest?.('[data-testid="ai-model-pill"]')) return;
-      setModelMenuOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setModelMenuOpen(false);
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [modelMenuOpen]);
 
   // ── Session map — the core of the isolation model ─────────────────────────
   // Keys: real session IDs (number) OR null for the unsent scratch chat.
@@ -1214,14 +1146,97 @@ export function AiWidget() {
               'text-[10px] font-mono px-1.5 py-0.5 border rounded transition-colors',
               sidebarOpen
                 ? 'border-terminal-amber/40 text-terminal-amber/80'
-                : 'border-terminal-amber/15 text-terminal-amber/40 hover:border-terminal-amber/35 hover:text-terminal-amber/60',
+                : 'border-terminal-amber/15 text-terminal-amber/60 hover:border-terminal-amber/35 hover:text-terminal-amber/80',
             )}
             title="Toggle chat history"
           >
             ☰
           </button>
 
-          <span className="text-terminal-amber/30 text-[10px] truncate flex-1">
+          {/* Model selector — native header <select>: Free/Paid when is_free
+              is known, otherwise grouped by [Provider] label prefixes. */}
+          <select
+            value={model || defaultModel}
+            onChange={(e) => patchSession(activeKey, { model: e.target.value })}
+            disabled={isStreaming}
+            data-testid="ai-model-select"
+            className="bg-terminal-bg border border-terminal-amber/20 text-terminal-amber/70 text-[10px] font-mono px-1 py-0.5 rounded outline-none focus:border-terminal-amber/50 disabled:opacity-50 max-w-[170px]"
+          >
+            {availableModels.length > 0 ? (
+              availableModels.some((m) => m.is_free !== undefined) ? (
+                <>
+                  {availableModels.some((m) => m.is_free) && (
+                    <optgroup label="Free Models" className="bg-[#121418] text-terminal-amber font-bold">
+                      {availableModels
+                        .filter((m) => m.is_free)
+                        .map((m) => (
+                          <option key={m.id} value={m.id} className="text-white font-normal">
+                            {m.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                  {availableModels.some((m) => !m.is_free) && (
+                    <optgroup label="Paid Models" className="bg-[#121418] text-white/50 font-bold">
+                      {availableModels
+                        .filter((m) => !m.is_free)
+                        .map((m) => (
+                          <option key={m.id} value={m.id} className="text-white font-normal">
+                            {m.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
+                </>
+              ) : (
+                // Group by [Provider] label prefix when present (multi-provider
+                // catalogs); flat list otherwise.
+                (() => {
+                  const groups = new Map<string, ModelOption[]>();
+                  const ungrouped: ModelOption[] = [];
+                  for (const m of availableModels) {
+                    const match = /^\[([^\]]+)\]\s*/.exec(m.label);
+                    if (match) {
+                      const g = groups.get(match[1]) ?? [];
+                      g.push(m);
+                      groups.set(match[1], g);
+                    } else {
+                      ungrouped.push(m);
+                    }
+                  }
+                  if (groups.size === 0) {
+                    return availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ));
+                  }
+                  return (
+                    <>
+                      {[...groups.entries()].map(([name, items]) => (
+                        <optgroup key={name} label={name} className="bg-[#121418] text-terminal-amber font-bold">
+                          {items.map((m) => (
+                            <option key={m.id} value={m.id} className="text-white font-normal">
+                              {m.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                      {ungrouped.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </>
+                  );
+                })()
+              )
+            ) : (
+              <option value="">Loading models…</option>
+            )}
+          </select>
+
+          <span className="text-terminal-amber/50 text-[10px] truncate flex-1">
             ctx: {symbol}.{exchange}
           </span>
 
@@ -1241,7 +1256,7 @@ export function AiWidget() {
               modeTrackClass(sessionMode),
             )}
           >
-            <span className="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-mono text-terminal-amber/40 pointer-events-none">
+            <span className="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-mono text-terminal-amber/60 pointer-events-none">
               <span>Research</span>
               <span>Σ</span>
             </span>
@@ -1257,12 +1272,12 @@ export function AiWidget() {
 
           {/* Streaming indicator in header when viewing a streaming session */}
           {isStreaming && (
-            <span className="text-[10px] text-blue-400/70 animate-pulse shrink-0">thinking…</span>
+            <span className="text-[10px] text-blue-300 animate-pulse shrink-0">thinking…</span>
           )}
 
           <button
             onClick={() => startNewChat(sessionMode)}
-            className="text-[10px] text-terminal-amber/40 hover:text-terminal-amber/70 px-1.5 py-0.5 border border-terminal-amber/10 hover:border-terminal-amber/30 rounded transition-colors shrink-0"
+            className="text-[10px] text-terminal-amber/60 hover:text-terminal-amber/90 px-1.5 py-0.5 border border-terminal-amber/10 hover:border-terminal-amber/30 rounded transition-colors shrink-0"
           >
             + new
           </button>
@@ -1271,14 +1286,14 @@ export function AiWidget() {
         {/* Message list */}
         <div className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-3 min-h-0">
           {!hasSentRef.current && messages.length === 0 && (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-terminal-amber/25 text-[11px]">
+            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-terminal-amber/60 text-[11px]">
               <span className="text-2xl opacity-20">{sessionMode === 'script' ? 'Σ' : '◈'}</span>
               <span>
                 {sessionMode === 'script'
                   ? 'Script Lab — describe a chart overlay'
                   : 'BLM AI — ask anything about NSE markets'}
               </span>
-              <span className="text-[10px] opacity-60">
+              <span className="text-[10px] opacity-80">
                 {sessionMode === 'script'
                   ? 'AI writes, validates & saves versioned scripts — accept the card to put it on the chart'
                   : 'Has access to live prices, fundamentals, news, deals, alerts & more'}
@@ -1313,14 +1328,14 @@ export function AiWidget() {
                 'px-2 py-0.5 rounded text-[10px] font-medium border transition-colors',
                 activePersona === p.id
                   ? 'bg-blue-500/20 border-blue-400/50 text-blue-300'
-                  : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70 hover:border-white/20'
+                  : 'bg-white/5 border-white/10 text-white/60 hover:text-white/90 hover:border-white/20'
               )}
             >
               {p.label}
             </button>
           ))}
           {activePersona && (
-            <span className="ml-auto text-[10px] text-blue-400/70 self-center pr-1">
+            <span className="ml-auto text-[10px] text-blue-300/90 self-center pr-1">
               {PERSONAS.find((p) => p.id === activePersona)?.description}
             </span>
           )}
@@ -1328,49 +1343,6 @@ export function AiWidget() {
 
         {/* Input area */}
         <div className="shrink-0 border-t border-terminal-amber/10 px-2 py-1.5 flex gap-2 items-end bg-terminal-gray/5">
-          {/* Model pill — shows the session's model; click to switch. The
-              header sliding switch owns the Research/Script mode now. */}
-          <button
-            ref={modelPillRef}
-            data-testid="ai-model-pill"
-            title={`Model: ${availableModels.find((m) => m.id === (model || defaultModel))?.label ?? 'loading…'} — click to switch`}
-            onClick={() => (modelMenuOpen ? setModelMenuOpen(false) : openModelMenu())}
-            disabled={isStreaming || availableModels.length === 0}
-            className="shrink-0 self-center max-w-[110px] truncate px-1.5 py-0.5 text-[10px] font-mono font-bold rounded bg-terminal-amber/15 border border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/25 transition-colors disabled:opacity-50"
-          >
-            ▾ {shortModelLabel(availableModels.find((m) => m.id === (model || defaultModel))?.label ?? 'model…')}
-          </button>
-          {modelMenuOpen && createPortal(
-            <div
-              data-model-menu
-              className="fixed z-[90] w-[220px] max-h-[280px] overflow-y-auto rounded border border-terminal-amber/30 bg-[#121418] py-1 shadow-xl"
-              style={{ top: modelMenuPos.top, left: modelMenuPos.left }}
-            >
-              {modelGroups.map((g) => (
-                <div key={g.label || 'all'}>
-                  {g.label && (
-                    <div className="px-2 pt-1 text-[9px] font-mono font-bold text-terminal-amber/60">{g.label}</div>
-                  )}
-                  {g.items.map((m) => {
-                    const current = m.id === (model || defaultModel);
-                    return (
-                      <button
-                        key={m.id}
-                        onClick={() => { patchSession(activeKey, { model: m.id }); setModelMenuOpen(false); }}
-                        className={cn(
-                          'w-full text-left px-2 py-1 text-[10px] font-mono truncate transition-colors',
-                          current ? 'text-terminal-amber font-bold' : 'text-white/70 hover:bg-terminal-amber/10 hover:text-white',
-                        )}
-                      >
-                        {current ? '✓ ' : ''}{shortModelLabel(m.label)}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>,
-            document.body,
-          )}
           <textarea
             ref={inputRef}
             value={input}
@@ -1387,7 +1359,7 @@ export function AiWidget() {
             rows={1}
             className={cn(
               'flex-1 resize-none bg-terminal-bg border border-terminal-amber/20 text-terminal-amber text-xs font-mono px-2 py-1.5 rounded outline-none',
-              'placeholder:text-terminal-amber/25',
+              'placeholder:text-terminal-amber/40',
               'focus:border-terminal-amber/50',
               'disabled:opacity-50 disabled:cursor-not-allowed',
               'leading-relaxed min-h-[32px] max-h-[80px] overflow-y-auto',
@@ -1409,7 +1381,7 @@ export function AiWidget() {
                 'shrink-0 px-2 py-1.5 text-[10px] font-mono border rounded transition-colors',
                 input.trim()
                   ? 'border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/10'
-                  : 'border-terminal-amber/10 text-terminal-amber/20 cursor-not-allowed',
+                  : 'border-terminal-amber/10 text-terminal-amber/40 cursor-not-allowed',
               )}
             >
               send

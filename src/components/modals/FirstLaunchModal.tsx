@@ -96,6 +96,15 @@ export function FirstLaunchModal() {
   const [eulaBusy, setEulaBusy] = useState(false);
   const [eulaError, setEulaError] = useState('');
 
+  // After ~30s of unresolved setup polls the packaged backend is usually
+  // just still booting (30-90s cold start) — say so instead of looking
+  // frozen. One-shot after mount; only rendered by the pending states.
+  const [showStartingHint, setShowStartingHint] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShowStartingHint(true), 30000);
+    return () => clearTimeout(t);
+  }, []);
+
   // consent step
   const [consentChoice, setConsentChoice] = useState<boolean | null>(null);
   const [consentBusy, setConsentBusy] = useState(false);
@@ -251,10 +260,12 @@ export function FirstLaunchModal() {
   // first-boot flag above. Only an explicit accepted:true passes — unknown
   // (cold backend/404) reads as NOT accepted so the agreement is re-flashed,
   // which is also what makes a hand-edited/reverted DB row re-prompt.
+  // - reachable + true  -> accepted: skip straight past the EULA to 'welcome'
   // - reachable + false -> force the wizard open at the EULA step even when
   //   onboarding was already completed (tamper re-flash path)
-  // - reachable + true  -> skip straight past the EULA to 'welcome'
-  // - unreachable -> keep polling (5s, ~5min cap), then resolve NOT accepted
+  // - unreachable -> keep polling (5s, ~5min cap), then resolve
+  //   {reachable:false}: never re-flashes a completed install (see the gate
+  //   below); a healthy boot later re-flashes if the accept is still missing
   useEffect(() => {
     let cancelled = false;
     let attempts = 0;
@@ -308,10 +319,16 @@ export function FirstLaunchModal() {
     return () => clearTimeout(t);
   }, [mounted, completed, step, health, healthChecking]);
 
-  // EULA overrides a completed onboarding: if the DB says the current EULA
-  // version was NOT accepted (fresh install, declined, or tampered row), the
-  // wizard re-opens regardless of `completed` — until then stay invisible.
-  if (!mounted || (completed && eulaStatus?.accepted !== false)) return null;
+  // EULA overrides a completed onboarding ONLY on an authoritative answer:
+  // reachable + accepted:false (pre-EULA install, declined accept, or a
+  // tampered/removed DB row) re-opens the wizard at the EULA step.
+  // "Unreachable" (cold backend, 404 from a stale build, exhausted retries)
+  // must NEVER re-flash a completed install — that was the 2026-09-28 loop:
+  // the modal reappeared mid-session and the unrecorded accept trapped the
+  // user in the tour forever. An accept made while unreachable re-flashes
+  // on the next healthy boot instead of trapping the user here.
+  if (!mounted) return null;
+  if (completed && !(eulaStatus?.reachable === true && eulaStatus?.accepted === false)) return null;
 
   // Loading gate: while the backend flag is unread, show a spinner instead
   // of the wizard. The wizard used to render immediately on mount while the
@@ -329,6 +346,11 @@ export function FirstLaunchModal() {
             <p className="text-xs text-terminal-amber animate-pulse leading-relaxed">
               Reading setup state…
             </p>
+            {showStartingHint && (
+              <p className="text-[11px] text-white/50 mt-2 leading-relaxed">
+                Still waiting for the backend to start — first launch can take up to a minute…
+              </p>
+            )}
           </div>
         </div>
       </div>

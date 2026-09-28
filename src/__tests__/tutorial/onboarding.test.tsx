@@ -135,6 +135,21 @@ describe('FirstLaunchModal gating', () => {
     expect(screen.getByRole('checkbox')).not.toBeChecked();
   });
 
+  it('stays hidden when completed and the EULA poll exhausts unreachable (2026-09-28 loop)', async () => {
+    vi.useFakeTimers();
+    mockedGetFirstBootStatus.mockResolvedValue({ reachable: true, onboardingCompleted: true });
+    mockedGetEulaStatus.mockRejectedValue(new Error('404'));
+    const { container } = render(<FirstLaunchModal />, {
+      wrapperProps: { initialAtomValues: [[onboardingCompletedAtom, true]] },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61 * 5000);
+    });
+    vi.useRealTimers();
+    expect(container.innerHTML).toBe('');
+    expect(screen.queryByText('End-User License Agreement')).not.toBeInTheDocument();
+  });
+
   it('blocks Continue until the EULA checkbox is checked, then records acceptance', async () => {
     mockedGetFirstBootStatus.mockResolvedValue({ reachable: true, onboardingCompleted: false });
     mockedGetEulaStatus.mockResolvedValue({
