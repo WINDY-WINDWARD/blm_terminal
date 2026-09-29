@@ -8,6 +8,7 @@ import {
   EMPTY_STOP_STREAK,
   HISTORY_CACHE_TTL_MS,
   HistoryCache,
+  backfillCacheAction,
   backfillChunkSpanMs,
   dailyBackfillRange,
   historyCacheKey,
@@ -97,16 +98,28 @@ describe('windows and trigger', () => {
     expect(fromDate).toBe('27-09-2024');
   });
 
-  it('intraday chunk is 2x-style span ending 1s before oldest; W/M null', () => {
+  it('intraday chunk spans stay NSE-safe; W backfills, M null', () => {
     const oldest = 1_758_000_000;
     const r = intradayBackfillRange(oldest, '1m');
     expect(r).not.toBeNull();
     expect(r!.toTsMs).toBe(oldest * 1000 - 1000);
     expect(r!.toTsMs - r!.fromTsMs).toBe(10 * 86_400_000);
-    expect(intradayBackfillRange(oldest, 'W')).toBeNull();
+    // Oversize windows used to come back newest-capped (dupes only): capped now.
+    expect(backfillChunkSpanMs('15m')).toBe(30 * 86_400_000);
+    expect(backfillChunkSpanMs('30m')).toBe(30 * 86_400_000);
+    expect(backfillChunkSpanMs('1h')).toBe(90 * 86_400_000);
+    expect(backfillChunkSpanMs('W')).toBe(365 * 86_400_000);
+    expect(intradayBackfillRange(oldest, 'W')).not.toBeNull();
     expect(intradayBackfillRange(oldest, 'M')).toBeNull();
-    expect(backfillChunkSpanMs('1h')).toBe(360 * 86_400_000);
     expect(backfillChunkSpanMs('nope')).toBeNull();
+  });
+
+  it('backfillCacheAction: empties never cached, only network empties count', () => {
+    expect(backfillCacheAction({ fromCache: false, count: 12 })).toBe('store');
+    expect(backfillCacheAction({ fromCache: true, count: 12 })).toBe('store');
+    // A transient NSE failure must not poison the next 2h or kill backfill.
+    expect(backfillCacheAction({ fromCache: false, count: 0 })).toBe('count-empty');
+    expect(backfillCacheAction({ fromCache: true, count: 0 })).toBe('ignore');
   });
 
   it('triggers only near logical bar 0', () => {

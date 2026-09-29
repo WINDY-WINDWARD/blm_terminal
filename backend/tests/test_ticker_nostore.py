@@ -220,3 +220,106 @@ class TestIntraday1hNoStore:
         closes = [c["close"] for c in r.json()["candles"]]
         assert 44.5 in closes
         assert 0 in closes  # zero-filled row survived instead of 500ing
+
+
+class TestChunkedNoStore:
+    def test_daily_2y_window_fetched_in_capped_chunks(self, client, monkeypatch):
+        today = date.today()
+        stored = [
+            {
+                "symbol": "RELIANCE",
+                "date": today - timedelta(days=d),
+                "series": "EQ",
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 10,
+                "value": 10.0,
+                "source": "db",
+            }
+            for d in range(30)
+        ]
+        monkeypatch.setattr(warehouse, "get_ohlcv", lambda symbol, f, t: list(stored))
+        monkeypatch.setattr(warehouse, "get_latest_candle", lambda symbol: {"date": today})
+        monkeypatch.setattr(warehouse, "get_last_trading_day", lambda: today)
+
+        calls: list = []
+
+        async def _chunked_daily(symbol, interval, from_ts=0, to_ts=0):
+            calls.append((from_ts, to_ts))
+            # One row dated at the chunk start, so every chunk contributes.
+            return [_nse_row(from_ts * 1000, 10.0)]
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _chunked_daily)
+
+        from_d = (today - timedelta(days=730)).strftime("%d-%m-%Y")
+        to_d = today.strftime("%d-%m-%Y")
+        r = client.get(f"/api/ticker/ohlcv/RELIANCE?from_date={from_d}&to_date={to_d}")
+        assert r.status_code == 200, r.text
+        # 700d span must arrive as multiple capped (<=366d) chunks, not one shot.
+        assert len(calls) >= 2, f"expected chunked fetches, got {calls}"
+        for c_from, c_to in calls:
+            assert c_to - c_from <= 366 * 86400, f"oversize chunk: {(c_from, c_to)}"
+        assert r.json()["count"] == 30 + len(calls)
+
+    def test_passthru_oversize_window_chunked(self, client, monkeypatch):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        old_ts = now_ms - 60 * 86400 * 1000  # 60d window on 15m (30d cap)
+
+        calls: list = []
+
+        async def _recording(symbol, interval, from_ts=0, to_ts=0):
+            calls.append((from_ts, to_ts))
+            return []
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _recording)
+
+        r = client.get(
+            f"/api/ticker/intraday/TCS?interval=15m&from_ts={old_ts}&to_ts={now_ms}"
+        )
+        assert r.status_code == 200, r.text
+        assert len(calls) >= 2, f"expected chunked fetches, got {calls}"
+        for c_from, c_to in calls:
+            assert c_to - c_from <= 30 * 86400 + 1, f"oversize chunk: {(c_from, c_to)}"
+
+    def test_weekly_nostore_served_without_upsert(self, client, monkeypatch):
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        old_ts = now_ms - 400 * 86400 * 1000
+
+        # DB holds only recent weeklies.
+        recent = {
+            "timestamp": now_ms - 5 * 86400 * 1000,
+            "open": 1.0, "high": 1.0, "low": 1.0, "close": 2.0, "volume": 10,
+        }
+        from types import SimpleNamespace
+        recent_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5)
+        monkeypatch.setattr(
+            warehouse,
+            "get_intraday_latest",
+            lambda s, i, n: {("INFY", "W"): [SimpleNamespace(timestamp=recent_dt)]},
+        )
+        monkeypatch.setattr(warehouse, "get_intraday", lambda s, i, **k: [dict(recent)])
+
+        upserts: list = []
+        monkeypatch.setattr(
+            warehouse, "upsert_intraday", lambda s, i, rows: upserts.append((s, i, list(rows)))
+        )
+
+        async def _fake_w(symbol, interval, from_ts=0, to_ts=0):
+            now_s = int(datetime.now(timezone.utc).timestamp())
+            if from_ts < now_s - 100 * 86400:
+                return [_nse_row(old_ts, 33.0)]
+            return []
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _fake_w)
+
+        r = client.get(
+            f"/api/ticker/intraday/INFY?interval=W&from_ts={old_ts}&to_ts={now_ms}"
+        )
+        assert r.status_code == 200, r.text
+        closes = [c["close"] for c in r.json()["candles"]]
+        assert 33.5 in closes  # old NSE row served
+        assert 2.0 in closes  # DB row kept
+        # Delta fetch returned [] so nothing persisted: proof of no-store.
+        assert upserts == []

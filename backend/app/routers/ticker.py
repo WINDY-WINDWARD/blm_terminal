@@ -125,6 +125,7 @@ async def get_ohlcv(
     # 2b. No-store backfill: if the requested window starts before stored
     # history, fetch the missing older span from NSE Charting and prepend it
     # WITHOUT persisting (extended history is memory-only on the client).
+    # Fetched in <=365d chunks: NSE truncates oversize single requests.
     # The forward on-demand backfill above is untouched.
     if from_date_obj is not None:
         earliest_stored = candles[0]["date"] if candles else (to_date_obj or date.today())
@@ -139,7 +140,7 @@ async def get_ohlcv(
                 f_from = int(datetime.combine(span_from, datetime.min.time(), tzinfo=timezone.utc).timestamp())
                 f_to = int(datetime.combine(span_to, datetime.max.time(), tzinfo=timezone.utc).timestamp())
                 if f_to >= f_from:
-                    raw_old = await fetch_candles_async(symbol, "D", from_ts=f_from, to_ts=f_to)
+                    raw_old = await _fetch_nse_chunked(symbol, "D", f_from, f_to, "daily")
                     seen_dates = {c["date"] for c in candles}
                     extra = []
                     for c in raw_old or []:
@@ -166,6 +167,10 @@ async def get_ohlcv(
                         })
                     extra.sort(key=lambda r: r["date"])
                     candles = extra + candles
+                    logging.getLogger(__name__).info(
+                        "[get_ohlcv] No-store backfill for %s: +%d rows (%s..%s)",
+                        symbol, len(extra), span_from, span_to,
+                    )
             except Exception as exc:
                 logging.getLogger(__name__).warning(
                     "[get_ohlcv] No-store backfill failed for %s: %s", symbol, exc
@@ -592,6 +597,52 @@ def _is_market_hours() -> bool:
     return market_open <= now_ist <= market_close
 
 
+# Max NSE Charting span per single request, by interval (seconds). NSE
+# silently caps/truncates oversize windows, so no-store backfill loops in
+# chunks of at most this size. Values mirror the proven warehouse/default
+# windows (daily ~365d single-shot, pass-through defaults).
+_NOSTORE_CHUNK_SPAN_S = {
+    "1m": 5 * 86400,
+    "5m": 15 * 86400,
+    "15m": 30 * 86400,
+    "30m": 30 * 86400,
+    "1h": 90 * 86400,
+    "D": 365 * 86400,
+    "W": 365 * 86400,
+}
+_NOSTORE_MAX_CHUNKS = 40
+
+
+async def _fetch_nse_chunked(
+    symbol: str, interval: str, from_s: int, to_s: int, tag: str
+) -> list:
+    """Fetch [from_s, to_s] (unix seconds) from NSE Charting in capped chunks.
+
+    Per-chunk failures log a warning and continue with the next chunk, so one
+    bad window never kills the whole backfill. Returns concatenated raw rows
+    (possibly empty). Never touches the DB.
+    """
+    span = _NOSTORE_CHUNK_SPAN_S.get(interval, 30 * 86400)
+    rows: list = []
+    cur = from_s
+    n = 0
+    log = logging.getLogger(__name__)
+    while cur < to_s and n < _NOSTORE_MAX_CHUNKS:
+        chunk_to = min(cur + span, to_s)
+        n += 1
+        try:
+            chunk = await fetch_candles_async(symbol, interval, from_ts=cur, to_ts=chunk_to)
+            if chunk:
+                rows.extend(chunk)
+        except Exception as exc:
+            log.warning(
+                "[nostore:%s] chunk %d [%d..%d] failed for %s/%s: %s",
+                tag, n, cur, chunk_to, symbol, interval, exc,
+            )
+        cur = chunk_to
+    return rows
+
+
 @router.get("/intraday/{symbol}", response_model=IntradayOHLCVResponse)
 async def get_intraday_ohlcv(
     symbol: str,
@@ -619,7 +670,10 @@ async def get_intraday_ohlcv(
     req_to_ts = int(valid_to_ts / 1000) if valid_to_ts else now_ts
 
     if interval in _PASS_THROUGH_INTERVALS:
-        # Pass-through logic: do not use local SQLite DB
+        # Pass-through logic: do not use local SQLite DB.
+        # Explicit scroll-back windows are fetched in NSE-safe chunks (NSE
+        # truncates oversize single requests, which used to return only the
+        # newest-capped subset — mostly dupes — so charts never grew).
         if valid_from_ts:
             fetch_from = int(valid_from_ts / 1000)
         else:
@@ -628,22 +682,30 @@ async def get_intraday_ohlcv(
             fetch_from = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
 
         try:
-            raw_rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=req_to_ts)
+            if valid_from_ts and req_to_ts - fetch_from > _NOSTORE_CHUNK_SPAN_S[interval]:
+                raw_rows = await _fetch_nse_chunked(symbol, interval, fetch_from, req_to_ts, "passthru")
+            else:
+                raw_rows = await fetch_candles_async(symbol, interval, from_ts=fetch_from, to_ts=req_to_ts)
         except ValueError as exc:
             logging.getLogger(__name__).warning("[intraday] Pass-through live fetch failed for %s/%s: %s", symbol, interval, exc)
             raw_rows = []
 
-        candle_rows = [
-            IntradayCandleRow(
-                timestamp=c["time_ms"],
-                open=c["open"],
-                high=c["high"],
-                low=c["low"],
-                close=c["close"],
-                volume=c["volume"],
-            )
-            for c in raw_rows
-        ]
+        candle_rows = []
+        for c in raw_rows or []:
+            try:
+                ts_ms = c.get("time_ms")
+                if not ts_ms:
+                    continue
+                candle_rows.append(IntradayCandleRow(
+                    timestamp=int(ts_ms),
+                    open=c.get("open", 0),
+                    high=c.get("high", 0),
+                    low=c.get("low", 0),
+                    close=c.get("close", 0),
+                    volume=c.get("volume", 0),
+                ))
+            except Exception:
+                continue
         return IntradayOHLCVResponse(symbol=symbol, interval=interval, candles=candle_rows, count=len(candle_rows))
 
     else:
@@ -691,7 +753,7 @@ async def get_intraday_ohlcv(
                     req_to_s = int(valid_to_ts / 1000) if valid_to_ts else now_ts
                     back_to = min(req_to_s, seed_cutoff_s)
                     if back_to > back_from:
-                        raw_old = await fetch_candles_async(symbol, interval, from_ts=back_from, to_ts=back_to)
+                        raw_old = await _fetch_nse_chunked(symbol, interval, back_from, back_to, "hourly")
                         seen_ts = set()
                         for c in raw_old or []:
                             try:
@@ -711,8 +773,48 @@ async def get_intraday_ohlcv(
                                 ))
                             except Exception:
                                 continue
+                        logging.getLogger(__name__).info(
+                            "[intraday] No-store backward fill for %s/%s: +%d rows",
+                            symbol, interval, len(nostore_rows),
+                        )
                 except Exception as exc:
                     logging.getLogger(__name__).warning("[intraday] No-store backward fill failed for %s/%s: %s", symbol, interval, exc)
+
+        # No-store backward fill (W): same shape as 1h — an explicit from_ts
+        # older than the oldest stored weekly bar is served straight from NSE
+        # WITHOUT upserting. Chunked (365d).
+        if interval == "W" and valid_from_ts:
+            try:
+                w_floor_s = int((datetime.now(timezone.utc) - timedelta(days=3 * 365)).timestamp())
+                w_back_from = max(int(valid_from_ts / 1000), w_floor_s)
+                w_back_to = int(valid_to_ts / 1000) if valid_to_ts else now_ts
+                if w_back_to > w_back_from:
+                    w_raw = await _fetch_nse_chunked(symbol, "W", w_back_from, w_back_to, "weekly")
+                    w_seen = {r.timestamp for r in nostore_rows}
+                    for c in w_raw or []:
+                        try:
+                            ts_ms = c.get("time_ms")
+                            if not ts_ms or ts_ms in w_seen:
+                                continue
+                            if ts_ms < valid_from_ts or (valid_to_ts and ts_ms > valid_to_ts):
+                                continue
+                            w_seen.add(ts_ms)
+                            nostore_rows.append(IntradayCandleRow(
+                                timestamp=int(ts_ms),
+                                open=c.get("open", 0),
+                                high=c.get("high", 0),
+                                low=c.get("low", 0),
+                                close=c.get("close", 0),
+                                volume=c.get("volume", 0),
+                            ))
+                        except Exception:
+                            continue
+                    logging.getLogger(__name__).info(
+                        "[intraday] No-store weekly fill for %s: +%d rows",
+                        symbol, len(nostore_rows),
+                    )
+            except Exception as exc:
+                logging.getLogger(__name__).warning("[intraday] No-store weekly fill failed for %s: %s", symbol, exc)
 
         candles = await asyncio.to_thread(
             ticker_warehouse.get_intraday, symbol, interval, from_ts=valid_from_ts, to_ts=valid_to_ts

@@ -38,6 +38,7 @@ import {
 import {
   EMPTY_STOP_STREAK,
   HISTORY_MAX_AGE_S,
+  backfillCacheAction,
   dailyBackfillRange,
   historyCache,
   historyCacheKey,
@@ -417,34 +418,45 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       try {
         let fetched: BrewInput[] | null = null;
         let key = '';
+        let fromCache = false;
         if (feed.isDaily) {
           const { fromDate, toDate } = dailyBackfillRange(feed.oldestSec);
           key = historyCacheKey(feed.symbol, feed.interval, fromDate);
           fetched = historyCache.get(key);
-          if (!fetched) {
+          fromCache = fetched !== null;
+          if (!fromCache) {
             const res = await fetchBackendOHLCV(feed.symbol, fromDate, toDate);
             fetched = mapDailyCandles(res.candles ?? []);
-            historyCache.set(key, fetched);
           }
         } else {
           const win = intradayBackfillRange(feed.oldestSec, feed.interval);
           if (!win) {
-            // W/M load full history up front — nothing to backfill.
+            // M loads full history up front — nothing to backfill.
             st.exhausted = true;
             return;
           }
           key = historyCacheKey(feed.symbol, feed.interval, String(win.fromTsMs));
           fetched = historyCache.get(key);
-          if (!fetched) {
+          fromCache = fetched !== null;
+          if (!fromCache) {
             const res = await fetchIntradayOHLCV(feed.symbol, feed.interval, win.fromTsMs, win.toTsMs);
             fetched = mapIntradayCandles(res.candles ?? []);
-            historyCache.set(key, fetched);
           }
         }
         if (st.epoch !== epoch) return;
+        if (fetched === null) fetched = [];
+        const action = backfillCacheAction({ fromCache, count: fetched.length });
+        if (action === 'store') historyCache.set(key, fetched);
+        console.debug(
+          `[backfill] ${feed.symbol}/${feed.interval} key=${key} fetched=${fetched.length} cached=${fromCache} action=${action}`,
+        );
         if (fetched.length === 0) {
-          st.emptyStreak += 1;
-          if (st.emptyStreak >= EMPTY_STOP_STREAK) st.exhausted = true;
+          // Only genuine network empties count: an empty cache hit (window
+          // still in flight elsewhere) or a skipped store must not exhaust.
+          if (action === 'count-empty') {
+            st.emptyStreak += 1;
+            if (st.emptyStreak >= EMPTY_STOP_STREAK) st.exhausted = true;
+          }
           return;
         }
         st.emptyStreak = 0;

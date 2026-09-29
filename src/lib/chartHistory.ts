@@ -19,7 +19,9 @@ export const EMPTY_STOP_STREAK = 2;
 /** Daily backfill chunk: 2 years per fetch. */
 export const DAILY_CHUNK_DAYS = 2 * 365;
 
-/** Intraday backfill chunk per fetch, in ms. Null = no backfill (W/M load full history). */
+/** Intraday backfill chunk per fetch, in ms. Null = no backfill (M loads full history).
+ * Spans stay within what NSE returns in one call — oversize windows come back
+ * newest-capped (mostly dupes), so the chart never visibly grows. */
 export function backfillChunkSpanMs(interval: string): number | null {
   const day = 86_400_000;
   switch (interval) {
@@ -29,9 +31,11 @@ export function backfillChunkSpanMs(interval: string): number | null {
       return 30 * day;
     case '15m':
     case '30m':
-      return 60 * day;
+      return 30 * day;
     case '1h':
-      return 360 * day;
+      return 90 * day;
+    case 'W':
+      return 365 * day;
     default:
       return null;
   }
@@ -170,4 +174,21 @@ export function intradayBackfillRange(
 /** Trigger when the visible left edge approaches logical bar 0 (oldest). */
 export function shouldBackfill(visibleFrom: number | null | undefined): boolean {
   return typeof visibleFrom === 'number' && Number.isFinite(visibleFrom) && visibleFrom < BACKFILL_TRIGGER_BARS;
+}
+
+export interface BackfillOutcome {
+  /** True when the window came from historyCache instead of the network. */
+  fromCache: boolean;
+  count: number;
+}
+
+/**
+ * Cache/streak decision for a backfill window. Empty windows are NEVER
+ * cached (a transient NSE failure must not poison the next 2h), and only a
+ * genuine network empty counts toward the stop streak — a cache hit for a
+ * window still in flight elsewhere must not kill backfill.
+ */
+export function backfillCacheAction(out: BackfillOutcome): 'store' | 'count-empty' | 'ignore' {
+  if (out.count > 0) return 'store';
+  return out.fromCache ? 'ignore' : 'count-empty';
 }
