@@ -53,6 +53,7 @@ packages = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "slow: tests that hit NSE upstream servers (deselect with -m 'not slow')",
 ]

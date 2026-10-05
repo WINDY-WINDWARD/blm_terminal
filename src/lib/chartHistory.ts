@@ -85,15 +85,24 @@ export function mapIntradayCandles(candles: IntradayCandleLike[]): BrewInput[] {
 
 /**
  * Merge an older (backfilled) window under the base array. Base wins ties
- * (same source, identical values), output is ascending and deduped —
- * lightweight-charts setData throws on unsorted/duplicate times.
+ * (same source, identical values), output is strictly ascending and deduped —
+ * lightweight-charts setData throws or crashes on unsorted/duplicate times.
  */
 export function mergeHistoryBars(base: BrewInput[], older: BrewInput[]): BrewInput[] {
-  if (older.length === 0) return base;
-  if (base.length === 0) return [...older].sort((a, b) => a.time - b.time);
-  const seen = new Set(base.map((b) => b.time));
-  const extra = older.filter((b) => !seen.has(b.time));
-  return [...extra, ...base].sort((a, b) => a.time - b.time);
+  if (older.length === 0 && base.length === 0) return [];
+  const map = new Map<number, BrewInput>();
+  // Older first so base overwrites older on timestamp collision
+  for (const b of older) {
+    if (typeof b?.time === 'number' && Number.isFinite(b.time)) {
+      map.set(b.time, b);
+    }
+  }
+  for (const b of base) {
+    if (typeof b?.time === 'number' && Number.isFinite(b.time)) {
+      map.set(b.time, b);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.time - b.time);
 }
 
 interface CacheEntry {

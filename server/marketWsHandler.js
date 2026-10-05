@@ -300,6 +300,8 @@ async function handleMarketWsMessage(ws, raw) {
     await streamBatch(ws, requestId, symbols, 'change_ranges_started', 'change_ranges_partial', 'change_ranges_complete', (s) => fetchChangeRangesWithFallback(s));
   } else if (action === 'get_symbol_data') {
     await streamBatch(ws, requestId, symbols, 'symbol_data_started', 'symbol_data_partial', 'symbol_data_complete', (s) => fetchSymbolDataWithFallback(s));
+  } else if (action === 'ping') {
+    sendJson(ws, { type: 'pong', request_id: requestId });
   } else if (action !== undefined) {
     sendJson(ws, { type: 'error', request_id: requestId, message: `Unknown action: ${action}` });
   }

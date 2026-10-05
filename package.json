@@ -9,6 +9,7 @@
     "build:next": "next build",
     "build:backend": "powershell -ExecutionPolicy Bypass -File ./scripts/build_backend.ps1",
     "build:desktop": "npm run build:next && npm run build:backend && electron-builder --win --config electron-builder.json",
+    "publish:binaries": "powershell -ExecutionPolicy Bypass -File ./scripts/publish_binaries.ps1",
     "build:desktop:fast": "powershell -ExecutionPolicy Bypass -File ./scripts/build_desktop_fast.ps1",
     "publish:desktop": "npm run build:next && npm run build:backend && node scripts/create_release.js && electron-builder --win --config electron-builder.json --publish always",
     "start": "cross-env NODE_ENV=production node server.js",

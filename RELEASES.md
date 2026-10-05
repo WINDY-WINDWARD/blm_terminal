@@ -64,26 +64,20 @@ git push origin HEAD --follow-tags
 ### Step 3: Local Compilation & Direct GitHub Publishing
 To avoid expensive GitHub Actions cloud minutes, the build and release process runs locally on your machine.
 
-We use the GitHub CLI (`gh`) to authenticate and prepare the release, while `electron-builder` performs the packaging and upload. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
+We use the GitHub CLI (`gh`) to authenticate and prepare the release to the dedicated **`blmterminal-binaries`** repository, while a PowerShell script performs the upload. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
 
-Run the automated build and publish script. You must pass your GitHub CLI token to the environment so `electron-builder` can authenticate the upload:
+Run the automated build and publish script:
 
 **Windows PowerShell:**
 ```powershell
-$env:GH_TOKEN = $(gh auth token); npm run publish:desktop
-```
-
-**Git Bash / macOS / Linux:**
-```bash
-export GH_TOKEN=$(gh auth token) && npm run publish:desktop
+npm run publish:binaries
 ```
 
 This command will:
-1.  Compile the Python backend via PyInstaller.
-2.  Build the Next.js production bundle.
-3.  Use the `gh` CLI to pre-create a draft release on GitHub.
-4.  Package the Windows NSIS installer using `electron-builder`.
-5.  Upload the `.exe`, `latest.yml`, and `.blockmap` to the draft Release on your GitHub repository.
+1.  Compile the Python backend via PyInstaller and build the Next.js bundle.
+2.  Package the Windows NSIS installer using `electron-builder`.
+3.  Automatically create a Release on the `WINDY-WINDWARD/blmterminal-binaries` repository using the `gh` CLI.
+4.  Upload the `.exe`, `latest.yml`, and `.blockmap` to the Release.
 
 > **Release rigor:** releases always use the full sequential `build:desktop`
 > path. `build:desktop:fast` (parallel stages, skip-unchanged) is strictly

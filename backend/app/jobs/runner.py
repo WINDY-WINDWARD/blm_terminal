@@ -1,6 +1,7 @@
 """Job runner for background task execution and tracking."""
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -11,11 +12,18 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal, _SyncSessionLocal
-from app.models.job import Job
+from app.models.job import Job, JobExecution
 from app.jobs.registry import JobRegistry
 from app.services.write_queue import _write_queue_enabled
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Active execution tracking
+# ---------------------------------------------------------------------------
+# { job_key: execution_id }
+_active_executions: dict[str, int] = {}
+_active_executions_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Debounce state for update_job_status_sync
@@ -27,17 +35,200 @@ _DEBOUNCE_MIN_INTERVAL = 0.8  # seconds
 _DEBOUNCE_MIN_DELTA_PCT = 5   # percent
 
 
+def _create_job_execution_sync(
+    job_key: str,
+    name: str | None = None,
+    category: str | None = None,
+    triggered_by: str = "manual",
+) -> int:
+    """Create a new JobExecution row synchronously and register as active."""
+    if not name:
+        job_def = JobRegistry.get(job_key)
+        if job_def:
+            name = job_def.name
+            category = category or job_def.category
+        else:
+            name = job_key
+
+    now = datetime.now(timezone.utc)
+    initial_log = json.dumps([
+        {
+            "timestamp": now.isoformat(),
+            "message": f"Job {name} started ({triggered_by})",
+            "level": "info",
+        }
+    ])
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with _SyncSessionLocal() as db:
+                exec_row = JobExecution(
+                    job_key=job_key,
+                    name=name,
+                    category=category,
+                    triggered_by=triggered_by,
+                    status="running",
+                    progress_percent=0,
+                    progress_message="Starting...",
+                    started_at=now,
+                    log_lines=initial_log,
+                )
+                db.add(exec_row)
+                db.commit()
+                db.refresh(exec_row)
+                exec_id = exec_row.id
+                with _active_executions_lock:
+                    _active_executions[job_key] = exec_id
+                return exec_id
+        except Exception as e:
+            if attempt < max_attempts:
+                time.sleep(0.3 * attempt)
+            else:
+                logger.warning("Failed to create JobExecution for %s: %s", job_key, e)
+                return 0
+    return 0
+
+
+def log_job_message(job_key: str, message: str, level: str = "info") -> None:
+    """Add a timestamped log line to the active execution of a job."""
+    def _do_log():
+        exec_id = None
+        with _active_executions_lock:
+            exec_id = _active_executions.get(job_key)
+        if not exec_id:
+            return
+
+        try:
+            with _SyncSessionLocal() as db:
+                exec_row = db.execute(select(JobExecution).where(JobExecution.id == exec_id)).scalar_one_or_none()
+                if exec_row:
+                    lines = []
+                    try:
+                        lines = json.loads(exec_row.log_lines or "[]")
+                    except Exception:
+                        lines = []
+                    lines.append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "message": message,
+                        "level": level,
+                    })
+                    if len(lines) > 500:
+                        lines = lines[-500:]
+                    exec_row.log_lines = json.dumps(lines)
+                    exec_row.progress_message = message
+                    db.commit()
+        except Exception as e:
+            logger.debug("Failed to log job message for %s: %s", job_key, e)
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, _do_log)
+    except RuntimeError:
+        _do_log()
+
+
 def _execute_job_update(job_key: str, values: dict) -> None:
-    """Execute a single job UPDATE directly via _SyncSessionLocal."""
+    """Execute a single job UPDATE directly via _SyncSessionLocal, and sync with JobExecution."""
     from app.database import _SyncSessionLocal
-    from app.models.job import Job
-    from sqlalchemy import update as sa_update
+    from app.models.job import Job, JobExecution
+    from sqlalchemy import update as sa_update, select as sa_select
+
+    now = datetime.now(timezone.utc)
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
             with _SyncSessionLocal() as db:
                 stmt = sa_update(Job).where(Job.job_key == job_key).values(**values)
                 db.execute(stmt)
+
+                # Check active execution
+                exec_id = None
+                with _active_executions_lock:
+                    exec_id = _active_executions.get(job_key)
+
+                status = values.get("status")
+
+                # If running and no active execution exists yet, auto-create one (e.g. from background daemon)
+                if not exec_id and status == "running":
+                    job_row = db.execute(sa_select(Job).where(Job.job_key == job_key)).scalar_one_or_none()
+                    name = job_row.name if job_row else job_key
+                    category = job_row.category if job_row else None
+                    initial_msg = values.get("progress_message") or f"Job {name} started (scheduled)"
+                    initial_log = json.dumps([
+                        {"timestamp": now.isoformat(), "message": initial_msg, "level": "info"}
+                    ])
+                    new_exec = JobExecution(
+                        job_key=job_key,
+                        name=name,
+                        category=category,
+                        triggered_by="scheduled",
+                        status="running",
+                        progress_percent=values.get("progress_percent") or 0,
+                        progress_message=values.get("progress_message") or "Starting...",
+                        started_at=values.get("last_triggered_at") or now,
+                        log_lines=initial_log,
+                    )
+                    db.add(new_exec)
+                    db.commit()
+                    db.refresh(new_exec)
+                    exec_id = new_exec.id
+                    with _active_executions_lock:
+                        _active_executions[job_key] = exec_id
+
+                elif exec_id:
+                    exec_row = db.execute(sa_select(JobExecution).where(JobExecution.id == exec_id)).scalar_one_or_none()
+                    if exec_row:
+                        # Append log line if progress message or error changed
+                        lines = []
+                        try:
+                            lines = json.loads(exec_row.log_lines or "[]")
+                        except Exception:
+                            lines = []
+
+                        msg = values.get("progress_message")
+                        err = values.get("last_error")
+                        new_log = None
+                        if err:
+                            new_log = {"timestamp": now.isoformat(), "message": f"Error: {err}", "level": "error"}
+                        elif msg and (not lines or lines[-1].get("message") != msg):
+                            new_log = {"timestamp": now.isoformat(), "message": msg, "level": "info"}
+
+                        if new_log:
+                            lines.append(new_log)
+                            if len(lines) > 500:
+                                lines = lines[-500:]
+                            exec_row.log_lines = json.dumps(lines)
+
+                        if "progress_percent" in values and values["progress_percent"] is not None:
+                            exec_row.progress_percent = values["progress_percent"]
+                        if msg is not None:
+                            exec_row.progress_message = msg
+                        if err is not None:
+                            exec_row.error = err
+
+                        # Terminal state: completed
+                        if status in ("idle", "completed") and (exec_row.progress_percent == 100 or values.get("progress_percent") == 100 or values.get("progress_message") == "Completed"):
+                            exec_row.status = "completed"
+                            exec_row.completed_at = now
+                            if exec_row.started_at:
+                                s = exec_row.started_at
+                                if s.tzinfo is None:
+                                    s = s.replace(tzinfo=timezone.utc)
+                                exec_row.duration_seconds = max(0.0, round((now - s).total_seconds(), 2))
+                            with _active_executions_lock:
+                                _active_executions.pop(job_key, None)
+                        elif status == "failed" or err is not None:
+                            exec_row.status = "failed"
+                            exec_row.completed_at = now
+                            if exec_row.started_at:
+                                s = exec_row.started_at
+                                if s.tzinfo is None:
+                                    s = s.replace(tzinfo=timezone.utc)
+                                exec_row.duration_seconds = max(0.0, round((now - s).total_seconds(), 2))
+                            with _active_executions_lock:
+                                _active_executions.pop(job_key, None)
+
                 db.commit()
             return
         except Exception as e:
@@ -71,46 +262,38 @@ async def update_job_status(
     next_trigger: datetime | None = None,
     last_success: datetime | None = None,
 ) -> None:
-    """Update job status in database. Uses timezone-aware UTC datetime.
-    
-    Automatically sets last_triggered_at when status is 'running'
-    and last_completed_at when status is 'idle' or 'waiting'.
-    Automatically calculates next_trigger_at for interval-based jobs.
-    """
-    async with AsyncSessionLocal() as db:
-        values: dict = {
-            "status": status,
-            "updated_at": datetime.now(timezone.utc),
-        }
-        
-        # Auto-set timestamps based on status
-        now = datetime.now(timezone.utc)
-        if status == "running" or last_triggered:
-            values["last_triggered_at"] = last_triggered if last_triggered else now
-        if status in ("idle", "waiting") or last_completed:
-            values["last_completed_at"] = last_completed if last_completed else now
-        
-        if status in ("running", "idle", "waiting"):
-            if error is None:
-                values["last_error"] = None
-        if progress is not None:
-            values["progress_percent"] = progress
-        if message is not None:
-            values["progress_message"] = message
-        if error is not None:
-            values["last_error"] = error
-        if last_completed is not None:
-            values["last_completed_at"] = last_completed
-        if last_triggered is not None:
-            values["last_triggered_at"] = last_triggered
-        if next_trigger is not None:
-            values["next_trigger_at"] = next_trigger
-        if last_success is not None:
-            values["last_success_at"] = last_success
+    """Update job status in database and sync with active JobExecution."""
+    values: dict = {
+        "status": status,
+        "updated_at": datetime.now(timezone.utc),
+    }
 
-        stmt = update(Job).where(Job.job_key == job_key).values(**values)
-        await db.execute(stmt)
-        await db.commit()
+    now = datetime.now(timezone.utc)
+    if status == "running" or last_triggered:
+        values["last_triggered_at"] = last_triggered if last_triggered else now
+    if status in ("idle", "waiting") or last_completed:
+        values["last_completed_at"] = last_completed if last_completed else now
+
+    if status in ("running", "idle", "waiting"):
+        if error is None:
+            values["last_error"] = None
+    if progress is not None:
+        values["progress_percent"] = progress
+    if message is not None:
+        values["progress_message"] = message
+    if error is not None:
+        values["last_error"] = error
+    if last_completed is not None:
+        values["last_completed_at"] = last_completed
+    if last_triggered is not None:
+        values["last_triggered_at"] = last_triggered
+    if next_trigger is not None:
+        values["next_trigger_at"] = next_trigger
+    if last_success is not None:
+        values["last_success_at"] = last_success
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _execute_job_update, job_key, values)
 
 
 def update_job_status_sync(
@@ -271,14 +454,15 @@ async def mark_job_success(job_key: str) -> None:
 
 
 def report_progress(job_key: str, percent: int, message: str) -> None:
-    """Thread-safe progress update. Called from worker threads."""
+    """Thread-safe progress update. Called from worker threads or async tasks."""
+    status = "idle" if percent == 100 else "running"
     try:
         loop = asyncio.get_running_loop()
-        loop.call_soon_threadsafe(
-            lambda: update_job_status(job_key, "running", progress=percent, message=message)
+        loop.create_task(
+            update_job_status(job_key, status, progress=percent, message=message)
         )
     except RuntimeError:
-        pass
+        update_job_status_sync(job_key, status, progress=percent, message=message)
 
 
 async def _execute_triggered_job(job_key: str, job_def: Any) -> None:
@@ -308,6 +492,8 @@ async def _execute_triggered_job(job_key: str, job_def: Any) -> None:
 
     finally:
         JobRegistry.set_running(job_key, False)
+        with _active_executions_lock:
+            _active_executions.pop(job_key, None)
 
 
 async def trigger_job(job_key: str, force: bool = False) -> dict:
@@ -348,6 +534,13 @@ async def trigger_job(job_key: str, force: bool = False) -> dict:
         logger.warning(f"Force-triggering job {job_key}, stopping existing run")
 
     now = datetime.now(timezone.utc)
+    _create_job_execution_sync(
+        job_key=job_key,
+        name=job_def.name,
+        category=job_def.category,
+        triggered_by="manual",
+    )
+
     await update_job_status(
         job_key, "running", progress=0, message="Starting...", last_triggered=now
     )
@@ -379,6 +572,13 @@ async def run_job_async(job_key: str) -> None:
         logger.warning(f"Job {job_key} has no callable, skipping")
         return
 
+    _create_job_execution_sync(
+        job_key=job_key,
+        name=job_def.name,
+        category=job_def.category,
+        triggered_by="scheduled",
+    )
+
     try:
         if job_def.is_async:
             await job_def.callable()
@@ -400,3 +600,7 @@ async def run_job_async(job_key: str) -> None:
     except Exception as e:
         logger.exception(f"Job {job_key} failed")
         await update_job_status(job_key, "failed", error=str(e)[:512])
+
+    finally:
+        with _active_executions_lock:
+            _active_executions.pop(job_key, None)

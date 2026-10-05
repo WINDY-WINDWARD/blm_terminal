@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useAtom } from 'jotai';
 import { authAtom } from '@/store/terminalStore';
@@ -90,6 +90,29 @@ interface DbAlert {
   snapshot: Record<string, unknown>;
 }
 
+interface JobLogLine {
+  ts: number;
+  level: string;
+  message: string;
+}
+
+interface JobExecution {
+  id: number;
+  job_key: string;
+  name: string;
+  category: string | null;
+  triggered_by: string | null;
+  status: string;
+  progress_percent: number;
+  progress_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  error: string | null;
+  log_lines: JobLogLine[];
+  created_at: string;
+}
+
 function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return '—';
   if (bytes < 1024) return `${bytes} B`;
@@ -113,6 +136,14 @@ function formatEpoch(ts: number | null | undefined): string {
     second: '2-digit',
     hour12: false,
   });
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—';
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}m ${s}s`;
 }
 
 const PRIO_LABELS: Record<string, string> = {
@@ -427,7 +458,14 @@ export default function JobsPage() {
   const [triggering, setTriggering] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'jobs' | 'stats' | 'dbstats'>('jobs');
+  const [activeTab, setActiveTab] = useState<'jobs' | 'stats' | 'dbstats' | 'history'>('jobs');
+  const [executions, setExecutions] = useState<JobExecution[]>([]);
+  const [executionsLoading, setExecutionsLoading] = useState(false);
+  const [executionsError, setExecutionsError] = useState<string | null>(null);
+  const [executionsJobFilter, setExecutionsJobFilter] = useState<string>('');
+  const [executionsOffset, setExecutionsOffset] = useState<number>(0);
+  const [expandedExecution, setExpandedExecution] = useState<number | null>(null);
+  const [autoRefreshHistory, setAutoRefreshHistory] = useState(true);
   const [tickerStatus, setTickerStatus] = useState<TickerStatus | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<string | null>(null);
@@ -578,6 +616,24 @@ export default function JobsPage() {
     }
   }, []);
 
+  const fetchExecutions = useCallback(async (jobFilter: string, offset: number) => {
+    setExecutionsLoading(true);
+    try {
+      let url = `/api/jobs/executions?limit=50&offset=${offset}`;
+      if (jobFilter) url += `&job_key=${encodeURIComponent(jobFilter)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to fetch executions');
+      const data = await res.json();
+      setExecutions(data.executions || []);
+      setExecutionsError(null);
+    } catch (err) {
+      console.error('Failed to fetch executions:', err);
+      setExecutionsError('Failed to load executions');
+    } finally {
+      setExecutionsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab !== 'dbstats') return;
     fetchDbLive();
@@ -589,6 +645,17 @@ export default function JobsPage() {
       clearInterval(alertsInterval);
     };
   }, [activeTab, fetchDbLive, fetchDbAlerts]);
+
+  useEffect(() => {
+    if (activeTab !== 'history') return;
+    fetchExecutions(executionsJobFilter, executionsOffset);
+    if (autoRefreshHistory) {
+      const interval = setInterval(() => {
+        fetchExecutions(executionsJobFilter, executionsOffset);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab, fetchExecutions, executionsJobFilter, executionsOffset, autoRefreshHistory]);
 
   const handleTriggerBackfill = async () => {
     if (!confirm('Trigger full backfill for all watchlist symbols?')) return;
@@ -704,7 +771,15 @@ export default function JobsPage() {
               ← BACK
             </Link>
             <button
-              onClick={activeTab === 'stats' ? fetchStats : activeTab === 'dbstats' ? fetchDbLive : fetchJobs}
+              onClick={
+                activeTab === 'stats'
+                  ? fetchStats
+                  : activeTab === 'dbstats'
+                  ? fetchDbLive
+                  : activeTab === 'history'
+                  ? () => fetchExecutions(executionsJobFilter, executionsOffset)
+                  : fetchJobs
+              }
               className="px-3 py-1 text-xs border border-terminal-gray text-terminal-amber hover:bg-terminal-amber hover:text-terminal-bg transition-colors"
             >
               REFRESH
@@ -743,6 +818,16 @@ export default function JobsPage() {
             }`}
           >
             DB Stats
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider transition-colors ${
+              activeTab === 'history'
+                ? 'bg-terminal-amber text-terminal-bg'
+                : 'text-white/60 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            History
           </button>
         </div>
 
@@ -854,6 +939,125 @@ export default function JobsPage() {
             expandedAlert={expandedAlert}
             setExpandedAlert={setExpandedAlert}
           />
+        ) : activeTab === 'history' ? (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  placeholder="Filter by job_key..."
+                  value={executionsJobFilter}
+                  onChange={(e) => {
+                    setExecutionsJobFilter(e.target.value);
+                    setExecutionsOffset(0);
+                  }}
+                  className="bg-black/50 border border-terminal-gray px-2 py-1 text-xs text-white outline-none focus:border-terminal-amber min-w-[200px]"
+                />
+                <button
+                  onClick={() => fetchExecutions(executionsJobFilter, 0)}
+                  className="px-3 py-1 bg-white/5 border border-terminal-gray hover:bg-white/10 text-xs text-terminal-amber hover:text-white transition-colors"
+                >
+                  SEARCH
+                </button>
+              </div>
+              <label className="flex items-center gap-2 text-xs text-white/70 cursor-pointer hover:text-white transition-colors">
+                <input
+                  type="checkbox"
+                  checked={autoRefreshHistory}
+                  onChange={(e) => setAutoRefreshHistory(e.target.checked)}
+                  className="accent-terminal-amber"
+                />
+                AUTO-REFRESH
+              </label>
+            </div>
+            
+            {executionsLoading && executions.length === 0 ? (
+              <div className="text-terminal-amber animate-pulse">Loading history...</div>
+            ) : executionsError ? (
+              <div className="p-3 bg-terminal-red/10 border border-terminal-red text-terminal-red text-xs">
+                {executionsError}
+              </div>
+            ) : (
+              <div className="overflow-x-auto overflow-y-visible pb-12">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-terminal-gray text-terminal-amber uppercase text-[10px] tracking-widest">
+                      <th className="text-left py-2 px-2 w-1/4">Job / Status</th>
+                      <th className="text-left py-2 px-2 w-1/6">Started At</th>
+                      <th className="text-left py-2 px-2 w-1/6">Duration</th>
+                      <th className="text-left py-2 px-2 w-5/12">Progress</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {executions.map((exc) => (
+                      <React.Fragment key={exc.id}>
+                        <tr
+                          onClick={() => setExpandedExecution(expandedExecution === exc.id ? null : exc.id)}
+                          className={`border-b border-terminal-gray/20 hover:bg-white/5 cursor-pointer transition-colors ${
+                            expandedExecution === exc.id ? 'bg-white/5' : ''
+                          }`}
+                        >
+                          <td className="py-2 px-2">
+                            <div className="font-bold text-white flex gap-2 items-center mb-1">
+                              {exc.name}
+                              <StatusBadge status={exc.status} />
+                            </div>
+                            <div className="text-[10px] text-white/50">{exc.job_key} • {exc.triggered_by || 'auto'}</div>
+                          </td>
+                          <td className="py-2 px-2 text-white/80 whitespace-nowrap">
+                            {formatEpoch(new Date(exc.started_at).getTime() / 1000)}
+                          </td>
+                          <td className="py-2 px-2 text-white/60">
+                            {exc.duration_seconds !== null ? formatDuration(exc.duration_seconds) : (exc.status === 'running' ? <span className="text-terminal-amber animate-pulse">Running...</span> : '—')}
+                          </td>
+                          <td className="py-2 px-2 pr-4">
+                            <div className="flex items-center gap-2 mb-1">
+                                <div className="w-full h-1.5 bg-terminal-gray rounded overflow-hidden">
+                                  <div
+                                    className={`h-full transition-all duration-300 ${
+                                      exc.status === 'failed'
+                                        ? 'bg-terminal-red'
+                                        : exc.status === 'running'
+                                        ? 'bg-blue-400'
+                                        : 'bg-terminal-green'
+                                    }`}
+                                    style={{ width: `${exc.progress_percent}%` }}
+                                  />
+                                </div>
+                                <span className="text-[10px] w-8 text-right font-mono">{exc.progress_percent}%</span>
+                            </div>
+                            <div className="text-[10px] text-white/60 truncate max-w-sm" title={exc.error || exc.progress_message || ''}>
+                              {exc.error ? <span className="text-terminal-red">{exc.error}</span> : exc.progress_message || '—'}
+                            </div>
+                          </td>
+                        </tr>
+                        {expandedExecution === exc.id && (
+                          <tr className="bg-black/30 border-b border-terminal-gray/20">
+                            <td colSpan={4} className="p-0">
+                              <div className="max-h-[400px] overflow-y-auto p-4 font-mono text-[10px] text-white/70 space-y-1 bg-zinc-950/50 shadow-inner">
+                                {exc.log_lines && exc.log_lines.length > 0 ? (
+                                  exc.log_lines.map((line, idx) => (
+                                    <div key={idx} className="flex gap-4 hover:text-white transition-colors">
+                                      <span className="text-white/40 shrink-0 w-20">{new Date(line.ts).toLocaleTimeString('en-US', {hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                                      <span className={line.level === 'ERROR' ? 'text-terminal-red' : line.level === 'WARN' ? 'text-terminal-amber' : ''}>
+                                        {line.message}
+                                      </span>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="text-white/40 italic">No logs available for this execution.</div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         ) : (
           <div>
             {statsLoading && !tickerStatus ? (

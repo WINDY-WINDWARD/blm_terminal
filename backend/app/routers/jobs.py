@@ -13,13 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_admin_user
 from app.config import settings
 from app.database import get_db
-from app.models.job import Job
+from app.models.job import Job, JobExecution
 from app.schemas.job import (
     JobStatus,
     JobListResponse,
     JobTriggerResponse,
     JobToggleRequest,
     JobToggleResponse,
+    JobExecutionResponse,
+    JobExecutionListResponse,
 )
 from app.jobs.runner import trigger_job, sync_all_jobs_to_db
 from app.jobs.registry import JobRegistry, JobDefinition
@@ -37,6 +39,73 @@ async def list_jobs(db: AsyncSession = Depends(get_db)) -> JobListResponse:
     jobs = result.scalars().all()
 
     return JobListResponse(jobs=[JobStatus.model_validate(j) for j in jobs])
+
+
+def _format_execution(exc: JobExecution) -> JobExecutionResponse:
+    import json
+    logs = []
+    if exc.log_lines:
+        try:
+            logs = json.loads(exc.log_lines) if isinstance(exc.log_lines, str) else exc.log_lines
+        except Exception:
+            logs = []
+    return JobExecutionResponse(
+        id=exc.id,
+        job_key=exc.job_key,
+        name=exc.name,
+        category=exc.category,
+        triggered_by=exc.triggered_by,
+        status=exc.status,
+        progress_percent=exc.progress_percent,
+        progress_message=exc.progress_message,
+        started_at=exc.started_at,
+        completed_at=exc.completed_at,
+        duration_seconds=exc.duration_seconds,
+        error=exc.error,
+        log_lines=logs,
+        created_at=exc.created_at,
+    )
+
+
+@router.get("/jobs/executions", response_model=JobExecutionListResponse, tags=["jobs"])
+async def list_job_executions(
+    job_key: Optional[str] = Query(None, description="Filter by job_key"),
+    limit: int = Query(50, ge=1, le=200, description="Max records to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: AsyncSession = Depends(get_db),
+) -> JobExecutionListResponse:
+    """List historical and active job executions, sorted newest first."""
+    from sqlalchemy import func
+
+    count_stmt = select(func.count(JobExecution.id))
+    if job_key:
+        count_stmt = count_stmt.where(JobExecution.job_key == job_key)
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    stmt = select(JobExecution).order_by(JobExecution.started_at.desc())
+    if job_key:
+        stmt = stmt.where(JobExecution.job_key == job_key)
+    stmt = stmt.offset(offset).limit(limit)
+    rows = (await db.execute(stmt)).scalars().all()
+
+    return JobExecutionListResponse(
+        total=total,
+        executions=[_format_execution(r) for r in rows],
+    )
+
+
+@router.get("/jobs/executions/{execution_id}", response_model=JobExecutionResponse, tags=["jobs"])
+async def get_job_execution(
+    execution_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> JobExecutionResponse:
+    """Get single job execution details including log lines."""
+    stmt = select(JobExecution).where(JobExecution.id == execution_id)
+    exc = (await db.execute(stmt)).scalar_one_or_none()
+    if not exc:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    return _format_execution(exc)
 
 
 @router.get("/jobs/{job_key}", response_model=JobStatus, tags=["jobs"])

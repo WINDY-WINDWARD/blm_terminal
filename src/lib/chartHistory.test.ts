@@ -40,6 +40,16 @@ describe('mergeHistoryBars', () => {
     expect(mergeHistoryBars([], [bar(2), bar(1)]).map((b) => b.time)).toEqual([1, 2]);
     expect(mergeHistoryBars([bar(1)], []).map((b) => b.time)).toEqual([1]);
   });
+
+  it('dedupes within older array and within base array', () => {
+    const olderWithDupes = [bar(1, 10), bar(1, 20), bar(2, 30)];
+    const out = mergeHistoryBars([bar(3)], olderWithDupes);
+    expect(out.map((b) => b.time)).toEqual([1, 2, 3]);
+
+    const baseWithDupes = [bar(2, 50), bar(2, 60)];
+    const out2 = mergeHistoryBars(baseWithDupes, [bar(1)]);
+    expect(out2.map((b) => b.time)).toEqual([1, 2]);
+  });
 });
 
 describe('mappers match chart conventions', () => {

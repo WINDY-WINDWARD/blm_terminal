@@ -556,6 +556,9 @@ async def run_loop_1_and_2(late: bool = False) -> str:
     or "error:<detail>" (API/parse failure — caller must report failed, and
     the success date stays unwritten so the next boot retries).
     """
+    from app.jobs.runner import report_progress
+
+    report_progress("job.ai_picks_morning", 10, "Fetching sector breadth and market context...")
     _, verifier_model = await get_dynamic_models()
     market_context = await _fetch_market_context()
     today = _today_ist_str()
@@ -567,22 +570,29 @@ async def run_loop_1_and_2(late: bool = False) -> str:
         )
 
     async with AsyncSessionLocal() as db:
+        report_progress("job.ai_picks_morning", 25, "Loop 1: Hunter agent scanning market candidates...")
         proposed_picks, hunter_err = await _call_hunter(db, market_context)
         if hunter_err:
             logger.error(f"Loop 1 failed: {hunter_err}")
+            report_progress("job.ai_picks_morning", 100, f"Hunter failed: {hunter_err}")
             return f"error:{hunter_err}"
         if not proposed_picks:
             logger.info("Loop 1 found no valid setups today.")
+            report_progress("job.ai_picks_morning", 100, "Hunter found no candidate setups today")
             return "empty"
 
+        report_progress("job.ai_picks_morning", 55, f"Loop 2: Verifier validating {len(proposed_picks)} candidate setups...")
         verified_picks, verifier_err = await _call_verifier(db, proposed_picks, market_context)
         if verifier_err:
             logger.error(f"Loop 2 failed: {verifier_err}")
+            report_progress("job.ai_picks_morning", 100, f"Verifier failed: {verifier_err}")
             return f"error:{verifier_err}"
         if not verified_picks:
             logger.info("Loop 2 rejected all setups.")
+            report_progress("job.ai_picks_morning", 100, "Verifier rejected all candidate setups")
             return "empty"
 
+        report_progress("job.ai_picks_morning", 85, f"Committing {len(verified_picks)} verified picks to database...")
         # Commit to DB
         for pick in verified_picks:
             try:
@@ -626,11 +636,15 @@ async def run_loop_1_and_2(late: bool = False) -> str:
             await db.commit()
         await _set_config_value(db, _LAST_SUCCESS_KEY, today)
         logger.info(f"Loop 1 & 2 completed. Saved {len(verified_picks)} picks.")
+        report_progress("job.ai_picks_morning", 100, f"Completed: saved {len(verified_picks)} verified picks")
         return "ok"
 
 
 async def run_loop_3(late: bool = False) -> bool:
     """Execute Evaluator (5pm) pipeline. Returns True on commit. Raises on failure."""
+    from app.jobs.runner import report_progress
+
+    report_progress("job.ai_picks_evening", 10, "Fetching live market context & active picks...")
     _, verifier_model = await get_dynamic_models()
     market_context = await _fetch_market_context()
     today = _today_ist_str()
@@ -646,13 +660,20 @@ async def run_loop_3(late: bool = False) -> bool:
         active_picks = result.scalars().all()
 
         if not active_picks:
+            report_progress("job.ai_picks_evening", 100, "No active picks to evaluate")
             return True
+
+        total_picks = len(active_picks)
+        report_progress("job.ai_picks_evening", 20, f"Evaluating {total_picks} active picks...")
 
         # Prepare pick wrappers to decouple DB objects from concurrent network tasks
         tasks = []
         sem = asyncio.Semaphore(3)
-        
+        completed_eval_count = 0
+        eval_lock = asyncio.Lock()
+
         async def evaluate_single(pick_id: int, pick_status: PickStatus, pick_created_at: datetime, p_data: dict):
+            nonlocal completed_eval_count
             async with sem:
                 try:
                     if pick_status == PickStatus.NEW:
@@ -660,13 +681,22 @@ async def run_loop_3(late: bool = False) -> bool:
                         # Picks are abandoned after 2+ fully elapsed business days (roughly 48h of market time).
                         business_days = _calculate_business_days_elapsed(pick_created_at)
                         if business_days >= 2:
-                            return pick_id, {"action": "ABANDON", "note": f"Auto-abandoned after {business_days} fully elapsed business days with no action."}
-                            
-                    eval_data = await _call_evaluator(db, p_data, market_context)
-                    return pick_id, eval_data
+                            res = (pick_id, {"action": "ABANDON", "note": f"Auto-abandoned after {business_days} fully elapsed business days with no action."})
+                        else:
+                            eval_data = await _call_evaluator(db, p_data, market_context)
+                            res = (pick_id, eval_data)
+                    else:
+                        eval_data = await _call_evaluator(db, p_data, market_context)
+                        res = (pick_id, eval_data)
                 except Exception as e:
                     logger.error(f"Failed to evaluate pick {pick_id}: {e}")
-                    return pick_id, {"action": "HOLD", "note": f"Evaluation failed due to API error: {str(e)}"}
+                    res = (pick_id, {"action": "HOLD", "note": f"Evaluation failed due to API error: {str(e)}"})
+
+                async with eval_lock:
+                    completed_eval_count += 1
+                    pct = min(85, int(20 + 65 * (completed_eval_count / total_picks)))
+                    report_progress("job.ai_picks_evening", pct, f"Evaluated {p_data.get('symbol')} ({completed_eval_count}/{total_picks})")
+                return res
 
         for p in active_picks:
             p_data = {
@@ -678,15 +708,16 @@ async def run_loop_3(late: bool = False) -> bool:
                 "history": p.notes
             }
             tasks.append(evaluate_single(p.id, p.status, p.created_at, p_data))
-            
+
         eval_results = await asyncio.gather(*tasks)
-            
+
+        report_progress("job.ai_picks_evening", 90, "Updating pick statuses and notes in database...")
         # Sequentially apply results to DB objects
         pick_map = {p.id: p for p in active_picks}
         for pid, eval_data in eval_results:
             pick = pick_map[pid]
             notes = list(pick.notes)
-            
+
             if eval_data.get("action") == "ABANDON":
                 pick.status = PickStatus.ABANDONED
                 pick.status_updated_at = datetime.now(timezone.utc)
@@ -717,6 +748,7 @@ async def run_loop_3(late: bool = False) -> bool:
         await db.commit()
         await _set_config_value(db, _LAST_EVAL_KEY, _today_ist_str())
         logger.info(f"Loop 3 completed. Evaluated {len(active_picks)} active picks.")
+        report_progress("job.ai_picks_evening", 100, f"Completed: evaluated {len(active_picks)} active picks")
         return True
 
 async def _morning_catchup_due() -> bool:

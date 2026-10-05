@@ -175,13 +175,28 @@ async function fetchIntradayOHLCV(
 function toChartBars(
   bars: BrewInput[],
 ): { time: Time; open: number; high: number; low: number; close: number }[] {
-  return bars.map((b) => ({
-    time: b.time as Time,
-    open: b.o,
-    high: b.h,
-    low: b.l,
-    close: b.c,
-  }));
+  return bars.flatMap((b) => {
+    if (
+      b == null ||
+      typeof b.time !== 'number' ||
+      !Number.isFinite(b.time) ||
+      !Number.isFinite(b.o) ||
+      !Number.isFinite(b.h) ||
+      !Number.isFinite(b.l) ||
+      !Number.isFinite(b.c)
+    ) {
+      return [];
+    }
+    return [
+      {
+        time: b.time as Time,
+        open: b.o,
+        high: b.h,
+        low: b.l,
+        close: b.c,
+      },
+    ];
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -388,11 +403,15 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     });
 
     const handleResize = () => {
-      if (chartContainerRef.current) {
-        chart.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-          height: chartContainerRef.current.clientHeight,
-        });
+      if (chartContainerRef.current && chartRef.current === chart) {
+        try {
+          chart.applyOptions({
+            width: chartContainerRef.current.clientWidth,
+            height: chartContainerRef.current.clientHeight,
+          });
+        } catch {
+          // Chart might be disposed
+        }
       }
     };
     window.addEventListener('resize', handleResize);
@@ -497,9 +516,13 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     return () => {
       window.removeEventListener('resize', handleResize);
       timeScale.unsubscribeVisibleLogicalRangeChange(onVisibleRange);
-      chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      try {
+        chart.remove();
+      } catch {
+        // Already disposed
+      }
     };
   }, []);
 
@@ -672,15 +695,29 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
       ? brewDaily(server, t.ltp, now)
       : brewIntraday(server, t.ltp, now, interval);
     const last = brewed[brewed.length - 1];
-    if (!last) return;
-    main.update({
-      time: last.time as Time,
-      open: last.o,
-      high: last.h,
-      low: last.l,
-      close: last.c,
-    });
-    brewActiveRef.current = true;
+    if (
+      !last ||
+      typeof last.time !== 'number' ||
+      !Number.isFinite(last.time) ||
+      !Number.isFinite(last.o) ||
+      !Number.isFinite(last.h) ||
+      !Number.isFinite(last.l) ||
+      !Number.isFinite(last.c)
+    ) {
+      return;
+    }
+    try {
+      main.update({
+        time: last.time as Time,
+        open: last.o,
+        high: last.h,
+        low: last.l,
+        close: last.c,
+      });
+      brewActiveRef.current = true;
+    } catch {
+      // Ignore transient update errors if chart is being rebuilt
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tick?.ltp,
@@ -734,14 +771,26 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
     let bars: IndicatorCandle[] = [];
     const server = isDaily ? dailyServerBars : intradayServerBars;
     if (!server?.length) return;
-    bars = server.map((b) => ({
-      time: b.time,
-      open: b.o,
-      high: b.h,
-      low: b.l,
-      close: b.c,
-      volume: b.v,
-    }));
+    bars = server.flatMap((b) =>
+      b &&
+      typeof b.time === 'number' &&
+      Number.isFinite(b.time) &&
+      Number.isFinite(b.o) &&
+      Number.isFinite(b.h) &&
+      Number.isFinite(b.l) &&
+      Number.isFinite(b.c)
+        ? [
+            {
+              time: b.time,
+              open: b.o,
+              high: b.h,
+              low: b.l,
+              close: b.c,
+              volume: Number.isFinite(b.v) ? b.v : 0,
+            },
+          ]
+        : [],
+    );
     if (bars.length === 0) return;
 
     // LIVE line on all intervals — dashed amber, history untouched.

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAtom, useAtomValue } from 'jotai';
+import { useQuery } from '@tanstack/react-query';
 import { advancedScrapingConsentAtom, onboardingCompletedAtom } from '@/store/terminalStore';
 
 export function AdvancedScrapingModal() {
@@ -13,10 +14,31 @@ export function AdvancedScrapingModal() {
     setMounted(true);
   }, []);
 
+  // If local consent is missing but onboarding is done, we might have lost it from localStorage.
+  // Query the backend source of truth to see if consent was previously given.
+  const { isLoading: isFetchingBackend } = useQuery({
+    queryKey: ['systemConfigConsentFallback'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/system_config/browser-status', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch backend consent');
+      const data = await res.json();
+      if (typeof data.consent === 'boolean') {
+        // Silently restore the consent state in local storage
+        setConsent(data.consent);
+      }
+      return data;
+    },
+    // Only run this query if we think we need to show the modal
+    enabled: mounted && consent === null && onboardingCompleted === true,
+    staleTime: Infinity,
+    retry: false,
+  });
+
   // Avoid hydration mismatch with localStorage.
   // Suppressed while the first-launch wizard is active — consent is collected
   // as a wizard step instead of via this standalone modal.
-  if (!mounted || consent !== null || !onboardingCompleted) {
+  // Also suppressed while verifying fallback state with the backend.
+  if (!mounted || consent !== null || !onboardingCompleted || isFetchingBackend) {
     return null;
   }
 

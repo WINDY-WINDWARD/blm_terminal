@@ -1,8 +1,11 @@
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from unittest.mock import AsyncMock, patch, MagicMock
+from fastapi import HTTPException
 
 from app.schemas.ai_picks import PickNote
 from app.workers.ai_picks_worker import _calculate_business_days_elapsed
+from app.routers.ai_picks import trigger_picks_run
 
 def test_calculate_business_days_elapsed():
     """Test fully elapsed business days calculation."""
@@ -38,3 +41,60 @@ def test_pick_note_structured_fields():
         model="gpt-4o"
     )
     assert note_basic.verdict is None
+
+
+@pytest.mark.asyncio
+async def test_trigger_picks_invalid_mode():
+    admin = MagicMock()
+    db = AsyncMock()
+    with pytest.raises(HTTPException) as exc_info:
+        await trigger_picks_run(mode="unknown_mode", force=False, admin=admin, db=db)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_trigger_picks_gated_15_mins():
+    admin = MagicMock()
+    db = AsyncMock()
+    recent_job = MagicMock()
+    recent_job.status = "idle"
+    # triggered 5 minutes ago
+    recent_job.last_triggered_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    with patch("app.routers.ai_picks.get_job_status", AsyncMock(return_value=recent_job)):
+        res = await trigger_picks_run(mode="morning", force=False, admin=admin, db=db)
+        assert res.ok is False
+        assert res.gated is True
+        assert "15-min cooldown" in res.message
+
+
+@pytest.mark.asyncio
+async def test_trigger_picks_running():
+    admin = MagicMock()
+    db = AsyncMock()
+    running_job = MagicMock()
+    running_job.status = "running"
+    running_job.last_triggered_at = None
+
+    with patch("app.routers.ai_picks.get_job_status", AsyncMock(return_value=running_job)):
+        res = await trigger_picks_run(mode="morning", force=False, admin=admin, db=db)
+        assert res.ok is False
+        assert res.gated is True
+        assert "currently in progress" in res.message
+
+
+@pytest.mark.asyncio
+async def test_trigger_picks_success():
+    admin = MagicMock()
+    db = AsyncMock()
+    idle_job = MagicMock()
+    idle_job.status = "idle"
+    idle_job.last_triggered_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+
+    with patch("app.routers.ai_picks.get_job_status", AsyncMock(return_value=idle_job)), \
+         patch("app.routers.ai_picks.trigger_job", AsyncMock(return_value={"ok": True})):
+        res = await trigger_picks_run(mode="morning", force=False, admin=admin, db=db)
+        assert res.ok is True
+        assert res.gated is False
+        assert "Successfully triggered Hunter (Morning)" in res.message
+

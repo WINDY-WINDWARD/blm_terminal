@@ -68,3 +68,33 @@ class JobToggleResponse(BaseModel):
 
     ok: bool
     job: Optional[JobStatus] = None
+
+
+class JobExecutionResponse(BaseModel):
+    """Response schema for a single job execution run."""
+
+    id: int
+    job_key: str
+    name: str
+    category: Optional[str] = None
+    triggered_by: str
+    status: str
+    progress_percent: int = 0
+    progress_message: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    error: Optional[str] = None
+    log_lines: list[dict] = []
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class JobExecutionListResponse(BaseModel):
+    """Response for paginated list of job executions."""
+
+    total: int
+    executions: list[JobExecutionResponse]
+

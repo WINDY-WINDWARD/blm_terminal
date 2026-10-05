@@ -3,8 +3,8 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
-import { useAtom, useAtomValue } from 'jotai';
-import { activeSymbolAtom, tickDataAtom, authAtom } from '@/store/terminalStore';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { activeSymbolAtom, tickDataAtom, authAtom, layoutToastAtom } from '@/store/terminalStore';
 import { marketWsService } from '@/lib/marketWs';
 import { AiPickModal, type AIPick } from './AiPickModal';
 
@@ -19,6 +19,43 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
       }`}
     >
       {label}
+    </button>
+  );
+}
+
+function ActionButton({
+  onClick,
+  loading,
+  disabled,
+  label,
+  title,
+  icon,
+}: {
+  onClick: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+  label: string;
+  title?: string;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || loading}
+      title={title}
+      className={cn(
+        'px-2 py-1 text-[10px] font-mono uppercase tracking-wider transition-all border flex items-center gap-1.5 rounded-sm select-none',
+        disabled || loading
+          ? 'opacity-40 cursor-not-allowed border-zinc-800 bg-zinc-950 text-white/40'
+          : 'border-terminal-amber/40 bg-terminal-amber/10 text-terminal-amber hover:bg-terminal-amber hover:text-black hover:border-terminal-amber active:scale-[0.96] shadow-[0_0_6px_rgba(255,182,0,0.1)]'
+      )}
+    >
+      {loading ? (
+        <span className="inline-block w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />
+      ) : (
+        icon
+      )}
+      <span>{label}</span>
     </button>
   );
 }
@@ -41,7 +78,7 @@ function getActionPill(pick: AIPick) {
   return <span className={cn('px-1.5 py-0.5 text-[10px] rounded-sm font-bold border', colorCls)}>{uc}</span>;
 }
 
-export function AiPicksWidget({ panelId }: { panelId: string }) {
+export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'PICKS' | 'ACTIVE' | 'HISTORY' | 'ABANDONED'>('PICKS');
   const [selectedPickId, setSelectedPickId] = useState<number | null>(null);
@@ -49,6 +86,113 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [tickData, setTickData] = useAtom(tickDataAtom);
   const auth = useAtomValue(authAtom);
+  const setLayoutToast = useSetAtom(layoutToastAtom);
+  const [triggeringMode, setTriggeringMode] = useState<'hunter' | 'verifier' | null>(null);
+
+  // Poll background job statuses to track running state & granular progress
+  interface JobStatusData {
+    job_key: string;
+    name: string;
+    status: string;
+    progress_percent: number;
+    progress_message?: string;
+    last_triggered_at?: string;
+    last_completed_at?: string;
+  }
+
+  const { data: morningJob } = useQuery<JobStatusData>({
+    queryKey: ['job-status', 'job.ai_picks_morning'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/jobs/job.ai_picks_morning');
+      if (!res.ok) return null;
+      return res.json();
+    },
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 1500 : 10000),
+  });
+
+  const { data: eveningJob } = useQuery<JobStatusData>({
+    queryKey: ['job-status', 'job.ai_picks_evening'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/jobs/job.ai_picks_evening');
+      if (!res.ok) return null;
+      return res.json();
+    },
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 1500 : 10000),
+  });
+
+  const isMorningRunning = morningJob?.status === 'running';
+  const isEveningRunning = eveningJob?.status === 'running';
+  const isAnyRunning = isMorningRunning || isEveningRunning;
+  const activeRunningJob = isMorningRunning ? morningJob : isEveningRunning ? eveningJob : null;
+  const activeJobTitle = isMorningRunning ? 'AI Hunter & Verifier (Morning)' : 'AI Evaluator (Evening)';
+
+  // Auto-refresh picks when background run transitions from running to idle/completed
+  const prevRunningRef = React.useRef(false);
+  React.useEffect(() => {
+    if (prevRunningRef.current && !isAnyRunning) {
+      queryClient.invalidateQueries({ queryKey: ['ai-picks'] });
+    }
+    prevRunningRef.current = isAnyRunning;
+  }, [isAnyRunning, queryClient]);
+
+  const handleTriggerRun = async (mode: 'hunter' | 'verifier') => {
+    if (triggeringMode || isAnyRunning) return;
+    setTriggeringMode(mode);
+
+    try {
+      const res = await fetch(`/api/py/ai/picks/trigger?mode=${mode}`, {
+        method: 'POST',
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (res.status === 403) {
+        setLayoutToast({
+          visible: true,
+          message: 'Permission denied: Admin privileges required to trigger AI runs.',
+          type: 'error',
+        });
+        return;
+      }
+
+      if (!res.ok) {
+        setLayoutToast({
+          visible: true,
+          message: data?.detail || data?.message || `Failed to trigger ${mode} run.`,
+          type: 'error',
+        });
+        return;
+      }
+
+      if (data?.ok) {
+        setLayoutToast({
+          visible: true,
+          message: data.message || `Successfully triggered ${mode} run.`,
+          type: 'success',
+        });
+        // Immediately refresh job statuses and picks
+        queryClient.invalidateQueries({ queryKey: ['job-status'] });
+        queryClient.invalidateQueries({ queryKey: ['ai-picks'] });
+      } else {
+        setLayoutToast({
+          visible: true,
+          message: data?.message || `Trigger rejected (cooldown active).`,
+          type: 'error',
+        });
+      }
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Network error';
+      setLayoutToast({
+        visible: true,
+        message: `Trigger error: ${errorMsg}`,
+        type: 'error',
+      });
+    } finally {
+      setTimeout(() => {
+        setTriggeringMode(null);
+      }, 1500);
+    }
+  };
 
   React.useEffect(() => {
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
@@ -62,7 +206,7 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
       if (!res.ok) throw new Error('Failed to fetch AI Picks');
       return res.json();
     },
-    refetchInterval: 60000,
+    refetchInterval: 15000,
   });
 
   // Create stable dependency string for WebSocket subscription
@@ -149,47 +293,110 @@ export function AiPicksWidget({ panelId }: { panelId: string }) {
           <div className="border border-terminal-amber/50 bg-black p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-xl">
             <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
             <div className="text-[10px] leading-relaxed">
-              AI can make mistakes and the user takes all responsibility for any actions taken using the AI's advice/recommendations.
+              AI can make mistakes and the user takes all responsibility for any actions taken using the AI&apos;s advice/recommendations.
             </div>
           </div>
         </div>
       )}
 
-      {/* Header Tabs */}
-      <div className="flex shrink-0 items-center border-b border-terminal-gray/50">
-        <TabButton
-          active={activeTab === 'PICKS'}
-          onClick={() => {
-            setActiveTab('PICKS');
-            setSelectedPickId(null);
-          }}
-          label="PICKS"
-        />
-        <TabButton
-          active={activeTab === 'ACTIVE'}
-          onClick={() => {
-            setActiveTab('ACTIVE');
-            setSelectedPickId(null);
-          }}
-          label="ACTIVE"
-        />
-        <TabButton
-          active={activeTab === 'HISTORY'}
-          onClick={() => {
-            setActiveTab('HISTORY');
-            setSelectedPickId(null);
-          }}
-          label="HISTORY"
-        />
-        <TabButton
-          active={activeTab === 'ABANDONED'}
-          onClick={() => {
-            setActiveTab('ABANDONED');
-            setSelectedPickId(null);
-          }}
-          label="ABANDONED"
-        />
+      {/* Header Tabs & Actions */}
+      <div className="flex shrink-0 items-center justify-between border-b border-terminal-gray/50 px-1 gap-2 flex-wrap">
+        <div className="flex items-center overflow-x-auto">
+          <TabButton
+            active={activeTab === 'PICKS'}
+            onClick={() => {
+              setActiveTab('PICKS');
+              setSelectedPickId(null);
+            }}
+            label="PICKS"
+          />
+          <TabButton
+            active={activeTab === 'ACTIVE'}
+            onClick={() => {
+              setActiveTab('ACTIVE');
+              setSelectedPickId(null);
+            }}
+            label="ACTIVE"
+          />
+          <TabButton
+            active={activeTab === 'HISTORY'}
+            onClick={() => {
+              setActiveTab('HISTORY');
+              setSelectedPickId(null);
+            }}
+            label="HISTORY"
+          />
+          <TabButton
+            active={activeTab === 'ABANDONED'}
+            onClick={() => {
+              setActiveTab('ABANDONED');
+              setSelectedPickId(null);
+            }}
+            label="ABANDONED"
+          />
+        </div>
+
+        {auth?.user?.is_admin && (
+          <div className="flex items-center gap-1.5 py-1 shrink-0 ml-auto">
+            <ActionButton
+              onClick={() => handleTriggerRun('hunter')}
+              loading={isMorningRunning || triggeringMode === 'hunter'}
+              disabled={isAnyRunning || triggeringMode !== null}
+              label={isMorningRunning ? 'HUNTER RUNNING...' : 'RUN HUNTER'}
+              title="Trigger Hunter (Morning loop) pre-market scan"
+              icon={
+                <svg className="w-2.5 h-2.5 text-terminal-amber" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                </svg>
+              }
+            />
+            <ActionButton
+              onClick={() => handleTriggerRun('verifier')}
+              loading={isEveningRunning || triggeringMode === 'verifier'}
+              disabled={isAnyRunning || triggeringMode !== null}
+              label={isEveningRunning ? 'VERIFIER RUNNING...' : 'RUN VERIFIER'}
+              title="Trigger Verifier / Evaluator (Evening loop) review"
+              icon={
+                <svg className="w-2.5 h-2.5 text-terminal-amber" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              }
+            />
+          </div>
+        )}
       </div>
+
+      {/* Sleek Cyberpunk Live Progress Bar Banner */}
+      {isAnyRunning && activeRunningJob && (
+        <div className="shrink-0 bg-zinc-950 border-b border-terminal-amber/30 px-3 py-2 transition-all duration-300">
+          <div className="flex items-center justify-between text-[11px] mb-1.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex h-2 w-2 relative shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-terminal-amber opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-terminal-amber" />
+              </span>
+              <span className="font-bold text-terminal-amber tracking-wider uppercase text-[10px] shrink-0">
+                {activeJobTitle}
+              </span>
+              <span className="text-white/30 text-[10px] hidden sm:inline">|</span>
+              <span className="text-white/80 text-[10px] truncate">
+                {activeRunningJob.progress_message || 'Executing agent loop...'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 font-mono text-[10px] text-terminal-amber font-bold shrink-0 ml-2">
+              <span>{activeRunningJob.progress_percent || 0}%</span>
+            </div>
+          </div>
+
+          {/* Progress Track */}
+          <div className="w-full bg-zinc-900 h-1.5 rounded-full overflow-hidden border border-zinc-800">
+            <div
+              className="bg-gradient-to-r from-amber-600 via-terminal-amber to-amber-300 h-full transition-all duration-500 rounded-full shadow-[0_0_8px_rgba(255,182,0,0.4)]"
+              style={{ width: `${Math.max(activeRunningJob.progress_percent || 5, 5)}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Picks List */}
       <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-1.5">

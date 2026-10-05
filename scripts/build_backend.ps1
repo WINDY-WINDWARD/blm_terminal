@@ -59,7 +59,8 @@ Remove-Item -Recurse -Force "dist" -ErrorAction SilentlyContinue
 # never imported by the backend (only camoufox + camoufox.sync_api are used).
 # Without the exclusion, --collect-all trips over it and warns about the
 # missing PySide6 dependency on every build.
-& $PyInstallerCmd `
+& $PythonCmd -m PyInstaller `
+    --noconfirm `
     --name blm-backend `
     --onefile `
     --add-data "alembic;alembic" `

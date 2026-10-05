@@ -55,3 +55,8 @@ class AIPickResponse(AIPickBase):
 class PickStatusUpdate(BaseModel):
     status: PickStatus
     exit_price: Optional[float] = None
+
+class AIPickTriggerResponse(BaseModel):
+    ok: bool
+    gated: bool = False
+    message: str
