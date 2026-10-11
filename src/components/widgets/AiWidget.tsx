@@ -33,9 +33,6 @@ import { cn } from '@/lib/utils';
  */
 export function sanitizeAiErrorMessage(message: string): string {
   const t = message.trim();
-  // Catches both bare blobs (`{ "error": ... }`) and prefixed ones
-  // (`Antigravity API 429: { "error": ... }`). Friendly messages never
-  // contain a serialized `"error"` object.
   if (/\{\s*"error"/.test(t)) {
     return 'The AI provider returned an unreadable error — please retry, or check the backend log for details.';
   }
@@ -68,10 +65,10 @@ export function shortModelLabel(label: string): string {
 // ─── Personas ─────────────────────────────────────────────────────────────────
 
 const PERSONAS = [
-  { id: 'value',    label: 'Value Analyst',    description: 'Graham/Buffett framework' },
-  { id: 'earnings', label: 'Earnings Analyst',  description: 'QoQ/YoY earnings forensics' },
-  { id: 'fno',      label: 'F&O Analyst',       description: 'Options strategy & derivatives' },
-  { id: 'macro',    label: 'Macro Analyst',     description: 'Sector rotation & India macro' },
+  { id: 'value',    label: '◈ Value Analyst',       description: 'Graham/Buffett intrinsic value & margin of safety lens' },
+  { id: 'earnings', label: '📊 Earnings Forensics',  description: 'QoQ/YoY revenue, operating margin & cash conversion forensics' },
+  { id: 'fno',      label: '⚡ F&O Derivatives',     description: 'Open interest buildup, PCR, implied volatility & option strategies' },
+  { id: 'macro',    label: '🌐 Sector & Macro',      description: 'Sector rotation, FII/DII flows & macro policy impact' },
 ] as const;
 
 type PersonaId = (typeof PERSONAS)[number]['id'];
@@ -79,11 +76,9 @@ type PersonaId = (typeof PERSONAS)[number]['id'];
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** AI chat mode — per session. Script mode adds the Script Lab system prompt. */
-type AiMode = 'research' | 'script';
+export type AiMode = 'research' | 'script';
 
-/** Script Lab mutation card — emitted by the backend as an extra SSE event
- *  right after the tool_result of create_script / revise_script. The card is
- *  the sole path to the chart: Accept writes the handoff atom. */
+/** Script Lab mutation card — emitted by the backend as an extra SSE event */
 interface ScriptCard {
   action: 'created' | 'revised';
   script_id: number;
@@ -142,6 +137,75 @@ type StreamEvent =
   | { type: 'error'; message: string }
   | { type: 'done' };
 
+// ─── Starter Prompts ──────────────────────────────────────────────────────────
+
+interface StarterPrompt {
+  tag: string;
+  title: string;
+  desc: string;
+  prompt: string;
+}
+
+function getResearchStarterPrompts(symbol: string, exchange: string): StarterPrompt[] {
+  const sym = symbol ? symbol.toUpperCase() : 'NIFTY';
+  const ex = exchange ? exchange.toUpperCase() : 'NSE';
+  return [
+    {
+      tag: 'EQUITY VALUATION & FUNDAMENTALS',
+      title: `Evaluate ${sym}`,
+      desc: 'Multi-model intrinsic valuation, debt & margin forensics, ROCE/ROE trends, and DCF fair value.',
+      prompt: `Perform a comprehensive fundamental and valuation analysis for ${sym}.${ex}. Evaluate: 1) P/E and EV/EBITDA multiples vs sector peers, 2) ROCE and ROE sustainability, 3) Debt-to-equity and interest coverage safety, 4) Operating margin and cash flow trends, and 5) Peter Lynch and DCF intrinsic fair value estimates. Provide clear actionable risk factors.`,
+    },
+    {
+      tag: 'MACRO & MARKET PULSE',
+      title: 'Indian Market Rundown',
+      desc: 'NIFTY 50 & SENSEX levels, market breadth, sector leadership, FII/DII net flows, and VIX sentiment.',
+      prompt: 'Provide a complete Indian market rundown today: 1) Benchmark indices (NIFTY 50, SENSEX, NIFTY BANK) price action and key support/resistance levels, 2) NSE market breadth (advances vs declines), 3) Top outperforming and lagging sectors, 4) FII and DII net cash market flows, and 5) India VIX regime and overall volatility outlook.',
+    },
+    {
+      tag: 'GLOBAL SPILLOVER',
+      title: 'Global News & Macro Context',
+      desc: 'US & Asian markets, Treasury yields, Brent crude, DXY dollar index, and domestic sector implications.',
+      prompt: 'Synthesize current global macro and geopolitical developments: 1) US and Asian market cues, 2) US 10-year Treasury yields and Federal Reserve interest rate expectations, 3) Brent Crude and commodity price trends, and 4) DXY US Dollar index movement. Detail specific positive and negative spillovers onto key Indian sectors (IT, Pharma, Auto, Energy).',
+    },
+    {
+      tag: 'SCREENER & DISCOVERY',
+      title: 'Find Next Investment Idea',
+      desc: 'High-conviction asymmetric setups across NSE with high ROCE (>20%), low debt, rising FCF, and technical momentum.',
+      prompt: 'Identify 3-4 high-conviction asymmetric investment candidates across the NSE universe. Screen for companies with: 1) High capital efficiency (ROCE > 20%, ROE > 18%), 2) Prudent leverage (Debt/Equity < 0.5), 3) Consistent Free Cash Flow generation with expanding operating margins, and 4) Technical momentum or consolidation breakout. Provide the thesis, key catalysts, and risk parameters for each candidate.',
+    },
+  ];
+}
+
+function getScriptStarterPrompts(): StarterPrompt[] {
+  return [
+    {
+      tag: 'OVERLAY SCRIPT',
+      title: 'Σ Trend Ribbon (EMA 9/21/55)',
+      desc: 'Multi-EMA institutional trend ribbon with dynamic bullish/bearish cloud fill and crossover signals.',
+      prompt: 'Create an EMA 9, 21, and 55 trend ribbon indicator with dynamic cloud color fill and crossover signals.',
+    },
+    {
+      tag: 'MEAN REVERSION',
+      title: 'Σ Anchored VWAP + σ Bands',
+      desc: 'Intraday anchored VWAP with upper and lower volatility exhaustion bands.',
+      prompt: 'Build a VWAP indicator with +2 and -2 standard deviation bands for intraday mean reversion.',
+    },
+    {
+      tag: 'MOMENTUM OSCILLATOR',
+      title: 'Σ RSI Regime & Divergence',
+      desc: 'RSI 14 with 70/30 overbought/oversold regime shading and price momentum divergence markers.',
+      prompt: 'Write an RSI 14 script with 70/30 horizontal bands, regime coloring, and momentum divergence markers.',
+    },
+    {
+      tag: 'VOLATILITY EXIT',
+      title: 'Σ ATR Trailing Stop Line',
+      desc: 'Dynamic chandelier exit stop line using 14-period Average True Range for risk management.',
+      prompt: 'Create an ATR 14 trailing stop overlay script for systematic trend following and stop loss management.',
+    },
+  ];
+}
+
 // ─── Per-session state ────────────────────────────────────────────────────────
 
 interface SessionState {
@@ -183,14 +247,16 @@ function ToolCallBadge({ name, done }: ToolCallBadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border',
+        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors',
         done
-          ? 'border-terminal-amber/30 text-terminal-amber/50 bg-transparent'
-          : 'border-blue-500/50 text-blue-400 bg-blue-900/20 animate-pulse',
+          ? 'border-[#27272a] text-zinc-300 bg-[#121216]'
+          : 'border-terminal-amber/50 text-terminal-amber bg-terminal-amber/10 animate-pulse',
       )}
     >
-      <span className="opacity-70">{done ? '✓' : '→'}</span>
-      {name}
+      <span className={cn('text-[9px]', done ? 'text-emerald-400' : 'text-terminal-amber')}>
+        {done ? '✓' : '⚡'}
+      </span>
+      <span>{name}</span>
     </span>
   );
 }
@@ -204,31 +270,33 @@ interface ScriptCardViewProps {
 /** Script Lab mutation card — Accept is the sole path onto the chart. */
 function ScriptCardView({ card, onAccept, onDiscard }: ScriptCardViewProps) {
   return (
-    <div className="mt-1 rounded border border-terminal-amber/30 bg-black/40 px-2 py-1.5 max-w-full">
-      <div className="flex items-center gap-1.5">
-        <span className="text-terminal-amber font-bold">Σ</span>
-        <span className="text-terminal-amber truncate flex-1" title={card.name}>
+    <div className="mt-2.5 rounded-md border border-emerald-500/40 bg-[#0d1512] p-2.5 max-w-full shadow-lg">
+      <div className="flex items-center gap-2">
+        <span className="text-emerald-400 font-bold text-sm">Σ</span>
+        <span className="text-emerald-300 font-bold text-xs truncate flex-1 font-mono" title={card.name}>
           {card.name}
         </span>
-        <span className="text-[10px] text-terminal-amber/50 shrink-0">
+        <span className="text-[10px] text-zinc-400 shrink-0 font-mono">
           {card.action === 'created' ? 'created' : `revised · rev ${card.rev_no}`}
         </span>
       </div>
-      <div className="flex items-center gap-1.5 mt-1">
+      <div className="flex items-center gap-2 mt-2">
         {card.accepted ? (
-          <span className="text-[10px] text-green-400/80">✓ on chart — tune params in the Σ menu</span>
+          <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1 font-mono">
+            <span>✓</span> on chart — tune parameters in the Σ menu
+          </span>
         ) : (
           <>
             <button
               onClick={() => onAccept(card)}
-              className="text-[10px] font-mono px-1.5 py-0.5 border border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/10 rounded transition-colors"
+              className="text-xs font-mono font-bold px-2.5 py-1 bg-emerald-500 text-black hover:bg-emerald-400 rounded transition-colors shadow-sm"
               title="Enable this script revision on the chart"
             >
-              Accept → chart
+              Accept → Chart
             </button>
             <button
               onClick={() => onDiscard(card)}
-              className="text-[10px] font-mono px-1.5 py-0.5 border border-white/10 text-white/60 hover:text-white/90 hover:border-white/25 rounded transition-colors"
+              className="text-xs font-mono px-2 py-1 border border-[#27272a] text-zinc-300 hover:text-white hover:border-zinc-500 rounded transition-colors"
               title="Dismiss this card (script stays saved)"
             >
               Discard
@@ -254,63 +322,73 @@ function MarkdownContent({ content }: { content: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        p: ({ children }) => <p className="mb-1.5 last:mb-0 leading-relaxed">{children}</p>,
-        h1: ({ children }) => <h1 className="text-sm font-bold text-terminal-amber mt-2 mb-1 border-b border-terminal-amber/20 pb-0.5">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-xs font-bold text-terminal-amber mt-2 mb-1">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-xs font-semibold text-terminal-amber/80 mt-1.5 mb-0.5">{children}</h3>,
+        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed font-mono">{children}</p>,
+        h1: ({ children }) => (
+          <h1 className="text-sm font-bold text-terminal-amber mt-3 mb-1.5 border-b border-[#27272a] pb-1 font-mono">
+            {children}
+          </h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="text-xs font-bold text-terminal-amber mt-2.5 mb-1 font-mono">{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="text-xs font-semibold text-terminal-amber/90 mt-2 mb-0.5 font-mono">{children}</h3>
+        ),
         code: ({ children, className }) => {
           const isBlock = className?.startsWith('language-');
           if (isBlock) {
             return (
-              <code className="block bg-black/40 border border-terminal-amber/15 rounded px-2 py-1.5 text-[10px] text-terminal-amber/90 whitespace-pre overflow-x-auto my-1">
+              <code className="block bg-[#050508] border border-[#27272a] rounded p-2.5 text-[11px] text-emerald-300 whitespace-pre overflow-x-auto my-2 font-mono">
                 {children}
               </code>
             );
           }
           return (
-            <code className="bg-black/30 border border-terminal-amber/20 rounded px-1 py-0.5 text-[10px] text-terminal-amber/90">
+            <code className="bg-[#121216] border border-[#27272a] rounded px-1.5 py-0.5 text-[11px] text-terminal-amber font-mono">
               {children}
             </code>
           );
         },
-        pre: ({ children }) => <pre className="my-1">{children}</pre>,
-        ul: ({ children }) => <ul className="list-none pl-3 mb-1.5 space-y-0.5">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal list-inside pl-1 mb-1.5 space-y-0.5">{children}</ol>,
+        pre: ({ children }) => <pre className="my-2">{children}</pre>,
+        ul: ({ children }) => <ul className="list-none pl-3 mb-2 space-y-1">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal list-inside pl-1 mb-2 space-y-1 font-mono">{children}</ol>,
         li: ({ children }) => (
-          <li className="flex gap-1.5 leading-relaxed">
-              <span className="text-terminal-amber/60 shrink-0">-</span>
+          <li className="flex gap-2 leading-relaxed">
+            <span className="text-terminal-amber font-bold shrink-0">▸</span>
             <span className="flex-1">{children}</span>
           </li>
         ),
         blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-terminal-amber/30 pl-2 my-1 text-terminal-amber/80 italic">
+          <blockquote className="border-l-2 border-terminal-amber/60 bg-[#121216]/60 pl-3 py-1 my-2 text-zinc-300 italic rounded-r">
             {children}
           </blockquote>
         ),
-        strong: ({ children }) => <strong className="font-bold text-terminal-amber">{children}</strong>,
-        em: ({ children }) => <em className="italic text-terminal-amber/80">{children}</em>,
-        hr: () => <hr className="border-terminal-amber/15 my-2" />,
+        strong: ({ children }) => <strong className="font-bold text-white">{children}</strong>,
+        em: ({ children }) => <em className="italic text-terminal-amber/90">{children}</em>,
+        hr: () => <hr className="border-[#27272a] my-3" />,
         table: ({ children }) => (
-          <div className="overflow-x-auto my-1.5">
-            <table className="text-[10px] border-collapse w-full">{children}</table>
+          <div className="overflow-x-auto my-2.5 rounded border border-[#27272a]">
+            <table className="text-xs border-collapse w-full font-mono">{children}</table>
           </div>
         ),
-        thead: ({ children }) => <thead className="border-b border-terminal-amber/20">{children}</thead>,
+        thead: ({ children }) => <thead className="bg-[#14141a] border-b border-[#27272a]">{children}</thead>,
         th: ({ children }) => (
-          <th className="px-2 py-0.5 text-left font-semibold text-terminal-amber/80 border border-terminal-amber/10">
+          <th className="px-3 py-1.5 text-left font-bold text-terminal-amber border-r border-[#27272a] last:border-r-0 text-[11px]">
             {children}
           </th>
         ),
         td: ({ children }) => (
-          <td className="px-2 py-0.5 border border-terminal-amber/10 text-terminal-amber/70">{children}</td>
+          <td className="px-3 py-1.5 border-t border-r border-[#27272a] last:border-r-0 text-zinc-200 text-xs">
+            {children}
+          </td>
         ),
-        tr: ({ children }) => <tr className="even:bg-terminal-amber/3">{children}</tr>,
+        tr: ({ children }) => <tr className="even:bg-[#101014] hover:bg-[#141418] transition-colors">{children}</tr>,
         a: ({ children, href }) => (
           <a
             href={href ?? '#'}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-400/70 underline underline-offset-2 hover:text-blue-300"
+            className="text-terminal-amber underline underline-offset-2 hover:text-amber-300 transition-colors"
           >
             {children}
           </a>
@@ -326,10 +404,24 @@ function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard,
   const isUser = msg.role === 'user';
   const toolCalls = msg.toolCalls ?? [];
   const hasError = !isUser && msg.isError;
+
+  if (isUser) {
+    return (
+      <div className="flex flex-col gap-1 items-end max-w-full">
+        <div className="bg-[#14141a] text-zinc-100 border border-[#27272a] border-r-2 border-r-terminal-amber rounded-lg px-3 py-2 text-xs font-mono leading-relaxed max-w-[85%] break-words whitespace-pre-wrap shadow-md">
+          {msg.content || <span className="opacity-40 animate-pulse">▋</span>}
+        </div>
+        <div className="flex items-center gap-1.5 px-1 text-[10px] text-zinc-400 font-mono">
+          <span className="font-bold text-terminal-amber">YOU</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={cn('flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
-      {!isUser && toolCalls.length > 0 && (
-        <div className="flex flex-wrap gap-1 max-w-full px-1">
+    <div className="flex flex-col gap-1.5 items-start w-full">
+      {toolCalls.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-1">
           {toolCalls.map((name, i) => (
             <ToolCallBadge key={i} name={name} done={isLastAssistant ? (toolsDone ?? false) : true} />
           ))}
@@ -337,33 +429,35 @@ function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard,
       )}
       <div
         className={cn(
-          'rounded px-2 py-1.5 text-xs font-mono leading-relaxed break-words max-w-full',
-          isUser
-            ? 'bg-blue-900/40 text-blue-100 border border-blue-800/50 whitespace-pre-wrap'
-            : hasError
-              ? 'bg-red-900/20 text-red-300 border border-red-500/30'
-              : 'bg-terminal-gray/30 text-terminal-amber border border-terminal-amber/10',
+          'w-full rounded-lg px-3.5 py-3 text-xs font-mono leading-relaxed break-words shadow-lg border transition-colors',
+          hasError
+            ? 'bg-rose-950/20 text-rose-300 border-rose-500/40'
+            : 'bg-[#0c0c0f] text-zinc-200 border-[#27272a]',
         )}
       >
-        {isUser ? (
-          msg.content || <span className="opacity-40 animate-pulse">▋</span>
-        ) : msg.content ? (
+        <div className="flex items-center justify-between border-b border-[#27272a]/60 pb-1.5 mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-terminal-amber font-bold text-xs">◈ BLM AI</span>
+            <span className="text-[10px] text-zinc-400 border border-[#27272a] bg-[#121216] px-1.5 py-0.2 rounded font-mono">
+              COPILOT
+            </span>
+          </div>
+        </div>
+        {msg.content ? (
           <MarkdownContent content={msg.content} />
         ) : (
           <span className="opacity-40 animate-pulse">▋</span>
         )}
-        {!isUser && msg.card && !msg.card.dismissed && onAcceptCard && onDiscardCard && (
+        {msg.card && !msg.card.dismissed && onAcceptCard && onDiscardCard && (
           <ScriptCardView card={msg.card} onAccept={onAcceptCard} onDiscard={onDiscardCard} />
         )}
       </div>
-      <div className="flex items-center gap-2 px-1">
-              <span className="text-[10px] text-terminal-amber/50">
-          {isUser ? 'you' : 'blm ai'}
-        </span>
+      <div className="flex items-center gap-2 px-1 text-[10px] text-zinc-400 font-mono">
+        <span>blm ai copilot</span>
         {hasError && isLastAssistant && onRetry && (
           <button
             onClick={onRetry}
-            className="text-[10px] text-terminal-amber/50 hover:text-terminal-amber underline underline-offset-2"
+            className="text-terminal-amber hover:underline text-[10px]"
             title="Resend last message"
           >
             retry
@@ -394,29 +488,33 @@ function SessionSidebar({
   onNewChat,
 }: SessionSidebarProps) {
   const fmt = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    } catch {
+      return '';
+    }
   };
 
   return (
-    <div className="flex flex-col h-full w-full border-r border-terminal-amber/10 bg-terminal-bg">
-      <div className="flex items-center justify-between px-2 py-1.5 border-b border-terminal-amber/10 shrink-0">
-        <span className="text-[10px] text-terminal-amber/50 font-mono uppercase tracking-wider">
-          History
+    <div className="flex flex-col h-full w-full border-r border-[#27272a] bg-[#0c0c0f]">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#27272a] shrink-0">
+        <span className="text-xs font-bold text-zinc-300 font-mono uppercase tracking-wider">
+          Sessions
         </span>
         <button
           onClick={() => onNewChat()}
-          className="text-[10px] font-mono text-terminal-amber/60 hover:text-terminal-amber px-1.5 py-0.5 border border-terminal-amber/15 hover:border-terminal-amber/40 rounded transition-colors"
-          title="New chat"
+          className="text-[11px] font-mono font-semibold text-terminal-amber hover:underline"
+          title="New scratch chat"
         >
-          + new
+          + Scratch
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scroll">
         {sessions.length === 0 ? (
-          <div className="px-2 py-4 text-[10px] text-terminal-amber/50 text-center">
-            No past chats
+          <div className="px-2 py-6 text-xs text-zinc-400 text-center font-mono">
+            No past sessions
           </div>
         ) : (
           sessions.map((s) => {
@@ -427,41 +525,40 @@ function SessionSidebar({
                 key={s.id}
                 onClick={() => onSelectSession(s.id)}
                 className={cn(
-                  'group flex flex-col px-2 py-1.5 cursor-pointer border-b border-terminal-amber/5 hover:bg-terminal-amber/5 transition-colors',
-                  isActive && 'bg-terminal-amber/8 border-l-2 border-l-terminal-amber/40',
+                  'group p-2 rounded cursor-pointer transition-all border text-left',
+                  isActive
+                    ? 'bg-terminal-amber/10 border-terminal-amber/50 text-white'
+                    : 'bg-[#121216] border-[#27272a] hover:border-zinc-500 text-zinc-300',
                 )}
               >
                 <div className="flex items-start justify-between gap-1">
                   <span
                     className={cn(
-                      'text-[10px] font-mono leading-tight flex-1 truncate',
-                      isActive ? 'text-terminal-amber' : 'text-terminal-amber/60',
+                      'text-xs font-medium leading-tight flex-1 truncate',
+                      isActive ? 'text-terminal-amber font-bold' : 'text-zinc-200',
                     )}
                   >
                     {s.title}
                   </span>
                   <div className="flex items-center gap-1 shrink-0">
                     {isStreaming && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" title="Streaming…" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" title="Streaming…" />
                     )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onDeleteSession(s.id);
                       }}
-                      className="opacity-0 group-hover:opacity-100 text-red-400/60 hover:text-red-400 text-[9px] px-1 transition-[opacity,color]"
+                      className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-rose-400 text-xs px-1 transition-opacity"
                       title="Delete session"
                     >
                       ✕
                     </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-[9px] text-terminal-amber/60">{s.symbol}</span>
-                  <span className="text-[9px] text-terminal-amber/45">·</span>
-                  <span className="text-[9px] text-terminal-amber/60">{s.message_count} msgs</span>
-                  <span className="text-[9px] text-terminal-amber/45">·</span>
-                  <span className="text-[9px] text-terminal-amber/50">{fmt(s.updated_at)}</span>
+                <div className="flex items-center justify-between text-[10px] text-zinc-400 mt-1.5 font-mono">
+                  <span className="font-bold text-zinc-300">{s.symbol}</span>
+                  <span>{s.message_count} msgs · {fmt(s.updated_at)}</span>
                 </div>
               </div>
             );
@@ -483,24 +580,22 @@ export function AiWidget() {
   const queryClient = useQueryClient();
 
   const [showDisclaimer, setShowDisclaimer] = useState(true);
-  const [aiAuthStatus, setAiAuthStatus] = useState<{provider: string, is_configured: boolean} | null>(null);
+  const [aiAuthStatus, setAiAuthStatus] = useState<{ provider: string; is_configured: boolean } | null>(null);
 
   useEffect(() => {
     fetch('/api/py/ai/status')
-      .then(r => r.json())
-      .then(d => setAiAuthStatus(d))
+      .then((r) => r.json())
+      .then((d) => setAiAuthStatus(d))
       .catch(console.error);
-      
-    // Poll it occasionally
+
     const intv = setInterval(() => {
       fetch('/api/py/ai/status')
-        .then(r => r.json())
-        .then(d => setAiAuthStatus(d))
+        .then((r) => r.json())
+        .then((d) => setAiAuthStatus(d))
         .catch(console.error);
     }, 10000);
     return () => clearInterval(intv);
   }, []);
-
 
   useEffect(() => {
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
@@ -521,25 +616,18 @@ export function AiWidget() {
   const availableModels: ModelOption[] = modelsData ?? [];
   const defaultModel = availableModels[0]?.id ?? '';
 
-  // ── Session map — the core of the isolation model ─────────────────────────
-  // Keys: real session IDs (number) OR null for the unsent scratch chat.
-  // Each session owns its own messages, streaming state, input, and abort handle.
-  // Switching activeKey is a pure view operation — no other key is ever touched.
+  // ── Session map ────────────────────────────────────────────────────────────
 
-  const [sessionMap, setSessionMap] = useState<Map<number | null, SessionState>>(
-    () => {
-      if (_persistedMap.size > 0) {
-        // Restore from module-level store but mark as not streaming
-        // (the underlying connection is dead after unmount)
-        const restored = new Map<number | null, SessionState>();
-        for (const [k, v] of _persistedMap) {
-          restored.set(k, { ...v, isStreaming: false, abortController: null });
-        }
-        return restored;
+  const [sessionMap, setSessionMap] = useState<Map<number | null, SessionState>>(() => {
+    if (_persistedMap.size > 0) {
+      const restored = new Map<number | null, SessionState>();
+      for (const [k, v] of _persistedMap) {
+        restored.set(k, { ...v, isStreaming: false, abortController: null });
       }
-      return new Map([[NEW_CHAT_KEY, emptySessionState()]]);
-    },
-  );
+      return restored;
+    }
+    return new Map([[NEW_CHAT_KEY, emptySessionState()]]);
+  });
   const [activeKey, setActiveKey] = useState<number | null>(() => {
     if (_persistedMap.size > 0) return _persistedActiveKey;
     return NEW_CHAT_KEY;
@@ -548,11 +636,9 @@ export function AiWidget() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activePersona, setActivePersona] = useState<PersonaId | null>(null);
 
-  // Derive current session's state for rendering — always safe to destructure
   const current = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
   const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research' } = current;
 
-  // Once models load, back-fill the default model into any session that has ''
   useEffect(() => {
     if (!defaultModel) return;
     setSessionMap((prev) => {
@@ -568,7 +654,7 @@ export function AiWidget() {
     });
   }, [defaultModel]);
 
-  // ── Sync to module-level store — survives unmount/remount ──────────────────
+  // ── Module-level sync ──────────────────────────────────────────────────────
 
   useEffect(() => {
     _persistedMap.clear();
@@ -586,7 +672,6 @@ export function AiWidget() {
     _persistedHasSent = hasSentRef.current;
   });
 
-  // Abort all in-flight streams on unmount by tracking them in a ref
   const ongoingAbortsRef = useRef<Set<AbortController>>(new Set());
   useEffect(() => {
     return () => {
@@ -598,7 +683,6 @@ export function AiWidget() {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /** Immutably patch one session's state without touching any other key. */
   const patchSession = useCallback(
     (key: number | null, patch: Partial<SessionState>) => {
       setSessionMap((prev) => {
@@ -620,7 +704,7 @@ export function AiWidget() {
       if (!res.ok) return [];
       return res.json();
     },
-    staleTime: 0,       // always re-fetch when invalidated
+    staleTime: 0,
     refetchOnMount: true,
   });
 
@@ -637,15 +721,12 @@ export function AiWidget() {
     inputRef.current?.focus();
   }, [activeKey]);
 
-  // ── Streaming keys (for sidebar pulse dots) ────────────────────────────────
-
   const streamingKeys = new Set<number | null>(
     [...sessionMap.entries()].filter(([, s]) => s.isStreaming).map(([k]) => k),
   );
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  /** Switch to a past session. Fetches from backend unless the session is currently streaming. */
   const loadSession = useCallback(
     async (id: number) => {
       setActiveKey(id);
@@ -653,7 +734,6 @@ export function AiWidget() {
       setActivePersona(null);
       setTimeout(() => inputRef.current?.focus(), 50);
 
-      // Never clobber a live stream — the in-memory state IS the truth while streaming
       if (sessionMap.get(id)?.isStreaming) return;
 
       try {
@@ -663,9 +743,6 @@ export function AiWidget() {
           return;
         }
         const data: SessionDetail = await res.json();
-        // Always apply DB state so completed replies are reflected after re-visiting.
-        // Cards themselves are in-session only, but a session whose turns called
-        // script tools reopens in Script mode so the workflow continues.
         const SCRIPT_TOOL_NAMES = new Set([
           'list_scripts',
           'get_script',
@@ -695,10 +772,8 @@ export function AiWidget() {
     [sessionMap, patchSession],
   );
 
-  /** Delete a session both from backend and from the local map. */
   const deleteSession = useCallback(
     async (id: number) => {
-      // Abort any in-flight stream for this session before deleting
       sessionMap.get(id)?.abortController?.abort();
 
       const res = await fetch(`/api/py/ai/chat/sessions/${id}`, { method: 'DELETE' });
@@ -718,276 +793,252 @@ export function AiWidget() {
     [sessionMap, activeKey, refetchSessions],
   );
 
-  /** Create a fresh scratch session and switch to it. Does not abort others. */
-  const startNewChat = useCallback((mode: AiMode = 'research') => {
-    // Reset the scratch slot and switch to it
-    setSessionMap((prev) => {
-      const next = new Map(prev);
-      next.set(NEW_CHAT_KEY, emptySessionState(defaultModel, mode));
-      return next;
-    });
-    setActiveKey(NEW_CHAT_KEY);
-    setSidebarOpen(false);
-    setActivePersona(null);
-    setTimeout(() => inputRef.current?.focus(), 50);
-  }, [defaultModel]);
-
-  /** Send a message. Fully scoped to sessionKey — safe to switch sessions during streaming. */
-  const sendMessage = useCallback(async (forcedInput?: string, replaceLastAssistant?: boolean) => {
-    // Capture session key and current state AT CALL TIME — these become
-    // immutable locals so the stream closure never reads stale React state.
-    const sessionKey = activeKey;
-    const sessionState = sessionMap.get(sessionKey) ?? emptySessionState(defaultModel);
-    const trimmed = (forcedInput ?? sessionState.input).trim();
-
-    if (!trimmed || sessionState.isStreaming) return;
-
-    const userMessage: ChatMessage = { role: 'user', content: trimmed };
-    // If retrying after an error, strip the last assistant message so we don't duplicate
-    const priorMessages = replaceLastAssistant
-      ? sessionState.messages.filter(
-          (_, i, arr) => !(arr[i].role === 'assistant' && i === arr.length - 1)
-        )
-      : sessionState.messages;
-    const historyWithUser = [...priorMessages, userMessage];
-
-    const abort = new AbortController();
-    ongoingAbortsRef.current.add(abort);
-
-    hasSentRef.current = true;
-
-    // Build the optimistic state for the session — will be committed via patchSession
-    // and also kept as a closure fallback for the session_id migration below.
-    const optimisticMessages = [...historyWithUser, { role: 'assistant' as const, content: '' }];
-    patchSession(sessionKey, {
-      messages: optimisticMessages,
-      input: '',
-      isStreaming: true,
-      toolsDone: false,
-      abortController: abort,
-    });
-
-    // After a session_id event the server assigns a real ID; we migrate the
-    // map entry from null → realId. This ref tracks the live key for writes
-    // that happen after the migration.
-    let liveKey: number | null = sessionKey;
-    // Closure-level fallback for the migration — set synchronously so that even
-    // if React hasn't committed patchSession yet, the migration can find its state.
-    const migrationFallback: SessionState = {
-      messages: optimisticMessages,
-      input: '',
-      isStreaming: true,
-      toolsDone: false,
-      model: sessionState.model || defaultModel,
-      mode: sessionState.mode ?? 'research',
-      abortController: abort,
-    };
-
-    // Accumulated content for the current streaming turn. assistantCard
-    // survives across token/tool_call rebuilds of the in-flight turn — every
-    // rebuild must carry it or the card vanishes mid-stream.
-    let assistantContent = '';
-    let assistantToolCalls: string[] = [];
-    let assistantCard: ScriptCard | undefined;
-
-    /** Write streaming progress to whichever key this stream owns. */
-    const writeStreamState = (patch: Partial<SessionState>) => {
+  const startNewChat = useCallback(
+    (mode: AiMode = 'research') => {
       setSessionMap((prev) => {
         const next = new Map(prev);
-        const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
-        next.set(liveKey, { ...existing, ...patch });
+        next.set(NEW_CHAT_KEY, emptySessionState(defaultModel, mode));
         return next;
       });
-    };
+      setActiveKey(NEW_CHAT_KEY);
+      setSidebarOpen(false);
+      setActivePersona(null);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    },
+    [defaultModel],
+  );
+
+  const sendMessage = useCallback(
+    async (forcedInput?: string, replaceLastAssistant?: boolean) => {
+      const sessionKey = activeKey;
+      const sessionState = sessionMap.get(sessionKey) ?? emptySessionState(defaultModel);
+      const trimmed = (forcedInput ?? sessionState.input).trim();
+
+      if (!trimmed || sessionState.isStreaming) return;
+
+      const userMessage: ChatMessage = { role: 'user', content: trimmed };
+      const priorMessages = replaceLastAssistant
+        ? sessionState.messages.filter(
+            (_, i, arr) => !(arr[i].role === 'assistant' && i === arr.length - 1),
+          )
+        : sessionState.messages;
+      const historyWithUser = [...priorMessages, userMessage];
+
+      const abort = new AbortController();
+      ongoingAbortsRef.current.add(abort);
+
+      hasSentRef.current = true;
+
+      const optimisticMessages = [...historyWithUser, { role: 'assistant' as const, content: '' }];
+      patchSession(sessionKey, {
+        messages: optimisticMessages,
+        input: '',
+        isStreaming: true,
+        toolsDone: false,
+        abortController: abort,
+      });
+
+      let liveKey: number | null = sessionKey;
+      const migrationFallback: SessionState = {
+        messages: optimisticMessages,
+        input: '',
+        isStreaming: true,
+        toolsDone: false,
+        model: sessionState.model || defaultModel,
+        mode: sessionState.mode ?? 'research',
+        abortController: abort,
+      };
+
+      let assistantContent = '';
+      let assistantToolCalls: string[] = [];
+      let assistantCard: ScriptCard | undefined;
+
+      const writeStreamState = (patch: Partial<SessionState>) => {
+        setSessionMap((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(liveKey) ?? emptySessionState(defaultModel);
+          next.set(liveKey, { ...existing, ...patch });
+          return next;
+        });
+      };
 
       try {
         const res = await fetch('/api/py/ai/chat', {
           method: 'POST',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
-            'Accept': 'text/event-stream'
+            Accept: 'text/event-stream',
           },
           signal: abort.signal,
           body: JSON.stringify({
             messages: historyWithUser.map((m) => ({ role: m.role, content: m.content })),
-          symbol: symbol.toUpperCase(),
-          exchange: exchange.toUpperCase(),
-          model: sessionState.model || defaultModel,
-          session_id: sessionKey, // null for new chats — backend creates the session
-          persona: activePersona,
-          mode: sessionState.mode ?? 'research',
-        }),
-      });
+            symbol: symbol.toUpperCase(),
+            exchange: exchange.toUpperCase(),
+            model: sessionState.model || defaultModel,
+            session_id: sessionKey,
+            persona: activePersona,
+            mode: sessionState.mode ?? 'research',
+          }),
+        });
 
-      if (!res.ok || !res.body) {
-        const text = await res.text();
-        // Proxy now returns JSON { error: string } for non-OK responses
-        let displayError = text.slice(0, 200);
-        try {
-          const parsed = JSON.parse(text) as { error?: string };
-          if (parsed.error) displayError = parsed.error.slice(0, 200);
-        } catch {
-          /* not JSON — use raw text */
+        if (!res.ok || !res.body) {
+          const text = await res.text();
+          let displayError = text.slice(0, 200);
+          try {
+            const parsed = JSON.parse(text) as { error?: string };
+            if (parsed.error) displayError = parsed.error.slice(0, 200);
+          } catch {
+            /* not JSON */
+          }
+          writeStreamState({
+            messages: [
+              ...historyWithUser,
+              { role: 'assistant', content: `Error: ${res.status} — ${displayError}`, isError: true },
+            ],
+            isStreaming: false,
+            abortController: null,
+          });
+          return;
         }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let streamDone = false;
+
+        while (!streamDone) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice(6).trim();
+            if (!raw) continue;
+
+            let event: StreamEvent;
+            try {
+              event = JSON.parse(raw) as StreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.type === 'session_id') {
+              const assignedId = event.id;
+              if (liveKey !== assignedId) {
+                const fromKey = liveKey;
+                migrateStash(fromKey, assignedId);
+                unstable_batchedUpdates(() => {
+                  setSessionMap((prev) => {
+                    const next = new Map(prev);
+                    const fromNext = next.get(liveKey);
+                    const existing = fromNext && fromNext.messages.length > 0 ? fromNext : migrationFallback;
+                    next.delete(liveKey);
+                    next.set(assignedId, existing);
+                    return next;
+                  });
+                  setActiveKey((prev) => (prev === sessionKey ? assignedId : prev));
+                });
+                liveKey = assignedId;
+                void refetchSessions();
+              }
+            } else if (event.type === 'token') {
+              assistantContent += event.text;
+              writeStreamState({
+                messages: [
+                  ...historyWithUser,
+                  {
+                    role: 'assistant',
+                    content: assistantContent,
+                    toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                    ...(assistantCard ? { card: assistantCard } : {}),
+                  },
+                ],
+              });
+            } else if (event.type === 'tool_call') {
+              assistantToolCalls = [...assistantToolCalls, event.name];
+              writeStreamState({
+                messages: [
+                  ...historyWithUser,
+                  {
+                    role: 'assistant',
+                    content: assistantContent,
+                    toolCalls: [...assistantToolCalls],
+                    ...(assistantCard ? { card: assistantCard } : {}),
+                  },
+                ],
+              });
+            } else if (event.type === 'script_card') {
+              const card: ScriptCard = {
+                action: event.action,
+                script_id: event.script_id,
+                name: event.name,
+                rev_no: event.rev_no,
+              };
+              assistantCard = card;
+              stashCard(liveKey, { ...card, ts: Date.now() });
+              writeStreamState({
+                messages: [
+                  ...historyWithUser,
+                  {
+                    role: 'assistant',
+                    content: assistantContent,
+                    toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                    card,
+                  },
+                ],
+              });
+            } else if (event.type === 'error') {
+              const clean = sanitizeAiErrorMessage(event.message);
+              assistantContent += assistantContent ? `\n\n⚠ ${clean}` : `⚠ ${clean}`;
+              writeStreamState({
+                messages: [
+                  ...historyWithUser,
+                  { role: 'assistant', content: assistantContent, isError: true },
+                ],
+                isStreaming: false,
+                abortController: null,
+              });
+            } else if (event.type === 'done') {
+              streamDone = true;
+              writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
+              void refetchSessions();
+              break;
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if ((err as Error)?.name === 'AbortError') {
+          writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
+          return;
+        }
+        const msg = err instanceof Error ? err.message : 'Unknown error';
         writeStreamState({
           messages: [
             ...historyWithUser,
-            { role: 'assistant', content: `Error: ${res.status} — ${displayError}`, isError: true },
+            { role: 'assistant', content: `Error: ${msg}`, isError: true },
           ],
           isStreaming: false,
           abortController: null,
         });
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let streamDone = false;
-
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (!raw) continue;
-
-          let event: StreamEvent;
-          try {
-            event = JSON.parse(raw) as StreamEvent;
-          } catch {
-            continue;
+      } finally {
+        ongoingAbortsRef.current.delete(abort);
+        setSessionMap((prev) => {
+          const next = new Map(prev);
+          const s = next.get(liveKey);
+          if (s?.isStreaming) {
+            next.set(liveKey, { ...s, isStreaming: false, abortController: null });
           }
-
-          if (event.type === 'session_id') {
-            // Migrate the map entry from null/old-key → assigned real session ID
-            const assignedId = event.id;
-            if (liveKey !== assignedId) {
-              const fromKey = liveKey;
-              migrateStash(fromKey, assignedId);
-              unstable_batchedUpdates(() => {
-                setSessionMap((prev) => {
-                  const next = new Map(prev);
-                  const fromNext = next.get(liveKey);
-                  const existing = (fromNext && fromNext.messages.length > 0)
-                    ? fromNext
-                    : migrationFallback;
-                  next.delete(liveKey);
-                  next.set(assignedId, existing);
-                  return next;
-                });
-                setActiveKey((prev) => (prev === sessionKey ? assignedId : prev));
-              });
-              liveKey = assignedId;
-              // Immediately refresh sidebar so the new session appears
-              void refetchSessions();
-            }
-          } else if (event.type === 'token') {
-            assistantContent += event.text;
-            writeStreamState({
-              messages: [
-                ...historyWithUser,
-                {
-                  role: 'assistant',
-                  content: assistantContent,
-                  toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
-                  ...(assistantCard ? { card: assistantCard } : {}),
-                },
-              ],
-            });
-          } else if (event.type === 'tool_call') {
-            assistantToolCalls = [...assistantToolCalls, event.name];
-            writeStreamState({
-              messages: [
-                ...historyWithUser,
-                {
-                  role: 'assistant',
-                  content: assistantContent,
-                  toolCalls: [...assistantToolCalls],
-                  ...(assistantCard ? { card: assistantCard } : {}),
-                },
-              ],
-            });
-          } else if (event.type === 'script_card') {
-            // Script Lab mutation card — attach to the in-flight assistant turn
-            // and stash for reload survival (cards are SSE-only; the DB keeps
-            // tool names, never the card itself).
-            const card: ScriptCard = {
-              action: event.action,
-              script_id: event.script_id,
-              name: event.name,
-              rev_no: event.rev_no,
-            };
-            assistantCard = card;
-            stashCard(liveKey, { ...card, ts: Date.now() });
-            writeStreamState({
-              messages: [
-                ...historyWithUser,
-                {
-                  role: 'assistant',
-                  content: assistantContent,
-                  toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
-                  card,
-                },
-              ],
-            });
-          } else if (event.type === 'error') {
-            const clean = sanitizeAiErrorMessage(event.message);
-            assistantContent += assistantContent
-              ? `\n\n⚠ ${clean}`
-              : `⚠ ${clean}`;
-            writeStreamState({
-              messages: [
-                ...historyWithUser,
-                { role: 'assistant', content: assistantContent, isError: true },
-              ],
-              isStreaming: false,
-              abortController: null,
-            });
-          } else if (event.type === 'done') {
-            streamDone = true;
-            writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
-            // Force-refetch so sidebar message count and updated_at reflect the new reply
-            void refetchSessions();
-            break;
-          }
-        }
+          return next;
+        });
+        setTimeout(() => inputRef.current?.focus(), 50);
       }
-    } catch (err: unknown) {
-      if ((err as Error)?.name === 'AbortError') {
-        // User stopped the stream — mark as done, keep whatever content arrived
-        writeStreamState({ isStreaming: false, toolsDone: true, abortController: null });
-        return;
-      }
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      writeStreamState({
-        messages: [
-          ...historyWithUser,
-          { role: 'assistant', content: `Error: ${msg}`, isError: true },
-        ],
-        isStreaming: false,
-        abortController: null,
-      });
-    } finally {
-      ongoingAbortsRef.current.delete(abort);
-      // Ensure isStreaming is always cleared even on unexpected throws
-      setSessionMap((prev) => {
-        const next = new Map(prev);
-        const s = next.get(liveKey);
-        if (s?.isStreaming) {
-          next.set(liveKey, { ...s, isStreaming: false, abortController: null });
-        }
-        return next;
-      });
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [activeKey, sessionMap, defaultModel, symbol, exchange, patchSession, refetchSessions]);
+    },
+    [activeKey, sessionMap, defaultModel, symbol, exchange, patchSession, refetchSessions, activePersona],
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -998,10 +1049,8 @@ export function AiWidget() {
 
   const handleStop = useCallback(() => {
     current.abortController?.abort();
-    // isStreaming/abortController cleared in the AbortError catch path of sendMessage
   }, [current]);
 
-  /** Retry the last user message (useful after an error response). */
   const retryLastMessage = useCallback(() => {
     const state = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
     const lastUser = [...state.messages].reverse().find((m) => m.role === 'user');
@@ -1017,7 +1066,6 @@ export function AiWidget() {
   const setChartHandoff = useSetAtom(scriptChartHandoffAtom);
   const [prefill, setPrefill] = useAtom(aiPrefillAtom);
 
-  /** Stamp one card (matched by script+rev) with a patch, scoped to a session key. */
   const patchCard = useCallback(
     (key: number | null, card: ScriptCard, patch: Partial<ScriptCard>) => {
       if (patch.accepted !== undefined || patch.dismissed !== undefined) {
@@ -1044,12 +1092,6 @@ export function AiWidget() {
     [],
   );
 
-  /**
-   * Accept is the sole path from a card onto the chart: enable the script on
-   * the focused CHART panel (else the first CHART panel found) and focus it
-   * so the user sees the overlay land. The ChartWidget handoff consumer does
-   * the actual slot enable.
-   */
   const acceptCard = useCallback(
     (card: ScriptCard) => {
       const target = resolveChartPanel(panels, focusedPanel);
@@ -1067,8 +1109,6 @@ export function AiWidget() {
     [patchCard, activeKey],
   );
 
-  // Same-window refine path: the chart Scripts menu sets aiPrefillAtom.
-  // Consume into the active session (switching it to Script mode) and focus input.
   const consumedPrefillRef = useRef(0);
   useEffect(() => {
     if (!prefill || prefill.ts <= consumedPrefillRef.current) return;
@@ -1078,8 +1118,6 @@ export function AiWidget() {
     setTimeout(() => inputRef.current?.focus(), 50);
   }, [prefill, activeKey, patchSession, setPrefill]);
 
-  // Popout refine path: the menu wrote localStorage then opened /widget/AI.
-  // This window is fresh, so the scratch session is the safe consume target.
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(AI_REFINE_REQUEST_KEY);
@@ -1090,21 +1128,23 @@ export function AiWidget() {
       patchSession(NEW_CHAT_KEY, { input: req.text, mode: 'script' });
       setActiveKey(NEW_CHAT_KEY);
     } catch {
-      /* corrupt bridge payload — ignore */
+      /* ignore */
     }
-    // Mount-only: the bridge key is consumed once by whoever mounts first.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const starterPrompts =
+    sessionMode === 'script' ? getScriptStarterPrompts() : getResearchStarterPrompts(symbol, exchange);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full w-full flex overflow-hidden font-mono text-xs bg-terminal-bg relative">
+    <div className="h-full w-full flex overflow-hidden font-mono text-xs bg-[#09090b] text-[#f4f4f5] relative select-none">
+      {/* Disclaimer Modal */}
       {showDisclaimer && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="border border-terminal-amber/50 bg-black p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-xl">
+          <div className="border border-terminal-amber/50 bg-[#09090b] p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-2xl rounded">
             <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
-            <div className="text-[10px] leading-relaxed">
+            <div className="text-[10px] leading-relaxed text-zinc-300">
               AI can make mistakes and the user takes all responsibility for any actions taken using the AI's advice/recommendations.
             </div>
           </div>
@@ -1114,22 +1154,22 @@ export function AiWidget() {
       {/* Provider Configuration Banner */}
       {aiAuthStatus && !aiAuthStatus.is_configured && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="border border-terminal-red/50 bg-black p-6 text-center text-terminal-red shadow-xl max-w-sm flex flex-col items-center gap-3">
+          <div className="border border-rose-500/50 bg-[#09090b] p-6 text-center text-rose-400 shadow-2xl max-w-sm flex flex-col items-center gap-3 rounded">
             <div className="font-bold uppercase text-lg">⚠️ Configuration Required</div>
-            <div className="text-xs text-white/70 leading-relaxed font-mono">
+            <div className="text-xs text-zinc-300 leading-relaxed font-mono">
               The AI Provider ({aiAuthStatus.provider}) is not fully configured.
               Please complete the setup in the <span className="text-terminal-amber font-bold">Settings widget</span>.
             </div>
-            <div className="text-[10px] text-terminal-red/50 mt-2">
+            <div className="text-[10px] text-zinc-500 mt-2 font-mono">
               (This widget is locked until a valid provider is set)
             </div>
           </div>
         </div>
       )}
 
-      {/* Collapsible sidebar */}
+      {/* Collapsible Session Drawer */}
       {sidebarOpen && (
-        <div className="w-44 shrink-0 flex flex-col overflow-hidden">
+        <aside className="w-64 bg-[#0c0c0f] border-r border-[#27272a] flex flex-col shrink-0 z-20 transition-all">
           <SessionSidebar
             sessions={sessions}
             activeKey={activeKey}
@@ -1138,265 +1178,339 @@ export function AiWidget() {
             onDeleteSession={deleteSession}
             onNewChat={startNewChat}
           />
-        </div>
+        </aside>
       )}
 
-      {/* Main chat area */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Header */}
-        <div className="flex items-center gap-2 px-2 py-1 border-b border-terminal-amber/10 bg-terminal-gray/10 shrink-0">
-          <button
-            onClick={() => setSidebarOpen((o) => !o)}
-            className={cn(
-              'text-[10px] font-mono px-1.5 py-0.5 border rounded transition-colors',
-              sidebarOpen
-                ? 'border-terminal-amber/40 text-terminal-amber/80'
-                : 'border-terminal-amber/15 text-terminal-amber/60 hover:border-terminal-amber/35 hover:text-terminal-amber/80',
-            )}
-            title="Toggle chat history"
-          >
-            ☰
-          </button>
+      {/* Main Workspace */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-[#09090b]">
+        {/* Unified Bento Command Toolbar */}
+        <div className="bg-[#09090b] border-b border-[#27272a] p-2 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2">
+            {/* History Drawer Button */}
+            <button
+              onClick={() => setSidebarOpen((o) => !o)}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-mono transition-colors',
+                sidebarOpen
+                  ? 'bg-terminal-amber/15 border-terminal-amber/50 text-terminal-amber font-bold'
+                  : 'bg-[#121216] border-[#27272a] text-zinc-300 hover:border-terminal-amber/40 hover:text-white',
+              )}
+              title="Toggle Session Drawer"
+            >
+              <span className="text-terminal-amber">☰</span>
+              <span className="text-[11px] font-medium">Sessions</span>
+              {sessions.length > 0 && (
+                <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1 py-0.2 rounded font-mono">
+                  {sessions.length}
+                </span>
+              )}
+            </button>
 
-          {/* Model selector — native header <select>: Free/Paid when is_free
-              is known, otherwise grouped by [Provider] label prefixes. */}
-          <select
-            value={model || defaultModel}
-            onChange={(e) => patchSession(activeKey, { model: e.target.value })}
-            disabled={isStreaming}
-            data-testid="ai-model-select"
-            className="bg-terminal-bg border border-terminal-amber/20 text-terminal-amber/70 text-[10px] font-mono px-1 py-0.5 rounded outline-none focus:border-terminal-amber/50 disabled:opacity-50 max-w-[170px]"
-          >
-            {availableModels.length > 0 ? (
-              availableModels.some((m) => m.is_free !== undefined) ? (
-                <>
-                  {availableModels.some((m) => m.is_free) && (
-                    <optgroup label="Free Models" className="bg-[#121418] text-terminal-amber font-bold">
-                      {availableModels
-                        .filter((m) => m.is_free)
-                        .map((m) => (
-                          <option key={m.id} value={m.id} className="text-white font-normal">
-                            {m.label}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                  {availableModels.some((m) => !m.is_free) && (
-                    <optgroup label="Paid Models" className="bg-[#121418] text-white/50 font-bold">
-                      {availableModels
-                        .filter((m) => !m.is_free)
-                        .map((m) => (
-                          <option key={m.id} value={m.id} className="text-white font-normal">
-                            {m.label}
-                          </option>
-                        ))}
-                    </optgroup>
-                  )}
-                </>
-              ) : (
-                // Group by [Provider] label prefix when present (multi-provider
-                // catalogs); flat list otherwise.
-                (() => {
-                  const groups = new Map<string, ModelOption[]>();
-                  const ungrouped: ModelOption[] = [];
-                  for (const m of availableModels) {
-                    const match = /^\[([^\]]+)\]\s*/.exec(m.label);
-                    if (match) {
-                      const g = groups.get(match[1]) ?? [];
-                      g.push(m);
-                      groups.set(match[1], g);
-                    } else {
-                      ungrouped.push(m);
-                    }
-                  }
-                  if (groups.size === 0) {
-                    return availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ));
-                  }
-                  return (
+            {/* Model Selector Bento Pill */}
+            <div className="flex items-center bg-[#121216] border border-[#27272a] rounded px-2 py-0.5 focus-within:border-terminal-amber">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 shrink-0" title="Provider Active" />
+              <select
+                value={model || defaultModel}
+                onChange={(e) => patchSession(activeKey, { model: e.target.value })}
+                disabled={isStreaming}
+                data-testid="ai-model-select"
+                className="bg-transparent text-xs text-white font-mono outline-none cursor-pointer pr-1 py-0.5 disabled:opacity-50 max-w-[170px]"
+              >
+                {availableModels.length > 0 ? (
+                  availableModels.some((m) => m.is_free !== undefined) ? (
                     <>
-                      {[...groups.entries()].map(([name, items]) => (
-                        <optgroup key={name} label={name} className="bg-[#121418] text-terminal-amber font-bold">
-                          {items.map((m) => (
-                            <option key={m.id} value={m.id} className="text-white font-normal">
+                      {availableModels.some((m) => m.is_free) && (
+                        <optgroup label="Free Models" className="bg-[#121418] text-terminal-amber font-bold">
+                          {availableModels
+                            .filter((m) => m.is_free)
+                            .map((m) => (
+                              <option key={m.id} value={m.id} className="text-white font-normal">
+                                {m.label}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                      {availableModels.some((m) => !m.is_free) && (
+                        <optgroup label="Paid Models" className="bg-[#121418] text-zinc-400 font-bold">
+                          {availableModels
+                            .filter((m) => !m.is_free)
+                            .map((m) => (
+                              <option key={m.id} value={m.id} className="text-white font-normal">
+                                {m.label}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                    </>
+                  ) : (
+                    (() => {
+                      const groups = new Map<string, ModelOption[]>();
+                      const ungrouped: ModelOption[] = [];
+                      for (const m of availableModels) {
+                        const match = /^\[([^\]]+)\]\s*/.exec(m.label);
+                        if (match) {
+                          const g = groups.get(match[1]) ?? [];
+                          g.push(m);
+                          groups.set(match[1], g);
+                        } else {
+                          ungrouped.push(m);
+                        }
+                      }
+                      if (groups.size === 0) {
+                        return availableModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ));
+                      }
+                      return (
+                        <>
+                          {[...groups.entries()].map(([name, items]) => (
+                            <optgroup key={name} label={name} className="bg-[#121418] text-terminal-amber font-bold">
+                              {items.map((m) => (
+                                <option key={m.id} value={m.id} className="text-white font-normal">
+                                  {m.label}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                          {ungrouped.map((m) => (
+                            <option key={m.id} value={m.id}>
                               {m.label}
                             </option>
                           ))}
-                        </optgroup>
-                      ))}
-                      {ungrouped.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </>
-                  );
-                })()
-              )
-            ) : (
-              <option value="">Loading models…</option>
-            )}
-          </select>
+                        </>
+                      );
+                    })()
+                  )
+                ) : (
+                  <option value="">Loading models…</option>
+                )}
+              </select>
+            </div>
 
-          <span className="text-terminal-amber/50 text-[10px] truncate flex-1">
-            ctx: {symbol}.{exchange}
-          </span>
-
-          {/* Sliding Research | Script switch — per session, sent with every
-              chat POST. Single track tinted with the active hue, one solid
-              knob carrying the active label: amber = Research, emerald = Script. */}
-          <button
-            role="switch"
-            aria-checked={sessionMode === 'script'}
-            data-testid="ai-mode-toggle"
-            data-mode={sessionMode}
-            onClick={() => patchSession(activeKey, { mode: sessionMode === 'script' ? 'research' : 'script' })}
-            disabled={isStreaming}
-            title="Research answers questions; Script writes versioned chart scripts (Script Lab)"
-            className={cn(
-              'relative w-[112px] h-[22px] rounded-full border transition-colors shrink-0 disabled:opacity-50',
-              modeTrackClass(sessionMode),
-            )}
-          >
-            <span
-              className={cn(
-                'absolute inset-0 flex items-center justify-between px-2 text-[10px] font-mono font-bold pointer-events-none',
-                sessionMode === 'script' ? 'text-emerald-300/85' : 'text-terminal-amber/85',
-              )}
-            >
-              <span>Research</span>
-              <span>Σ</span>
-            </span>
-            <span
-              className={cn(
-                'absolute top-[2px] bottom-[2px] w-[calc(50%-3px)] rounded-full text-[10px] font-mono flex items-center justify-center transition-all',
-                modeKnobClass(sessionMode),
-              )}
-            >
-              {sessionMode === 'script' ? 'Σ Script' : 'Research'}
-            </span>
-          </button>
-
-          {/* Streaming indicator in header when viewing a streaming session */}
-          {isStreaming && (
-            <span className="text-[10px] text-blue-300 animate-pulse shrink-0">thinking…</span>
-          )}
-
-          <button
-            onClick={() => startNewChat(sessionMode)}
-            className="text-[10px] text-terminal-amber/60 hover:text-terminal-amber/90 px-1.5 py-0.5 border border-terminal-amber/10 hover:border-terminal-amber/30 rounded transition-colors shrink-0"
-          >
-            + new
-          </button>
-        </div>
-
-        {/* Message list */}
-        <div className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-3 min-h-0">
-          {!hasSentRef.current && messages.length === 0 && (
-            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-terminal-amber/60 text-[11px]">
-              <span className="text-2xl opacity-20">{sessionMode === 'script' ? 'Σ' : '◈'}</span>
-              <span>
-                {sessionMode === 'script'
-                  ? 'Script Lab — describe a chart overlay'
-                  : 'BLM AI — ask anything about NSE markets'}
-              </span>
-              <span className="text-[10px] opacity-80">
-                {sessionMode === 'script'
-                  ? 'AI writes, validates & saves versioned scripts — accept the card to put it on the chart'
-                  : 'Has access to live prices, fundamentals, news, deals, alerts & more'}
+            {/* Active Context Stock Pill */}
+            <div className="flex items-center gap-1.5 bg-terminal-amber/10 border border-terminal-amber/30 px-2.5 py-1 rounded text-xs font-mono">
+              <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold">CTX</span>
+              <span className="text-terminal-amber font-bold">
+                {symbol ? `${symbol}.${exchange}` : 'NIFTY.NSE'}
               </span>
             </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Thinking indicator */}
+            {isStreaming && (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 border border-blue-400/30 text-blue-300 text-[11px] font-mono animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                <span>thinking…</span>
+              </div>
+            )}
+
+            {/* Sliding Research | Script mode toggle */}
+            <button
+              role="switch"
+              aria-checked={sessionMode === 'script'}
+              data-testid="ai-mode-toggle"
+              data-mode={sessionMode}
+              onClick={() => patchSession(activeKey, { mode: sessionMode === 'script' ? 'research' : 'script' })}
+              disabled={isStreaming}
+              title="Research answers questions; Script writes versioned chart scripts (Script Lab)"
+              className={cn(
+                'relative w-[130px] h-[24px] rounded-full border transition-all shrink-0 disabled:opacity-50',
+                modeTrackClass(sessionMode),
+              )}
+            >
+              <span
+                className={cn(
+                  'absolute inset-0 flex items-center justify-between px-2 text-[10px] font-mono font-bold pointer-events-none',
+                  sessionMode === 'script' ? 'text-emerald-300/85' : 'text-terminal-amber/85',
+                )}
+              >
+                <span>Research</span>
+                <span>Σ Script</span>
+              </span>
+              <span
+                className={cn(
+                  'absolute top-[2px] bottom-[2px] w-[calc(50%-3px)] rounded-full text-[10px] font-mono flex items-center justify-center transition-all',
+                  modeKnobClass(sessionMode),
+                )}
+              >
+                {sessionMode === 'script' ? 'Σ Script' : 'Research'}
+              </span>
+            </button>
+
+            {/* New Chat Button */}
+            <button
+              onClick={() => startNewChat(sessionMode)}
+              className="px-2.5 py-1 rounded bg-[#121216] border border-[#27272a] hover:border-terminal-amber hover:text-terminal-amber text-zinc-200 text-xs font-mono font-semibold transition-colors"
+              title="Create new scratch session"
+            >
+              + New
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable Message List / Empty State */}
+        <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3 min-h-0 custom-scroll">
+          {messages.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-3xl mx-auto w-full my-auto">
+              {/* Hero Bento Card */}
+              <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-4 mb-3 shadow-xl">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'text-base font-bold',
+                        sessionMode === 'script' ? 'text-emerald-400' : 'text-terminal-amber',
+                      )}
+                    >
+                      {sessionMode === 'script' ? 'Σ' : '◈'}
+                    </span>
+                    <span className="text-xs font-bold tracking-wider uppercase text-white font-mono">
+                      {sessionMode === 'script' ? 'QUANT SCRIPT LAB' : 'BLM INTELLIGENCE COPILOT'}
+                    </span>
+                    <span className="text-[10px] text-zinc-400 bg-[#141419] border border-[#27272a] px-1.5 py-0.5 rounded font-mono">
+                      {sessionMode === 'script' ? 'INDICATORS & OVERLAYS' : 'NSE LIVE ENGINE'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-zinc-400">
+                    CTX: <span className="text-terminal-amber font-bold">{symbol ? `${symbol}.${exchange}` : 'NIFTY.NSE'}</span>
+                  </div>
+                </div>
+                <p className="text-xs text-zinc-300 leading-relaxed font-mono">
+                  {sessionMode === 'script'
+                    ? 'Generate, optimize, and backtest custom technical indicators and chart overlays. Accept generated scripts to instantly mount them onto your chart panels.'
+                    : `Institutional-grade equity analysis powered by real-time NSE tick data, multi-model intrinsic valuation engines, corporate filings, and global macro spillovers.`}
+                </p>
+              </div>
+
+              {/* 2x2 Bento Starter Prompts Grid */}
+              <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {starterPrompts.map((p, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => void sendMessage(p.prompt)}
+                    disabled={isStreaming}
+                    className="group flex flex-col justify-between p-3 rounded-lg bg-[#0c0c0f] border border-[#27272a] hover:border-terminal-amber/60 hover:bg-[#121217] transition-all text-left shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span
+                          className={cn(
+                            'text-[9px] font-mono font-bold uppercase tracking-wider',
+                            sessionMode === 'script' ? 'text-emerald-400' : 'text-terminal-amber',
+                          )}
+                        >
+                          {p.tag}
+                        </span>
+                        <span className="text-[10px] text-zinc-500 group-hover:text-terminal-amber font-mono transition-colors">
+                          ↵ Launch
+                        </span>
+                      </div>
+                      <h4 className="text-xs font-bold text-white group-hover:text-terminal-amber transition-colors font-mono mb-1">
+                        {p.title}
+                      </h4>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed group-hover:text-zinc-300 transition-colors font-mono">
+                        {p.desc}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((msg, i) => {
+              const isLastAssistant = msg.role === 'assistant' && i === messages.length - 1;
+              return (
+                <MessageBubble
+                  key={i}
+                  msg={msg}
+                  isLastAssistant={isLastAssistant}
+                  toolsDone={isLastAssistant ? toolsDone : undefined}
+                  onRetry={isLastAssistant ? retryLastMessage : undefined}
+                  onAcceptCard={acceptCard}
+                  onDiscardCard={discardCard}
+                />
+              );
+            })
           )}
-          {messages.map((msg, i) => {
-            const isLastAssistant = msg.role === 'assistant' && i === messages.length - 1;
-            return (
-              <MessageBubble
-                key={i}
-                msg={msg}
-                isLastAssistant={isLastAssistant}
-                toolsDone={isLastAssistant ? toolsDone : undefined}
-                onRetry={isLastAssistant ? retryLastMessage : undefined}
-                onAcceptCard={acceptCard}
-                onDiscardCard={discardCard}
-              />
-            );
-          })}
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Persona selector */}
-        <div className="flex gap-1 px-2 py-1.5 border-t border-white/5 flex-wrap">
-          {PERSONAS.map((p) => (
-            <button
-              key={p.id}
-              title={p.description}
-              onClick={() => setActivePersona((prev) => (prev === p.id ? null : p.id))}
-              className={cn(
-                'px-2 py-0.5 rounded text-[10px] font-medium border transition-colors',
-                activePersona === p.id
-                  ? 'bg-blue-500/20 border-blue-400/50 text-blue-300'
-                  : 'bg-white/5 border-white/10 text-white/60 hover:text-white/90 hover:border-white/20'
-              )}
-            >
-              {p.label}
-            </button>
-          ))}
+        {/* Persona Bento Strip */}
+        <div className="px-3 py-1.5 bg-[#0c0c0f] border-t border-[#27272a] flex items-center gap-1.5 flex-wrap shrink-0">
+          <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold mr-1">ANALYST:</span>
+          {PERSONAS.map((p) => {
+            const isSelected = activePersona === p.id;
+            return (
+              <button
+                key={p.id}
+                title={p.description}
+                onClick={() => setActivePersona((prev) => (prev === p.id ? null : p.id))}
+                className={cn(
+                  'px-2.5 py-1 rounded text-xs font-medium border font-mono transition-all',
+                  isSelected
+                    ? 'bg-terminal-amber/15 border-terminal-amber text-terminal-amber font-bold shadow-sm'
+                    : 'bg-[#121216] border-[#27272a] text-zinc-300 hover:border-zinc-500 hover:text-white',
+                )}
+              >
+                {p.label}
+              </button>
+            );
+          })}
           {activePersona && (
-            <span className="ml-auto text-[10px] text-blue-300/90 self-center pr-1">
+            <span className="ml-auto text-xs text-terminal-amber font-medium font-mono">
               {PERSONAS.find((p) => p.id === activePersona)?.description}
             </span>
           )}
         </div>
 
-        {/* Input area */}
-        <div className="shrink-0 border-t border-terminal-amber/10 px-2 py-1.5 flex gap-2 items-end bg-terminal-gray/5">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => patchSession(activeKey, { input: e.target.value })}
-            onKeyDown={handleKeyDown}
-            disabled={isStreaming}
-            placeholder={
-              isStreaming
-                ? 'AI is thinking — you can switch to another chat while waiting…'
-                : sessionMode === 'script'
-                  ? 'Describe a chart script… e.g. "RSI bands with 70/30 lines" (Enter to send)'
-                  : 'Ask about NSE markets… (Enter to send, Shift+Enter for newline)'
-            }
-            rows={1}
-            className={cn(
-              'flex-1 resize-none bg-terminal-bg border border-terminal-amber/20 text-terminal-amber text-xs font-mono px-2 py-1.5 rounded outline-none',
-              'placeholder:text-terminal-amber/40',
-              'focus:border-terminal-amber/50',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
-              'leading-relaxed min-h-[32px] max-h-[80px] overflow-y-auto',
-            )}
-            style={{ fieldSizing: 'content' } as React.CSSProperties}
-          />
-          {isStreaming ? (
-            <button
-              onClick={handleStop}
-              className="shrink-0 px-2 py-1.5 text-[10px] font-mono border border-red-500/40 text-red-400 hover:bg-red-900/20 rounded transition-colors"
-            >
-              stop
-            </button>
-          ) : (
-            <button
-              onClick={() => void sendMessage()}
-              disabled={!input.trim()}
+        {/* Elevated Bento Input Bar */}
+        <div className="p-2.5 bg-[#09090b] border-t border-[#27272a] shrink-0">
+          <div className="flex items-end gap-2 bg-[#121216] border border-[#27272a] focus-within:border-terminal-amber rounded-md p-2 transition-colors">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => patchSession(activeKey, { input: e.target.value })}
+              onKeyDown={handleKeyDown}
+              disabled={isStreaming}
+              placeholder={
+                isStreaming
+                  ? 'AI is reasoning — you can switch sessions while waiting…'
+                  : sessionMode === 'script'
+                    ? 'Describe a chart script… e.g. "RSI 14 with 70/30 bands & divergence" (Enter to send)'
+                    : `Ask about ${symbol ? `${symbol}.${exchange}` : 'NSE stocks'}, peers, valuation, or macro… (Enter to send)`
+              }
+              rows={1}
               className={cn(
-                'shrink-0 px-2 py-1.5 text-[10px] font-mono border rounded transition-colors',
-                input.trim()
-                  ? 'border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/10'
-                  : 'border-terminal-amber/10 text-terminal-amber/40 cursor-not-allowed',
+                'flex-1 bg-transparent text-xs text-white placeholder-zinc-500 outline-none resize-none font-mono leading-relaxed min-h-[32px] max-h-[120px] overflow-y-auto',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
               )}
-            >
-              send
-            </button>
-          )}
+              style={{ fieldSizing: 'content' } as React.CSSProperties}
+            />
+            {isStreaming ? (
+              <button
+                onClick={handleStop}
+                className="px-3.5 py-1.5 rounded bg-red-600/90 hover:bg-red-500 text-white font-bold text-xs font-mono transition-colors shrink-0"
+              >
+                STOP ■
+              </button>
+            ) : (
+              <button
+                onClick={() => void sendMessage()}
+                disabled={!input.trim()}
+                className={cn(
+                  'px-3.5 py-1.5 rounded font-bold text-xs font-mono transition-colors shrink-0',
+                  input.trim()
+                    ? 'bg-terminal-amber text-black hover:bg-amber-400'
+                    : 'bg-zinc-800 text-zinc-500 border border-zinc-700 cursor-not-allowed',
+                )}
+              >
+                SEND ↵
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

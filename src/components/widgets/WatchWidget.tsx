@@ -62,6 +62,7 @@ type SortColumn =
   | 'exchange'
   | 'ltp'
   | 'chg'
+  | 'momentum'
   | '1w'
   | '1m'
   | '3m'
@@ -90,6 +91,7 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   exchange: { key: 'exchange', label: 'EXCHANGE', textAlign: 'center', defaultSort: 'asc' },
   ltp: { key: 'ltp', label: 'LTP', textAlign: 'right', defaultSort: 'desc' },
   chg: { key: 'chg', label: 'CHG%', textAlign: 'right', defaultSort: 'desc' },
+  momentum: { key: 'momentum', label: 'MOMENTUM (1W-1Y)', textAlign: 'center', defaultSort: 'desc' },
   '1w': { key: '1w', label: '1W%', textAlign: 'right', defaultSort: 'desc' },
   '1m': { key: '1m', label: '1M%', textAlign: 'right', defaultSort: 'desc' },
   '3m': { key: '3m', label: '3M%', textAlign: 'right', defaultSort: 'desc' },
@@ -100,7 +102,7 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   '5y': { key: '5y', label: '5Y%', textAlign: 'right', defaultSort: 'desc' },
   '52wh': { key: '52wh', label: '52W HIGH', textAlign: 'right', defaultSort: 'desc' },
   '52wl': { key: '52wl', label: '52W LOW', textAlign: 'right', defaultSort: 'desc' },
-  msfv: { key: 'msfv', label: 'MS FV', textAlign: 'right', defaultSort: 'desc' },
+  msfv: { key: 'msfv', label: 'MS FAIR VALUE', textAlign: 'right', defaultSort: 'desc' },
   results: { key: 'results', label: 'RESULTS', textAlign: 'center', defaultSort: 'asc' },
   alerts: { key: 'alerts', label: 'ALERTS', textAlign: 'center', defaultSort: 'desc' },
 };
@@ -135,18 +137,18 @@ function compareValues(a: unknown, b: unknown, direction: SortDirection): number
 }
 
 function formatRange(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
-  const isUp = val > 0;
+  if (val == null || isNaN(val)) return <span className="text-zinc-500">—</span>;
+  const isUp = val >= 0;
   return (
-    <span className={isUp ? 'text-terminal-green' : 'text-terminal-red'}>
+    <span className={`font-semibold tabular-nums ${isUp ? 'text-terminal-green' : 'text-terminal-red'}`}>
       {isUp ? '+' : ''}{val.toFixed(1)}%
     </span>
   );
 }
 
 function formatPrice(val: number | null | undefined): React.ReactNode {
-  if (val == null || isNaN(val)) return <span className="text-white/60">—</span>;
-  return <span>{val.toFixed(2)}</span>;
+  if (val == null || isNaN(val)) return <span className="text-zinc-500">—</span>;
+  return <span className="text-zinc-200 tabular-nums">{val.toFixed(2)}</span>;
 }
 
 interface WatchRowProps {
@@ -164,14 +166,13 @@ interface WatchRowProps {
 function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash, onAlertClick }: WatchRowProps) {
   const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, alertCount, symbolLoading, rangesLoading, fairValueLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
-  const colorClass = isUp ? 'text-terminal-green' : 'text-terminal-red';
-  const dash = <span className="text-white/60">-</span>;
+  const dash = <span className="text-zinc-500">—</span>;
 
   const renderCell = (col: string) => {
     switch (col) {
       case 'ltp':
         return symbolLoading ? dash : ltp != null ? (
-          <span className={flash === 'up' ? 'animate-flash-green' : flash === 'down' ? 'animate-flash-red' : ''}>
+          <span className={`text-white font-mono font-semibold tabular-nums ${flash === 'up' ? 'animate-flash-green' : flash === 'down' ? 'animate-flash-red' : ''}`}>
             {ltp.toFixed(2)}
           </span>
         ) : dash;
@@ -180,11 +181,54 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
           ? dash
           : chgPct != null
           ? (
-              <span className={colorClass}>
+              <span className={`px-1.5 py-0.5 rounded font-bold tabular-nums text-xs ${
+                isUp ? 'text-terminal-green bg-emerald-500/10' : 'text-terminal-red bg-rose-500/10'
+              }`}>
                 {chgPct >= 0 ? '+' : ''}{chgPct.toFixed(2)}%
               </span>
             )
           : dash;
+      case 'momentum': {
+        if (rangesLoading) return dash;
+        const periods = [
+          { label: '1W', val: oneWeek },
+          { label: '1M', val: oneMonth },
+          { label: '3M', val: threeMonth },
+          { label: '6M', val: sixMonth },
+          { label: '1Y', val: oneYear },
+        ];
+        return (
+          <div className="inline-flex items-center justify-center gap-0.5">
+            {periods.map(({ label, val }) => {
+              if (val == null || isNaN(val)) {
+                return (
+                  <span
+                    key={label}
+                    className="w-3.5 h-3.5 rounded-[2px] bg-zinc-800/80 text-zinc-500 text-[8px] flex items-center justify-center font-bold"
+                    title={`${label}: —`}
+                  >
+                    -
+                  </span>
+                );
+              }
+              const isPeriodUp = val >= 0;
+              return (
+                <span
+                  key={label}
+                  className={`w-3.5 h-3.5 rounded-[2px] text-[8px] flex items-center justify-center font-bold border ${
+                    isPeriodUp
+                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                      : 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                  }`}
+                  title={`${label}: ${isPeriodUp ? '+' : ''}${val.toFixed(1)}%`}
+                >
+                  {isPeriodUp ? '▲' : '▼'}
+                </span>
+              );
+            })}
+          </div>
+        );
+      }
       case '1w':
         return rangesLoading ? dash : formatRange(oneWeek);
       case '1m':
@@ -205,15 +249,31 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
         return symbolLoading ? dash : formatPrice(yearHigh);
       case '52wl':
         return symbolLoading ? dash : formatPrice(yearLow);
-      case 'msfv':
-        return fairValueLoading ? dash : fairValue != null ? (
-          <span className="text-terminal-amber">₹{fairValue.toFixed(2)}</span>
-        ) : dash;
+      case 'msfv': {
+        if (fairValueLoading) return dash;
+        if (fairValue == null) return dash;
+        const upsidePct = ltp != null && ltp > 0 ? ((fairValue - ltp) / ltp) * 100 : null;
+        return (
+          <div className="flex flex-col items-end leading-tight">
+            <span className="text-terminal-amber font-bold tabular-nums">₹{fairValue.toFixed(2)}</span>
+            {upsidePct != null && (
+              <span className={`text-[9px] font-semibold tabular-nums ${upsidePct >= 0 ? 'text-terminal-green' : 'text-terminal-red'}`}>
+                {upsidePct >= 0 ? `+${upsidePct.toFixed(1)}% Undervalued` : `${upsidePct.toFixed(1)}% Premium`}
+              </span>
+            )}
+          </div>
+        );
+      }
       case 'results': {
         const result = resultDates.get(item.symbol.toUpperCase());
         if (!result) return dash;
+        const isUpcoming = result.status === 'upcoming';
         return (
-          <span className={result.status === 'upcoming' ? 'text-terminal-green font-semibold' : 'text-terminal-amber font-semibold'}>
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums border ${
+            isUpcoming
+              ? 'text-terminal-green bg-emerald-500/10 border-emerald-500/30'
+              : 'text-zinc-400 bg-zinc-800/80 border-zinc-700/50'
+          }`}>
             {formatResultsDate(result.date)}
           </span>
         );
@@ -226,14 +286,14 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
               onAlertClick(item.symbol);
             }}
             title={`${alertCount} unread alert${alertCount !== 1 ? 's' : ''} in last 2 days — click to filter NOTIF panel`}
-            className="w-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-terminal-amber
-              bg-zinc-600 hover:bg-zinc-500 active:bg-zinc-700
-              border border-zinc-500
-              shadow-[0_2px_0_#18181b,inset_0_1px_0_rgba(255,255,255,0.12)]
-              active:shadow-[inset_0_2px_3px_rgba(0,0,0,0.45)] active:translate-y-px
-              transition-colors select-none cursor-pointer rounded-sm"
+            className={`px-2 py-0.5 text-[10px] font-bold tabular-nums rounded transition-all cursor-pointer select-none inline-flex items-center gap-1 border ${
+              alertCount > 0
+                ? 'bg-terminal-amber/15 text-terminal-amber border-terminal-amber/40 hover:bg-terminal-amber hover:text-black hover:border-terminal-amber shadow-sm'
+                : 'bg-zinc-800/60 text-zinc-500 border-zinc-700/40 hover:text-zinc-300'
+            }`}
           >
-            {alertCount > 0 ? alertCount : '—'}
+            <span className="text-[9px]">🔔</span>
+            <span>{alertCount > 0 ? alertCount : '—'}</span>
           </button>
         );
       default:
@@ -244,35 +304,38 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
   return (
     <tr
       onClick={() => onRowClick(item)}
-      className={`border-b border-terminal-gray hover:bg-zinc-900 cursor-pointer ${
-        isActive ? 'bg-zinc-800' : ''
+      className={`border-b border-[#27272a]/70 hover:bg-zinc-900/60 cursor-pointer transition-colors ${
+        isActive ? 'bg-terminal-amber/5 border-l-2 border-l-terminal-amber' : ''
       }`}
     >
-      <td className="p-1 text-center border-r border-terminal-gray">
+      <td className="p-1 text-center border-r border-[#27272a]/50 w-7">
         <button
           onClick={(e) => {
             e.stopPropagation();
             onRemove(item.id);
           }}
           disabled={removing}
-          className="text-terminal-red hover:text-red-400 text-xs font-bold disabled:opacity-40"
+          className="text-zinc-500 hover:text-rose-400 text-xs font-bold transition-colors disabled:opacity-40 cursor-pointer"
           title="Remove"
         >
           ✕
         </button>
       </td>
-      <td className="p-1 border-r border-terminal-gray text-terminal-amber font-bold">
+      <td className="p-1.5 border-r border-[#27272a]/50 text-terminal-amber font-bold whitespace-nowrap">
         <span>{item.symbol}</span>
-        <span className="text-white/60 text-[9px] ml-1">{item.exchange}</span>
+        <span className="text-zinc-400 text-[9px] bg-zinc-800/80 px-1 py-0.5 rounded ml-1.5 font-normal tracking-wide">{item.exchange}</span>
       </td>
-      {columns.map((col) => (
-        <td
-          key={col}
-          className={`p-1 border-r border-terminal-gray ${col === 'alerts' ? 'text-center' : 'text-right'}`}
-        >
-          {renderCell(col)}
-        </td>
-      ))}
+      {columns.map((col) => {
+        const isCenter = col === 'alerts' || col === 'results' || col === 'momentum';
+        return (
+          <td
+            key={col}
+            className={`p-1.5 border-r border-[#27272a]/50 ${isCenter ? 'text-center' : 'text-right'}`}
+          >
+            {renderCell(col)}
+          </td>
+        );
+      })}
     </tr>
   );
 }
@@ -620,6 +683,10 @@ export function WatchWidget() {
           aVal = a.chgPct;
           bVal = b.chgPct;
           break;
+        case 'momentum':
+          aVal = a.oneWeek;
+          bVal = b.oneWeek;
+          break;
         case '1w':
           aVal = a.oneWeek;
           bVal = b.oneWeek;
@@ -792,45 +859,108 @@ export function WatchWidget() {
     createWatchlistMutation.mutate(name);
   };
 
+  const advCount = rowDataList.filter((r) => (r.chgPct ?? 0) > 0).length;
+  const decCount = rowDataList.filter((r) => (r.chgPct ?? 0) < 0).length;
+
   return (
-    <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden relative">
-      {/* Watchlist selector header */}
-      <div className="flex items-center gap-1 px-2 py-1 border-b border-terminal-gray bg-blue-950 flex-shrink-0">
-        <span className="text-white/60 uppercase text-[10px]">Watchlist:</span>
-        <select
-          value={activeWatchlistId}
-          onChange={(e) => setActiveWatchlistId(Number(e.target.value))}
-          className="bg-black border border-terminal-gray text-terminal-amber px-2 py-0.5 uppercase text-xs"
+    <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden relative bg-[#0a0a0a]">
+      {/* Bento Toolbar Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-2 border-b border-[#27272a] bg-[#09090b] flex-shrink-0">
+        {/* Watchlist selector */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-zinc-400 text-[10px] uppercase font-bold tracking-wider mr-0.5">LIST:</span>
+          <div className="flex items-center gap-1 bg-[#141418] border border-[#27272a] rounded px-1.5 py-0.5">
+            <select
+              value={activeWatchlistId}
+              onChange={(e) => setActiveWatchlistId(Number(e.target.value))}
+              className="bg-transparent border-0 text-terminal-amber font-bold text-xs uppercase outline-none cursor-pointer pr-1"
+            >
+              {watchlists.map((wl) => (
+                <option key={wl.id} value={wl.id} className="bg-[#141418] text-zinc-200">
+                  {wl.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="text-terminal-amber hover:text-black hover:bg-terminal-amber text-xs font-bold border border-terminal-amber/50 hover:border-terminal-amber rounded px-2 py-0.5 transition-colors cursor-pointer"
+            title="Create new watchlist"
+          >
+            +
+          </button>
+        </div>
+
+        {/* Add symbol form */}
+        <form
+          onSubmit={handleAdd}
+          className="flex items-center gap-1.5 flex-1 max-w-sm min-w-[240px]"
         >
-          {watchlists.map((wl) => (
-            <option key={wl.id} value={wl.id}>
-              {wl.name}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="ml-1 text-terminal-amber hover:text-white text-xs font-bold border border-terminal-amber hover:bg-terminal-amber hover:text-black px-1.5 py-0.5"
-          title="Create new watchlist"
-        >
-          +
-        </button>
+          <input
+            type="text"
+            value={newExchange}
+            onChange={(e) => setNewExchange(e.target.value.toUpperCase())}
+            placeholder="NSE"
+            className="w-11 bg-[#141418] border border-[#27272a] focus:border-terminal-amber text-terminal-amber font-bold px-1 py-1 uppercase text-center rounded text-xs outline-none transition-colors"
+          />
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={newSymbol}
+              onChange={(e) => handleSymbolChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+              placeholder="ADD SYMBOL (e.g. INFY)..."
+              className="w-full bg-[#141418] border border-[#27272a] focus:border-terminal-amber text-white placeholder:text-zinc-600 px-2 py-1 uppercase rounded text-xs outline-none transition-colors"
+            />
+            {showDropdown && autocompleteResults.length > 0 && (
+              <div className="absolute z-50 w-full bg-[#121216] border border-[#27272a] rounded shadow-2xl mt-1 max-h-48 overflow-auto">
+                {autocompleteResults.slice(0, 10).map((result, index) => (
+                  <div
+                    key={result.symbol}
+                    onClick={() => handleSelectResult(result)}
+                    className={`px-2 py-1 cursor-pointer transition-colors flex items-center justify-between ${
+                      index === activeIndex ? 'bg-zinc-800 text-terminal-amber' : 'text-zinc-300 hover:bg-zinc-800/80 hover:text-terminal-amber'
+                    }`}
+                  >
+                    <span className="font-bold">{result.symbol}</span>
+                    <span className="text-[10px] text-zinc-400 truncate max-w-[150px]">{result.companyName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            type="submit"
+            disabled={addMutation.isPending}
+            className="px-3 py-1 bg-terminal-amber hover:bg-amber-400 text-black font-bold border border-terminal-amber rounded text-xs disabled:opacity-50 transition-colors shadow-sm cursor-pointer whitespace-nowrap"
+          >
+            +ADD
+          </button>
+        </form>
+
+        {/* Breadth & Sort Indicators */}
+        <div className="hidden lg:flex items-center gap-2 text-[10px] text-zinc-400 pl-1 whitespace-nowrap">
+          <span>SORT: <strong className="text-terminal-amber font-mono font-bold uppercase">{sortColumn ? `${sortColumn} (${sortDirection})` : 'DEFAULT'}</strong></span>
+          <span>•</span>
+          <span>ADV: <strong className="text-terminal-green font-bold">{advCount}</strong> / DEC: <strong className="text-terminal-red font-bold">{decCount}</strong></span>
+        </div>
       </div>
 
       {/* Create watchlist modal */}
       {showCreateModal && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="bg-black border border-terminal-amber p-3 w-64">
-            <div className="text-terminal-amber font-bold mb-2 text-center">NEW WATCHLIST</div>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs">
+          <div className="bg-[#09090b] border border-terminal-amber/60 rounded p-4 w-72 shadow-2xl">
+            <div className="text-terminal-amber font-bold mb-3 text-center text-sm tracking-wider">NEW WATCHLIST</div>
             <form onSubmit={handleCreateWatchlist}>
               <input
                 type="text"
                 value={newWatchlistName}
                 onChange={(e) => setNewWatchlistName(e.target.value)}
-                placeholder="Name (letters, hyphen)"
+                placeholder="NAME (LETTERS, HYPHEN)"
                 maxLength={32}
                 pattern="^[A-Za-z-]+$"
-                className="w-full bg-black border border-terminal-gray text-terminal-amber px-2 py-1 uppercase mb-2"
+                className="w-full bg-[#141418] border border-[#27272a] focus:border-terminal-amber text-terminal-amber px-2 py-1.5 uppercase mb-3 rounded text-xs outline-none transition-colors"
                 autoFocus
               />
               <div className="flex gap-2 justify-end">
@@ -840,14 +970,14 @@ export function WatchWidget() {
                     setShowCreateModal(false);
                     setNewWatchlistName('');
                   }}
-                  className="px-2 py-1 text-white border border-terminal-gray hover:bg-terminal-gray"
+                  className="px-2.5 py-1 text-zinc-300 border border-[#27272a] hover:bg-zinc-800 rounded text-xs transition-colors cursor-pointer"
                 >
                   CANCEL
                 </button>
                 <button
                   type="submit"
                   disabled={createWatchlistMutation.isPending || !newWatchlistName.trim() || !/^[A-Za-z-]+$/.test(newWatchlistName.trim())}
-                  className="px-2 py-1 bg-terminal-amber text-black font-bold hover:bg-amber-400 disabled:opacity-50"
+                  className="px-3 py-1 bg-terminal-amber text-black font-bold hover:bg-amber-400 rounded text-xs disabled:opacity-50 transition-colors cursor-pointer"
                 >
                   CREATE
                 </button>
@@ -857,67 +987,19 @@ export function WatchWidget() {
         </div>
       )}
 
-      {/* Add symbol form */}
-      <form
-        onSubmit={handleAdd}
-        className="flex gap-1 p-1 border-b border-terminal-gray flex-shrink-0"
-      >
-        <input
-          type="text"
-          value={newExchange}
-          onChange={(e) => setNewExchange(e.target.value.toUpperCase())}
-          placeholder="NSE"
-          className="w-12 bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase text-center"
-        />
-        <div className="flex-1 relative">
-          <input
-            type="text"
-            value={newSymbol}
-            onChange={(e) => handleSymbolChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
-            placeholder="SYMBOL"
-            className="w-full bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase"
-          />
-          {showDropdown && autocompleteResults.length > 0 && (
-            <div className="absolute z-50 w-full bg-black border border-terminal-gray mt-0.5 max-h-48 overflow-auto">
-              {autocompleteResults.slice(0, 10).map((result, index) => (
-                <div
-                  key={result.symbol}
-                  onClick={() => handleSelectResult(result)}
-                  className={`px-1 py-0.5 cursor-pointer hover:bg-zinc-800 ${
-                    index === activeIndex ? 'bg-zinc-800 text-terminal-amber' : 'text-white/70'
-                  }`}
-                >
-                  <span className="text-terminal-amber font-bold">{result.symbol}</span>
-                  <span className="ml-1 truncate text-white/80">{result.companyName}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <button
-          type="submit"
-          disabled={addMutation.isPending}
-          className="px-2 py-0.5 bg-blue-800 hover:bg-blue-700 text-white border border-blue-500 disabled:opacity-50"
-        >
-          +ADD
-        </button>
-      </form>
-
       {/* Watchlist table */}
-      <div className="flex-1 overflow-auto">
-        {isLoading && <div className="p-2 text-white">LOADING WATCHLIST...</div>}
-        {isError && <div className="p-2 text-terminal-red">FAILED TO LOAD WATCHLIST</div>}
+      <div className="flex-1 overflow-auto bg-[#0a0a0a]">
+        {isLoading && <div className="p-3 text-terminal-amber animate-pulse">LOADING WATCHLIST...</div>}
+        {isError && <div className="p-3 text-terminal-red font-bold">FAILED TO LOAD WATCHLIST</div>}
         {!isLoading && !isError && (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[700px]">
-              <thead className="bg-blue-900 text-white sticky top-0">
+              <thead className="bg-[#121216] text-zinc-400 font-mono text-[11px] uppercase tracking-wider sticky top-0 z-10 border-b border-[#27272a]">
                 <tr>
-                  <th className="p-1 border border-terminal-gray w-6"></th>
+                  <th className="p-1.5 border-r border-[#27272a]/60 w-7 text-center">✕</th>
                   <th
                     onClick={() => handleHeaderClick('symbol')}
-                    className="p-1 border border-terminal-gray cursor-pointer hover:text-terminal-amber transition-colors"
+                    className="p-1.5 border-r border-[#27272a]/60 cursor-pointer hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none"
                   >
                     SYMBOL{getSortIndicator('symbol')}
                   </th>
@@ -927,7 +1009,7 @@ export function WatchWidget() {
                       <th
                         key={col}
                         onClick={() => handleHeaderClick(colConfig?.key || (col as SortColumn))}
-                        className={`p-1 border border-terminal-gray cursor-pointer hover:text-terminal-amber transition-colors ${
+                        className={`p-1.5 border-r border-[#27272a]/60 cursor-pointer hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none ${
                           colConfig?.textAlign === 'right' ? 'text-right' : 'text-center'
                         }`}
                       >
@@ -960,9 +1042,9 @@ export function WatchWidget() {
                   <tr>
                     <td
                       colSpan={watchlistColumns.length + 2}
-                      className="p-2 text-white text-center"
+                      className="p-6 text-zinc-400 text-center"
                     >
-                      No symbols. Add one above.
+                      No symbols in this watchlist. Add one above.
                     </td>
                   </tr>
                 )}
