@@ -81,7 +81,7 @@ const DEFAULT_NOTIF_CONFIG: NotifConfigState = {
 const WATCHLIST_COLUMNS = [
   { key: 'ltp', label: 'LTP' },
   { key: 'chg', label: 'CHG%' },
-    { key: 'msfv', label: 'MS FV' },
+  { key: 'msfv', label: 'MS FV' },
   { key: 'momentum', label: 'MOMENTUM' },
   { key: '1w', label: '1W%' },
   { key: '1m', label: '1M%' },
@@ -191,77 +191,66 @@ const NOTIF_CONFIG_HELP: Record<NotifConfigKey, string> = {
   'notif.deal_absolute_threshold_cr': '…or above this ₹ Cr value when market cap is unknown.',
 };
 
-// Partition group: eyebrow label + hairline rule + sections.
-function Group({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+// Bento UI Component - modeled directly after CompanyTabs/FundamentalsTab.tsx
+function BentoCard({
+  children,
+  className = '',
+  title,
+  icon,
+  badge,
+  blurb,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  title?: string;
+  icon?: string;
+  badge?: React.ReactNode;
+  blurb?: string;
+}) {
   return (
-    <div id={id} className="flex flex-col gap-2 scroll-mt-24">
-      <div className="flex items-center gap-2">
-        <span className="text-white/35 text-[10px] font-bold uppercase tracking-[0.25em]">
-          {title}
-        </span>
-        <div className="flex-1 border-t border-terminal-border" />
+    <div
+      className={`bg-[#09090b] border border-[#27272a] rounded p-3 flex flex-col justify-between transition-colors duration-200 hover:bg-zinc-900/80 ${className}`}
+    >
+      <div className="flex flex-col gap-2">
+        {(title || badge || icon) && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              {icon && (
+                <span className="text-terminal-amber text-xs w-4 text-center shrink-0">
+                  {icon}
+                </span>
+              )}
+              {title && (
+                <span className="text-[10px] uppercase font-mono tracking-wider text-zinc-400 font-semibold truncate">
+                  {title}
+                </span>
+              )}
+            </div>
+            {badge && <div className="shrink-0 flex items-center">{badge}</div>}
+          </div>
+        )}
+        {blurb && (
+          <p className="text-white/50 text-[10px] leading-relaxed">{blurb}</p>
+        )}
+        <div className="flex flex-col gap-2">{children}</div>
       </div>
-      {children}
     </div>
   );
 }
 
-// Collapsible settings section card: icon + title + optional status badge,
-// one-line description, then the controls.
-function Section({
-  icon,
-  title,
-  blurb,
-  badge,
-  defaultOpen = true,
-  children,
-}: {
-  icon: string;
-  title: string;
-  blurb?: string;
-  badge?: React.ReactNode;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className="border border-terminal-border bg-terminal-panel">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-white/[0.03] transition-colors text-left"
-      >
-        <span className="text-terminal-amber text-xs w-4 text-center shrink-0">{icon}</span>
-        <span className="text-terminal-amber font-bold uppercase text-[10px] tracking-widest">
-          {title}
-        </span>
-        {badge && <span className="ml-1 flex items-center">{badge}</span>}
-        <span className={`text-white/40 text-[10px] ${badge ? '' : 'ml-auto'}`}>
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
-      {open && blurb && (
-        <p className="px-2 pb-1.5 text-white/50 text-[10px] leading-relaxed">{blurb}</p>
-      )}
-      {open && <div className="px-2 pb-2 flex flex-col gap-2">{children}</div>}
-    </section>
-  );
-}
+type SettingsTabId = 'workspace' | 'connections' | 'intelligence' | 'automation' | 'system';
 
-const SETTINGS_INDEX = [
-  { id: 'sec-workspace', label: 'Workspace' },
-  { id: 'sec-connections', label: 'Connections' },
-  { id: 'sec-intelligence', label: 'Intelligence' },
-  { id: 'sec-automation', label: 'Automation' },
-  { id: 'sec-system', label: 'System' },
+const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
+  { id: 'workspace', label: 'WORKSPACE' },
+  { id: 'connections', label: 'CONNECTIONS' },
+  { id: 'intelligence', label: 'INTELLIGENCE' },
+  { id: 'automation', label: 'AUTOMATION' },
+  { id: 'system', label: 'SYSTEM' },
 ];
-
-function scrollToSection(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
 
 export function SettingsWidget() {
   const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState<SettingsTabId>('workspace');
   const [wsConnected] = useAtom(wsConnectedAtom);
   const [funds] = useAtom(fundsAtom);
   const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
@@ -812,693 +801,762 @@ export function SettingsWidget() {
     }
   };
 
+
   return (
-    <div className="h-full w-full flex flex-col font-mono text-xs overflow-auto p-3 gap-3">
-      <div className="sticky top-0 z-10 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-terminal-bg/95 backdrop-blur-sm border-b border-terminal-gray">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-terminal-amber font-bold text-sm">SETTINGS</div>
+    <div className="h-full w-full flex flex-col bg-[#0a0a0a] font-mono text-xs overflow-hidden">
+      {/* Tab Bar (CompanyWidget pattern) */}
+      <div className="flex items-center border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111] flex-wrap">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3 py-1 text-xs font-mono transition-all duration-300 ease-out border ${
+              activeTab === tab.id
+                ? 'border-terminal-amber text-terminal-amber bg-terminal-amber/10'
+                : 'border-transparent text-white/60 hover:text-white hover:bg-terminal-gray/20'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+        <div className="ml-auto flex items-center gap-2 px-2">
           {apiKeySaveStatus ? (
             <span className="text-[10px] text-terminal-green animate-pulse">{apiKeySaveStatus}</span>
           ) : (
             <span className="text-white/30 text-[10px]">Changes save automatically</span>
           )}
-        </div>
-        <div className="flex flex-wrap gap-1 mt-1.5">
-          {SETTINGS_INDEX.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => scrollToSection(s.id)}
-              className="px-2 py-0.5 text-[10px] uppercase tracking-wider border border-terminal-border text-white/60 hover:text-terminal-amber hover:border-terminal-amber transition-colors"
-            >
-              {s.label}
-            </button>
-          ))}
+          <span className="text-terminal-amber font-mono text-sm font-bold tracking-wider">SETTINGS</span>
         </div>
       </div>
 
-      <Group id="sec-workspace" title="Workspace">
-      <Section
-        icon="▦"
-        title="Window Layout"
-        blurb="How many panels share the screen. Switching counts resets panel sizes and merges."
-      >
-      {/* Window Layout */}
-      <div className="flex flex-col gap-1" data-tour="layout-controls">
-        <div className="flex flex-wrap gap-2">
-          {[2, 4, 6, 8].map((count) => {
-            const isActive = panelCount === count;
-            return (
-              <button
-                key={count}
-                onClick={() => handlePanelCountChange(count as PanelCount)}
-                className={`min-w-10 border px-2 py-1 text-[10px] font-bold uppercase transition-colors ${
-                  isActive
-                    ? 'border-terminal-amber bg-terminal-amber text-black'
-                    : 'border-terminal-gray text-white hover:border-terminal-amber hover:text-terminal-amber'
-                }`}
+      {/* Tab Content / Bento Grid Body */}
+      <div className="flex-1 overflow-y-auto p-2.5 bg-[#0a0a0a]">
+        <div key={activeTab} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5 max-w-full animate-in fade-in duration-200">
+          {/* TAB 1: WORKSPACE */}
+          {activeTab === 'workspace' && (
+            <>
+              {/* Window Layout */}
+              <BentoCard
+                icon="▦"
+                title="Window Layout"
+                blurb="How many panels share the screen. Switching counts resets panel sizes and merges."
+                className="col-span-1 md:col-span-2 lg:col-span-2"
               >
-                {count}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      </Section>
+                <div className="flex flex-col gap-1" data-tour="layout-controls">
+                  <div className="flex flex-wrap gap-2">
+                    {[2, 4, 6, 8].map((count) => {
+                      const isActive = panelCount === count;
+                      return (
+                        <button
+                          key={count}
+                          type="button"
+                          onClick={() => handlePanelCountChange(count as PanelCount)}
+                          className={`min-w-10 border px-2 py-1 text-[10px] font-bold uppercase transition-colors ${
+                            isActive
+                              ? 'border-terminal-amber bg-terminal-amber text-black'
+                              : 'border-terminal-gray text-white hover:border-terminal-amber hover:text-terminal-amber'
+                          }`}
+                        >
+                          {count}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </BentoCard>
 
-      <Section
-        icon="◉"
-        title="Ticker Source"
-        blurb="Feed for the scrolling ticker bar at the top of the terminal."
-      >
-      {/* Ticker Source */}
-      <div className="flex flex-col gap-1">
-        <select
-          value={tickerSource}
-          onChange={(e) => setTickerSource(e.target.value)}
-          className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-        >
-          <option value="default">Default (First Watchlist)</option>
-          <option value="top">Top Movers (Gainers + Losers)</option>
-          {watchlists.map((wl) => (
-            <option key={wl.id} value={`watchlist:${wl.id}`}>
-              Watchlist: {wl.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      </Section>
+              {/* Ticker Source */}
+              <BentoCard
+                icon="◉"
+                title="Ticker Source"
+                blurb="Feed for the scrolling ticker bar at the top of the terminal."
+                className="col-span-1 md:col-span-2 lg:col-span-2"
+              >
+                <div className="flex flex-col gap-1">
+                  <select
+                    value={tickerSource}
+                    onChange={(e) => setTickerSource(e.target.value)}
+                    className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                  >
+                    <option value="default">Default (First Watchlist)</option>
+                    <option value="top">Top Movers (Gainers + Losers)</option>
+                    {watchlists.map((wl) => (
+                      <option key={wl.id} value={`watchlist:${wl.id}`}>
+                        Watchlist: {wl.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </BentoCard>
 
-      {/* Saved Layouts */}
-      {Object.keys(savedLayouts).length > 0 && (
-      <Section
-        icon="❏"
-        title="Saved Layouts"
-        blurb="Named snapshots of your panel arrangement. Load one with :name in the command bar."
-        badge={auth?.user ? (
-          <span
-            className={`text-[9px] font-mono uppercase tracking-wider ${
-              syncStatus.status === 'error'
-                ? 'text-terminal-red'
-                : syncStatus.status === 'pending'
-                ? 'text-terminal-amber/70'
-                : 'text-terminal-green/70'
-            }`}
-          >
-            {syncStatus.status === 'pending'
-              ? `Syncing (${syncStatus.pendingCount})`
-              : syncStatus.status === 'error'
-              ? 'Sync Error'
-              : 'Synced'}
-          </span>
-        ) : undefined}
-      >
-        <div className="flex flex-col gap-1">
-          <div className="flex flex-col gap-0.5">
-            {Object.values(savedLayouts)
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((layout) => {
-                const widgetList = Object.values(layout.activePanels)
-                  .slice(0, layout.panelCount)
-                  .join(', ');
-                return (
-                  <div key={layout.name} className="flex items-center justify-between gap-2 group">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      {renamingLayout === layout.name ? (
-                        <input
-                          type="text"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onBlur={() => handleFinishRename(layout.name)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleFinishRename(layout.name);
-                            if (e.key === 'Escape') setRenamingLayout(null);
-                          }}
-                          autoFocus
-                          className="bg-black border border-terminal-amber text-terminal-amber text-xs px-1 py-0.5 outline-none font-mono w-24"
-                        />
-                      ) : (
-                        <span className="text-terminal-amber font-bold text-xs font-mono">
-                          :{layout.name}
-                        </span>
-                      )}
-                      <span className="text-white/40 text-[9px] shrink-0">
-                        {layout.panelCount}P
-                      </span>
-                      <span className="text-white/30 text-[9px] truncate">
-                        {widgetList}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => handleStartRename(layout)}
-                        className="text-white/30 hover:text-terminal-amber text-xs transition-colors px-0.5"
-                        title="Rename layout"
+              {/* Saved Layouts */}
+              {Object.keys(savedLayouts).length > 0 && (
+                <BentoCard
+                  icon="❏"
+                  title="Saved Layouts"
+                  blurb="Named snapshots of your panel arrangement. Load one with :name in the command bar."
+                  badge={
+                    auth?.user ? (
+                      <span
+                        className={`text-[9px] font-mono uppercase tracking-wider ${
+                          syncStatus.status === 'error'
+                            ? 'text-terminal-red'
+                            : syncStatus.status === 'pending'
+                            ? 'text-terminal-amber/70'
+                            : 'text-terminal-green/70'
+                        }`}
                       >
-                        ✎
-                      </button>
-                      <button
-                        onClick={() => handleDeleteLayout(layout.name)}
-                        className="text-terminal-red/50 hover:text-terminal-red text-xs font-bold transition-colors px-0.5"
-                        title="Delete layout"
-                      >
-                        ✕
-                      </button>
+                        {syncStatus.status === 'pending'
+                          ? `Syncing (${syncStatus.pendingCount})`
+                          : syncStatus.status === 'error'
+                          ? 'Sync Error'
+                          : 'Synced'}
+                      </span>
+                    ) : undefined
+                  }
+                  className="col-span-1 md:col-span-2 lg:col-span-4"
+                >
+                  <div className="flex flex-col gap-1">
+                    <div className="flex flex-col gap-0.5">
+                      {Object.values(savedLayouts)
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((layout) => {
+                          const widgetList = Object.values(layout.activePanels)
+                            .slice(0, layout.panelCount)
+                            .join(', ');
+                          return (
+                            <div key={layout.name} className="flex items-center justify-between gap-2 group">
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {renamingLayout === layout.name ? (
+                                  <input
+                                    type="text"
+                                    value={renameValue}
+                                    onChange={(e) => setRenameValue(e.target.value)}
+                                    onBlur={() => handleFinishRename(layout.name)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') handleFinishRename(layout.name);
+                                      if (e.key === 'Escape') setRenamingLayout(null);
+                                    }}
+                                    autoFocus
+                                    className="bg-black border border-terminal-amber text-terminal-amber text-xs px-1 py-0.5 outline-none font-mono w-24"
+                                  />
+                                ) : (
+                                  <span className="text-terminal-amber font-bold text-xs font-mono">
+                                    :{layout.name}
+                                  </span>
+                                )}
+                                <span className="text-white/40 text-[9px] shrink-0">
+                                  {layout.panelCount}P
+                                </span>
+                                <span className="text-white/30 text-[9px] truncate">
+                                  {widgetList}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartRename(layout)}
+                                  className="text-white/30 hover:text-terminal-amber text-xs transition-colors px-0.5"
+                                  title="Rename layout"
+                                >
+                                  ✎
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteLayout(layout.name)}
+                                  className="text-terminal-red/50 hover:text-terminal-red text-xs font-bold transition-colors px-0.5"
+                                  title="Delete layout"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   </div>
-                );
-              })}
-          </div>
-        </div>
-      </Section>
-      )}
-
-      <Section
-        icon="☰"
-        title="Table Columns"
-        blurb="Choose which columns appear in the Watch and Movers tables. Changes apply instantly."
-      >
-      {/* Watchlist Columns */}
-      <div className="flex flex-col gap-1">
-        <span className="text-white/60 text-[10px]">Watch table</span>
-        <ColumnCheckboxes
-          columns={WATCHLIST_COLUMNS}
-          selected={watchlistCols}
-          onChange={handleWatchlistChange}
-        />
-      </div>
-      {/* Movers Columns */}
-      <div className="flex flex-col gap-1">
-        <span className="text-white/60 text-[10px]">Movers table</span>
-        <ColumnCheckboxes
-          columns={MOVERS_COLUMNS}
-          selected={moversCols}
-          onChange={handleMoversChange}
-        />
-      </div>
-      </Section>
-      </Group>
-
-      <Group id="sec-connections" title="Connections">
-      <Section
-        icon="⇄"
-        title="Market Connection"
-        blurb="Live socket health for market data, plus the broker bridge endpoint."
-      >
-      {/* Connection Status */}
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-block w-2 h-2 rounded-full ${
-              wsConnected ? 'bg-terminal-green' : 'bg-terminal-red'
-            }`}
-          />
-          <span className={wsConnected ? 'text-terminal-green' : 'text-terminal-red'}>
-            Market WS: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
-          </span>
-        </div>
-        {openAlgoAvailable && (
-          <div className="text-white text-[10px]">
-            OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
-          </div>
-        )}
-      </div>
-      </Section>
-
-      {openAlgoAvailable && funds && (
-      <Section
-        icon="₹"
-        title="Account Funds"
-        blurb="Live broker balances pulled via OpenAlgo. ORDER and POS use these for sizing and margin display."
-      >
-        <div className="flex flex-col gap-1">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-            {[
-              ['Available Cash', funds.availablecash],
-              ['Collateral', funds.collateral],
-              ['M2M Realized', funds.m2mrealized],
-              ['M2M Unrealized', funds.m2munrealized],
-              ['Utilised Debits', funds.utiliseddebits],
-            ].map(([label, val]) => (
-              <React.Fragment key={label}>
-                <span className="text-white">{label}:</span>
-                <span className="text-terminal-amber text-right">{val}</span>
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
-      </Section>
-      )}
-      </Group>
-
-      <Group id="sec-intelligence" title="Intelligence">
-      <Section
-        icon="◐"
-        title="Data Extraction & Privacy"
-        blurb="Controls whether the terminal may run headless browser automation to harvest deep fundamentals and premium news tokens. Safe Mode disables all external scraping."
-        badge={(
-          <span
-            className={`text-[10px] px-1.5 py-0.5 font-mono ${
-              scrapingConsent === true
-                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                : scrapingConsent === null
-                ? 'bg-amber-950 text-amber-400 border border-amber-800'
-                : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
-            }`}
-          >
-            {scrapingConsent === true ? 'Advanced Extraction Active' : scrapingConsent === null ? 'Consent Required' : 'Safe Mode (Anonymous)'}
-          </span>
-        )}
-      >
-      <div className="flex flex-col gap-1.5">
-        <p className="text-[10px] text-white/60 leading-relaxed">
-          When Advanced Extraction is enabled, the terminal operates generic headless automation on your behalf to harvest deep company fundamentals and premium news tokens. In Safe Mode, external scraping is disabled.
-        </p>
-        <div className="flex items-center gap-2 mt-1">
-          <button
-            type="button"
-            onClick={() => handleUpdateConsent(false)}
-            disabled={scrapingConsent !== true}
-            className={`px-3 py-1 text-[11px] font-mono rounded border transition ${
-              scrapingConsent !== true
-                ? 'bg-zinc-800/60 text-zinc-500 border-zinc-700/50 cursor-not-allowed opacity-60'
-                : 'bg-zinc-800 text-zinc-300 border-zinc-600 hover:bg-zinc-700 hover:text-white cursor-pointer'
-            }`}
-          >
-            Disable (Safe Mode)
-          </button>
-          <button
-            type="button"
-            onClick={() => handleUpdateConsent(true)}
-            disabled={scrapingConsent === true}
-            className={`px-3 py-1 text-[11px] font-mono rounded border transition ${
-              scrapingConsent === true
-                ? 'bg-zinc-800/60 text-zinc-500 border-zinc-700/50 cursor-not-allowed opacity-60'
-                : 'bg-blue-600 text-white border-blue-500 hover:bg-blue-500 cursor-pointer font-semibold shadow-sm'
-            }`}
-          >
-            Enable Advanced Extraction
-          </button>
-        </div>
-        {consentSyncStatus && (
-          <div className="text-[10px] text-terminal-amber animate-pulse mt-0.5">
-            {consentSyncStatus}
-          </div>
-        )}
-        {scrapingConsent === true && browserProvision && browserProvision.state !== 'ready' && (
-          <div className="mt-1 rounded border border-zinc-700/60 bg-zinc-900/60 px-2.5 py-2 text-[10px] font-mono">
-            <div className="flex items-center justify-between gap-2">
-              <span className={
-                browserProvision.state === 'failed'
-                  ? 'text-red-400'
-                  : browserProvision.state === 'downloading'
-                  ? 'text-terminal-amber animate-pulse'
-                  : 'text-zinc-400'
-              }>
-                {browserProvision.state === 'downloading'
-                  ? `Downloading extraction browser${browserProvision.total > 0 ? ` — ${Math.round((browserProvision.downloaded / browserProvision.total) * 100)}%` : '…'}`
-                  : browserProvision.state === 'failed'
-                  ? `Browser download failed${browserProvision.error ? `: ${browserProvision.error}` : ''}`
-                  : 'Extraction browser not installed yet — starting download…'}
-              </span>
-              {(browserProvision.state === 'failed' || browserProvision.state === 'missing') && (
-                <button
-                  type="button"
-                  onClick={handleBrowserRetry}
-                  disabled={browserFetchBusy}
-                  className="shrink-0 px-2 py-0.5 rounded border border-blue-500 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60 cursor-pointer"
-                >
-                  {browserFetchBusy ? 'Starting…' : 'Retry'}
-                </button>
+                </BentoCard>
               )}
-            </div>
-            {browserProvision.state === 'downloading' && browserProvision.total > 0 && (
-              <div className="mt-1.5 h-1 rounded bg-zinc-800 overflow-hidden">
-                <div
-                  className="h-full bg-terminal-amber transition-all"
-                  style={{ width: `${Math.min(100, Math.round((browserProvision.downloaded / browserProvision.total) * 100))}%` }}
-                />
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-      </Section>
 
-      {auth?.user?.is_admin && (
-      <>
-      <Section
-        icon="⌁"
-        title="OpenAlgo Configuration"
-        blurb="Order-execution bridge. The URL points at your local OpenAlgo server; the key authenticates this terminal. Used by ORDER and POS."
-      >
-          {/* OpenAlgo Section */}
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-1.5 text-xs">
-              <label className="flex flex-col gap-0.5">
-                <span className="text-white/70 text-[10px]">OpenAlgo URL:</span>
-                <input
-                  type="text"
-                  value={openAlgoUrlInput}
-                  onChange={(e) => {
-                  setOpenAlgoUrlInput(e.target.value);
-                  scheduleSystemConfigSave('openalgo.url', e.target.value);
-                }}
-                  placeholder="http://127.0.0.1:5000"
-                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-                />
-                <span className="text-white/50 text-[10px]">Address of your local OpenAlgo server (order-execution bridge).</span>
-              </label>
-              <label className="flex flex-col gap-0.5">
-                <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
-                <input
-                  type="password"
-                  value={openAlgoApiKeyInput}
-                  onChange={(e) => {
-                  setOpenAlgoApiKeyInput(e.target.value);
-                  scheduleSystemConfigSave('openalgo.api_key', e.target.value);
-                }}
-                  placeholder="Enter OpenAlgo API key"
-                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-                />
-                <span className="text-white/50 text-[10px]">From your OpenAlgo server config — authenticates order placement.</span>
-              </label>
-              
-            </div>
-          </div>
-      </Section>
-
-      <Section
-        icon="✦"
-        title="AI Provider"
-        blurb="Engine behind AI chat, background picks and summaries. Keys save automatically as you type."
-        badge={aiAuthStatus ? (
-          <span className={aiAuthStatus.is_configured ? 'text-[10px] text-terminal-green' : 'text-[10px] text-terminal-red'}>
-            {aiAuthStatus.is_configured ? '✅ Connected' : '❌ Not Connected'}
-          </span>
-        ) : undefined}
-      >
-          {/* AI Provider Section */}
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-col gap-1.5 text-xs">
-              <span className="text-white/50 text-[10px] leading-relaxed">
-                Best results need a paid subscription or pay-as-you-go provider.
-                Free models work well too depending on provider/model — Google
-                AI Studio offers a free key.
-              </span>
-              <label className="flex flex-col gap-0.5">
-                <span className="text-white/70 text-[10px]">Provider:</span>
-                <select
-                  value={aiProvider}
-                  onChange={(e) => {
-                  setAiProvider(e.target.value);
-                  scheduleSystemConfigSave('ai.provider', e.target.value);
-                }}
-                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-                >
-                  {AI_PROVIDERS.map((p) => (
-                    <option key={p.id} value={p.id}>{p.label}</option>
-                  ))}
-                </select>
-              </label>
-
-              {aiProvider === 'gemini' ? (
-                <div className="flex flex-col gap-1 mt-1">
-                  <span className="text-white/70 text-[10px]">Use your existing Google subscription via the Google Antigravity proxy — no API key needed.</span>
-                  <span className="text-white/70 text-[10px]">Gemini Authentication:</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      fetch('/api/py/auth/gemini/login')
-                        .then(r => r.json())
-                        .then(d => {
-                          if (d.auth_url) {
-                            window.open(d.auth_url, '_blank');
-                            setApiKeySaveStatus('Awaiting Google OAuth... Check your browser.');
-                            const interval = setInterval(() => {
-                              fetch('/api/py/auth/gemini/status').then(r => r.json()).then(st => {
-                                if (st.configured && st.has_refresh_token) {
-                                  clearInterval(interval);
-                                  setApiKeySaveStatus('Gemini Auth Successful!');
-                                  setTimeout(() => setApiKeySaveStatus(null), 3000);
-                                  fetch('/api/py/system-config/ai.provider', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'gemini' }) }).then(() => {
-                                      fetch('/api/py/ai/status').then(r => r.json()).then(d => setAiAuthStatus(d));
-                                  });
-                                }
-                              });
-                            }, 3000);
-                          }
-                        })
-                        .catch(err => setApiKeySaveStatus('Failed to initiate login: ' + err));
-                    }}
-                    className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
-                  >
-                    Login to Gemini
-                  </button>
+              {/* Table Columns */}
+              <BentoCard
+                icon="☰"
+                title="Table Columns"
+                blurb="Choose which columns appear in the Watch and Movers tables. Changes apply instantly."
+                className="col-span-1 md:col-span-2 lg:col-span-4"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-1.5 bg-black/30 border border-zinc-800/80 p-2.5 rounded">
+                    <span className="text-terminal-amber text-[10px] uppercase tracking-wider font-semibold">Watch table</span>
+                    <ColumnCheckboxes
+                      columns={WATCHLIST_COLUMNS}
+                      selected={watchlistCols}
+                      onChange={handleWatchlistChange}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5 bg-black/30 border border-zinc-800/80 p-2.5 rounded">
+                    <span className="text-terminal-amber text-[10px] uppercase tracking-wider font-semibold">Movers table</span>
+                    <ColumnCheckboxes
+                      columns={MOVERS_COLUMNS}
+                      selected={moversCols}
+                      onChange={handleMoversChange}
+                    />
+                  </div>
                 </div>
-              ) : aiProvider === 'codex' ? (
-                <div className="flex flex-col gap-1 mt-1">
-                  <span className="text-white/70 text-[10px]">Use your ChatGPT Plus/Pro subscription via the Codex backend — no API key needed.</span>
-                  {codexStatus?.logged_in ? (
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-terminal-green text-[10px]">✅ Signed in to Codex</span>
-                      <button
-                        type="button"
-                        onClick={handleCodexLogout}
-                        className="px-2 py-0.5 border border-terminal-border text-white/70 hover:text-white text-[10px] uppercase transition-colors"
-                      >
-                        Sign out
-                      </button>
+              </BentoCard>
+            </>
+          )}
+
+          {/* TAB 2: CONNECTIONS */}
+          {activeTab === 'connections' && (
+            <>
+              {/* Market Connection */}
+              <BentoCard
+                icon="⇄"
+                title="Market Connection"
+                blurb="Live socket health for market data, plus the broker bridge endpoint."
+                className="col-span-1 md:col-span-2 lg:col-span-2"
+              >
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full ${
+                        wsConnected ? 'bg-terminal-green' : 'bg-terminal-red'
+                      }`}
+                    />
+                    <span className={wsConnected ? 'text-terminal-green' : 'text-terminal-red'}>
+                      Market WS: {wsConnected ? 'CONNECTED' : 'DISCONNECTED'}
+                    </span>
+                  </div>
+                  {openAlgoAvailable && (
+                    <div className="text-white text-[10px]">
+                      OpenAlgo URL: {process.env.NEXT_PUBLIC_OPENALGO_URL ?? 'http://localhost:5000'}
                     </div>
-                  ) : codexLogin ? (
-                    <div className="flex flex-col gap-1 mt-1 border border-terminal-border p-2">
-                      <span className="text-white/70 text-[10px]">1. Open this URL in your browser:</span>
-                      <a href={codexLogin.verification_url} target="_blank" rel="noreferrer" className="text-terminal-amber text-[10px] underline break-all">
-                        {codexLogin.verification_url}
-                      </a>
-                      <span className="text-white/70 text-[10px]">2. Enter this code:</span>
-                      <span className="text-white font-mono text-lg font-bold tracking-widest">{codexLogin.user_code}</span>
-                      <span className="text-white/50 text-[10px] animate-pulse">Waiting for sign-in…</span>
+                  )}
+                </div>
+              </BentoCard>
+
+              {/* Account Funds */}
+              {openAlgoAvailable && funds && (
+                <BentoCard
+                  icon="₹"
+                  title="Account Funds"
+                  blurb="Live broker balances pulled via OpenAlgo. ORDER and POS use these for sizing and margin display."
+                  className="col-span-1 md:col-span-2 lg:col-span-2"
+                >
+                  <div className="flex flex-col gap-1">
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                      {[
+                        ['Available Cash', funds.availablecash],
+                        ['Collateral', funds.collateral],
+                        ['M2M Realized', funds.m2mrealized],
+                        ['M2M Unrealized', funds.m2munrealized],
+                        ['Utilised Debits', funds.utiliseddebits],
+                      ].map(([label, val]) => (
+                        <React.Fragment key={label}>
+                          <span className="text-white">{label}:</span>
+                          <span className="text-terminal-amber text-right">{val}</span>
+                        </React.Fragment>
+                      ))}
                     </div>
-                  ) : (
+                  </div>
+                </BentoCard>
+              )}
+            </>
+          )}
+
+          {/* TAB 3: INTELLIGENCE */}
+          {activeTab === 'intelligence' && (
+            <>
+              {/* Data Extraction & Privacy */}
+              <BentoCard
+                icon="◐"
+                title="Data Extraction & Privacy"
+                blurb="Controls whether the terminal may run headless browser automation to harvest deep fundamentals and premium news tokens. Safe Mode disables all external scraping."
+                badge={
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 font-mono ${
+                      scrapingConsent === true
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                        : scrapingConsent === null
+                        ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                        : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                    }`}
+                  >
+                    {scrapingConsent === true
+                      ? 'Advanced Extraction Active'
+                      : scrapingConsent === null
+                      ? 'Consent Required'
+                      : 'Safe Mode (Anonymous)'}
+                  </span>
+                }
+                className="col-span-1 md:col-span-2 lg:col-span-4"
+              >
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-[10px] text-white/60 leading-relaxed">
+                    When Advanced Extraction is enabled, the terminal operates generic headless automation on your behalf to harvest deep company fundamentals and premium news tokens. In Safe Mode, external scraping is disabled.
+                  </p>
+                  <div className="flex items-center gap-2 mt-1">
                     <button
                       type="button"
-                      onClick={handleCodexLoginStart}
-                      className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
+                      onClick={() => handleUpdateConsent(false)}
+                      disabled={scrapingConsent !== true}
+                      className={`px-3 py-1 text-[11px] font-mono rounded border transition ${
+                        scrapingConsent !== true
+                          ? 'bg-zinc-800/60 text-zinc-500 border-zinc-700/50 cursor-not-allowed opacity-60'
+                          : 'bg-zinc-800 text-zinc-300 border-zinc-600 hover:bg-zinc-700 hover:text-white cursor-pointer'
+                      }`}
                     >
-                      Sign in with ChatGPT
+                      Disable (Safe Mode)
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateConsent(true)}
+                      disabled={scrapingConsent === true}
+                      className={`px-3 py-1 text-[11px] font-mono rounded border transition ${
+                        scrapingConsent === true
+                          ? 'bg-zinc-800/60 text-zinc-500 border-zinc-700/50 cursor-not-allowed opacity-60'
+                          : 'bg-blue-600 text-white border-blue-500 hover:bg-blue-500 cursor-pointer font-semibold shadow-sm'
+                      }`}
+                    >
+                      Enable Advanced Extraction
+                    </button>
+                  </div>
+                  {consentSyncStatus && (
+                    <div className="text-[10px] text-terminal-amber animate-pulse mt-0.5">
+                      {consentSyncStatus}
+                    </div>
+                  )}
+                  {scrapingConsent === true && browserProvision && browserProvision.state !== 'ready' && (
+                    <div className="mt-1 rounded border border-zinc-700/60 bg-zinc-900/60 px-2.5 py-2 text-[10px] font-mono">
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={
+                            browserProvision.state === 'failed'
+                              ? 'text-red-400'
+                              : browserProvision.state === 'downloading'
+                              ? 'text-terminal-amber animate-pulse'
+                              : 'text-zinc-400'
+                          }
+                        >
+                          {browserProvision.state === 'downloading'
+                            ? `Downloading extraction browser${
+                                browserProvision.total > 0
+                                  ? ` — ${Math.round((browserProvision.downloaded / browserProvision.total) * 100)}%`
+                                  : '…'
+                              }`
+                            : browserProvision.state === 'failed'
+                            ? `Browser download failed${browserProvision.error ? `: ${browserProvision.error}` : ''}`
+                            : 'Extraction browser not installed yet — starting download…'}
+                        </span>
+                        {(browserProvision.state === 'failed' || browserProvision.state === 'missing') && (
+                          <button
+                            type="button"
+                            onClick={handleBrowserRetry}
+                            disabled={browserFetchBusy}
+                            className="shrink-0 px-2 py-0.5 rounded border border-blue-500 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-60 cursor-pointer"
+                          >
+                            {browserFetchBusy ? 'Starting…' : 'Retry'}
+                          </button>
+                        )}
+                      </div>
+                      {browserProvision.state === 'downloading' && browserProvision.total > 0 && (
+                        <div className="mt-1.5 h-1 rounded bg-zinc-800 overflow-hidden">
+                          <div
+                            className="h-full bg-terminal-amber transition-all"
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.round((browserProvision.downloaded / browserProvision.total) * 100),
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
-              ) : activeKeyBinding ? (
-                <label className="flex flex-col gap-0.5">
-                  <span className="text-white/70 text-[10px]">{activeKeyBinding.label}:</span>
-                  <input
-                    type="password"
-                    value={activeKeyBinding.value}
-                    onChange={(e) => {
-                      activeKeyBinding.set(e.target.value);
-                      scheduleSystemConfigSave(activeKeyBinding.dbKey, e.target.value);
-                    }}
-                    placeholder={activeKeyBinding.placeholder}
-                    className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-                  />
-                  {activeKeyBinding.hint && (
-                    <span className="text-white/50 text-[10px]">{activeKeyBinding.hint}</span>
+              </BentoCard>
+
+              {auth?.user?.is_admin && (
+                <>
+                  {/* OpenAlgo Configuration */}
+                  <BentoCard
+                    icon="⌁"
+                    title="OpenAlgo Configuration"
+                    blurb="Order-execution bridge. The URL points at your local OpenAlgo server; the key authenticates this terminal. Used by ORDER and POS."
+                    className="col-span-1 md:col-span-2 lg:col-span-2"
+                  >
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-col gap-1.5 text-xs">
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-white/70 text-[10px]">OpenAlgo URL:</span>
+                          <input
+                            type="text"
+                            value={openAlgoUrlInput}
+                            onChange={(e) => {
+                              setOpenAlgoUrlInput(e.target.value);
+                              scheduleSystemConfigSave('openalgo.url', e.target.value);
+                            }}
+                            placeholder="http://127.0.0.1:5000"
+                            className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                          />
+                          <span className="text-white/50 text-[10px]">Address of your local OpenAlgo server (order-execution bridge).</span>
+                        </label>
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
+                          <input
+                            type="password"
+                            value={openAlgoApiKeyInput}
+                            onChange={(e) => {
+                              setOpenAlgoApiKeyInput(e.target.value);
+                              scheduleSystemConfigSave('openalgo.api_key', e.target.value);
+                            }}
+                            placeholder="Enter OpenAlgo API key"
+                            className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                          />
+                          <span className="text-white/50 text-[10px]">From your OpenAlgo server config — authenticates order placement.</span>
+                        </label>
+                      </div>
+                    </div>
+                  </BentoCard>
+
+                  {/* AI Provider */}
+                  <BentoCard
+                    icon="✦"
+                    title="AI Provider"
+                    blurb="Engine behind AI chat, background picks and summaries. Keys save automatically as you type."
+                    badge={
+                      aiAuthStatus ? (
+                        <span className={aiAuthStatus.is_configured ? 'text-[10px] text-terminal-green' : 'text-[10px] text-terminal-red'}>
+                          {aiAuthStatus.is_configured ? '✅ Connected' : '❌ Not Connected'}
+                        </span>
+                      ) : undefined
+                    }
+                    className="col-span-1 md:col-span-2 lg:col-span-2"
+                  >
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-col gap-1.5 text-xs">
+                        <span className="text-white/50 text-[10px] leading-relaxed">
+                          Best results need a paid subscription or pay-as-you-go provider. Free models work well too depending on provider/model — Google AI Studio offers a free key.
+                        </span>
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-white/70 text-[10px]">Provider:</span>
+                          <select
+                            value={aiProvider}
+                            onChange={(e) => {
+                              setAiProvider(e.target.value);
+                              scheduleSystemConfigSave('ai.provider', e.target.value);
+                            }}
+                            className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                          >
+                            {AI_PROVIDERS.map((p) => (
+                              <option key={p.id} value={p.id}>{p.label}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        {aiProvider === 'gemini' ? (
+                          <div className="flex flex-col gap-1 mt-1">
+                            <span className="text-white/70 text-[10px]">Use your existing Google subscription via the Google Antigravity proxy — no API key needed.</span>
+                            <span className="text-white/70 text-[10px]">Gemini Authentication:</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                fetch('/api/py/auth/gemini/login')
+                                  .then(r => r.json())
+                                  .then(d => {
+                                    if (d.auth_url) {
+                                      window.open(d.auth_url, '_blank');
+                                      setApiKeySaveStatus('Awaiting Google OAuth... Check your browser.');
+                                      const interval = setInterval(() => {
+                                        fetch('/api/py/auth/gemini/status').then(r => r.json()).then(st => {
+                                          if (st.configured && st.has_refresh_token) {
+                                            clearInterval(interval);
+                                            setApiKeySaveStatus('Gemini Auth Successful!');
+                                            setTimeout(() => setApiKeySaveStatus(null), 3000);
+                                            fetch('/api/py/system-config/ai.provider', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'gemini' }) }).then(() => {
+                                              fetch('/api/py/ai/status').then(r => r.json()).then(d => setAiAuthStatus(d));
+                                            });
+                                          }
+                                        });
+                                      }, 3000);
+                                    }
+                                  })
+                                  .catch(err => setApiKeySaveStatus('Failed to initiate login: ' + err));
+                              }}
+                              className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
+                            >
+                              Login to Gemini
+                            </button>
+                          </div>
+                        ) : aiProvider === 'codex' ? (
+                          <div className="flex flex-col gap-1 mt-1">
+                            <span className="text-white/70 text-[10px]">Use your ChatGPT Plus/Pro subscription via the Codex backend — no API key needed.</span>
+                            {codexStatus?.logged_in ? (
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-terminal-green text-[10px]">✅ Signed in to Codex</span>
+                                <button
+                                  type="button"
+                                  onClick={handleCodexLogout}
+                                  className="px-2 py-0.5 border border-terminal-border text-white/70 hover:text-white text-[10px] uppercase transition-colors"
+                                >
+                                  Sign out
+                                </button>
+                              </div>
+                            ) : codexLogin ? (
+                              <div className="flex flex-col gap-1 mt-1 border border-terminal-border p-2">
+                                <span className="text-white/70 text-[10px]">1. Open this URL in your browser:</span>
+                                <a href={codexLogin.verification_url} target="_blank" rel="noreferrer" className="text-terminal-amber text-[10px] underline break-all">
+                                  {codexLogin.verification_url}
+                                </a>
+                                <span className="text-white/70 text-[10px]">2. Enter this code:</span>
+                                <span className="text-white font-mono text-lg font-bold tracking-widest">{codexLogin.user_code}</span>
+                                <span className="text-white/50 text-[10px] animate-pulse">Waiting for sign-in…</span>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={handleCodexLoginStart}
+                                className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
+                              >
+                                Sign in with ChatGPT
+                              </button>
+                            )}
+                          </div>
+                        ) : activeKeyBinding ? (
+                          <label className="flex flex-col gap-0.5">
+                            <span className="text-white/70 text-[10px]">{activeKeyBinding.label}:</span>
+                            <input
+                              type="password"
+                              value={activeKeyBinding.value}
+                              onChange={(e) => {
+                                activeKeyBinding.set(e.target.value);
+                                scheduleSystemConfigSave(activeKeyBinding.dbKey, e.target.value);
+                              }}
+                              placeholder={activeKeyBinding.placeholder}
+                              className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                            />
+                            {activeKeyBinding.hint && (
+                              <span className="text-white/50 text-[10px]">{activeKeyBinding.hint}</span>
+                            )}
+                          </label>
+                        ) : null}
+
+                        <AiProviderInstructions providerId={aiProvider} />
+                      </div>
+                    </div>
+                  </BentoCard>
+
+                  {/* Background Worker Models */}
+                  <BentoCard
+                    icon="◇"
+                    title="Background Worker Models"
+                    blurb="Models for the background AI-picks worker. The hunter scans the market; the verifier double-checks. Applies to future runs."
+                    className="col-span-1 md:col-span-2 lg:col-span-4"
+                  >
+                    <div className={`flex flex-col gap-2 ${!aiAuthStatus?.is_configured ? 'opacity-50 pointer-events-none' : ''}`}>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-white/70 text-[10px]">Hunter Model:</span>
+                          <select
+                            value={aiHunterModel}
+                            onChange={(e) => {
+                              setAiHunterModel(e.target.value);
+                              scheduleSystemConfigSave('ai.hunter_model', e.target.value);
+                            }}
+                            className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                          >
+                            <option value="">Select</option>
+                            {aiAvailableModels.map(m => (
+                              <option key={m.id} value={m.id}>{m.label}</option>
+                            ))}
+                          </select>
+                          <span className="text-white/50 text-[10px]">Scans the market for opportunities — pick a smarter, more capable model.</span>
+                        </label>
+
+                        <label className="flex flex-col gap-0.5">
+                          <span className="text-white/70 text-[10px]">Verifier Model:</span>
+                          <select
+                            value={aiVerifierModel}
+                            onChange={(e) => {
+                              setAiVerifierModel(e.target.value);
+                              scheduleSystemConfigSave('ai.verifier_model', e.target.value);
+                            }}
+                            className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+                          >
+                            <option value="">Select</option>
+                            {aiAvailableModels.map(m => (
+                              <option key={m.id} value={m.id}>{m.label}</option>
+                            ))}
+                          </select>
+                          <span className="text-white/50 text-[10px]">Double-checks the hunter's picks — a faster, less capable model is fine.</span>
+                        </label>
+                      </div>
+                    </div>
+                  </BentoCard>
+                </>
+              )}
+            </>
+          )}
+
+          {/* TAB 4: AUTOMATION */}
+          {activeTab === 'automation' && (
+            <>
+              {auth?.user?.is_admin ? (
+                <BentoCard
+                  icon="⚙"
+                  title="Global Scan Settings"
+                  blurb="Thresholds that trigger scanner alerts and notifications. Each field auto-saves and applies to future scans. Admin only."
+                  className="col-span-1 md:col-span-2 lg:col-span-4"
+                >
+                  <div className="flex flex-col gap-1">
+                    {configLoading ? (
+                      <div className="text-white">Loading...</div>
+                    ) : (
+                      <ThresholdInputs
+                        values={notifConfig}
+                        onChange={handleNotifConfigChange}
+                        disabled={configLoading}
+                      />
+                    )}
+                  </div>
+                </BentoCard>
+              ) : (
+                <BentoCard
+                  icon="⚙"
+                  title="Global Scan Settings"
+                  className="col-span-1 md:col-span-2 lg:col-span-4"
+                >
+                  <span className="text-white/50 text-[10px]">Admin access required to configure global scan thresholds.</span>
+                </BentoCard>
+              )}
+            </>
+          )}
+
+          {/* TAB 5: SYSTEM */}
+          {activeTab === 'system' && (
+            <>
+              {/* Watchlists Management */}
+              <BentoCard
+                icon="▤"
+                title="Watchlists"
+                blurb="Your symbol lists. The default list cannot be deleted. ● marks the active list."
+                className="col-span-1 md:col-span-2 lg:col-span-2"
+              >
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-0.5">
+                    {watchlists.map((wl) => (
+                      <div key={wl.id} className="flex items-center justify-between gap-2">
+                        <span className="text-white">
+                          {wl.name}
+                          {activeWatchlistId === wl.id && (
+                            <span className="ml-1 text-terminal-green text-[9px]">●</span>
+                          )}
+                        </span>
+                        {wl.id !== 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteWatchlist(wl.id, wl.name)}
+                            className="text-terminal-red hover:text-red-400 text-xs font-bold px-1"
+                            title="Delete watchlist"
+                          >
+                            ✕
+                          </button>
+                        )}
+                        {wl.id === 1 && (
+                          <span className="text-white/40 text-[9px]">default</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </BentoCard>
+
+              {/* Updates & Shortcuts */}
+              <BentoCard
+                icon="⌨"
+                title="Updates & Shortcuts"
+                blurb="Desktop updater and command-bar reference."
+                className="col-span-1 md:col-span-2 lg:col-span-2"
+              >
+                <div className="flex flex-col gap-2">
+                  {typeof window !== 'undefined' && window.electronAPI && (
+                    <div className="flex flex-col items-start gap-2 border-b border-terminal-gray/40 pb-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCheckForUpdates}
+                          className="px-2 py-1 text-[10px] bg-terminal-amber text-terminal-bg font-bold"
+                        >
+                          CHECK FOR UPDATES
+                        </button>
+                        {updaterStatus && (
+                          <span className="text-[10px] text-white/60">
+                            {updaterStatus === 'checking' && 'Checking...'}
+                            {updaterStatus === 'available' && 'Update available! Prompt shown.'}
+                            {updaterStatus === 'not-available' && 'App is up to date'}
+                            {updaterStatus === 'error' && 'Update check failed'}
+                            {updaterStatus === 'progress' && updaterProgress && `Downloading: ${Math.round(updaterProgress.percent)}%`}
+                            {updaterStatus === 'downloaded' && 'Update downloaded & ready'}
+                          </span>
+                        )}
+                      </div>
+                      {updateReady && (
+                        <button
+                          type="button"
+                          onClick={handleInstallUpdate}
+                          className="px-2 py-1 text-[10px] bg-terminal-green text-terminal-bg font-bold animate-pulse"
+                        >
+                          INSTALL & RESTART
+                        </button>
+                      )}
+                    </div>
                   )}
-                </label>
-              ) : null}
 
-              <AiProviderInstructions providerId={aiProvider} />
+                  <div className="text-white text-[10px]">
+                    Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS · PORTFOLIO
+                  </div>
+                  <div className="text-white text-[10px]">
+                    Layouts: :save &lt;name&gt; · :&lt;name&gt; to load
+                  </div>
+                  <div className="text-white text-[10px]">
+                    Press / or Escape to focus command bar
+                  </div>
+                  <div className="text-white text-[10px]">
+                    F1 = BUY · F2 = SELL (in ORDER widget)
+                  </div>
+                  {appVersion && (
+                    <div className="text-white/40 text-[10px] mt-1">
+                      v{appVersion}
+                    </div>
+                  )}
+                </div>
+              </BentoCard>
 
-              
-            </div>
-          </div>
-      </Section>
-
-      <Section
-        icon="◇"
-        title="Background Worker Models"
-        blurb="Models for the background AI-picks worker. The hunter scans the market; the verifier double-checks. Applies to future runs."
-      >
-          {/* AI Models Section */}
-          <div className={`flex flex-col gap-2 ${!aiAuthStatus?.is_configured ? 'opacity-50 pointer-events-none' : ''}`}>
-            <div className="flex flex-col gap-1.5 text-xs">
-              <label className="flex flex-col gap-0.5">
-                <span className="text-white/70 text-[10px]">Hunter Model:</span>
-                <select
-                  value={aiHunterModel}
-                  onChange={(e) => {
-                  setAiHunterModel(e.target.value);
-                  scheduleSystemConfigSave('ai.hunter_model', e.target.value);
-                }}
-                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
+              {/* Admin Links */}
+              {auth?.user?.is_admin && (
+                <BentoCard
+                  icon="⧉"
+                  title="Links"
+                  blurb="Jump to background task monitoring."
+                  className="col-span-1 md:col-span-2 lg:col-span-4"
                 >
-                  <option value="">Select</option>
-                  {aiAvailableModels.map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </select>
-                <span className="text-white/50 text-[10px]">Scans the market for opportunities — pick a smarter, more capable model.</span>
-              </label>
-
-              <label className="flex flex-col gap-0.5">
-                <span className="text-white/70 text-[10px]">Verifier Model:</span>
-                <select
-                  value={aiVerifierModel}
-                  onChange={(e) => {
-                  setAiVerifierModel(e.target.value);
-                  scheduleSystemConfigSave('ai.verifier_model', e.target.value);
-                }}
-                  className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
-                >
-                  <option value="">Select</option>
-                  {aiAvailableModels.map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </select>
-                <span className="text-white/50 text-[10px]">Double-checks the hunter's picks — a faster, less capable model is fine.</span>
-              </label>
-
-              
-            </div>
-          </div>
-      </Section>
-      </>
-      )}
-      </Group>
-
-      <Group id="sec-automation" title="Automation">
-      {auth?.user?.is_admin && (
-      <Section
-        icon="⚙"
-        title="Global Scan Settings"
-        blurb="Thresholds that trigger scanner alerts and notifications. Each field auto-saves and applies to future scans. Admin only."
-      >
-        <div className="flex flex-col gap-1">
-          {configLoading ? (
-            <div className="text-white">Loading...</div>
-          ) : (
-            <ThresholdInputs
-              values={notifConfig}
-              onChange={handleNotifConfigChange}
-              disabled={configLoading}
-            />
+                  <div className="flex flex-col gap-1">
+                    <Link
+                      href="/jobs"
+                      className="text-white hover:text-terminal-amber text-[10px] transition-colors"
+                    >
+                      → Jobs (background tasks)
+                    </Link>
+                  </div>
+                </BentoCard>
+              )}
+            </>
           )}
         </div>
-      </Section>
-      )}
-      </Group>
-
-      <Group id="sec-system" title="System">
-      <Section
-        icon="▤"
-        title="Watchlists"
-        blurb="Your symbol lists. The default list cannot be deleted. ● marks the active list."
-      >
-      {/* Watchlists Management */}
-      <div className="flex flex-col gap-1">
-        <div className="flex flex-col gap-0.5">
-          {watchlists.map((wl) => (
-            <div key={wl.id} className="flex items-center justify-between gap-2">
-              <span className="text-white">
-                {wl.name}
-                {activeWatchlistId === wl.id && (
-                  <span className="ml-1 text-terminal-green text-[9px]">●</span>
-                )}
-              </span>
-              {wl.id !== 1 && (
-                <button
-                  onClick={() => handleDeleteWatchlist(wl.id, wl.name)}
-                  className="text-terminal-red hover:text-red-400 text-xs font-bold px-1"
-                  title="Delete watchlist"
-                >
-                  ✕
-                </button>
-              )}
-              {wl.id === 1 && (
-                <span className="text-white/40 text-[9px]">default</span>
-              )}
-            </div>
-          ))}
-        </div>
       </div>
-      </Section>
-
-      {auth?.user?.is_admin && (
-      <Section icon="⧉" title="Links" blurb="Jump to background task monitoring.">
-      {/* Links (Admin Only) */}
-      <div className="flex flex-col gap-1">
-          <Link
-            href="/jobs"
-            className="text-white hover:text-terminal-amber text-[10px] transition-colors"
-          >
-            → Jobs (background tasks)
-          </Link>
-        </div>
-      </Section>
-      )}
-
-      <Section
-        icon="⌨"
-        title="Updates & Shortcuts"
-        defaultOpen={false}
-        blurb="Desktop updater and command-bar reference."
-      >
-      {/* Tips */}
-      <div className="flex flex-col gap-0.5 mt-auto">
-        
-        {typeof window !== 'undefined' && window.electronAPI && (
-          <div className="border-t border-terminal-gray pt-2 mt-2 mb-2 flex flex-col items-start gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleCheckForUpdates}
-                className="px-2 py-1 text-[10px] bg-terminal-amber text-terminal-bg font-bold"
-              >
-                CHECK FOR UPDATES
-              </button>
-              {updaterStatus && (
-                <span className="text-[10px] text-white/60">
-                  {updaterStatus === 'checking' && 'Checking...'}
-                  {updaterStatus === 'available' && 'Update available! Prompt shown.'}
-                  {updaterStatus === 'not-available' && 'App is up to date'}
-                  {updaterStatus === 'error' && 'Update check failed'}
-                  {updaterStatus === 'progress' && updaterProgress && `Downloading: ${Math.round(updaterProgress.percent)}%`}
-                  {updaterStatus === 'downloaded' && 'Update downloaded & ready'}
-                </span>
-              )}
-            </div>
-            {updateReady && (
-              <button
-                onClick={handleInstallUpdate}
-                className="px-2 py-1 text-[10px] bg-terminal-green text-terminal-bg font-bold animate-pulse"
-              >
-                INSTALL & RESTART
-              </button>
-            )}
-          </div>
-        )}
-
-        <div className="text-white text-[10px] border-t border-terminal-gray pt-2">
-          Commands: CHART · WATCH · ORDER · POS · TOP · SETTINGS · FDM · DEALS · LARGEDEALS · BREAKOUTS · NEWS · ANALYSIS · PORTFOLIO
-        </div>
-        <div className="text-white text-[10px]">
-          Layouts: :save &lt;name&gt; · :&lt;name&gt; to load
-        </div>
-        <div className="text-white text-[10px]">
-          Press / or Escape to focus command bar
-        </div>
-        <div className="text-white text-[10px]">
-          F1 = BUY · F2 = SELL (in ORDER widget)
-        </div>
-        {appVersion && (
-          <div className="text-white/40 text-[10px] mt-1">
-            v{appVersion}
-          </div>
-        )}
-      </div>
-      </Section>
-      </Group>
     </div>
   );
 }
