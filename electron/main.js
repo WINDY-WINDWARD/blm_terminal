@@ -406,17 +406,24 @@ async function startApp() {
     // Learn the ephemeral backend port from its stdout banner.
     const pythonPort = await new Promise((resolve, reject) => {
       let buf = '';
+      let portResolved = false;
       const timer = setTimeout(() => reject(new Error('backend did not report BLM_BACKEND_PORT in 120s')), 120000);
-      pythonProcess.stdout.on('data', (d) => {
+      
+      const onData = (d) => {
         const text = d.toString();
         log(`[python stdout]: ${text.trim()}`);
+        if (portResolved) return;
         buf += text;
         const m = /BLM_BACKEND_PORT=(\d+)/.exec(buf);
         if (m) {
+          portResolved = true;
+          buf = '';
           clearTimeout(timer);
           resolve(parseInt(m[1], 10));
         }
-      });
+      };
+
+      pythonProcess.stdout.on('data', onData);
       pythonProcess.on('exit', (code) => {
         clearTimeout(timer);
         reject(new Error(`backend exited before reporting port (code=${code})`));
@@ -474,12 +481,14 @@ async function startApp() {
     nextProcess.send({ type: 'license-token', token: launchToken });
     const nextPort = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Next.js did not report server-ready in 30s')), 30000);
-      nextProcess.on('message', (m) => {
+      const onMessage = (m) => {
         if (m && m.type === 'server-ready' && Number.isInteger(m.port)) {
           clearTimeout(timer);
+          nextProcess.removeListener('message', onMessage);
           resolve(m.port);
         }
-      });
+      };
+      nextProcess.on('message', onMessage);
       nextProcess.on('exit', (code) => {
         clearTimeout(timer);
         reject(new Error(`Next.js exited before reporting port (code=${code})`));
