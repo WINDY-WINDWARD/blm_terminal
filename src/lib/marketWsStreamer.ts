@@ -34,9 +34,7 @@ import {
   type RawNseSymbolData,
   type SymbolDataExtract,
 } from '@/lib/nseTypes';
-
-const PYTHON_BACKEND_URL =
-  process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 const ENDPOINT_SYMBOL_DATA = 'symbol-data';
 const ENDPOINT_CHANGE_RANGES = 'change-ranges';
@@ -117,9 +115,9 @@ async function fetchChangeRangesFromNse(symbol: string): Promise<ChangeRanges | 
 // ── Python backend fallbacks ──────────────────────────────────────────────
 
 async function fetchSymbolDataFromPython(symbol: string): Promise<SymbolDataExtract | null> {
-  const url = `${PYTHON_BACKEND_URL}/api/markets/symbol-data?symbol=${encodeURIComponent(symbol)}`;
+  const url = `${getPythonBackendUrl()}/api/markets/symbol-data?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
-    headers: { Accept: 'application/json' },
+    headers: getBackendForwardHeaders(null, { Accept: 'application/json' }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
@@ -133,9 +131,9 @@ async function fetchSymbolDataFromPython(symbol: string): Promise<SymbolDataExtr
 }
 
 async function fetchChangeRangesFromPython(symbol: string): Promise<ChangeRanges | null> {
-  const url = `${PYTHON_BACKEND_URL}/api/markets/change-ranges?symbol=${encodeURIComponent(symbol)}`;
+  const url = `${getPythonBackendUrl()}/api/markets/change-ranges?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
-    headers: { Accept: 'application/json' },
+    headers: getBackendForwardHeaders(null, { Accept: 'application/json' }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {

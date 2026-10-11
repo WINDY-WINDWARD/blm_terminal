@@ -599,11 +599,15 @@ async function startApp() {
         width: bounds.width || 900,
         height: bounds.height || 650,
         titleBarStyle: 'hidden',
-        titleBarOverlay: {
-          color: '#121212',
-          symbolColor: '#ffb000',
-          height: 32
-        },
+        ...(process.platform === 'darwin'
+          ? { trafficLightPosition: { x: 12, y: 9 } }
+          : {
+              titleBarOverlay: {
+                color: '#121212',
+                symbolColor: '#ffb000',
+                height: 32
+              }
+            }),
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
@@ -659,11 +663,15 @@ async function startApp() {
         width: 900,
         height: 520,
         titleBarStyle: 'hidden',
-        titleBarOverlay: {
-          color: '#121212',
-          symbolColor: '#ffb000',
-          height: 32
-        },
+        ...(process.platform === 'darwin'
+          ? { trafficLightPosition: { x: 12, y: 9 } }
+          : {
+              titleBarOverlay: {
+                color: '#121212',
+                symbolColor: '#ffb000',
+                height: 32
+              }
+            }),
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
@@ -765,11 +773,15 @@ async function startApp() {
         width: 1000,
         height: 700,
         titleBarStyle: 'hidden',
-        titleBarOverlay: {
-          color: '#121212',
-          symbolColor: '#ffb000',
-          height: 32
-        },
+        ...(process.platform === 'darwin'
+          ? { trafficLightPosition: { x: 12, y: 9 } }
+          : {
+              titleBarOverlay: {
+                color: '#121212',
+                symbolColor: '#ffb000',
+                height: 32
+              }
+            }),
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,

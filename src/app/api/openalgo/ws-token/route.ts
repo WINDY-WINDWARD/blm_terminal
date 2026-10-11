@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 /**
  * GET /api/openalgo/ws-token
@@ -8,14 +9,14 @@ import { NextRequest, NextResponse } from 'next/server';
  * 2. The API key is still only sent to authenticated users
  * 3. The key is still never stored in client-side environment files
  */
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
     let apiKey = process.env.OPENALGO_API_KEY;
 
     if (!apiKey) {
       try {
-        const pythonUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
-        const cfgRes = await fetch(`${pythonUrl}/api/system-config`, {
+        const cfgRes = await fetch(`${getPythonBackendUrl()}/api/system-config`, {
+          headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
           signal: AbortSignal.timeout(2000),
         });
         if (cfgRes.ok) {

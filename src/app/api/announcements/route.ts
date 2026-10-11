@@ -1,8 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 export const runtime = 'nodejs';
-
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
 
 export interface Announcement {
   title: string;
@@ -68,12 +67,12 @@ function parseRSS(xml: string): AnnouncementsResponse {
   return { items, lastBuild };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/announcements`, {
-      headers: {
+    const res = await fetch(`${getPythonBackendUrl()}/api/announcements`, {
+      headers: getBackendForwardHeaders(request, {
         accept: 'application/rss+xml, application/xml, text/xml',
-      },
+      }),
     });
 
     if (!res.ok) {

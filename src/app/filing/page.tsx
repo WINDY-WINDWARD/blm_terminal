@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useState, Suspense, type CSSProperties } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useIsMac } from '@/lib/usePlatform';
+import { cn } from '@/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -482,16 +484,26 @@ function FilingViewer() {
   }, [url]);
 
   const filenameFromUrl = url ? url.split('/').pop() ?? url : '';
+  const isMac = useIsMac();
 
   return (
     <div className="min-h-screen bg-terminal-bg text-white font-mono overflow-y-auto" style={{ height: '100vh', overflowY: 'auto' }}>
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-zinc-950 border-b border-terminal-gray/30 px-4 py-2 flex items-center gap-3">
+      <div
+        className={cn(
+          "sticky top-0 z-10 h-8 bg-zinc-950 border-b border-terminal-gray/30 flex items-center gap-3 select-none",
+          isMac ? "pl-20 pr-4" : "pl-4 pr-36"
+        )}
+        style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+      >
         <span className="text-terminal-amber font-semibold text-sm">NSE FILING VIEWER</span>
         <span className="text-white/30 text-xs hidden sm:block truncate max-w-xs" title={url}>
           {filenameFromUrl}
         </span>
-        <div className="ml-auto flex items-center gap-3">
+        <div
+          className="ml-auto flex items-center gap-3"
+          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
+        >
           {(state.status === 'xbrl' || state.status === 'tree') && (
             <button
               onClick={() => setShowRaw((v) => !v)}

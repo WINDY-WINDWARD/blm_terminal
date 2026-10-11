@@ -1,15 +1,13 @@
-import { NextResponse } from 'next/server';
-
+import { NextRequest, NextResponse } from 'next/server';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 import type { EventCalendarItem } from '../route';
 
 export const runtime = 'nodejs';
 
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
-
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/event-calendar/past`, {
-      headers: { accept: 'application/json' },
+    const res = await fetch(`${getPythonBackendUrl()}/api/event-calendar/past`, {
+      headers: getBackendForwardHeaders(request, { accept: 'application/json' }),
       next: { revalidate: 900 },
     });
 

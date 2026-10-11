@@ -4,6 +4,7 @@ import { cache } from '@/lib/cache';
 import { rateLimiter } from '@/lib/rate-limiter';
 import { logger } from '@/lib/logger';
 import { getCacheTtl } from '@/lib/api-config';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 const ENDPOINT_NAME = 'quotes';
 
@@ -20,15 +21,15 @@ interface QuoteData {
   oi?: number;
 }
 
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
 const FALLBACK_TIMEOUT_MS = 8000;
 
-async function fetchFromPythonBackend(symbol: string): Promise<QuoteData> {
+async function fetchFromPythonBackend(symbol: string, req?: NextRequest): Promise<QuoteData> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FALLBACK_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${PYTHON_BACKEND_URL}/api/market/symbol-data/${symbol}`, {
+    const response = await fetch(`${getPythonBackendUrl()}/api/market/symbol-data/${symbol}`, {
+      headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
       signal: controller.signal,
     });
 
@@ -118,7 +119,7 @@ export async function POST(req: NextRequest) {
     logger.warn(`OpenAlgo unavailable for quote (${symbol}/${exchange}): ${message}. Attempting fallback to Python backend.`);
 
     try {
-      const fallbackData = await fetchFromPythonBackend(symbol);
+      const fallbackData = await fetchFromPythonBackend(symbol, req);
       const result = { status: 'success', data: fallbackData };
 
       const cacheTtl = getCacheTtl('quotes');

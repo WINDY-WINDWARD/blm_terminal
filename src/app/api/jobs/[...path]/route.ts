@@ -1,20 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
-
-function forwardHeaders(req: NextRequest): Record<string, string> {
-  const headers: Record<string, string> = { accept: 'application/json' };
-  const cookie = req.headers.get('cookie');
-  if (cookie) headers['cookie'] = cookie;
-  const auth = req.headers.get('authorization');
-  if (auth) headers['authorization'] = auth;
-  return headers;
-}
-
-function forwardSetCookie(upstream: Response, res: NextResponse): void {
-  const setCookie = upstream.headers.get('set-cookie');
-  if (setCookie) res.headers.set('set-cookie', setCookie);
-}
+import { getPythonBackendUrl, getBackendForwardHeaders, forwardSetCookie } from '@/lib/backendUrl';
 
 export async function GET(
   request: NextRequest,
@@ -22,10 +7,12 @@ export async function GET(
 ) {
   const { path } = await params;
   const pathPart = path?.length ? `/${path.join('/')}` : '';
-  const url = `${PYTHON_BACKEND_URL}/api/jobs${pathPart}${request.nextUrl.search}`;
+  const url = `${getPythonBackendUrl()}/api/jobs${pathPart}${request.nextUrl.search}`;
 
   try {
-    const upstream = await fetch(url, { headers: forwardHeaders(request) });
+    const upstream = await fetch(url, {
+      headers: getBackendForwardHeaders(request, { accept: 'application/json' }),
+    });
     const data = await upstream.json();
     const res = NextResponse.json(data, { status: upstream.status });
     forwardSetCookie(upstream, res);
@@ -41,13 +28,16 @@ export async function POST(
 ) {
   const { path } = await params;
   const pathPart = path?.length ? `/${path.join('/')}` : '';
-  const url = `${PYTHON_BACKEND_URL}/api/jobs${pathPart}`;
+  const url = `${getPythonBackendUrl()}/api/jobs${pathPart}`;
 
   try {
     const body = await request.json().catch(() => ({}));
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: { ...forwardHeaders(request), 'content-type': 'application/json' },
+      headers: getBackendForwardHeaders(request, {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      }),
       body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined,
     });
     const data = await upstream.json().catch(() => ({ error: 'Invalid response' }));

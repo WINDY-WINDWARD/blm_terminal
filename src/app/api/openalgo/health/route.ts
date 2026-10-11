@@ -1,16 +1,17 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { logger } from '@/lib/logger';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   let url = process.env.OPENALGO_URL;
   let key = process.env.OPENALGO_API_KEY;
 
   if (!url || !key) {
     try {
-      const pythonUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
-      const cfgRes = await fetch(`${pythonUrl}/api/system-config`, {
+      const cfgRes = await fetch(`${getPythonBackendUrl()}/api/system-config`, {
+        headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
         signal: AbortSignal.timeout(2000),
       });
       if (cfgRes.ok) {

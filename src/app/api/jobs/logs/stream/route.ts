@@ -1,6 +1,5 @@
 import type { NextRequest } from 'next/server';
-
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,20 +11,17 @@ export const runtime = 'nodejs';
  */
 export async function GET(request: NextRequest) {
   const lines = request.nextUrl.searchParams.get('lines') ?? '200';
-  const upstreamUrl = `${PYTHON_BACKEND_URL}/api/jobs/logs/stream?lines=${lines}`;
+  const upstreamUrl = `${getPythonBackendUrl()}/api/jobs/logs/stream?lines=${lines}`;
 
-  const headers: Record<string, string> = {
+  const headers = getBackendForwardHeaders(request, {
     accept: 'text/event-stream',
-  };
-  const cookie = request.headers.get('cookie');
-  if (cookie) headers['cookie'] = cookie;
-  const auth = request.headers.get('authorization');
-  if (auth) headers['authorization'] = auth;
+  });
 
   let upstream: Response;
   try {
     upstream = await fetch(upstreamUrl, {
       headers,
+      cache: 'no-store',
       // @ts-expect-error – Node 18+ fetch supports duplex for streaming
       duplex: 'half',
     });

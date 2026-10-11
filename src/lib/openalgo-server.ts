@@ -4,6 +4,7 @@
 
 import { logger } from './logger';
 import { API_CONFIG } from './api-config';
+import { getPythonBackendUrl, getBackendForwardHeaders } from './backendUrl';
 
 // ─── Response Types (shared with client) ───────────────────────────────────
 
@@ -119,8 +120,8 @@ async function resolveOpenAlgoCredentials(): Promise<{ url: string; apiKey: stri
   const now = Date.now();
   if (!cachedOpenAlgoUrl || !cachedOpenAlgoApiKey || now - lastConfigFetchTime > 5000) {
     try {
-      const pythonUrl = process.env.PYTHON_BACKEND_URL || 'http://localhost:4455';
-      const res = await fetch(`${pythonUrl}/api/system-config`, {
+      const res = await fetch(`${getPythonBackendUrl()}/api/system-config`, {
+        headers: getBackendForwardHeaders(null, { accept: 'application/json' }),
         // Internal server call - bypass auth or use internal timeout
         signal: AbortSignal.timeout(2000),
       });

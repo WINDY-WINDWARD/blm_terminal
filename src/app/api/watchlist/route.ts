@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getPythonBackendUrl, getBackendForwardHeaders, forwardSetCookie } from '@/lib/backendUrl';
 
 export const runtime = 'nodejs';
-
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
 
 function getWatchlistIdParam(req: NextRequest): number | null {
   const watchlistIdParam = req.nextUrl.searchParams.get('watchlist_id');
@@ -11,33 +10,20 @@ function getWatchlistIdParam(req: NextRequest): number | null {
   return isNaN(watchlistId) ? null : watchlistId;
 }
 
-function forwardAuthHeaders(req: NextRequest): Record<string, string> {
-  const headers: Record<string, string> = { accept: 'application/json' };
-  const auth = req.headers.get('authorization');
-  if (auth) headers['authorization'] = auth;
-  const cookie = req.headers.get('cookie');
-  if (cookie) headers['cookie'] = cookie;
-  return headers;
-}
-
-function forwardSetCookie(upstream: Response, res: NextResponse): void {
-  const setCookie = upstream.headers.get('set-cookie');
-  if (setCookie) res.headers.set('set-cookie', setCookie);
-}
-
 // GET /api/watchlist — return watchlist items (optionally from specific watchlist)
 export async function GET(req: NextRequest) {
   try {
     const watchlistId = getWatchlistIdParam(req);
-    let url = `${BACKEND_URL}/api/watchlist`;
+    const backendUrl = getPythonBackendUrl();
+    let url = `${backendUrl}/api/watchlist`;
     
     // If watchlist_id is specified, use the new endpoint
     if (watchlistId !== null) {
-      url = `${BACKEND_URL}/api/watchlists/${watchlistId}/items`;
+      url = `${backendUrl}/api/watchlists/${watchlistId}/items`;
     }
     
     const upstream = await fetch(url, {
-      headers: forwardAuthHeaders(req),
+      headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
     });
     const data: unknown = await upstream.json();
     const res = NextResponse.json(data, { status: upstream.status });
@@ -54,16 +40,20 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const watchlistId = getWatchlistIdParam(req);
-    let url = `${BACKEND_URL}/api/watchlist`;
+    const backendUrl = getPythonBackendUrl();
+    let url = `${backendUrl}/api/watchlist`;
     
     // If watchlist_id is specified, use the new endpoint
     if (watchlistId !== null) {
-      url = `${BACKEND_URL}/api/watchlists/${watchlistId}/items`;
+      url = `${backendUrl}/api/watchlists/${watchlistId}/items`;
     }
     
     const upstream = await fetch(url, {
       method: 'POST',
-      headers: { ...forwardAuthHeaders(req), 'content-type': 'application/json' },
+      headers: getBackendForwardHeaders(req, {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      }),
       body: JSON.stringify(body),
     });
     const data: unknown = await upstream.json();
@@ -88,16 +78,17 @@ export async function DELETE(req: NextRequest) {
     }
 
     // Use the legacy endpoint for backward compatibility (defaults to watchlist_id=1)
-    let url = `${BACKEND_URL}/api/watchlist/${id}`;
+    const backendUrl = getPythonBackendUrl();
+    let url = `${backendUrl}/api/watchlist/${id}`;
     
     // If watchlist_id is specified, use the new endpoint
     if (watchlistId !== null) {
-      url = `${BACKEND_URL}/api/watchlists/${watchlistId}/items/${id}`;
+      url = `${backendUrl}/api/watchlists/${watchlistId}/items/${id}`;
     }
     
     const upstream = await fetch(url, {
       method: 'DELETE',
-      headers: forwardAuthHeaders(req),
+      headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
     });
     const data: unknown = await upstream.json();
     const res = NextResponse.json(data, { status: upstream.status });

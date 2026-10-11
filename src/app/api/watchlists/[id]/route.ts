@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getPythonBackendUrl, getBackendForwardHeaders, forwardSetCookie } from '@/lib/backendUrl';
 
 export const runtime = 'nodejs';
-
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
 
 // DELETE /api/watchlists/:id — delete watchlist
 export async function DELETE(
@@ -17,20 +16,13 @@ export async function DELETE(
       return NextResponse.json({ error: 'Invalid watchlist id' }, { status: 400 });
     }
 
-    const headers: Record<string, string> = { accept: 'application/json' };
-    const auth = req.headers.get('authorization');
-    if (auth) headers['authorization'] = auth;
-    const cookie = req.headers.get('cookie');
-    if (cookie) headers['cookie'] = cookie;
-
-    const upstream = await fetch(`${BACKEND_URL}/api/watchlists/${watchlistId}`, {
+    const upstream = await fetch(`${getPythonBackendUrl()}/api/watchlists/${watchlistId}`, {
       method: 'DELETE',
-      headers,
+      headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
     });
     const data: unknown = await upstream.json();
     const res = NextResponse.json(data, { status: upstream.status });
-    const setCookie = upstream.headers.get('set-cookie');
-    if (setCookie) res.headers.set('set-cookie', setCookie);
+    forwardSetCookie(upstream, res);
     return res;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';

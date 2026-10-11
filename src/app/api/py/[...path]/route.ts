@@ -50,7 +50,7 @@ async function proxyRequest(
   // edge before passing the request to Next.js. Never trust a client-supplied
   // value here — delete it first, then set the server-side one (if any).
   forwardHeaders.delete('x-blm-token')
-  const localToken = request.headers.get('x-blm-internal-token')
+  const localToken = request.headers.get('x-blm-internal-token') || process.env.BLM_LOCAL_TOKEN
   if (localToken) {
     forwardHeaders.set('x-blm-token', localToken)
   }

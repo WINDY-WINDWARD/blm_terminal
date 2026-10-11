@@ -1,8 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
 
 export const runtime = 'nodejs';
-
-const BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? 'http://localhost:4455';
 
 export interface EventCalendarItem {
   symbol: string;
@@ -14,10 +13,10 @@ export interface EventCalendarItem {
   attachment: string | null;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/event-calendar`, {
-      headers: { accept: 'application/json' },
+    const res = await fetch(`${getPythonBackendUrl()}/api/event-calendar`, {
+      headers: getBackendForwardHeaders(request, { accept: 'application/json' }),
       // Next.js fetch cache: revalidate every 15 minutes
       next: { revalidate: 900 },
     });

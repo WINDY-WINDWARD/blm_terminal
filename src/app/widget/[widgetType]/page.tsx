@@ -5,6 +5,8 @@ import { WidgetRenderer } from '@/components/WidgetRenderer';
 import { useSearchParams } from 'next/navigation';
 import { useSetAtom, useAtomValue } from 'jotai';
 import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom } from '@/store/terminalStore';
+import { useIsMac } from '@/lib/usePlatform';
+import { cn } from '@/lib/utils';
 
 export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetType: string }> }) {
   const unwrappedParams = use(params);
@@ -17,6 +19,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
 
   const [isRestoring, setIsRestoring] = useState(false);
   const pendingReqIdRef = useRef<string | null>(null);
+  const isMac = useIsMac();
 
   const originPanelId = searchParams.get('originPanelId') || 'panel-1';
   const widgetTitle = decodeURIComponent(unwrappedParams.widgetType).toUpperCase();
@@ -76,7 +79,10 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
     <div className="h-screen w-screen bg-terminal-bg text-terminal-amber font-mono overflow-hidden flex flex-col select-none">
       {/* Draggable Titlebar with Native Window Controls area offset */}
       <div 
-        className="h-8 bg-[#121212] border-b border-terminal-border flex items-center justify-between px-3 pr-36 shrink-0 select-none"
+        className={cn(
+          "h-8 bg-[#121212] border-b border-terminal-border flex items-center justify-between shrink-0 select-none",
+          isMac ? "pl-20 pr-3" : "pl-3 pr-36"
+        )}
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <div className="flex items-center gap-2">
