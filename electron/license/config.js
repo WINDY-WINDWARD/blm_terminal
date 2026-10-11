@@ -8,8 +8,12 @@ let baked = {};
 try {
   baked = require('../licenseConfig.js');
 } catch (e) {
-  // If it's genuinely missing, we fall back to an empty object
-  baked = {};
+  try {
+    baked = require('../../licenseConfig.js');
+  } catch {
+    // If it's genuinely missing, we fall back to an empty object
+    baked = {};
+  }
 }
 
 const { app } = require('electron');

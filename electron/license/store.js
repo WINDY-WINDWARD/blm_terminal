@@ -32,7 +32,11 @@ function writeRaw(obj) {
   const fp = filePath();
   let blob;
   if (safeStorage.isEncryptionAvailable()) {
-    blob = { v: 1, enc: safeStorage.encryptString(JSON.stringify(obj)).toString('base64') };
+    try {
+      blob = { v: 1, enc: safeStorage.encryptString(JSON.stringify(obj)).toString('base64') };
+    } catch {
+      blob = { v: 1, plain: obj };
+    }
   } else {
     blob = { v: 1, plain: obj };
   }

@@ -43,7 +43,9 @@ function showKeyWindow(prefill) {
       preload: path.join(__dirname, '..', 'licensePreload.js'),
     },
   });
-  keyWin.setMenu(null);
+  if (typeof keyWin.setMenu === 'function') {
+    keyWin.setMenu(null);
+  }
   keyWin.loadFile(path.join(__dirname, '..', 'licenseWindow.html'));
   if (prefill) {
     keyWin.webContents.once('did-finish-load', () => sendMsg(prefill.text, prefill.cls));

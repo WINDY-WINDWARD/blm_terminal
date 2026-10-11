@@ -9,6 +9,7 @@
   "buildDependenciesFromSource": false,
   "files": [
     "electron/**/*",
+    "licenseConfig.js",
     "server.js",
     "server/**/*",
     ".next/**/*",
@@ -16,12 +17,6 @@
     "!.next/dev/**/*",
     "public/**/*",
     "package.json"
-  ],
-  "extraResources": [
-    {
-      "from": "backend/dist/blm-backend.exe",
-      "to": "blm-backend/blm-backend.exe"
-    }
   ],
   "asar": true,
   "asarUnpack": [
@@ -35,6 +30,27 @@
       {
         "target": "nsis",
         "arch": ["x64"]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/blm-backend.exe",
+        "to": "blm-backend/blm-backend.exe"
+      }
+    ]
+  },
+  "mac": {
+    "icon": "electron/icon.png",
+    "category": "public.app-category.finance",
+    "target": [
+      {
+        "target": "dmg"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/blm-backend",
+        "to": "blm-backend"
       }
     ]
   },

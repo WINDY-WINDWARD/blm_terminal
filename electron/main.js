@@ -199,6 +199,13 @@ if (!gotTheLock) {
     startApp();
   });
 
+  app.on('activate', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
   app.on('window-all-closed', () => {
     // In desktop daemon mode, keep backend alive in system tray
   });
@@ -270,6 +277,33 @@ async function startApp() {
     }
     log(`License gate passed (key ${licKey === 'dev-no-key' ? 'not enforced in dev' : 'verified'})`);
     let lastVerifiedUpdate = null;
+
+    // Show splash window immediately while servers boot, so the user never
+    // stares at an empty desktop after activating their license.
+    let splashWindow = null;
+    try {
+      splashWindow = new BrowserWindow({
+        width: 420,
+        height: 300,
+        title: "BLM Terminal",
+        frame: false,
+        alwaysOnTop: true,
+        resizable: false,
+        show: true,
+        icon: path.join(__dirname, process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+        webPreferences: { nodeIntegration: false, contextIsolation: true }
+      });
+      splashWindow.loadFile(path.join(__dirname, 'splash.html'));
+    } catch (e) {
+      log(`Splash window creation failed (non-fatal): ${e.message}`);
+      splashWindow = null;
+    }
+    const closeSplash = () => {
+      try {
+        if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+      } catch {}
+      splashWindow = null;
+    };
     
     // Dynamic port for Python backend, fixed default port (with fallback) for Next.js
     // IMPORTANT: Next.js frontend origin MUST remain consistent (e.g. http://127.0.0.1:4400)
@@ -311,8 +345,10 @@ async function startApp() {
       );
       pythonArgs = [path.join(app.getAppPath(), 'backend', 'main.py')];
     } else {
-      // Packaged app path — electron-builder.json places exe at blm-backend/blm-backend.exe
-      pythonCmd = path.join(process.resourcesPath, 'blm-backend', 'blm-backend.exe');
+      // Packaged app path — electron-builder.json places binary at blm-backend/blm-backend(.exe)
+      const isWindows = process.platform === 'win32';
+      const binName = isWindows ? 'blm-backend.exe' : 'blm-backend';
+      pythonCmd = path.join(process.resourcesPath, 'blm-backend', binName);
     }
 
     log(`Python cmd: ${pythonCmd}  exists=${fs.existsSync(pythonCmd)}`);
@@ -347,11 +383,17 @@ async function startApp() {
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
         SECRET_KEY: 'desktop_terminal_local_secret_key_123456789'
       },
-      stdio: ['pipe', 'pipe', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     });
 
     log(`Python process spawned — pid=${pythonProcess.pid}`);
+
+    if (pythonProcess.stderr) {
+      pythonProcess.stderr.on('data', (d) => {
+        log(`[python stderr]: ${d.toString().trim()}`);
+      });
+    }
 
     // Deliver the launch token over stdin (one line), then close stdin.
     try {
@@ -364,9 +406,11 @@ async function startApp() {
     // Learn the ephemeral backend port from its stdout banner.
     const pythonPort = await new Promise((resolve, reject) => {
       let buf = '';
-      const timer = setTimeout(() => reject(new Error('backend did not report BLM_BACKEND_PORT in 30s')), 30000);
+      const timer = setTimeout(() => reject(new Error('backend did not report BLM_BACKEND_PORT in 120s')), 120000);
       pythonProcess.stdout.on('data', (d) => {
-        buf += d.toString();
+        const text = d.toString();
+        log(`[python stdout]: ${text.trim()}`);
+        buf += text;
         const m = /BLM_BACKEND_PORT=(\d+)/.exec(buf);
         if (m) {
           clearTimeout(timer);
@@ -484,34 +528,7 @@ async function startApp() {
       log(`Token injection armed for ${origins.join(', ')}`);
     }
 
-    // 4. Splash window — visible immediately while servers boot, so the
-    // user never stares at a blank window or a raw Chromium error page.
-    let splashWindow = null;
-    try {
-      splashWindow = new BrowserWindow({
-        width: 420,
-        height: 300,
-        title: "BLM Terminal",
-        frame: false,
-        alwaysOnTop: true,
-        resizable: false,
-        show: true,
-        icon: path.join(__dirname, 'icon.ico'),
-        webPreferences: { nodeIntegration: false, contextIsolation: true }
-      });
-      splashWindow.loadFile(path.join(__dirname, 'splash.html'));
-    } catch (e) {
-      log(`Splash window creation failed (non-fatal): ${e.message}`);
-      splashWindow = null;
-    }
-    const closeSplash = () => {
-      try {
-        if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
-      } catch {}
-      splashWindow = null;
-    };
-
-    // 5. Create Main Window (hidden until its first paint is ready)
+    // 4. Create Main Window (hidden until its first paint is ready)
     const savedBounds = loadMainBounds();
     const targetUrl = `http://127.0.0.1:${nextPort}`;
     let loadAttempts = 0;
@@ -522,7 +539,7 @@ async function startApp() {
       title: "BLM Terminal",
       autoHideMenuBar: true,
       show: false,
-      icon: path.join(__dirname, 'icon.ico'),
+      icon: path.join(__dirname, process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -798,10 +815,13 @@ async function startApp() {
     // 5. System Tray Integration
     try {
       let icon;
-      const iconPath = path.join(__dirname, 'icon.ico');
+      const iconPath = path.join(__dirname, process.platform === 'win32' ? 'icon.ico' : 'icon.png');
       try {
         icon = nativeImage.createFromPath(iconPath);
         if (icon.isEmpty()) throw new Error('empty icon');
+        if (process.platform === 'darwin') {
+          icon = icon.resize({ width: 18, height: 18 });
+        }
       } catch {
         icon = nativeImage.createEmpty();
       }
@@ -1001,7 +1021,7 @@ async function startApp() {
     }
 
   } catch (error) {
-    console.error('App failed to start:', error);
+    log(`App failed to start: ${error?.stack || error?.message || error}`);
     app.quit();
   }
 }
