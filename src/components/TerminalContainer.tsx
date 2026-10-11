@@ -37,13 +37,13 @@ function isTextInputFocused(): boolean {
 }
 
 const VALID_WIDGETS = [
-  'TOP',
+  'TOP', 'COMPANY',
   'POS',
   'CHART',
   'WATCH',
   'SETTINGS',
-  'FDM',
-  'DEALS',
+  
+  
   'LARGEDEALS',
   'BREAKOUTS',
   'NEWS',

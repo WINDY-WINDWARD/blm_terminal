@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAtom } from 'jotai';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   activeExchangeAtom,
   activeSymbolAtom,
@@ -24,7 +24,7 @@ interface NewsPaginatedResponse {
   source_used?: 'iinvest' | 'moneycontrol' | 'merged' | null;
 }
 
-type Tab = 'global' | 'company';
+
 const PAGE_LIMIT = 50;
 const ENTITY_CHIP_LIMIT = 3;
 
@@ -503,42 +503,39 @@ function TabButton({
 }
 
 export function NewsWidget() {
-  const [symbol, setActiveSymbol] = useAtom(activeSymbolAtom);
+  const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const [wsConnected, setWsConnected] = useAtom(newsWsConnectedAtom);
   const [liveArticles, setLiveArticles] = useAtom(liveNewsArticlesAtom);
   const [filters, setFilters] = useAtom(newsFiltersAtom);
 
-  const [activeTab, setActiveTab] = useState<Tab>('global');
   const [globalOffset, setGlobalOffset] = useState(0);
-  const [companyOffset, setCompanyOffset] = useState(0);
-  const [companySource, setCompanySource] = useState<'auto' | 'iinvest' | 'moneycontrol' | 'merged'>('merged');
-  const [localSearch, setLocalSearch] = useState(filters.searchQuery || '');
+  const [localSearch, setLocalSearch] = useState(filters.searchQuery || "");
   const [scrapingConsent] = useAtom(advancedScrapingConsentAtom);
   const [showNudge, setShowNudge] = useState(false);
-  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (scrapingConsent === false) {
-      setShowNudge(true);
-      const timer = setTimeout(() => {
+      const showTimer = setTimeout(() => setShowNudge(true), 0);
+      const hideTimer = setTimeout(() => {
         setShowNudge(false);
       }, 5000);
-      return () => clearTimeout(timer);
+      return () => {
+        clearTimeout(showTimer);
+        clearTimeout(hideTimer);
+      };
     }
   }, [scrapingConsent]);
-  
+
   useEffect(() => {
     const t = setTimeout(() => {
-      if ((filters.searchQuery || '') !== localSearch) {
-        setFilters(prev => ({ ...prev, searchQuery: localSearch }));
+      if ((filters.searchQuery || "") !== localSearch) {
+        setFilters((prev) => ({ ...prev, searchQuery: localSearch }));
         setGlobalOffset(0);
-        setCompanyOffset(0);
       }
     }, 400);
     return () => clearTimeout(t);
   }, [localSearch, filters.searchQuery, setFilters]);
-
 
   useEffect(() => {
     newsSocketService.connect();
@@ -565,34 +562,12 @@ export function NewsWidget() {
     };
   }, [setLiveArticles, setWsConnected]);
 
-  const handleTabChange = (tab: Tab) => {
-    setActiveTab(tab);
-    if (tab === 'global') setGlobalOffset(0);
-    if (tab === 'company') setCompanyOffset(0);
-  };
-
-  const handleRefresh = async () => {
-    await queryClient.cancelQueries({ queryKey: ['news/company', symbol] });
-    await fetch('/api/py/news/company', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol }),
-    });
-    // Force upstream re-fetch (bypasses the 2h iinvest sync cache) before refetching.
-    const sq = filters.searchQuery ? `&q=${encodeURIComponent(filters.searchQuery)}` : '';
-    await fetch(
-      `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=0&source=${effectiveCompanySource}${sq}&refresh=true`,
-    );
-    setCompanyOffset(0);
-    await queryClient.refetchQueries({ queryKey: ['news/company', symbol] });
-  };
-
   const {
     data: globalData,
-    isLoading: globalLoading,
-    error: globalError,
+    isLoading,
+    error,
   } = useQuery<NewsPaginatedResponse>({
-    queryKey: ['news/all', { limit: PAGE_LIMIT, offset: globalOffset, filters }],
+    queryKey: ["news/all", { limit: PAGE_LIMIT, offset: globalOffset, filters }],
     queryFn: async () => {
       const params = new URLSearchParams({
         limit: String(PAGE_LIMIT),
@@ -601,78 +576,34 @@ export function NewsWidget() {
       const allSourceIds = Object.keys(SOURCE_LABELS);
       const excludedSources = filters.excludedSources || [];
       if (excludedSources.length > 0) {
-        const included = allSourceIds.filter(s => !excludedSources.includes(s));
+        const included = allSourceIds.filter((s) => !excludedSources.includes(s));
         if (included.length > 0) {
-          params.set('sources', included.join(','));
+          params.set("sources", included.join(","));
         } else {
-          // If all are excluded, fetch something that matches nothing, or just pass an invalid source
-          params.set('sources', 'NONE');
+          params.set("sources", "NONE");
         }
       }
-      if (filters.searchQuery) params.set('q', filters.searchQuery);
-      if (filters.sentiment) params.set('sentiment', filters.sentiment);
-      if (filters.threatLevel) params.set('threat_level', filters.threatLevel);
+      if (filters.searchQuery) params.set("q", filters.searchQuery);
+      if (filters.sentiment) params.set("sentiment", filters.sentiment);
+      if (filters.threatLevel) params.set("threat_level", filters.threatLevel);
       const res = await fetch(`/api/py/news/all?${params.toString()}`);
-      if (!res.ok) throw new Error('Failed to fetch global news');
+      if (!res.ok) throw new Error("Failed to fetch global news");
       return res.json() as Promise<NewsPaginatedResponse>;
     },
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
-    enabled: activeTab === 'global',
   });
 
-  const effectiveCompanySource =
-    scrapingConsent === false && (companySource === 'iinvest' || companySource === 'auto')
-      ? 'moneycontrol'
-      : companySource;
-
-  const {
-    data: companyData,
-    isLoading: companyLoading,
-    isFetching: companyFetching,
-    error: companyError,
-  } = useQuery<NewsPaginatedResponse>({
-    queryKey: ['news/company', symbol, { limit: PAGE_LIMIT, offset: companyOffset, source: effectiveCompanySource }],
-    queryFn: async () => {
-      const sq = filters.searchQuery ? `&q=${encodeURIComponent(filters.searchQuery)}` : '';
-      const res = await fetch(
-        `/api/py/news/company/${encodeURIComponent(symbol)}?limit=${PAGE_LIMIT}&offset=${companyOffset}&source=${effectiveCompanySource}${sq}`,
-      );
-      if (res.status === 404) {
-        const postRes = await fetch('/api/py/news/company', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol }),
-        });
-        if (!postRes.ok) {
-          throw new Error('Failed to fetch company news');
-        }
-        return postRes.json() as Promise<NewsPaginatedResponse>;
-      }
-      if (!res.ok) throw new Error('Failed to fetch company news');
-      return res.json() as Promise<NewsPaginatedResponse>;
-    },
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-    enabled: activeTab === 'company' && !!symbol,
-    retry: false,
-  });
-
-  const isLoading = activeTab === 'global' ? globalLoading : companyLoading;
-  const isRefreshing = activeTab === 'company' && companyFetching && !companyLoading;
-  const error = activeTab === 'global' ? globalError : companyError;
-
-  const currentData = activeTab === 'global' ? globalData : companyData;
-  const dbArticles = currentData?.articles || [];
-  const currentOffset = activeTab === 'global' ? globalOffset : companyOffset;
-  const setOffset = activeTab === 'global' ? setGlobalOffset : setCompanyOffset;
+  const dbArticles = globalData?.articles || [];
+  const currentOffset = globalOffset;
+  const setOffset = setGlobalOffset;
 
   const filteredLiveArticles = useCallback(() => {
     return liveArticles.filter((a) => matchesFilters(a, filters));
   }, [liveArticles, filters])();
 
-  const totalCount = currentData?.total ?? 0;
-  const hasMore = currentData?.has_more || false;
+  const totalCount = globalData?.total ?? 0;
+  const hasMore = globalData?.has_more || false;
 
   const handlePrevPage = () => {
     setOffset((prev: number) => Math.max(0, prev - PAGE_LIMIT));
@@ -686,27 +617,30 @@ export function NewsWidget() {
 
   const handleSourceFilterChange = (excludedSources: string[]) => {
     setFilters((prev) => ({ ...prev, excludedSources }));
-    setGlobalOffset(0); // reset to page 1 whenever filters change
+    setGlobalOffset(0);
   };
 
-  const handleTickerClick = useCallback(async (ticker: string) => {
-    const normalizedTicker = normalizeTicker(ticker);
-    if (!normalizedTicker) return;
+  const handleTickerClick = useCallback(
+    async (ticker: string) => {
+      const normalizedTicker = normalizeTicker(ticker);
+      if (!normalizedTicker) return;
 
-    try {
-      const res = await fetch(`/api/py/stockuniverse/search/${encodeURIComponent(normalizedTicker)}`);
-      if (!res.ok) return;
+      try {
+        const res = await fetch(`/api/py/stockuniverse/search/${encodeURIComponent(normalizedTicker)}`);
+        if (!res.ok) return;
 
-      const data = (await res.json()) as Array<{ symbol?: string; exchange?: string }>;
-      const match = data.find((item) => normalizeTicker(item.symbol || '') === normalizedTicker);
-      if (!match?.symbol) return;
+        const data = (await res.json()) as Array<{ symbol?: string; exchange?: string }>;
+        const match = data.find((item) => normalizeTicker(item.symbol || "") === normalizedTicker);
+        if (!match?.symbol) return;
 
-      setActiveSymbol(match.symbol);
-      setActiveExchange(match.exchange || 'NSE');
-    } catch {
-      // Ignore lookup failures so news browsing remains uninterrupted.
-    }
-  }, [setActiveExchange, setActiveSymbol]);
+        setActiveSymbol(match.symbol);
+        setActiveExchange(match.exchange || "NSE");
+      } catch {
+        // Ignore lookup failures so news browsing remains uninterrupted.
+      }
+    },
+    [setActiveExchange, setActiveSymbol]
+  );
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden">
@@ -721,72 +655,24 @@ export function NewsWidget() {
       </div>
       <div className="flex border-b border-terminal-gray shrink-0">
         <TabButton
-          active={activeTab === 'global'}
-          onClick={() => handleTabChange('global')}
+          active={true}
+          onClick={() => undefined}
           label="Global"
-          live={wsConnected && activeTab === 'global'}
+          live={wsConnected}
         />
-        <TabButton
-          active={activeTab === 'company'}
-          onClick={() => handleTabChange('company')}
-          label="Company"
-        />
-        {activeTab === 'company' && symbol && (
-          <span className="ml-auto flex items-center gap-2 pr-1 py-1 text-[10px] text-terminal-amber">
-            <span>{symbol}</span>
-            <select
-              value={companySource}
-              onChange={(e) => {
-                setCompanySource(e.target.value as typeof companySource);
-                setCompanyOffset(0);
-              }}
-              className="bg-zinc-800 text-terminal-amber border border-zinc-700 rounded px-1 py-0.5 text-[10px] font-mono"
-              title="News source: auto (iinvest primary, MC fallback for deep history)"
-            >
-              <option value="auto">Source: auto</option>
-              <option value="iinvest">Source: iinvest</option>
-              <option value="moneycontrol">Source: MoneyControl</option>
-              <option value="merged">Source: merged</option>
-            </select>
-            <button
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="p-0.5 hover:bg-zinc-700 rounded disabled:opacity-40 transition-opacity"
-              title="Force refresh"
-            >
-              <svg
-                viewBox="0 0 16 16"
-                width="10"
-                height="10"
-                fill="currentColor"
-                className={isRefreshing ? 'animate-spin' : ''}
-              >
-                <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 1 1 .908-.418A6 6 0 1 1 8 2v1z" />
-                <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z" />
-              </svg>
-            </button>
-          </span>
-        )}
       </div>
 
-      {activeTab === 'global' && (
-        <SourceFilterChips
-          excluded={filters.excludedSources || []}
-          onChange={handleSourceFilterChange}
-        />
-      )}
+      <SourceFilterChips
+        excluded={filters.excludedSources || []}
+        onChange={handleSourceFilterChange}
+      />
 
       <div className="flex-1 overflow-auto">
         {isLoading ? (
           <div className="h-full w-full flex flex-col items-center justify-center gap-1">
             <span className="text-terminal-amber/60 animate-pulse text-[10px]">
-              {activeTab === 'company' && !symbol
-                ? 'SELECT A SYMBOL'
-                : 'LOADING NEWS...'}
+              LOADING NEWS...
             </span>
-            {activeTab === 'company' && symbol && (
-              <span className="text-white/40 text-[10px]">{symbol}</span>
-            )}
           </div>
         ) : error ? (
           <div className="h-full w-full flex flex-col items-center justify-center gap-1 px-4 text-center">
@@ -794,18 +680,12 @@ export function NewsWidget() {
               Error
             </span>
             <span className="text-white/60 text-[10px]">
-              {error instanceof Error ? error.message : 'Unknown error'}
-            </span>
-          </div>
-        ) : !symbol && activeTab === 'company' ? (
-          <div className="h-full w-full flex items-center justify-center">
-            <span className="text-white/40 text-[10px]">
-              Select a symbol to view company news
+              {error instanceof Error ? error.message : "Unknown error"}
             </span>
           </div>
         ) : (
           <div className="flex flex-col h-full">
-            {activeTab === 'global' && filteredLiveArticles.length > 0 && (
+            {filteredLiveArticles.length > 0 && (
               <div className="border-b border-terminal-gray/40 pb-1">
                 <div className="text-[9px] text-green-500 px-2 pt-1 flex items-center gap-1">
                   <span className="inline-flex h-1.5 w-1.5 rounded-full bg-green-500"></span>
@@ -813,7 +693,7 @@ export function NewsWidget() {
                 </div>
                 {filteredLiveArticles.slice(0, 5).map((article) => (
                   <ArticleRow
-                    key={article.url + '_live'}
+                    key={article.url + "_live"}
                     article={article}
                     onTickerClick={handleTickerClick}
                   />
@@ -825,16 +705,16 @@ export function NewsWidget() {
                 <div className="h-full w-full flex items-center justify-center">
                   <span className="text-white/40 text-[10px]">No articles found</span>
                 </div>
-                ) : (
-                  dbArticles.map((article, idx) => (
-                    <ArticleRow
-                      key={article.url + idx}
-                      article={article}
-                      onTickerClick={handleTickerClick}
-                    />
-                  ))
-                )}
-              </div>
+              ) : (
+                dbArticles.map((article, idx) => (
+                  <ArticleRow
+                    key={article.url + idx}
+                    article={article}
+                    onTickerClick={handleTickerClick}
+                  />
+                ))
+              )}
+            </div>
             {dbArticles.length > 0 && (
               <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
                 <button
@@ -847,14 +727,6 @@ export function NewsWidget() {
                 <span className="font-mono">
                   {currentOffset + 1}–{Math.min(currentOffset + dbArticles.length, totalCount)} of {totalCount}
                 </span>
-                {activeTab === 'company' && currentData?.source_used && (
-                  <span
-                    className="ml-2 px-1.5 py-0.5 text-[9px] uppercase font-mono border border-terminal-amber/50 text-terminal-amber rounded"
-                    title="Which backend source delivered these articles"
-                  >
-                    {currentData.source_used}
-                  </span>
-                )}
                 <button
                   onClick={handleNextPage}
                   disabled={!hasMore}

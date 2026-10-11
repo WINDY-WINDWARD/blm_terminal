@@ -392,3 +392,157 @@ def test_loop_no_candidates_no_batches(monkeypatch):
 
     assert calls["batch_after"] == []
     assert total == {"processed": 0, "enriched": 0, "skipped": 0, "failed": 0}
+
+
+def test_calculate_piotroski_score_all_positive():
+    from bs4 import BeautifulSoup
+    from app.services.screener_client import _calculate_piotroski_score
+
+    sample_html = """
+    <html><body>
+    <section id="profit-loss">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th><th>TTM</th></tr></thead>
+        <tbody>
+          <tr><td>Sales+</td><td>1000</td><td>1200</td><td>1300</td></tr>
+          <tr><td>OPM %</td><td>15%</td><td>18%</td><td>19%</td></tr>
+          <tr><td>Net Profit+</td><td>100</td><td>150</td><td>160</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="balance-sheet">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Equity Capital</td><td>50</td><td>50</td></tr>
+          <tr><td>Borrowings+</td><td>200</td><td>180</td></tr>
+          <tr><td>Other Liabilities+</td><td>100</td><td>90</td></tr>
+          <tr><td>Other Assets+</td><td>300</td><td>320</td></tr>
+          <tr><td>Total Assets</td><td>800</td><td>900</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="cash-flow">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Cash from Operating Activity+</td><td>120</td><td>180</td></tr>
+        </tbody>
+      </table>
+    </section>
+    </body></html>
+    """
+    soup = BeautifulSoup(sample_html, "lxml")
+    score = _calculate_piotroski_score(soup)
+    assert score == 9.0
+
+
+def test_calculate_piotroski_score_all_weak():
+    from bs4 import BeautifulSoup
+    from app.services.screener_client import _calculate_piotroski_score
+
+    sample_html_weak = """
+    <html><body>
+    <section id="profit-loss">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Sales+</td><td>1000</td><td>800</td></tr>
+          <tr><td>OPM %</td><td>15%</td><td>10%</td></tr>
+          <tr><td>Net Profit+</td><td>50</td><td>-50</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="balance-sheet">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Equity Capital</td><td>50</td><td>100</td></tr>
+          <tr><td>Borrowings+</td><td>100</td><td>400</td></tr>
+          <tr><td>Other Liabilities+</td><td>50</td><td>200</td></tr>
+          <tr><td>Other Assets+</td><td>300</td><td>200</td></tr>
+          <tr><td>Total Assets</td><td>800</td><td>800</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="cash-flow">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Cash from Operating Activity+</td><td>50</td><td>-100</td></tr>
+        </tbody>
+      </table>
+    </section>
+    </body></html>
+    """
+    soup = BeautifulSoup(sample_html_weak, "lxml")
+    score = _calculate_piotroski_score(soup)
+    assert score == 0.0
+
+
+def test_calculate_piotroski_score_insufficient_periods():
+    from bs4 import BeautifulSoup
+    from app.services.screener_client import _calculate_piotroski_score
+
+    html = """
+    <html><body>
+    <section id="profit-loss">
+      <table>
+        <thead><tr><th></th><th>Mar 2024</th></tr></thead>
+        <tbody><tr><td>Net Profit</td><td>100</td></tr></tbody>
+      </table>
+    </section>
+    <section id="balance-sheet">
+      <table>
+        <thead><tr><th></th><th>Mar 2024</th></tr></thead>
+        <tbody><tr><td>Total Assets</td><td>500</td></tr></tbody>
+      </table>
+    </section>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "lxml")
+    assert _calculate_piotroski_score(soup) is None
+
+
+def test_parse_company_page_populates_piotroski_score():
+    from app.services.screener_client import _parse_company_page
+
+    sample_html = """
+    <html><body>
+    <h1><span>Tata Consultancy Services</span></h1>
+    <section id="profit-loss">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Sales</td><td>1000</td><td>1200</td></tr>
+          <tr><td>OPM %</td><td>15%</td><td>18%</td></tr>
+          <tr><td>Net Profit</td><td>100</td><td>150</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="balance-sheet">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Equity Capital</td><td>50</td><td>50</td></tr>
+          <tr><td>Borrowings</td><td>0</td><td>0</td></tr>
+          <tr><td>Other Liabilities</td><td>100</td><td>90</td></tr>
+          <tr><td>Other Assets</td><td>300</td><td>320</td></tr>
+          <tr><td>Total Assets</td><td>800</td><td>900</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="cash-flow">
+      <table>
+        <thead><tr><th></th><th>Mar 2023</th><th>Mar 2024</th></tr></thead>
+        <tbody>
+          <tr><td>Cash from Operating Activity</td><td>120</td><td>180</td></tr>
+        </tbody>
+      </table>
+    </section>
+    </body></html>
+    """
+    parsed = _parse_company_page("TCS", sample_html)
+    assert "ratios" in parsed
+    assert "piotroski_score" in parsed["ratios"]
+    assert parsed["ratios"]["piotroski_score"] == "9.00"

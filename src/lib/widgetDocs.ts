@@ -226,7 +226,7 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'How to use',
         items: [
-          'Click a row to set the global active symbol (updates CHART, ORDER, FDM).',
+          'Click a row to set the global active symbol (updates CHART, ORDER, COMPANY).',
           'Click the ALERTS badge to jump to filtered notifications for that symbol.',
           'Switch watchlists using the dropdown in the header.',
           'Columns can be configured in SETTINGS.',
@@ -379,122 +379,33 @@ const DOCS_MAP: WidgetDoc[] = [
     ],
   },
 
-  // ── FDM ────────────────────────────────────────────────────────────────────
+  // ── COMPANY ────────────────────────────────────────────────────────────────
   {
-    command: 'FDM',
-    title: 'Fundamentals',
+    command: 'COMPANY',
+    title: 'Company Overview & Fundamentals',
     summary:
-      'Key fundamental ratios and recent quarterly financial results for the active symbol, sourced from Screener.in with NSE ratios and iinvest enrichment as fallbacks.',
+      'Unified single-stock intelligence dashboard with 5 tabs: Fundamentals (Bento Matrix), Deals, News, Alerts, and Corporate disclosures.',
     sections: [
       {
         heading: 'What it shows',
-        body: 'Valuation multiples, profitability ratios, and the last 4 quarters of revenue/profit data. Uses consolidated financials by default.',
+        body: 'Consolidates all company-specific fundamental, regulatory, and qualitative analysis for the active symbol into one 5-tab interface. The Fundamentals tab utilizes a high-density Bento Matrix layout.',
       },
       {
-        heading: 'Key ratios',
+        heading: 'Tabs & Capabilities',
         items: [
-          { name: 'P/E', desc: 'Price-to-Earnings. How many years of current earnings you pay at today\'s price. Compare within sector.' },
-          { name: 'P/B', desc: 'Price-to-Book. Market value vs. accounting book value. High P/B means market expects strong ROE.' },
-          { name: 'ROE', desc: 'Return on Equity. Net profit as % of shareholder equity. >15% is generally healthy.' },
-          { name: 'ROCE', desc: 'Return on Capital Employed. Broader than ROE — includes debt. Indicates capital efficiency.' },
-          { name: 'Debt/Equity', desc: 'Total debt relative to equity. High D/E amplifies both gains and losses.' },
-          { name: 'Sales Growth', desc: 'Year-on-year revenue growth. Proxy for business momentum.' },
-          { name: 'Promoter Holding', desc: '% of shares held by promoters. Declining promoter stake warrants scrutiny.' },
+          { name: 'Fundamentals', desc: 'Bento Matrix layout displaying Industry Context, TradingView panel, 11 core ratios, Piotroski score, Peter Lynch valuation, Intrinsic Valuation Matrix (DCF/DDM/PEG), and Quarterly Financial Performance.' },
+          { name: 'Deals', desc: 'Insider trades, bulk deals, block deals, shareholding pattern, pledged shares, and SAST disclosures from Screener and iInvest.' },
+          { name: 'News', desc: 'Company-specific news stream with sentiment scoring, threat categories, and article reading.' },
+          { name: 'Alerts', desc: 'Real-time technical alerts and notifications filtered specifically for the active stock symbol.' },
+          { name: 'Corporate', desc: 'Official regulatory filings, corporate announcements, board meetings, dividends, legal litigation, and capital structure history.' },
         ] as DocField[],
       },
       {
-        heading: 'Quarterly results',
+        heading: 'Trading workflow tips',
         items: [
-          { name: 'Net Sales', desc: 'Revenue for the quarter. Growing QoQ + YoY is positive.' },
-          { name: 'Net Profit', desc: 'Bottom-line profit. Watch for one-off items inflating/deflating numbers.' },
-          { name: 'OPM%', desc: 'Operating profit margin. Stable or expanding margin = pricing power.' },
-        ] as DocField[],
-      },
-      {
-        heading: 'Calculated Ratios',
-        items: [
-          { name: 'Piotroski Score', desc: '9-point quality score. ≥7 = strong, 4–6 = average, <4 = weak.' },
-          { name: 'Peter Lynch FV', desc: 'Fair value from EPS growth × EPS. Compare to current price.' },
-          { name: 'Peter Lynch FV Ratio', desc: '(EPS Growth + Div Yield) / P/E. >1.0 suggests undervaluation.' },
-          { name: 'MS Fair Value', desc: 'Morningstar fair value estimate when available.' },
-        ] as DocField[],
-      },
-      {
-        heading: 'Valuation Columns',
-        items: [
-          { name: 'Model', desc: 'The valuation methodology being applied.' },
-          { name: 'Fair Value', desc: 'The intrinsic value price per share calculated by the model.' },
-          { name: 'vs CMP', desc: 'The percentage difference between the computed Fair Value and the Current Market Price. Positive indicates potential upside.' },
-          { name: 'Signal', desc: 'Categorization based on upside: UNDERVALUED (>+15% upside), FAIR (±15%), or OVERVALUED (<-15% upside).' },
-        ] as DocField[],
-      },
-      {
-        heading: 'Valuation Models',
-        items: [
-          { name: 'Graham Number', desc: '√(22.5 × EPS × Book Value). Conservative floor price from screener.in or computed.' },
-          { name: 'DCF (10Y)', desc: 'Discounted cash flow with 2-stage growth. Requires FCF; auto-growth from revenue/earnings growth.' },
-          { name: 'DDM', desc: 'Dividend Discount Model. Only shown when dividend > 0.' },
-          { name: 'EV/EBITDA', desc: 'Enterprise value at sector median multiple. Uses screener EBITDA when available.' },
-          { name: 'PEG Fair Value', desc: 'Forward EPS × earnings growth rate (Lynch rule).' },
-        ] as DocField[],
-      },
-      {
-        heading: 'Valuation Controls',
-        items: [
-          { name: 'Weighted Average Cost of Capital', desc: 'The discount rate applied to future cash flows. A higher WACC reflects higher risk and lowers the present fair value.' },
-          { name: 'Terminal Growth Rate', desc: 'The perpetual growth rate of cash flows after the 10-year forecast period. Changing these triggers a live re-calculation.' },
-        ] as DocField[],
-      },
-      {
-        heading: 'Data sources & enrichment',
-        items: [
-          { name: 'Screener.in', desc: 'Primary source for ratios, quarterly results, and valuation inputs. Needs a session; ~1-day lag.' },
-          { name: 'NSE Market Ratios', desc: '4 of 10 core ratios (P/E, sector P/E, 52W high/low) from NSE GetQuoteApi — no session needed, shown when screener is unavailable.' },
-          { name: 'iinvest Enrichment (6 sections)', desc: 'Announcements, board meetings, corporate actions, legal cases, capital history, and key ratios from iinvest. Requires Advanced Extraction consent (Safe Mode disables it); authenticated automatically with a guest JWT. Sections render only while the token is live.' },
-        ] as DocField[],
-      },
-      {
-        heading: 'How to use',
-        items: [
-          'Compare P/E and ROCE against sector peers for context.',
-          'Declining margins QoQ despite rising revenue can be an early warning.',
-          'Screener.in data has a ~1-day lag; not suitable for intraday decisions.',
-          'Valuation models use screener.in data first; yfinance fills gaps for FCF, forward EPS, and shares outstanding.',
-          'Not all models compute for every stock — DDM requires dividends, DCF requires FCF.',
-        ],
-      },
-    ],
-  },
-
-  // ── DEALS ──────────────────────────────────────────────────────────────────
-  {
-    command: 'DEALS',
-    title: 'Bulk & Block Deals',
-    summary:
-      'Historical bulk and block deal records from NSE, searchable by symbol and date range.',
-    sections: [
-      {
-        heading: 'What it shows',
-        body: 'Bulk deals (≥0.5% of shares in one session) and block deals (large negotiated trades via the block window). Sourced from Screener.in historical data.',
-      },
-      {
-        heading: 'Fields',
-        items: [
-          { name: 'Date', desc: 'Date of the deal.' },
-          { name: 'Symbol', desc: 'NSE ticker.' },
-          { name: 'Client', desc: 'Entity name (buyer or seller). Institutions and FIIs are significant.' },
-          { name: 'Buy/Sell', desc: 'Direction of the trade from the reported client\'s perspective.' },
-          { name: 'Qty', desc: 'Number of shares transacted.' },
-          { name: 'Price', desc: 'Deal execution price.' },
-          { name: 'Value (₹ Cr)', desc: 'Total deal value. Larger values carry more signal weight.' },
-        ] as DocField[],
-      },
-      {
-        heading: 'How to use',
-        items: [
-          'Institutional buys in bulk/block deals signal conviction — especially if the buying continues across sessions.',
-          'Check if the deal price is at a premium or discount to market — block deals at premium = urgency to buy.',
-          'Repeated selling by promoters in bulk deals is a red flag.',
+          'Use /COMPANY to access all qualitative and fundamental metrics for the active symbol in one consolidated window.',
+          'Adjust WACC and Terminal Growth directly inside the Valuation Matrix to recalculate DCF models live.',
+          'Switch to the Corporate tab to inspect statutory board meetings, dividend actions, and legal dispute disclosures.',
         ],
       },
     ],
@@ -524,7 +435,7 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           'Use as a discovery tool — find stocks with institutional activity you may not be tracking.',
           'Filter by deal type to focus on insider activity vs. institutional deals.',
-          'Click a symbol to set it globally and deep-dive with CHART or FDM.',
+          'Click a symbol to set it globally and deep-dive with CHART or COMPANY.',
         ],
       },
     ],
@@ -559,7 +470,7 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           '52W highs with expanding volume are the most reliable breakout candidates.',
           '52W lows with contracting volume + reversal candles may signal a bottom.',
-          'Cross-reference with FDM — a 52W high on strong fundamentals is higher conviction.',
+          'Cross-reference with COMPANY — a 52W high on strong fundamentals is higher conviction.',
         ],
       },
     ],
@@ -657,7 +568,7 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           'Trade with the sector tailwind — a bullish sector amplifies individual stock moves.',
           'A/D ratio below 0.5 in your stock\'s sector signals broad weakness; raises the bar for longs.',
-          'Expand a sector to see constituent stocks; clicking a company name sets it as the global active symbol (CHART, ORDER, FDM follow).',
+          'Expand a sector to see constituent stocks; clicking a company name sets it as the global active symbol (CHART, ORDER, COMPANY follow).',
           'Click a heatmap tile to open that category\'s stock table in a modal (Esc/backdrop closes).',
           'Name column keeps a 160px floor; narrow panels scroll horizontally (header scrolls with rows).',
           'If every market cap shows —, the universe has not synced yet: trigger market_caps or fundamentals from the Jobs page.',
@@ -779,7 +690,7 @@ const DOCS_MAP: WidgetDoc[] = [
         items: [
           'Use SCAN to discover stocks generating signals that are not in your watchlist.',
           'Filter to high-conviction trigger types: 52w_high_breakout + volume_breakout together are stronger than either alone.',
-          'Click a symbol to set it globally — cross-reference with FDM, DEALS, and NEWS before acting.',
+          'Click a symbol to set it globally — cross-reference with COMPANY and NEWS before acting.',
           'iinvest-backed enrichment needs Advanced Extraction consent: with consent, guest login supplies the token automatically (no browser needed).',
           'SCAN data is 30 minutes old — validate with current price and volume in CHART.',
         ],

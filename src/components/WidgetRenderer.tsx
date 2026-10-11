@@ -4,11 +4,10 @@ import React from 'react';
 import { MoversWidget } from './widgets/MoversWidget';
 import { PosWidget } from './widgets/PosWidget';
 import { OrderWidget } from './widgets/OrderWidget';
+import { CompanyWidget } from './widgets/CompanyWidget';
 import { ChartWidget } from './widgets/ChartWidget';
 import { WatchWidget } from './widgets/WatchWidget';
 import { SettingsWidget } from './widgets/SettingsWidget';
-import { FundamentalsWidget } from './widgets/FundamentalsWidget';
-import { DealsWidget } from './widgets/DealsWidget';
 import { LargedealsWidget } from './widgets/LargedealsWidget';
 import { BreakoutsWidget } from './widgets/BreakoutsWidget';
 import { NewsWidget } from './widgets/NewsWidget';
@@ -33,12 +32,12 @@ export function WidgetRenderer({ title, panelId }: WidgetRendererProps) {
     case 'TOP':      return <MoversWidget />;
     case 'POS':      return <PosWidget />;
     case 'ORDER':    return <OrderWidget panelId={panelId} />;
+    case 'COMPANY':
+      return <CompanyWidget />;
     case 'CHART':    return <ChartWidget panelId={panelId} />;
     case 'WATCH':    return <WatchWidget />;
     case 'SETTINGS': return <SettingsWidget />;
-    case 'FDM':      return <FundamentalsWidget />;
-    case 'DEALS':    return <DealsWidget />;
-    case 'LARGEDEALS': return <LargedealsWidget />;
+            case 'LARGEDEALS': return <LargedealsWidget />;
     case 'BREAKOUTS': return <BreakoutsWidget />;
     case 'NEWS':     return <NewsWidget />;
     case 'ANALYSIS': return <AnalysisWidget />;

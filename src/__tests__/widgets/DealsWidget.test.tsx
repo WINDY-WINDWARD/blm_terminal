@@ -139,179 +139,33 @@ afterEach(() => {
   fetchSpy?.mockRestore();
 });
 
-import { DealsWidget } from '@/components/widgets/DealsWidget';
+import { DealsTab } from '@/components/widgets/CompanyTabs/DealsTab';
+import { ShareholdingTable } from '@/components/widgets/CompanyTabs/ShareholdingTable';
+import { IinvestGenericTable, type IinvestColumn } from '@/components/widgets/CompanyTabs/IinvestGenericTable';
 
 const renderWithSymbol = (symbol = 'RELIANCE') => {
-  return render(<DealsWidget />, {
+  return render(<DealsTab symbol={symbol} />, {
     wrapperProps: { initialAtomValues: [[activeSymbolAtom, symbol]] },
   });
 };
 
-describe('DealsWidget — iinvest tabs', () => {
-  it('renders all 6 tabs (Insider, Bulk, Block, Pledged, Shareholding, SAST)', async () => {
+describe('DealsWidget — deals and trades tabs', () => {
+  it('renders all 4 deals tabs (Insider, Bulk, Block, SAST) and excludes Pledged and Shareholding', async () => {
     renderWithSymbol();
 
     await waitFor(() => {
       expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
     });
 
-    // Existing screener tabs
+    // Screener & iinvest deals tabs
     expect(screen.getByText(/^Bulk$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Block$/i)).toBeInTheDocument();
-    // New iinvest tabs
-    expect(screen.getByText(/^Pledged$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Shareholding$/i)).toBeInTheDocument();
     expect(screen.getByText(/^SAST$/i)).toBeInTheDocument();
+
+    // Pledged and Shareholding are strictly moved to FundamentalsTab
+    expect(screen.queryByText(/^Pledged$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Shareholding$/i)).not.toBeInTheDocument();
   });
-
-  it('Pledged tab shows iinvest data', async () => {
-    renderWithSymbol();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
-    });
-
-    const user = userEvent.setup();
-    await user.click(screen.getByText(/^Pledged$/i));
-
-    await waitFor(() => {
-      // "Promoter" matches both the "Promoter Name" header AND the data cell;
-      // use getAllByText to assert at least one exists.
-      expect(screen.getAllByText(/Promoter/).length).toBeGreaterThan(0);
-      // Number formatter — 100000 → 1,00,000 (en-IN)
-      expect(screen.getByText(/1,00,000/)).toBeInTheDocument();
-    });
-  });
-
-  it('Shareholding tab renders rows from the real iinvest data shape (array header + dict rows with {per,val})', async () => {
-    renderWithSymbol();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
-    });
-
-    const user = userEvent.setup();
-    await user.click(screen.getByText(/^Shareholding$/i));
-
-    await waitFor(() => {
-      // The header row drives the column labels. The mocked data has
-      // Mar-26, Dec-25, Sep-25 as quarter columns. The header stacks the
-      // month ("Mar") above the year ("26") with a "% Holding | No of
-      // Shares" sub-label, so the text appears in two sibling divs.
-      expect(screen.getAllByText('Mar-26')[0]).toBeInTheDocument();
-      expect(screen.getAllByText('Dec-25')[0]).toBeInTheDocument();
-      // Top-level GROUPS render as expandable section headers
-      expect(screen.getByText(/Promoter and Promoter Group/i)).toBeInTheDocument();
-      expect(screen.getByText(/Public Group/i)).toBeInTheDocument();
-      // Holders are rendered by their Description
-      expect(screen.getByText(/Vinay Kumar/i)).toBeInTheDocument();
-      expect(screen.getByText(/Abhay Soi/i)).toBeInTheDocument();
-      // The {per, val} dict is unwrapped — we render the percent as "51.82"
-      // (no % suffix; the column header already labels this as "% Holding")
-      // and the share count as "4,08,50,367" (en-IN formatting). The percent
-      // appears in multiple quarter cells, so use getAllByText.
-      expect(screen.getAllByText(/^51\.82$/).length).toBeGreaterThan(0);
-      // The share count uses Indian number formatting (en-IN): 40850367 → 4,08,50,367
-      // (same value appears in multiple quarter cells, use getAllByText)
-      expect(screen.getAllByText(/4,08,50,367/).length).toBeGreaterThan(0);
-    });
-  });
-
-  it('Shareholding tab expands top-level groups by default and shows their child holders indented', async () => {
-    renderWithSymbol();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
-    });
-
-    const user = userEvent.setup();
-    await user.click(screen.getByText(/^Shareholding$/i));
-
-    await waitFor(() => {
-      // Children of the Promoter group are visible by default (expanded)
-      // AND should be rendered with indentation (different visual class).
-      const vinay = screen.getByText(/Vinay Kumar/i);
-      expect(vinay).toBeInTheDocument();
-      // Children of the Public group also visible
-      expect(screen.getByText(/Abhay Soi/i)).toBeInTheDocument();
-      // Holders with all-null per/val are DROPPED from the expanded view
-      // to reduce noise (they're tracked at the group aggregate level only).
-      expect(screen.queryByText(/Smallcap World Fund/i)).not.toBeInTheDocument();
-    });
-  });
-
-  it('Shareholding tab: clicking a group header collapses its children', async () => {
-    renderWithSymbol();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
-    });
-
-    const user = userEvent.setup();
-    await user.click(screen.getByText(/^Shareholding$/i));
-
-    await waitFor(() => {
-      // Sanity: Vinay Kumar (child of Promoter) is visible initially
-      expect(screen.getByText(/Vinay Kumar/i)).toBeInTheDocument();
-    });
-
-    // Click the Promoter group header to collapse it
-    await user.click(screen.getByText(/Promoter and Promoter Group/i));
-
-    // After collapse, Vinay Kumar should no longer be in the document
-    await waitFor(() => {
-      expect(screen.queryByText(/Vinay Kumar/i)).not.toBeInTheDocument();
-    });
-    // The Public group is still expanded (its own state)
-    expect(screen.getByText(/Abhay Soi/i)).toBeInTheDocument();
-  });
-
-  it('Shareholding tab: when a group is collapsed, the group header shows aggregate % and share totals for its children', async () => {
-    renderWithSymbol();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
-    });
-
-    const user = userEvent.setup();
-    await user.click(screen.getByText(/^Shareholding$/i));
-
-    // Collapse the Promoter group
-    await waitFor(() => {
-      expect(screen.getByText(/Vinay Kumar/i)).toBeInTheDocument();
-    });
-    await user.click(screen.getByText(/Promoter and Promoter Group/i));
-
-    // After collapse, the Promoter header row should show the SUM of its
-    // children: 51.82 + 11.36 = 63.18 (for Mar-26).
-    await waitFor(() => {
-      // The aggregate is shown inline in the group header cell.
-      const groupHeader = screen.getByTestId('shareholding-group-501');
-      expect(groupHeader).toBeInTheDocument();
-      expect(groupHeader.textContent).toMatch(/63\.18/);
-    });
-  });
-
-  it('Shareholding tab: when a group is expanded, holders with no data (per:null) are dropped from the children list', async () => {
-    renderWithSymbol();
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Insider$/i)).toBeInTheDocument();
-    });
-
-    const user = userEvent.setup();
-    await user.click(screen.getByText(/^Shareholding$/i));
-
-    await waitFor(() => {
-      // Holders with real data ARE visible
-      expect(screen.getByText(/Abhay Soi/i)).toBeInTheDocument();
-    });
-
-    // The "Smallcap World Fund" row (per:null) should NOT be visible —
-    // we drop empty rows from expanded children to reduce noise.
-    expect(screen.queryByText(/Smallcap World Fund/i)).not.toBeInTheDocument();
-  });
-
   it('SAST tab renders human-readable column headers from columns[].displayName, not raw f_* codes', async () => {
     renderWithSymbol();
 
@@ -468,6 +322,78 @@ describe('DealsWidget — iinvest tabs', () => {
       const tableRows = screen.getAllByRole('row');
       // 1 header row + N data rows. Assert N >= 1 (any data).
       expect(tableRows.length).toBeGreaterThan(1);
+    });
+  });
+});
+
+describe('IinvestGenericTable', () => {
+  it('renders table columns and formatted data', () => {
+    render(
+      <IinvestGenericTable
+        data={mockPledgedShares.response.data}
+        columns={mockPledgedShares.response.columns as IinvestColumn[]}
+        emptyMsg="No pledged shares"
+      />,
+    );
+    expect(screen.getAllByText(/Promoter/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/1,00,000/)).toBeInTheDocument();
+  });
+});
+
+describe('ShareholdingTable', () => {
+  it('renders quarter columns, group headers with aggregate totals, and starts with groups collapsed', async () => {
+    render(<ShareholdingTable data={realKeyShareholders.response.data} />);
+
+    // Quarter header labels
+    expect(screen.getAllByText('Mar-26')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('Dec-25')[0]).toBeInTheDocument();
+
+    // Top-level groups render
+    expect(screen.getByText(/Promoter and Promoter Group/i)).toBeInTheDocument();
+    expect(screen.getByText(/Public Group/i)).toBeInTheDocument();
+
+    // Groups are collapsed by default: children are NOT visible yet
+    expect(screen.queryByText(/Vinay Kumar/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Abhay Soi/i)).not.toBeInTheDocument();
+
+    // Group header displays aggregate % (63.18) even when collapsed
+    const groupHeader = screen.getByTestId('shareholding-group-501');
+    expect(groupHeader).toBeInTheDocument();
+    expect(groupHeader.textContent).toMatch(/63.18/);
+  });
+
+  it('expands group on click to show child holders with values, filtering out empty rows', async () => {
+    render(<ShareholdingTable data={realKeyShareholders.response.data} />);
+
+    const user = userEvent.setup();
+    const promoterHeader = screen.getByText(/Promoter and Promoter Group/i);
+
+    // Expand Promoter group
+    await user.click(promoterHeader);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Vinay Kumar/i)).toBeInTheDocument();
+      expect(screen.getByText(/Ajay Kumar/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/^51.82$/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/4,08,50,367/).length).toBeGreaterThan(0);
+    });
+
+    // Expand Public group
+    const publicHeader = screen.getByText(/Public Group/i);
+    await user.click(publicHeader);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Abhay Soi/i)).toBeInTheDocument();
+      expect(screen.getByText(/New World Fund Inc/i)).toBeInTheDocument();
+    });
+
+    // Empty holder row (Smallcap World Fund with per:null) is dropped from expanded children
+    expect(screen.queryByText(/Smallcap World Fund/i)).not.toBeInTheDocument();
+
+    // Clicking group header again collapses it
+    await user.click(promoterHeader);
+    await waitFor(() => {
+      expect(screen.queryByText(/Vinay Kumar/i)).not.toBeInTheDocument();
     });
   });
 });

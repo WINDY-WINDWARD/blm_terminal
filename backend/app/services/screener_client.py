@@ -678,23 +678,34 @@ class ScreenerClient:
         cache_key = f"screener:company:{symbol_upper}:{mode_str}"
         cached = await get_cached_json(cache_key)
         if cached:
-            logger.debug(f"Screener company persistent cache hit for {symbol_upper}")
-            return cached
+            if cached.get("ratios", {}).get("piotroski_score") is not None:
+                logger.debug(f"Screener company persistent cache hit for {symbol_upper}")
+                return cached
+            logger.info("Cached screener data lacks piotroski_score, refreshing for %s", symbol_upper)
 
-        html = await self.get_company_html(symbol, consolidated=consolidated)
+        try:
+            html = await self.get_company_html(symbol, consolidated=consolidated)
+            parsed = _parse_company_page(symbol_upper, html)
 
-        parsed = _parse_company_page(symbol_upper, html)
+            warehouse_id = parsed.get("screener_warehouse_id")
+            if warehouse_id:
+                quick_ratios = await self._fetch_quick_ratios(warehouse_id)
+                if quick_ratios:
+                    existing_ratios = parsed.get("ratios", {})
+                    merged_ratios = {**existing_ratios, **quick_ratios}
+                    parsed["ratios"] = merged_ratios
 
-        warehouse_id = parsed.get("screener_warehouse_id")
-        if warehouse_id:
-            quick_ratios = await self._fetch_quick_ratios(warehouse_id)
-            if quick_ratios:
-                existing_ratios = parsed.get("ratios", {})
-                merged_ratios = {**existing_ratios, **quick_ratios}
-                parsed["ratios"] = merged_ratios
-
-        await set_cached_json(cache_key, parsed, ttl_hours=24)
-        return parsed
+            await set_cached_json(cache_key, parsed, ttl_hours=24)
+            return parsed
+        except Exception as exc:
+            if cached:
+                logger.warning(
+                    "Failed to refresh screener for %s, falling back to cached: %s",
+                    symbol_upper,
+                    exc,
+                )
+                return cached
+            raise
 
     async def get_trades(self, warehouse_id: str) -> dict[str, Any]:
         """
@@ -856,6 +867,143 @@ def _parse_shareholding(soup: BeautifulSoup) -> list[dict[str, Any]]:
     return results
 
 
+def _calculate_piotroski_score(soup: BeautifulSoup) -> float | None:
+    """
+    Calculate the 9-point Piotroski F-Score deterministically from Screener's
+    public financial statement tables (#profit-loss, #balance-sheet, #cash-flow).
+
+    Signals (1 point each):
+    1. Positive Net Income: Net Profit_t > 0
+    2. Positive Operating Cash Flow: CFO_t > 0 (or fallback to positive operating profit)
+    3. Higher ROA: (Net Profit_t / Total Assets_t) > (Net Profit_{t-1} / Total Assets_{t-1})
+    4. Accrual / Quality of Earnings: CFO_t > Net Profit_t
+    5. Lower Leverage: (Borrowings_t / Total Assets_t) <= (Borrowings_{t-1} / Total Assets_{t-1}) or debt-free
+    6. Higher Liquidity: (Other Assets_t / Other Liabilities_t) > (Other Assets_{t-1} / Other Liabilities_{t-1})
+    7. No Dilution: Equity Capital_t <= Equity Capital_{t-1}
+    8. Higher Margin: OPM%_t > OPM%_{t-1}
+    9. Higher Asset Turnover: (Sales_t / Total Assets_t) > (Sales_{t-1} / Total Assets_{t-1})
+    """
+    def _parse_table(sec_id: str) -> tuple[dict[str, list[float | None]], list[str]]:
+        sec = soup.select_one(f"#{sec_id}")
+        if not sec:
+            return {}, []
+        tbl = sec.select_one("table.data-table, table")
+        if not tbl:
+            return {}, []
+        headers = [th.get_text(strip=True) for th in tbl.select("thead th")]
+        periods = headers[1:] if len(headers) > 1 else []
+        row_map: dict[str, list[float | None]] = {}
+        for tr in tbl.select("tbody tr"):
+            tds = tr.select("td")
+            if not tds:
+                continue
+            raw_label = tds[0].get_text(" ", strip=True).replace("+", "").strip().lower()
+            vals: list[float | None] = []
+            for td in tds[1:]:
+                txt = td.get_text(strip=True).replace(",", "").replace("%", "")
+                if not txt or txt in ("-", "—", "N/A", "None", ""):
+                    vals.append(None)
+                else:
+                    try:
+                        vals.append(float(txt))
+                    except ValueError:
+                        vals.append(None)
+            row_map[raw_label] = vals
+        return row_map, periods
+
+    pl, pl_periods = _parse_table("profit-loss")
+    bs, bs_periods = _parse_table("balance-sheet")
+    cf, cf_periods = _parse_table("cash-flow")
+
+    common = [p for p in pl_periods if p != "TTM" and p in bs_periods]
+    if len(common) < 2:
+        return None
+
+    t_per = common[-1]
+    prev_per = common[-2]
+
+    i_pl_t = pl_periods.index(t_per)
+    i_pl_prev = pl_periods.index(prev_per)
+    i_bs_t = bs_periods.index(t_per)
+    i_bs_prev = bs_periods.index(prev_per)
+    i_cf_t = cf_periods.index(t_per) if t_per in cf_periods else None
+
+    def _find_val(data: dict[str, list[float | None]], keywords: list[str], idx: int | None) -> float | None:
+        if idx is None:
+            return None
+        for kw in keywords:
+            for k, vals in data.items():
+                if kw in k:
+                    if idx < len(vals):
+                        return vals[idx]
+        return None
+
+    np_t = _find_val(pl, ["net profit", "pat"], i_pl_t)
+    np_prev = _find_val(pl, ["net profit", "pat"], i_pl_prev)
+    sales_t = _find_val(pl, ["sales", "revenue"], i_pl_t)
+    sales_prev = _find_val(pl, ["sales", "revenue"], i_pl_prev)
+    opm_t = _find_val(pl, ["opm"], i_pl_t)
+    opm_prev = _find_val(pl, ["opm"], i_pl_prev)
+
+    ta_t = _find_val(bs, ["total assets"], i_bs_t)
+    ta_prev = _find_val(bs, ["total assets"], i_bs_prev)
+    eq_t = _find_val(bs, ["equity capital", "share capital"], i_bs_t)
+    eq_prev = _find_val(bs, ["equity capital", "share capital"], i_bs_prev)
+    debt_t = _find_val(bs, ["borrowings", "total debt"], i_bs_t)
+    debt_prev = _find_val(bs, ["borrowings", "total debt"], i_bs_prev)
+    ca_t = _find_val(bs, ["other assets", "current assets"], i_bs_t)
+    ca_prev = _find_val(bs, ["other assets", "current assets"], i_bs_prev)
+    cl_t = _find_val(bs, ["other liabilities", "current liabilities"], i_bs_t)
+    cl_prev = _find_val(bs, ["other liabilities", "current liabilities"], i_bs_prev)
+
+    cfo_t = _find_val(cf, ["operating activity", "cash from operating", "cfo"], i_cf_t)
+
+    score = 0
+    # 1. Net Income > 0
+    if np_t is not None and np_t > 0:
+        score += 1
+    # 2. Operating Cash Flow > 0
+    if cfo_t is not None:
+        if cfo_t > 0:
+            score += 1
+    elif np_t is not None and np_t > 0:
+        score += 1
+    # 3. Higher ROA
+    roa_t = (np_t / ta_t) if (np_t is not None and ta_t and ta_t > 0) else None
+    roa_prev = (np_prev / ta_prev) if (np_prev is not None and ta_prev and ta_prev > 0) else None
+    if roa_t is not None and roa_prev is not None and roa_t > roa_prev:
+        score += 1
+    # 4. CFO > Net Income
+    if cfo_t is not None and np_t is not None:
+        if cfo_t > np_t:
+            score += 1
+    elif roa_t is not None and roa_prev is not None and roa_t > roa_prev:
+        score += 1
+    # 5. Lower Leverage
+    lev_t = (debt_t / ta_t) if (debt_t is not None and ta_t and ta_t > 0) else (debt_t if debt_t is not None else 0.0)
+    lev_prev = (debt_prev / ta_prev) if (debt_prev is not None and ta_prev and ta_prev > 0) else (debt_prev if debt_prev is not None else 0.0)
+    if (debt_t == 0.0 and debt_prev == 0.0) or (lev_t <= lev_prev):
+        score += 1
+    # 6. Higher Current Ratio
+    cr_t = (ca_t / cl_t) if (ca_t is not None and cl_t and cl_t > 0) else None
+    cr_prev = (ca_prev / cl_prev) if (ca_prev is not None and cl_prev and cl_prev > 0) else None
+    if cr_t is not None and cr_prev is not None and cr_t > cr_prev:
+        score += 1
+    # 7. No Dilution
+    if eq_t is not None and eq_prev is not None and eq_t <= eq_prev:
+        score += 1
+    # 8. Higher Margin
+    if opm_t is not None and opm_prev is not None and opm_t > opm_prev:
+        score += 1
+    # 9. Higher Asset Turnover
+    turn_t = (sales_t / ta_t) if (sales_t is not None and ta_t and ta_t > 0) else None
+    turn_prev = (sales_prev / ta_prev) if (sales_prev is not None and ta_prev and ta_prev > 0) else None
+    if turn_t is not None and turn_prev is not None and turn_t > turn_prev:
+        score += 1
+
+    return float(score)
+
+
 def _parse_company_page(symbol: str, html: str) -> dict[str, Any]:
     """
     Parse the screener.in company HTML page.
@@ -872,6 +1020,10 @@ def _parse_company_page(symbol: str, html: str) -> dict[str, Any]:
     quarters = _parse_quarters(soup)
     shareholding = _parse_shareholding(soup)
     warehouse_id = _parse_warehouse_id(soup)
+
+    piotroski = _calculate_piotroski_score(soup)
+    if piotroski is not None:
+        ratios["piotroski_score"] = f"{piotroski:.2f}"
 
     return {
         "symbol": symbol,
