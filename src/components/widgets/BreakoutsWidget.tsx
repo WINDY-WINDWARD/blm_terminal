@@ -233,17 +233,15 @@ function compareValues(a: unknown, b: unknown, direction: SortDirection): number
 function getVolumeShockerMeta(row: BreakoutRow, volumeMap: Map<string, VolumeGainerItem>) {
   const volItem = volumeMap.get(row.symbol.toUpperCase());
   if (volItem && volItem.week1AvgVolume > 0) {
-    const mult = Math.max(1.2, volItem.volume / volItem.week1AvgVolume);
+    const mult = volItem.volume / volItem.week1AvgVolume;
     return {
-      multiplierText: `⚡ ${mult.toFixed(1)}x Vol`,
+      multiplierText: mult >= 1 ? `⚡ ${mult.toFixed(1)}x Vol` : `${mult.toFixed(1)}x Vol`,
       subText: `₹${formatNumber(volItem.turnover, 0)} Cr T/O`,
     };
   }
-  const absChg = Math.abs(row.pChange ?? 1.5);
-  const estMult = Math.max(1.4, Math.min(6.4, 1.6 + absChg * 0.45));
   return {
-    multiplierText: `⚡ ${estMult.toFixed(1)}x Vol`,
-    subText: row.prevHLDate ? `Prev: ${row.prevHLDate}` : 'Breakout Pulse',
+    multiplierText: null as string | null,
+    subText: row.prevHLDate ? `Prev: ${row.prevHLDate}` : null,
   };
 }
 
@@ -348,12 +346,24 @@ function BreakoutBentoCardItem({
       </div>
 
       <div className="flex items-center justify-between sm:justify-end gap-3 flex-shrink-0">
-        <div className="bg-terminal-amber/10 border border-terminal-amber/40 px-2 py-1 rounded text-right">
-          <div className="text-[10px] font-mono uppercase text-terminal-amber font-bold flex items-center gap-1 justify-end tabular-nums">
-            <span>{volMeta.multiplierText}</span>
+        {(volMeta.multiplierText || volMeta.subText) && (
+          <div
+            className={`px-2 py-1 rounded text-right ${
+              volMeta.multiplierText
+                ? 'bg-terminal-amber/10 border border-terminal-amber/40'
+                : 'bg-zinc-900/60 border border-zinc-800'
+            }`}
+          >
+            {volMeta.multiplierText && (
+              <div className="text-[10px] font-mono uppercase text-terminal-amber font-bold flex items-center gap-1 justify-end tabular-nums">
+                <span>{volMeta.multiplierText}</span>
+              </div>
+            )}
+            {volMeta.subText && (
+              <div className="text-[10px] font-mono text-zinc-300 tabular-nums">{volMeta.subText}</div>
+            )}
           </div>
-          <div className="text-[10px] font-mono text-zinc-300 tabular-nums">{volMeta.subText}</div>
-        </div>
+        )}
 
         <div className="text-right min-w-[82px]">
           <div className="text-sm font-bold font-mono text-white tabular-nums">
@@ -458,9 +468,13 @@ function BreakoutTable({ rows, onRowClick, volumeMap, mode }: BreakoutTableProps
                   {row.prevHLDate ?? <span className="text-zinc-400">—</span>}
                 </td>
                 <td className="py-2 pr-2 text-right whitespace-nowrap">
-                  <span className="text-[10px] font-bold text-terminal-amber bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded">
-                    {volMeta.multiplierText}
-                  </span>
+                  {volMeta.multiplierText ? (
+                    <span className="text-[10px] font-bold text-terminal-amber bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded">
+                      {volMeta.multiplierText}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-500 font-mono text-xs">—</span>
+                  )}
                 </td>
                 <td className="py-2 text-right whitespace-nowrap">
                   <span
@@ -1119,8 +1133,8 @@ export function BreakoutsWidget() {
                       const mult =
                         item.week1AvgVolume > 0
                           ? (item.volume / item.week1AvgVolume).toFixed(1)
-                          : '2.5';
-                      const barPct = Math.min(100, Math.max(20, Number(mult) * 16));
+                          : null;
+                      const barPct = mult ? Math.min(100, Math.max(10, Number(mult) * 16)) : 0;
                       return (
                         <div
                           key={item.symbol}
@@ -1130,9 +1144,15 @@ export function BreakoutsWidget() {
                           <div className="flex items-center justify-between mb-1">
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-white text-sm">{item.symbol}</span>
-                              <span className="text-[10px] text-terminal-amber font-mono bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded font-bold tabular-nums">
-                                ⚡ {mult}x Vol
-                              </span>
+                              {mult ? (
+                                <span className="text-[10px] text-terminal-amber font-mono bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded font-bold tabular-nums">
+                                  ⚡ {mult}x Vol
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-zinc-400 font-mono bg-zinc-800/60 border border-zinc-700/40 px-1.5 py-0.5 rounded font-bold tabular-nums">
+                                  —
+                                </span>
+                              )}
                             </div>
                             <div className="text-right tabular-nums">
                               <span className="text-xs font-bold text-white mr-2">
@@ -1150,7 +1170,7 @@ export function BreakoutsWidget() {
                           <div className="flex justify-between text-[11px] font-mono text-zinc-300 tabular-nums">
                             <span>
                               Vol: <b className="text-white">{formatVolume(item.volume)}</b> (1W Avg:{' '}
-                              {formatVolume(item.week1AvgVolume)})
+                              {item.week1AvgVolume > 0 ? formatVolume(item.week1AvgVolume) : '—'})
                             </span>
                             <span>
                               Turnover:{' '}

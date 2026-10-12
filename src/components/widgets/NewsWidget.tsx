@@ -176,179 +176,6 @@ interface InstitutionalDealRow {
   url?: string;
 }
 
-const FALLBACK_WIRE_ARTICLES: NewsArticle[] = [
-  {
-    url: 'https://www.bloomberg.com/markets/rbi-mpc-repo-rate-fy27',
-    source: 'bloomberg-mkts',
-    title: 'RBI MPC keeps Repo Rate unchanged at 6.50%; highlights robust GDP trajectory above 7.2% for FY27.',
-    text: 'Monetary Policy Committee maintains stance with high system liquidity.',
-    publish_date: new Date(Date.now() - 4 * 60_000).toISOString(),
-    fetched_at: new Date().toISOString(),
-    company_symbol: 'HDFCBANK',
-    sentiment: 'BULLISH',
-    sentiment_score: 0.88,
-    confidence: 0.92,
-    language: 'en',
-    entities: { tickers: ['BANKNIFTY', 'HDFCBANK'], organizations: ['RBI MPC'] },
-    threat_level: null,
-    threat_category: 'High Liquidity',
-    source_credibility: 'NONE',
-  },
-  {
-    url: 'https://www.reuters.com/markets/reliance-retail-luxury-jv-q3',
-    source: 'reuters',
-    title: 'Reliance Retail to ink joint-venture for luxury omnichannel expansion; Q3 revenue expected up 18% YoY.',
-    text: 'Retail footprint expands by 420 stores across tier-1 and tier-2 metros.',
-    publish_date: new Date(Date.now() - 9 * 60_000).toISOString(),
-    fetched_at: new Date().toISOString(),
-    company_symbol: 'RELIANCE',
-    sentiment: 'BULLISH',
-    sentiment_score: 0.84,
-    confidence: 0.89,
-    language: 'en',
-    entities: { tickers: ['RELIANCE'], organizations: ['Reliance Retail'] },
-    threat_level: null,
-    threat_category: 'Retail Footprint: +420 Stores',
-    source_credibility: 'NONE',
-  },
-  {
-    url: 'https://www.moneycontrol.com/news/business/markets/us-semiconductor-restrictions',
-    source: 'moneycontrol',
-    title: 'US Commerce Dept proposes tighter restrictions on semiconductor shipments to overseas affiliates.',
-    text: 'Global tech hardware supply chain faces compliance review.',
-    publish_date: new Date(Date.now() - 16 * 60_000).toISOString(),
-    fetched_at: new Date().toISOString(),
-    company_symbol: 'TCS',
-    sentiment: 'BEARISH',
-    sentiment_score: 0.79,
-    confidence: 0.85,
-    language: 'en',
-    entities: { tickers: ['TCS', 'INFY'], organizations: ['US Commerce Dept'] },
-    threat_level: 'medium',
-    threat_category: 'Tech Hardware Sector',
-    source_credibility: 'NONE',
-  },
-  {
-    url: 'https://apnews.com/hub/business/crude-oil-opec-compliance-q4',
-    source: 'ap-top',
-    title: 'Crude oil steady around $76.40/bbl as OPEC+ delegates confirm production quota compliance for Q4.',
-    text: 'Upstream and downstream energy names trade within tight range.',
-    publish_date: new Date(Date.now() - 24 * 60_000).toISOString(),
-    fetched_at: new Date().toISOString(),
-    company_symbol: 'ONGC',
-    sentiment: 'NEUTRAL',
-    sentiment_score: 0.55,
-    confidence: 0.81,
-    language: 'en',
-    entities: { tickers: ['ONGC', 'BPCL'], organizations: ['OPEC+'] },
-    threat_level: null,
-    threat_category: null,
-    source_credibility: 'NONE',
-  },
-];
-
-const DEFAULT_FILING_ITEMS: FilingItem[] = [
-  {
-    id: 'filing-hdfcbank-q2',
-    symbol: 'HDFCBANK',
-    category: 'Q2 RESULTS',
-    headline: 'Standalone Net Profit ₹16,820 Cr (+17.2% YoY). Net NPA drops to 0.31%. Board recommends ₹19.50/share dividend.',
-    meta: 'Rec Date: 18-OCT | Ex Date: 17-OCT',
-    linkLabel: 'PDF FILING ↗',
-    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
-    publishDate: new Date(Date.now() - 12 * 60_000).toISOString(),
-  },
-  {
-    id: 'filing-tatasteel-corp',
-    symbol: 'TATASTEEL',
-    category: 'CORP ACTION',
-    headline: 'Commissioning of 5 MTPA expansion at Kalinganagar Phase-II completed. Blast furnace lit today.',
-    meta: 'CapEx: ₹27,000 Cr | Capacity: 8 MTPA',
-    linkLabel: 'CIRCULAR ↗',
-    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
-    publishDate: new Date(Date.now() - 28 * 60_000).toISOString(),
-  },
-  {
-    id: 'filing-dixon-board',
-    symbol: 'DIXON',
-    category: 'BOARD / AGM',
-    headline: 'Board approves fundraising up to ₹1,500 Cr via QIP/preferential issue for mobile component vertical.',
-    meta: 'EGM Date: 28-OCT-2026 (Virtual)',
-    linkLabel: 'NOTICE ↗',
-    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
-    publishDate: new Date(Date.now() - 42 * 60_000).toISOString(),
-  },
-  {
-    id: 'filing-persistent-ma',
-    symbol: 'PERSISTENT',
-    category: 'M&A / DEAL',
-    headline: 'Completes acquisition of 100% stake in CloudApex LLC for $42M cash consideration.',
-    meta: 'Revenue Accretive from Q3',
-    linkLabel: 'INVESTOR DECK ↗',
-    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
-    publishDate: new Date(Date.now() - 55 * 60_000).toISOString(),
-  },
-];
-
-const DEFAULT_INSTITUTIONAL_DEALS: InstitutionalDealRow[] = [
-  {
-    id: 'deal-reliance-block',
-    time: '11:15:20',
-    symbol: 'RELIANCE',
-    dealType: 'BLOCK',
-    clientName: 'MORGAN STANLEY ASIA (SINGAPORE)',
-    action: 'BUY',
-    quantity: '1,200,000',
-    price: '2,940.00',
-    valueCr: 352.8,
-    impactLabel: '+1.8% LTP',
-    positiveImpact: true,
-    url: 'https://www.nseindia.com/market-data/block-deal-watch',
-  },
-  {
-    id: 'deal-coforge-bulk',
-    time: '10:48:05',
-    symbol: 'COFORGE',
-    dealType: 'BULK',
-    clientName: 'LIFE INSURANCE CORP OF INDIA',
-    action: 'BUY',
-    quantity: '385,000',
-    price: '7,420.50',
-    valueCr: 285.69,
-    impactLabel: '+3.4% LTP',
-    positiveImpact: true,
-    url: 'https://www.nseindia.com/market-data/bulk-deals',
-  },
-  {
-    id: 'deal-indusind-block',
-    time: '10:24:18',
-    symbol: 'INDUSINDBK',
-    dealType: 'BLOCK',
-    clientName: 'NOMURA INDIA INVESTMENT FUND',
-    action: 'SELL',
-    quantity: '1,500,000',
-    price: '1,385.00',
-    valueCr: 207.75,
-    impactLabel: '-2.1% LTP',
-    positiveImpact: false,
-    url: 'https://www.nseindia.com/market-data/block-deal-watch',
-  },
-  {
-    id: 'deal-trent-bulk',
-    time: '09:32:44',
-    symbol: 'TRENT',
-    dealType: 'BULK',
-    clientName: 'VANGUARD TOTAL INTL STOCK INDEX',
-    action: 'BUY',
-    quantity: '180,000',
-    price: '7,810.00',
-    valueCr: 140.58,
-    impactLabel: '+4.1% LTP',
-    positiveImpact: true,
-    url: 'https://www.nseindia.com/market-data/bulk-deals',
-  },
-];
-
 const CORPORATE_KEYWORDS = [
   'results',
   'q1',
@@ -1035,15 +862,14 @@ export function NewsWidget() {
     [liveArticles, filters]
   );
 
-  const wireArticles = useMemo(() => {
+  const wireArticles = useMemo<NewsArticle[]>(() => {
     const liveUrls = new Set(filteredLiveArticles.map((a) => a.url));
     const merged = [
       ...filteredLiveArticles,
       ...dbArticles.filter((a) => !liveUrls.has(a.url)),
     ];
-    if (merged.length > 0) return merged;
-    return FALLBACK_WIRE_ARTICLES.filter((a) => matchesFilters(a, filters));
-  }, [filteredLiveArticles, dbArticles, filters]);
+    return merged;
+  }, [filteredLiveArticles, dbArticles]);
 
   const liveUrlSet = useMemo(
     () => new Set(filteredLiveArticles.map((a) => a.url)),
@@ -1086,7 +912,7 @@ export function NewsWidget() {
       });
 
     const queryLower = localSearch.trim().toLowerCase();
-    const fallbackFiltered = DEFAULT_FILING_ITEMS.filter((item) => {
+    const filtered = matchedFromStream.filter((item) => {
       if (!queryLower) return true;
       return (
         item.symbol.toLowerCase().includes(queryLower) ||
@@ -1095,9 +921,8 @@ export function NewsWidget() {
       );
     });
 
-    const combined = [...matchedFromStream, ...fallbackFiltered];
     const seen = new Set<string>();
-    return combined
+    return filtered
       .filter((item) => {
         const key = `${item.symbol}-${item.headline.slice(0, 40)}`;
         if (seen.has(key)) return false;
@@ -1121,12 +946,12 @@ export function NewsWidget() {
           text.includes('institutional')
         );
       })
-      .slice(0, 4)
+      .slice(0, 10)
       .map((article, idx) => {
         const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
         const symbol = article.company_symbol
           ? normalizeTicker(article.company_symbol)
-          : tickers[0] || 'NIFTY50';
+          : tickers[0] || 'NIFTY';
         const isBearish = article.sentiment === 'BEARISH';
         const orgs = getEntityValues(article, 'organizations');
         const client = (
@@ -1139,20 +964,20 @@ export function NewsWidget() {
           id: `live-deal-${idx}-${article.url}`,
           time: formatDate(article.publish_date),
           symbol,
-          dealType: idx % 2 === 0 ? 'BLOCK' : 'BULK',
+          dealType: (article.text || article.title || '').toLowerCase().includes('block') ? 'BLOCK' : 'BULK',
           clientName: client,
           action: isBearish ? 'SELL' : 'BUY',
-          quantity: '450,000',
-          price: '1,840.00',
-          valueCr: 82.8,
-          impactLabel: isBearish ? '-1.6% LTP' : '+2.2% LTP',
+          quantity: 'DISCLOSED IN WIRE',
+          price: 'MARKET',
+          valueCr: article.sentiment_score ? Math.round(article.sentiment_score * 100) : 0,
+          impactLabel: isBearish ? 'BEARISH FLOW' : 'BULLISH FLOW',
           positiveImpact: !isBearish,
           url: article.url,
         };
       });
 
     const queryLower = localSearch.trim().toLowerCase();
-    const merged = [...DEFAULT_INSTITUTIONAL_DEALS, ...highImpactFromNews].filter((row) => {
+    const filtered = highImpactFromNews.filter((row) => {
       if (!queryLower) return true;
       return (
         row.symbol.toLowerCase().includes(queryLower) ||
@@ -1162,7 +987,7 @@ export function NewsWidget() {
       );
     });
 
-    return merged;
+    return filtered;
   }, [wireArticles, localSearch]);
 
   const totalCount = globalData?.total ?? wireArticles.length;
@@ -1544,6 +1369,13 @@ export function NewsWidget() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#27272a]/60">
+                  {institutionalDeals.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="p-8 text-center text-zinc-400 font-mono text-xs">
+                        No institutional block or bulk deals recorded in active stream.
+                      </td>
+                    </tr>
+                  )}
                   {institutionalDeals.map((deal) => (
                     <tr
                       key={deal.id}

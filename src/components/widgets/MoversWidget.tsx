@@ -54,21 +54,14 @@ interface MoverCategory {
 type TimeframeFocus = 'INTRADAY' | '1-WEEK' | '1-MONTH' | '3-MONTH' | '52-WEEK';
 type MatrixFilter = 'ALL' | 'GAINERS' | 'LOSERS';
 
-type MarketDataServiceWithMovers = typeof marketDataService & {
-  getTopMovers?: (category: string, type?: 'gainers' | 'losers') => Promise<TopMoverItem[]>;
-};
-
-const moverService = marketDataService as MarketDataServiceWithMovers;
-if (!moverService.getTopMovers) {
-  moverService.getTopMovers = async (
-    category: string,
-    type: 'gainers' | 'losers' = 'gainers'
-  ): Promise<TopMoverItem[]> => {
-    const endpoint = type === 'losers' ? 'top-losers' : 'top-gainers';
-    const res = await fetch(`/api/py/market/${endpoint}?category=${encodeURIComponent(category)}`);
-    if (!res.ok) throw new Error(`Failed to fetch top ${type}`);
-    return res.json();
-  };
+async function fetchTopMovers(
+  category: string,
+  type: 'gainers' | 'losers' = 'gainers'
+): Promise<TopMoverItem[]> {
+  const endpoint = type === 'losers' ? 'top-losers' : 'top-gainers';
+  const res = await fetch(`/api/py/market/${endpoint}?category=${encodeURIComponent(category)}`);
+  if (!res.ok) throw new Error(`Failed to fetch top ${type}`);
+  return res.json();
 }
 
 function formatPrice(val: number): string {
@@ -269,48 +262,42 @@ function mapItemToRow(item: TopMoverItem): MoverRow {
 interface HeatSegment {
   label: '1W' | '1M' | '3M' | '6M' | '1Y';
   value: number | null | undefined;
-  fallbackValue: number;
   highlighted?: boolean;
 }
 
 function MomentumHeatStrip({
   ranges,
-  pChange,
+  pChange: _pChange,
   timeframeFocus,
 }: {
   ranges: ChangeRanges | null;
-  pChange: number;
+  pChange?: number;
   timeframeFocus: TimeframeFocus;
 }) {
   const segments: HeatSegment[] = [
     {
       label: '1W',
       value: ranges?.oneWeekPercent,
-      fallbackValue: Number((pChange * 1.15).toFixed(1)),
       highlighted: timeframeFocus === '1-WEEK',
     },
     {
       label: '1M',
       value: ranges?.oneMonthPercent,
-      fallbackValue: Number((pChange * 2.1).toFixed(1)),
       highlighted: timeframeFocus === '1-MONTH',
     },
     {
       label: '3M',
       value: ranges?.threeMonthPercent,
-      fallbackValue: Number((pChange * 3.05).toFixed(1)),
       highlighted: timeframeFocus === '3-MONTH',
     },
     {
       label: '6M',
       value: ranges?.sixMonthPercent,
-      fallbackValue: Number((pChange * 4.4).toFixed(1)),
       highlighted: false,
     },
     {
       label: '1Y',
       value: ranges?.oneYearPercent,
-      fallbackValue: Number((pChange * 6.8).toFixed(1)),
       highlighted: timeframeFocus === '52-WEEK',
     },
   ];
@@ -318,8 +305,22 @@ function MomentumHeatStrip({
   return (
     <div className="flex items-center justify-center gap-1 flex-wrap sm:flex-nowrap">
       {segments.map((seg) => {
-        const effectiveVal =
-          seg.value != null && !Number.isNaN(seg.value) ? seg.value : seg.fallbackValue;
+        const hasVal = seg.value != null && !Number.isNaN(seg.value);
+        if (!hasVal) {
+          return (
+            <div
+              key={seg.label}
+              title={`${seg.label}: Awaiting data`}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums border text-zinc-500 bg-[#121216] border-[#27272a] whitespace-nowrap ${
+                seg.highlighted ? 'ring-1 ring-terminal-amber' : ''
+              }`}
+            >
+              {seg.label} —
+            </div>
+          );
+        }
+
+        const effectiveVal = seg.value as number;
         const isUp = effectiveVal >= 0;
         const arrow = isUp ? '▲' : '▼';
         const sign = isUp ? '+' : '';
@@ -349,44 +350,58 @@ function MomentumHeatStrip({
 }
 
 function computeAlignmentMeta(ranges: ChangeRanges | null, pChange: number) {
-  const vals = [
-    ranges?.oneWeekPercent ?? pChange * 1.15,
-    ranges?.oneMonthPercent ?? pChange * 2.1,
-    ranges?.threeMonthPercent ?? pChange * 3.05,
-    ranges?.sixMonthPercent ?? pChange * 4.4,
-    ranges?.oneYearPercent ?? pChange * 6.8,
-  ];
-  const bullCount = vals.filter((v) => v >= 0).length;
-  const baseVelocity = Math.min(99, Math.max(12, Math.round(50 + pChange * 5.2 + (bullCount - 2.5) * 6)));
+  if (!ranges) {
+    return {
+      bullCount: 0,
+      velocity: 50,
+      label: 'AWAITING RANGES',
+      badgeClass: 'text-zinc-400 bg-zinc-800/40 border-zinc-700',
+    };
+  }
 
-  if (bullCount === 5) {
+  const validVals = [
+    ranges.oneWeekPercent,
+    ranges.oneMonthPercent,
+    ranges.threeMonthPercent,
+    ranges.sixMonthPercent,
+    ranges.oneYearPercent,
+  ].filter((v): v is number => v != null && !Number.isNaN(v));
+
+  if (validVals.length === 0) {
+    return {
+      bullCount: 0,
+      velocity: 50,
+      label: 'NO HISTORICAL DATA',
+      badgeClass: 'text-zinc-400 bg-zinc-800/40 border-zinc-700',
+    };
+  }
+
+  const bullCount = validVals.filter((v) => v >= 0).length;
+  const baseVelocity = Math.min(
+    99,
+    Math.max(12, Math.round(50 + pChange * 3 + (bullCount - validVals.length / 2) * 8))
+  );
+
+  if (bullCount >= Math.ceil(validVals.length * 0.8)) {
     return {
       bullCount,
-      velocity: Math.max(82, baseVelocity),
-      label: '🔥 ALL-BULL (5/5)',
+      velocity: Math.max(70, baseVelocity),
+      label: `▲ ACCELERATING (${bullCount}/${validVals.length})`,
       badgeClass: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
     };
   }
-  if (bullCount >= 4) {
-    return {
-      bullCount,
-      velocity: Math.max(72, baseVelocity),
-      label: `▲ ACCELERATING (${bullCount}/5)`,
-      badgeClass: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-    };
-  }
-  if (bullCount >= 2) {
+  if (bullCount >= Math.ceil(validVals.length * 0.4)) {
     return {
       bullCount,
       velocity: baseVelocity,
-      label: `◈ CONSOLIDATING (${bullCount}/5)`,
+      label: `◈ CONSOLIDATING (${bullCount}/${validVals.length})`,
       badgeClass: 'text-terminal-amber bg-terminal-amber/10 border-terminal-amber/30',
     };
   }
   return {
     bullCount,
-    velocity: Math.min(38, baseVelocity),
-    label: `▼ BEARISH DRIFT (${bullCount}/5)`,
+    velocity: Math.min(35, baseVelocity),
+    label: `▼ BEARISH DRIFT (${bullCount}/${validVals.length})`,
     badgeClass: 'text-rose-400 bg-rose-500/10 border-rose-500/30',
   };
 }
@@ -674,28 +689,14 @@ export function MoversWidget() {
 
   const { data: gainers = [], isLoading: gainersLoading } = useQuery<TopMoverItem[]>({
     queryKey: ['market/top-gainers', moversCategory],
-    queryFn: async () => {
-      if (moverService.getTopMovers) {
-        return moverService.getTopMovers(moversCategory, 'gainers');
-      }
-      const res = await fetch(`/api/py/market/top-gainers?category=${encodeURIComponent(moversCategory)}`);
-      if (!res.ok) throw new Error('Failed to fetch top gainers');
-      return res.json();
-    },
+    queryFn: () => fetchTopMovers(moversCategory, 'gainers'),
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
 
   const { data: losers = [], isLoading: losersLoading } = useQuery<TopMoverItem[]>({
     queryKey: ['market/top-losers', moversCategory],
-    queryFn: async () => {
-      if (moverService.getTopMovers) {
-        return moverService.getTopMovers(moversCategory, 'losers');
-      }
-      const res = await fetch(`/api/py/market/top-losers?category=${encodeURIComponent(moversCategory)}`);
-      if (!res.ok) throw new Error('Failed to fetch top losers');
-      return res.json();
-    },
+    queryFn: () => fetchTopMovers(moversCategory, 'losers'),
     staleTime: 60_000,
     refetchInterval: 60_000,
   });

@@ -459,6 +459,23 @@ function formatDateTime(iso: string): string {
   return `${mon} ${dd}, ${hh}:${mm}`;
 }
 
+function getIstHour(iso: string): number | null {
+  if (!iso) return null;
+  const normalized = iso.includes('Z') || /[+-]\d{2}(:?\d{2})?$/.test(iso)
+    ? iso
+    : `${iso.replace(' ', 'T')}Z`;
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    const istString = d.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hourCycle: 'h23', hour: 'numeric' });
+    const parsed = parseInt(istString, 10);
+    return Number.isNaN(parsed) ? d.getUTCHours() : parsed;
+  } catch {
+    const istMs = d.getTime() + 5.5 * 60 * 60 * 1000;
+    return new Date(istMs).getUTCHours();
+  }
+}
+
 /** Parse streak day count from a notification message. Returns null if not parseable. */
 export function parseStreakDays(message: string): number | null {
   // Matches: "RELIANCE up 7 consecutive days" or "TCS down 5 days"
@@ -927,9 +944,8 @@ export function NotifWidget() {
       const cells = SESSION_SLOTS.map((slot) => {
         const matches = pool.filter((n) => {
           if (!row.triggers.includes(n.trigger_type)) return false;
-          const d = new Date(n.triggered_at);
-          if (Number.isNaN(d.getTime())) return false;
-          const hr = d.getHours();
+          const hr = getIstHour(n.triggered_at);
+          if (hr === null) return false;
           return hr >= slot.startHour && hr < slot.endHour;
         });
         const count = matches.length;

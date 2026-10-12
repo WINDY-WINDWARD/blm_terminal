@@ -22,10 +22,10 @@ interface OrderWidgetProps {
 }
 
 const QUICK_INSTRUMENTS = [
-  { symbol: 'RELIANCE', defaultLtp: 2945.80, change: '+1.47%', isUp: true },
-  { symbol: 'HDFCBANK', defaultLtp: 1672.40, change: '+1.26%', isUp: true },
-  { symbol: 'TCS', defaultLtp: 4215.10, change: '+0.84%', isUp: true },
-  { symbol: 'INFY', defaultLtp: 1894.25, change: '-0.42%', isUp: false },
+  { symbol: 'RELIANCE' },
+  { symbol: 'HDFCBANK' },
+  { symbol: 'TCS' },
+  { symbol: 'INFY' },
 ] as const;
 
 export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
@@ -38,11 +38,11 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
 
   const [symbol, setSymbol] = useState(globalSymbol || 'RELIANCE');
   const [exchange, setExchange] = useState<Exchange>((globalExchange as Exchange) || 'NSE');
-  const [qty, setQty] = useState('50');
+  const [qty, setQty] = useState('1');
   const [orderType, setOrderType] = useState<OrderType>('MARKET');
   const [product, setProduct] = useState<Product>('MIS');
-  const [price, setPrice] = useState('2945.80');
-  const [triggerPrice, setTriggerPrice] = useState('2940.00');
+  const [price, setPrice] = useState('');
+  const [triggerPrice, setTriggerPrice] = useState('');
   const [status, setStatus] = useState<{ type: 'success' | 'error' | 'pending'; msg: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderFilter, setOrderFilter] = useState<'ALL' | 'COMPLETE' | 'PENDING' | 'REJECTED'>('ALL');
@@ -56,6 +56,12 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
   // Current instrument live LTP lookup
   const tickKey = `${symbol}.${exchange}`;
   const liveLtp = tickData[tickKey]?.ltp ?? tickData[`${symbol}.NSE`]?.ltp ?? 0;
+
+  // When symbol or exchange changes, clear price so ticket reflects current instrument
+  useEffect(() => {
+    setPrice('');
+    setTriggerPrice('');
+  }, [symbol, exchange]);
 
   // When liveLtp arrives and price is empty or 0, update price field
   useEffect(() => {
@@ -86,13 +92,19 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
 
   const fundsData: FundsData | null = fundsResponse?.data ?? globalFunds;
 
-  const availableCash = parseFloat(fundsData?.availablecash ?? '482500.00') || 482500.0;
-  const collateral = parseFloat(fundsData?.collateral ?? '294400.00') || 294400.0;
-  const realizedM2M = parseFloat(fundsData?.m2mrealized ?? '18450.00') || 18450.0;
-  const unrealizedM2M = parseFloat(fundsData?.m2munrealized ?? '4280.00') || 4280.0;
-  const utilisedMargin = parseFloat(fundsData?.utiliseddebits ?? '298400.00') || 298400.0;
-  const totalMargin = availableCash + utilisedMargin > 0 ? availableCash + utilisedMargin : 776900.0;
-  const marginPct = totalMargin > 0 ? (utilisedMargin / totalMargin) * 100 : 38.4;
+  const parseFund = (val: string | number | undefined | null): number => {
+    if (val === undefined || val === null) return 0;
+    const num = typeof val === 'number' ? val : parseFloat(val);
+    return isNaN(num) ? 0 : num;
+  };
+
+  const availableCash = fundsData ? parseFund(fundsData.availablecash) : 0;
+  const collateral = fundsData ? parseFund(fundsData.collateral) : 0;
+  const realizedM2M = fundsData ? parseFund(fundsData.m2mrealized) : 0;
+  const unrealizedM2M = fundsData ? parseFund(fundsData.m2munrealized) : 0;
+  const utilisedMargin = fundsData ? parseFund(fundsData.utiliseddebits) : 0;
+  const totalMargin = availableCash + utilisedMargin;
+  const marginPct = totalMargin > 0 ? (utilisedMargin / totalMargin) * 100 : 0;
   const availableBuffer = Math.max(0, availableCash - utilisedMargin);
 
   // Query: Recent Orders
@@ -161,19 +173,19 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
   const unitPrice = useMemo(() => {
     const parsedPrice = parseFloat(price);
     if (orderType === 'MARKET') {
-      return liveLtp > 0 ? liveLtp : parsedPrice > 0 ? parsedPrice : 2945.8;
+      return liveLtp > 0 ? liveLtp : !isNaN(parsedPrice) && parsedPrice > 0 ? parsedPrice : 0;
     }
-    return parsedPrice > 0 ? parsedPrice : liveLtp > 0 ? liveLtp : 2945.8;
+    return !isNaN(parsedPrice) && parsedPrice > 0 ? parsedPrice : liveLtp > 0 ? liveLtp : 0;
   }, [orderType, price, liveLtp]);
 
   const qtyNum = Math.max(1, parseInt(qty, 10) || 1);
-  const estMargin = (qtyNum * unitPrice) / leverage;
+  const estMargin = unitPrice > 0 ? (qtyNum * unitPrice) / leverage : 0;
 
   const maxQty = useMemo(() => {
     if (availableCash > 0 && unitPrice > 0) {
-      return Math.max(1, Math.floor((availableCash * leverage) / unitPrice));
+      return Math.max(0, Math.floor((availableCash * leverage) / unitPrice));
     }
-    return 163;
+    return 0;
   }, [availableCash, leverage, unitPrice]);
 
   const handleSelectSymbol = (sym: string) => {
@@ -247,8 +259,8 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
   const needsPrice = orderType === 'LIMIT' || orderType === 'SL';
   const needsTrigger = orderType === 'SL' || orderType === 'SL-M';
 
-  const bidDisp = liveLtp > 0 ? (liveLtp - 0.3).toFixed(2) : (unitPrice - 0.3).toFixed(2);
-  const askDisp = liveLtp > 0 ? liveLtp.toFixed(2) : unitPrice.toFixed(2);
+  const bidDisp = liveLtp > 0 ? (liveLtp - 0.3).toFixed(2) : unitPrice > 0 ? (unitPrice - 0.3).toFixed(2) : '—';
+  const askDisp = liveLtp > 0 ? liveLtp.toFixed(2) : unitPrice > 0 ? unitPrice.toFixed(2) : '—';
 
   return (
     <div className="h-full w-full flex flex-col font-mono text-xs bg-[#09090b] text-white overflow-hidden select-none">
@@ -305,7 +317,11 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   {QUICK_INSTRUMENTS.map((inst) => {
                     const isSelected = symbol === inst.symbol;
-                    const instTick = tickData[`${inst.symbol}.${exchange}`]?.ltp ?? tickData[`${inst.symbol}.NSE`]?.ltp ?? inst.defaultLtp;
+                    const instTick = tickData[`${inst.symbol}.${exchange}`] ?? tickData[`${inst.symbol}.NSE`];
+                    const instLtp = instTick?.ltp;
+                    const instChg = instTick?.pChange;
+                    const hasChg = instChg != null;
+                    const isUp = hasChg ? instChg >= 0 : true;
                     return (
                       <button
                         key={inst.symbol}
@@ -321,15 +337,19 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
                           <span className={isSelected ? 'text-terminal-amber font-black' : 'text-zinc-200'}>
                             {inst.symbol}
                           </span>
-                          <span className={`text-[10px] ${inst.isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {inst.isUp ? '▲' : '▼'}
-                          </span>
+                          {hasChg && (
+                            <span className={`text-[10px] ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {isUp ? '▲' : '▼'}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-white font-mono font-bold tabular-nums">
-                          ₹{instTick.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {instLtp != null
+                            ? `₹${instLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                            : '—'}
                         </div>
-                        <div className={`text-[10px] font-mono tabular-nums ${inst.isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {inst.change}
+                        <div className={`text-[10px] font-mono tabular-nums ${hasChg ? (isUp ? 'text-emerald-400' : 'text-rose-400') : 'text-zinc-500'}`}>
+                          {hasChg ? `${isUp ? '+' : ''}${instChg.toFixed(2)}%` : '—'}
                         </div>
                       </button>
                     );
@@ -346,7 +366,21 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
                   <input
                     type="text"
                     value={symbol}
-                    onChange={(e) => handleSelectSymbol(e.target.value)}
+                    onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                    onBlur={() => {
+                      const trimmed = symbol.trim();
+                      if (trimmed && trimmed !== globalSymbol) {
+                        setGlobalSymbol(trimmed);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const trimmed = symbol.trim();
+                        if (trimmed && trimmed !== globalSymbol) {
+                          setGlobalSymbol(trimmed);
+                        }
+                      }
+                    }}
                     placeholder="E.g. RELIANCE, NIFTY..."
                     className="w-full bg-[#09090b] border border-[#27272a] text-white font-mono font-bold text-xs py-1 px-2 rounded uppercase outline-none focus:border-terminal-amber"
                   />
@@ -475,8 +509,11 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setQty(String(maxQty))}
-                    className="px-2.5 py-1 text-xs font-mono font-bold rounded bg-terminal-amber/15 border border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber hover:text-black transition-all"
+                    onClick={() => {
+                      if (maxQty > 0) setQty(String(maxQty));
+                    }}
+                    disabled={maxQty <= 0}
+                    className="px-2.5 py-1 text-xs font-mono font-bold rounded bg-terminal-amber/15 border border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber hover:text-black disabled:opacity-40 disabled:pointer-events-none transition-all"
                   >
                     MAX ({maxQty})
                   </button>
@@ -634,8 +671,14 @@ export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
-                    COLLATERAL VERIFIED
+                  <span
+                    className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                      openAlgoAvailable && fundsData
+                        ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                        : 'text-zinc-400 bg-zinc-800 border-zinc-700'
+                    }`}
+                  >
+                    {openAlgoAvailable && fundsData ? 'COLLATERAL SYNCED' : 'NO BROKER DATA'}
                   </span>
                 </div>
               </div>

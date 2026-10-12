@@ -258,8 +258,9 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
   // ─── Calculations ──────────────────────────────────────────────────────────
   const positions: PositionData[] = posData?.data ?? [];
   const openLivePositions = positions.filter((p) => Number(p.quantity) !== 0);
-  const liveTotalPnl = openLivePositions.reduce((acc, p) => acc + parseFloat(p.pnl ?? '0'), 0);
-  const liveRealizedPnl = parseFloat(funds?.m2mrealized ?? '0') || 0;
+  const liveTotalPnl = openLivePositions.reduce((acc, p) => acc + (parseFloat(p.pnl ?? '0') || 0), 0);
+  const liveRealizedPnl = (funds?.m2mrealized ? parseFloat(funds.m2mrealized) : 0) || 0;
+  const liveTotalCombined = liveRealizedPnl + liveTotalPnl;
 
   // Split paper trades into open and closed
   const openPaperTrades = useMemo(
@@ -420,7 +421,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                 {effectiveMode === 'live' ? 'TOTAL LIVE P&L' : 'TOTAL SIMULATED P&L'}
               </span>
               <span className="text-xs">
-                {(effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined) >= 0 ? (
+                {(effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined) >= 0 ? (
                   <span className="text-emerald-400">▲</span>
                 ) : (
                   <span className="text-rose-400">▼</span>
@@ -429,19 +430,19 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
             </div>
             <div
               className={`text-lg sm:text-xl font-mono font-bold tabular-nums ${
-                (effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined) >= 0
+                (effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined) >= 0
                   ? 'text-emerald-400'
                   : 'text-rose-400'
               }`}
             >
-              {(effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined) >= 0 ? '+' : ''}
-              ₹{(effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined).toLocaleString('en-IN', {
+              {(effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined) >= 0 ? '+' : ''}
+              ₹{(effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined).toLocaleString('en-IN', {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2,
               })}
             </div>
             <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
-              {effectiveMode === 'live' ? 'Aggregate Net M2M' : 'Realized + Floating Combined'}
+              {effectiveMode === 'live' ? 'Realized + Floating Combined' : 'Realized + Floating Combined'}
             </div>
           </div>
 
@@ -510,13 +511,13 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
               </span>
               <span
                 className={`text-xs font-mono font-bold px-2 py-0.5 rounded border tabular-nums ${
-                  (effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined) >= 0
+                  (effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined) >= 0
                     ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
                     : 'text-rose-400 bg-rose-500/10 border-rose-500/30'
                 }`}
               >
-                NET: {(effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined) >= 0 ? '+' : ''}
-                ₹{(effectiveMode === 'live' ? liveTotalPnl : paperTotalCombined).toFixed(2)}
+                NET: {(effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined) >= 0 ? '+' : ''}
+                ₹{(effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined).toFixed(2)}
               </span>
             </div>
 
