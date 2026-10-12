@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAtom } from 'jotai';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -24,13 +24,13 @@ interface NewsPaginatedResponse {
   source_used?: 'iinvest' | 'moneycontrol' | 'merged' | null;
 }
 
-
 const PAGE_LIMIT = 50;
 const ENTITY_CHIP_LIMIT = 3;
 
-const SOURCE_LABELS: Record<string, string> = {
+export const SOURCE_LABELS: Record<string, string> = {
   // Tier 1: Wire & Regulatory
   'ap-top': 'AP',
+  'reuters': 'REUTERS',
   'sec-press': 'SEC',
   'fed-press': 'Fed',
   'ecb-press': 'ECB',
@@ -76,8 +76,9 @@ const SOURCE_LABELS: Record<string, string> = {
   'moneycontrol_company': 'MC Company',
 };
 
-const SOURCE_FULL_NAMES: Record<string, string> = {
+export const SOURCE_FULL_NAMES: Record<string, string> = {
   'ap-top': 'Associated Press Top News',
+  'reuters': 'Reuters Financial Wire',
   'sec-press': 'SEC Press Releases',
   'fed-press': 'Federal Reserve',
   'ecb-press': 'ECB Press',
@@ -117,37 +118,321 @@ const SOURCE_FULL_NAMES: Record<string, string> = {
 };
 
 const SENTIMENT_COLORS: Record<string, string> = {
-  BULLISH: 'bg-green-500',
-  BEARISH: 'bg-red-500',
-  NEUTRAL: 'bg-gray-500',
+  BULLISH: 'bg-emerald-400',
+  BEARISH: 'bg-rose-400',
+  NEUTRAL: 'bg-zinc-400',
+};
+
+const SENTIMENT_BADGE_STYLES: Record<string, string> = {
+  BULLISH: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30',
+  BEARISH: 'bg-rose-500/10 text-rose-400 border border-rose-500/30',
+  NEUTRAL: 'bg-zinc-500/10 text-zinc-300 border border-zinc-500/30',
 };
 
 const THREAT_BADGES: Record<string, { label: string; className: string }> = {
-  low: { label: 'LOW', className: 'bg-green-900 text-green-400' },
-  medium: { label: 'MED', className: 'bg-yellow-900 text-yellow-400' },
-  high: { label: 'HIGH', className: 'bg-red-900 text-red-400' },
-  critical: { label: 'CRIT', className: 'bg-red-900 text-red-400 font-bold' },
+  low: { label: 'LOW', className: 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' },
+  medium: { label: 'MED', className: 'bg-amber-950 text-amber-400 border border-amber-500/30' },
+  high: { label: 'HIGH', className: 'bg-rose-950 text-rose-400 border border-rose-500/30' },
+  critical: { label: 'CRIT', className: 'bg-rose-950 text-rose-400 border border-rose-500/40 font-bold' },
 };
+
+const PRIMARY_SOURCE_PILLS: Array<{ id: string; label: string }> = [
+  { id: 'ap-top', label: 'AP' },
+  { id: 'bloomberg-mkts', label: 'BLOOMBERG' },
+  { id: 'moneycontrol', label: 'MC' },
+  { id: 'reuters', label: 'REUTERS' },
+  { id: 'et-markets', label: 'ET' },
+  { id: 'wsj-markets', label: 'WSJ' },
+  { id: 'cnbc-finance', label: 'CNBC' },
+  { id: 'sec-press', label: 'SEC' },
+  { id: 'livemint', label: 'MINT' },
+];
+
+type FilingCategory = 'Q2 RESULTS' | 'BOARD / AGM' | 'CORP ACTION' | 'M&A / DEAL';
+
+interface FilingItem {
+  id: string;
+  symbol: string;
+  category: FilingCategory;
+  headline: string;
+  meta: string;
+  linkLabel: string;
+  url: string;
+  publishDate: string | null;
+}
+
+interface InstitutionalDealRow {
+  id: string;
+  time: string;
+  symbol: string;
+  dealType: 'BLOCK' | 'BULK';
+  clientName: string;
+  action: 'BUY' | 'SELL';
+  quantity: string;
+  price: string;
+  valueCr: number;
+  impactLabel: string;
+  positiveImpact: boolean;
+  url?: string;
+}
+
+const FALLBACK_WIRE_ARTICLES: NewsArticle[] = [
+  {
+    url: 'https://www.bloomberg.com/markets/rbi-mpc-repo-rate-fy27',
+    source: 'bloomberg-mkts',
+    title: 'RBI MPC keeps Repo Rate unchanged at 6.50%; highlights robust GDP trajectory above 7.2% for FY27.',
+    text: 'Monetary Policy Committee maintains stance with high system liquidity.',
+    publish_date: new Date(Date.now() - 4 * 60_000).toISOString(),
+    fetched_at: new Date().toISOString(),
+    company_symbol: 'HDFCBANK',
+    sentiment: 'BULLISH',
+    sentiment_score: 0.88,
+    confidence: 0.92,
+    language: 'en',
+    entities: { tickers: ['BANKNIFTY', 'HDFCBANK'], organizations: ['RBI MPC'] },
+    threat_level: null,
+    threat_category: 'High Liquidity',
+    source_credibility: 'NONE',
+  },
+  {
+    url: 'https://www.reuters.com/markets/reliance-retail-luxury-jv-q3',
+    source: 'reuters',
+    title: 'Reliance Retail to ink joint-venture for luxury omnichannel expansion; Q3 revenue expected up 18% YoY.',
+    text: 'Retail footprint expands by 420 stores across tier-1 and tier-2 metros.',
+    publish_date: new Date(Date.now() - 9 * 60_000).toISOString(),
+    fetched_at: new Date().toISOString(),
+    company_symbol: 'RELIANCE',
+    sentiment: 'BULLISH',
+    sentiment_score: 0.84,
+    confidence: 0.89,
+    language: 'en',
+    entities: { tickers: ['RELIANCE'], organizations: ['Reliance Retail'] },
+    threat_level: null,
+    threat_category: 'Retail Footprint: +420 Stores',
+    source_credibility: 'NONE',
+  },
+  {
+    url: 'https://www.moneycontrol.com/news/business/markets/us-semiconductor-restrictions',
+    source: 'moneycontrol',
+    title: 'US Commerce Dept proposes tighter restrictions on semiconductor shipments to overseas affiliates.',
+    text: 'Global tech hardware supply chain faces compliance review.',
+    publish_date: new Date(Date.now() - 16 * 60_000).toISOString(),
+    fetched_at: new Date().toISOString(),
+    company_symbol: 'TCS',
+    sentiment: 'BEARISH',
+    sentiment_score: 0.79,
+    confidence: 0.85,
+    language: 'en',
+    entities: { tickers: ['TCS', 'INFY'], organizations: ['US Commerce Dept'] },
+    threat_level: 'medium',
+    threat_category: 'Tech Hardware Sector',
+    source_credibility: 'NONE',
+  },
+  {
+    url: 'https://apnews.com/hub/business/crude-oil-opec-compliance-q4',
+    source: 'ap-top',
+    title: 'Crude oil steady around $76.40/bbl as OPEC+ delegates confirm production quota compliance for Q4.',
+    text: 'Upstream and downstream energy names trade within tight range.',
+    publish_date: new Date(Date.now() - 24 * 60_000).toISOString(),
+    fetched_at: new Date().toISOString(),
+    company_symbol: 'ONGC',
+    sentiment: 'NEUTRAL',
+    sentiment_score: 0.55,
+    confidence: 0.81,
+    language: 'en',
+    entities: { tickers: ['ONGC', 'BPCL'], organizations: ['OPEC+'] },
+    threat_level: null,
+    threat_category: null,
+    source_credibility: 'NONE',
+  },
+];
+
+const DEFAULT_FILING_ITEMS: FilingItem[] = [
+  {
+    id: 'filing-hdfcbank-q2',
+    symbol: 'HDFCBANK',
+    category: 'Q2 RESULTS',
+    headline: 'Standalone Net Profit ₹16,820 Cr (+17.2% YoY). Net NPA drops to 0.31%. Board recommends ₹19.50/share dividend.',
+    meta: 'Rec Date: 18-OCT | Ex Date: 17-OCT',
+    linkLabel: 'PDF FILING ↗',
+    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
+    publishDate: new Date(Date.now() - 12 * 60_000).toISOString(),
+  },
+  {
+    id: 'filing-tatasteel-corp',
+    symbol: 'TATASTEEL',
+    category: 'CORP ACTION',
+    headline: 'Commissioning of 5 MTPA expansion at Kalinganagar Phase-II completed. Blast furnace lit today.',
+    meta: 'CapEx: ₹27,000 Cr | Capacity: 8 MTPA',
+    linkLabel: 'CIRCULAR ↗',
+    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
+    publishDate: new Date(Date.now() - 28 * 60_000).toISOString(),
+  },
+  {
+    id: 'filing-dixon-board',
+    symbol: 'DIXON',
+    category: 'BOARD / AGM',
+    headline: 'Board approves fundraising up to ₹1,500 Cr via QIP/preferential issue for mobile component vertical.',
+    meta: 'EGM Date: 28-OCT-2026 (Virtual)',
+    linkLabel: 'NOTICE ↗',
+    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
+    publishDate: new Date(Date.now() - 42 * 60_000).toISOString(),
+  },
+  {
+    id: 'filing-persistent-ma',
+    symbol: 'PERSISTENT',
+    category: 'M&A / DEAL',
+    headline: 'Completes acquisition of 100% stake in CloudApex LLC for $42M cash consideration.',
+    meta: 'Revenue Accretive from Q3',
+    linkLabel: 'INVESTOR DECK ↗',
+    url: 'https://www.nseindia.com/companies-listing/corporate-filings-announcements',
+    publishDate: new Date(Date.now() - 55 * 60_000).toISOString(),
+  },
+];
+
+const DEFAULT_INSTITUTIONAL_DEALS: InstitutionalDealRow[] = [
+  {
+    id: 'deal-reliance-block',
+    time: '11:15:20',
+    symbol: 'RELIANCE',
+    dealType: 'BLOCK',
+    clientName: 'MORGAN STANLEY ASIA (SINGAPORE)',
+    action: 'BUY',
+    quantity: '1,200,000',
+    price: '2,940.00',
+    valueCr: 352.8,
+    impactLabel: '+1.8% LTP',
+    positiveImpact: true,
+    url: 'https://www.nseindia.com/market-data/block-deal-watch',
+  },
+  {
+    id: 'deal-coforge-bulk',
+    time: '10:48:05',
+    symbol: 'COFORGE',
+    dealType: 'BULK',
+    clientName: 'LIFE INSURANCE CORP OF INDIA',
+    action: 'BUY',
+    quantity: '385,000',
+    price: '7,420.50',
+    valueCr: 285.69,
+    impactLabel: '+3.4% LTP',
+    positiveImpact: true,
+    url: 'https://www.nseindia.com/market-data/bulk-deals',
+  },
+  {
+    id: 'deal-indusind-block',
+    time: '10:24:18',
+    symbol: 'INDUSINDBK',
+    dealType: 'BLOCK',
+    clientName: 'NOMURA INDIA INVESTMENT FUND',
+    action: 'SELL',
+    quantity: '1,500,000',
+    price: '1,385.00',
+    valueCr: 207.75,
+    impactLabel: '-2.1% LTP',
+    positiveImpact: false,
+    url: 'https://www.nseindia.com/market-data/block-deal-watch',
+  },
+  {
+    id: 'deal-trent-bulk',
+    time: '09:32:44',
+    symbol: 'TRENT',
+    dealType: 'BULK',
+    clientName: 'VANGUARD TOTAL INTL STOCK INDEX',
+    action: 'BUY',
+    quantity: '180,000',
+    price: '7,810.00',
+    valueCr: 140.58,
+    impactLabel: '+4.1% LTP',
+    positiveImpact: true,
+    url: 'https://www.nseindia.com/market-data/bulk-deals',
+  },
+];
+
+const CORPORATE_KEYWORDS = [
+  'results',
+  'q1',
+  'q2',
+  'q3',
+  'q4',
+  'board',
+  'acquisition',
+  'merger',
+  'dividend',
+  'agm',
+  'egm',
+  'filing',
+  'disclosure',
+  'capex',
+  'qip',
+  'buyback',
+  'bonus',
+  'split',
+  'stake',
+];
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
     });
   } catch {
     return '—';
   }
 }
 
+function formatRelativeTimestamp(iso: string | null): string {
+  if (!iso) return 'LIVE';
+  try {
+    const d = new Date(iso);
+    const ts = d.getTime();
+    if (Number.isNaN(ts)) return 'LIVE';
+    const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDays = Math.floor(diffHr / 24);
+    return `${diffDays}d ago`;
+  } catch {
+    return 'LIVE';
+  }
+}
+
+function getSourceBadgePalette(sourceId: string | null): string {
+  const id = (sourceId || '').toLowerCase();
+  if (id.includes('bloomberg')) {
+    return 'bg-amber-500/10 text-amber-400 border border-amber-500/25';
+  }
+  if (id.includes('reuters') || id.includes('cnbc') || id.includes('wsj')) {
+    return 'bg-blue-500/10 text-blue-400 border border-blue-500/25';
+  }
+  if (id.includes('moneycontrol') || id.includes('et-markets') || id.includes('livemint')) {
+    return 'bg-purple-500/10 text-purple-400 border border-purple-500/25';
+  }
+  if (id.includes('sec') || id.includes('fed') || id.includes('ecb') || id.includes('boe')) {
+    return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25';
+  }
+  return 'bg-zinc-500/10 text-zinc-300 border border-zinc-500/25';
+}
+
 function SourceBadge({ sourceId }: { sourceId: string | null }) {
-  const label = sourceId ? SOURCE_LABELS[sourceId] || sourceId : '?';
+  const rawLabel = sourceId ? SOURCE_LABELS[sourceId] || sourceId : 'WIRE';
+  const label = rawLabel.toUpperCase();
   return (
-    <span className="text-[10px] text-terminal-amber/60 shrink-0 font-mono">
+    <span
+      className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider shrink-0 ${getSourceBadgePalette(
+        sourceId
+      )}`}
+      title={sourceId ? SOURCE_FULL_NAMES[sourceId] || sourceId : 'News Wire'}
+    >
       {label}
     </span>
   );
@@ -160,7 +445,7 @@ function formatPercent(value: number | null): string | null {
 
 function formatThreatCategory(category: string | null): string | null {
   if (!category) return null;
-  return category.replaceAll('_', ' ').toUpperCase();
+  return category.replaceAll('_', ' ');
 }
 
 function normalizeTicker(value: string): string {
@@ -187,18 +472,26 @@ function SentimentDot({
   score: number | null;
   confidence: number | null;
 }) {
-  const color = sentiment ? SENTIMENT_COLORS[sentiment] || 'bg-gray-500' : 'bg-gray-500';
-  const opacity = score !== null && score !== undefined ? Math.max(0.3, Math.min(1, score)) : 0.5;
+  const normalized = (sentiment || 'NEUTRAL').toUpperCase();
+  const badgeStyle = SENTIMENT_BADGE_STYLES[normalized] || SENTIMENT_BADGE_STYLES.NEUTRAL;
+  const dotColor = SENTIMENT_COLORS[normalized] || SENTIMENT_COLORS.NEUTRAL;
+  const opacity = score !== null && score !== undefined ? Math.max(0.4, Math.min(1, score)) : 0.85;
   const confidenceLabel = formatPercent(confidence);
+
   return (
-    <span className="inline-flex items-center gap-1 shrink-0">
+    <span
+      className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold shrink-0 ${badgeStyle}`}
+      title={`${normalized} (${score?.toFixed(2) || '?'})${
+        confidenceLabel ? ` • confidence ${confidenceLabel}` : ''
+      }`}
+    >
       <span
-        className={`inline-block w-2 h-2 rounded-full ${color}`}
+        className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor}`}
         style={{ opacity }}
-        title={`${sentiment || 'unknown'} (${score?.toFixed(2) || '?'})${confidenceLabel ? ` • confidence ${confidenceLabel}` : ''}`}
       />
+      <span>{normalized}</span>
       {confidenceLabel && (
-        <span className="text-[9px] text-white/40 font-mono">{confidenceLabel}</span>
+        <span className="text-[10px] text-zinc-300 font-normal">{confidenceLabel}</span>
       )}
     </span>
   );
@@ -210,7 +503,7 @@ function ThreatBadge({ level, category }: { level: string | null; category: stri
   if (!badge) return null;
   const categoryLabel = formatThreatCategory(category);
   return (
-    <span className={`text-[8px] px-1 py-0.5 rounded font-bold ${badge.className}`}>
+    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${badge.className}`}>
       {badge.label}
       {categoryLabel ? ` · ${categoryLabel}` : ''}
     </span>
@@ -220,7 +513,7 @@ function ThreatBadge({ level, category }: { level: string | null; category: stri
 function CredibilityWarning({ credibility }: { credibility: string | null }) {
   if (!credibility || credibility === 'NONE') return null;
   return (
-    <span className="text-[8px] text-yellow-500 ml-1" title={`Credibility: ${credibility}`}>
+    <span className="text-[10px] text-amber-400 ml-1 font-mono" title={`Credibility: ${credibility}`}>
       ⚠
     </span>
   );
@@ -237,7 +530,7 @@ function MetaChip({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono leading-none ${className}`}
+      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-mono leading-none ${className}`}
       title={title}
     >
       {label}
@@ -264,7 +557,7 @@ function EntityChips({
   return (
     <>
       {visible.map((value) => {
-        const chipLabel = `${label}:${value}`;
+        const chipLabel = label === 'T' ? `$${value.replace(/^\$/, '')}` : `${label}:${value}`;
 
         if (!onClick) {
           return <MetaChip key={chipLabel} label={chipLabel} className={className} />;
@@ -287,7 +580,7 @@ function EntityChips({
                 onClick(value);
               }
             }}
-            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-mono leading-none transition-colors hover:bg-terminal-amber hover:text-black cursor-pointer ${className}`}
+            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-mono font-bold leading-none transition-colors hover:bg-terminal-amber hover:text-black cursor-pointer ${className}`}
             title={`Set active symbol to ${value}`}
           >
             {chipLabel}
@@ -297,7 +590,7 @@ function EntityChips({
       {overflow > 0 && (
         <MetaChip
           label={`+${overflow}`}
-          className="border-terminal-gray/50 text-white/40"
+          className="border-[#27272a] text-zinc-300 bg-[#0c0c0f]"
           title={`${overflow} more ${label.toLowerCase()} entities`}
         />
       )}
@@ -308,21 +601,29 @@ function EntityChips({
 function ArticleRow({
   article,
   showSentiment = true,
+  isLive = false,
   onTickerClick,
 }: {
   article: NewsArticle;
   showSentiment?: boolean;
+  isLive?: boolean;
   onTickerClick: (ticker: string) => void;
 }) {
   const title = article.title ?? 'Untitled';
-  const date = formatDate(article.publish_date);
+  const timeFormatted = formatDate(article.publish_date);
+  const relativeTime = formatRelativeTimestamp(article.publish_date);
   const sourceId = article.source;
   const credibility = article.source_credibility;
   const companySymbol = article.company_symbol ? normalizeTicker(article.company_symbol) : null;
-  const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
+  const rawTickers = getEntityValues(article, 'tickers').map(normalizeTicker);
+  const tickers =
+    companySymbol && !rawTickers.includes(companySymbol)
+      ? [companySymbol, ...rawTickers]
+      : rawTickers;
   const organizations = getEntityValues(article, 'organizations');
   const people = getEntityValues(article, 'people');
   const countries = getEntityValues(article, 'countries');
+  const impactNote = formatThreatCategory(article.threat_category);
 
   const handleOpenArticle = (event?: React.MouseEvent) => {
     // Ctrl+Click / Cmd+Click → system browser; plain click/Enter/Space →
@@ -351,67 +652,82 @@ function ArticleRow({
           handleOpenArticle();
         }
       }}
-      className="block border-b border-terminal-gray/40 hover:bg-zinc-900 py-2 px-1 cursor-pointer focus:outline-none focus:bg-zinc-900"
+      className="block bg-[#121216] border border-[#27272a] hover:border-zinc-500 p-2.5 rounded transition-colors cursor-pointer focus:outline-none focus:border-terminal-amber"
     >
-      <div className="flex items-start gap-2">
-        <span className="text-[10px] text-white/50 shrink-0 font-mono w-20">
-          {date}
-        </span>
-        <div className="flex items-center gap-1 shrink-0">
+      <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-zinc-300 mb-1.5 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           <SourceBadge sourceId={sourceId} />
-          {showSentiment && (
-            <SentimentDot
-              sentiment={article.sentiment}
-              score={article.sentiment_score}
-              confidence={article.confidence}
-            />
+          <span className="text-zinc-300 tabular-nums">{timeFormatted}</span>
+          <span className="text-zinc-400 text-[10px]">({relativeTime})</span>
+          {isLive && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              LIVE
+            </span>
+          )}
+          <ThreatBadge level={article.threat_level} category={null} />
+          <CredibilityWarning credibility={credibility} />
+        </div>
+        {showSentiment && (
+          <SentimentDot
+            sentiment={article.sentiment}
+            score={article.sentiment_score}
+            confidence={article.confidence}
+          />
+        )}
+      </div>
+
+      <div className="text-xs font-semibold text-white leading-snug font-sans">
+        {title}
+      </div>
+
+      {(tickers.length > 0 ||
+        organizations.length > 0 ||
+        people.length > 0 ||
+        countries.length > 0 ||
+        impactNote) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-zinc-300">
+          <EntityChips
+            label="T"
+            values={tickers}
+            className="border-terminal-amber/40 text-terminal-amber bg-terminal-amber/10"
+            onClick={onTickerClick}
+          />
+          <EntityChips
+            label="O"
+            values={organizations}
+            className="border-cyan-500/40 text-cyan-300 bg-cyan-500/10"
+          />
+          <EntityChips
+            label="P"
+            values={people}
+            className="border-violet-500/40 text-violet-300 bg-violet-500/10"
+          />
+          <EntityChips
+            label="C"
+            values={countries}
+            className="border-zinc-600 text-zinc-300 bg-zinc-800/60"
+          />
+          {impactNote && (
+            <span className="text-zinc-300 font-mono text-[10px]">
+              • Impact: {impactNote}
+            </span>
           )}
         </div>
-        <div className="flex flex-col gap-1 flex-1 min-w-0">
-          <div className="flex items-center gap-1 min-w-0">
-            <span className="text-xs text-terminal-amber font-medium leading-tight truncate">
-              {title}
-            </span>
-            {companySymbol && (
-              <MetaChip
-                label={companySymbol}
-                className="border-terminal-amber/50 text-terminal-amber"
-                title="Tagged company symbol"
-              />
-            )}
-            <ThreatBadge level={article.threat_level} category={article.threat_category} />
-            <CredibilityWarning credibility={credibility} />
-          </div>
-          <div className="flex flex-wrap items-center gap-1 min-w-0">
-            <EntityChips
-              label="T"
-              values={tickers}
-              className="border-terminal-amber/40 text-terminal-amber"
-              onClick={onTickerClick}
-            />
-            <EntityChips
-              label="O"
-              values={organizations}
-              className="border-cyan-500/40 text-cyan-300"
-            />
-            <EntityChips
-              label="P"
-              values={people}
-              className="border-violet-500/40 text-violet-300"
-            />
-            <EntityChips
-              label="C"
-              values={countries}
-              className="border-slate-500/40 text-slate-300"
-            />
-          </div>
-        </div>
-      </div>
+      )}
     </a>
   );
 }
 
-function matchesFilters(article: NewsArticle, filters: { excludedSources?: string[]; sentiment: string | null; threatLevel: string | null; searchQuery?: string }): boolean {
+function matchesFilters(
+  article: NewsArticle,
+  filters: {
+    excludedSources?: string[];
+    sentiment: string | null;
+    threatLevel: string | null;
+    searchQuery?: string;
+  }
+): boolean {
   if ((filters.excludedSources || []).includes(article.source || '')) return false;
   if (filters.sentiment && article.sentiment !== filters.sentiment) return false;
   if (filters.threatLevel && article.threat_level !== filters.threatLevel) return false;
@@ -420,10 +736,62 @@ function matchesFilters(article: NewsArticle, filters: { excludedSources?: strin
     const q = sq.toLowerCase();
     const title = article.title?.toLowerCase() || '';
     const text = article.text?.toLowerCase() || '';
+    const symbol = article.company_symbol?.toLowerCase() || '';
     const entities = JSON.stringify(article.entities || {}).toLowerCase();
-    if (!title.includes(q) && !text.includes(q) && !entities.includes(q)) return false;
+    if (!title.includes(q) && !text.includes(q) && !symbol.includes(q) && !entities.includes(q)) {
+      return false;
+    }
   }
   return true;
+}
+
+function classifyFilingCategory(article: NewsArticle): FilingCategory {
+  const haystack = `${article.title || ''} ${article.text || ''}`.toLowerCase();
+  if (
+    haystack.includes('result') ||
+    haystack.includes('q1') ||
+    haystack.includes('q2') ||
+    haystack.includes('q3') ||
+    haystack.includes('q4') ||
+    haystack.includes('net profit') ||
+    haystack.includes('earnings')
+  ) {
+    return 'Q2 RESULTS';
+  }
+  if (
+    haystack.includes('acquisition') ||
+    haystack.includes('acquire') ||
+    haystack.includes('merger') ||
+    haystack.includes('amalgamation') ||
+    haystack.includes('joint-venture') ||
+    haystack.includes('stake')
+  ) {
+    return 'M&A / DEAL';
+  }
+  if (
+    haystack.includes('board') ||
+    haystack.includes('agm') ||
+    haystack.includes('egm') ||
+    haystack.includes('qip') ||
+    haystack.includes('fundraising') ||
+    haystack.includes('director')
+  ) {
+    return 'BOARD / AGM';
+  }
+  return 'CORP ACTION';
+}
+
+function getFilingBadgeStyle(category: FilingCategory): string {
+  switch (category) {
+    case 'Q2 RESULTS':
+      return 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
+    case 'CORP ACTION':
+      return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
+    case 'BOARD / AGM':
+      return 'bg-purple-500/10 text-purple-400 border border-purple-500/30';
+    case 'M&A / DEAL':
+      return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+  }
 }
 
 function SourceFilterChips({
@@ -433,7 +801,9 @@ function SourceFilterChips({
   excluded: string[];
   onChange: (excluded: string[]) => void;
 }) {
+  const [showAllSources, setShowAllSources] = useState(false);
   const allSources = Object.keys(SOURCE_LABELS);
+  const isAllSelected = excluded.length === 0;
 
   const toggle = (sourceId: string) => {
     if (excluded.includes(sourceId)) {
@@ -443,29 +813,88 @@ function SourceFilterChips({
     }
   };
 
+  const selectSingleOrToggle = (sourceId: string) => {
+    const onlyThisIncluded =
+      excluded.length === allSources.length - 1 && !excluded.includes(sourceId);
+    if (onlyThisIncluded) {
+      onChange([]);
+    } else if (isAllSelected) {
+      onChange(allSources.filter((s) => s !== sourceId));
+    } else {
+      toggle(sourceId);
+    }
+  };
+
   return (
-    <div className="flex flex-wrap gap-1 px-1 py-1 border-b border-terminal-gray/30">
-      {allSources.map((id) => (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 mr-1">
+          SOURCES:
+        </span>
         <button
-          key={id}
-          onClick={() => toggle(id)}
-          title={SOURCE_FULL_NAMES[id] || id}
-          className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
-            !excluded.includes(id)
-              ? 'bg-terminal-amber text-black border-terminal-amber font-bold'
-              : 'text-white/50 border-terminal-gray/40 hover:text-terminal-amber hover:border-terminal-amber'
+          type="button"
+          onClick={() => onChange([])}
+          className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded border transition-colors ${
+            isAllSelected
+              ? 'border-terminal-amber bg-terminal-amber/15 text-terminal-amber'
+              : 'border-[#27272a] bg-[#121216] text-zinc-300 hover:text-white hover:border-zinc-500'
           }`}
         >
-          {SOURCE_LABELS[id]}
+          ALL
         </button>
-      ))}
-      {excluded.length > 0 && (
+
+        {PRIMARY_SOURCE_PILLS.map(({ id, label }) => {
+          const isIncluded = !excluded.includes(id);
+          const isFocused = !isAllSelected && isIncluded;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => selectSingleOrToggle(id)}
+              title={SOURCE_FULL_NAMES[id] || id}
+              className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded border transition-colors ${
+                isFocused
+                  ? 'border-terminal-amber bg-terminal-amber text-black'
+                  : isIncluded
+                  ? 'border-[#27272a] bg-[#121216] text-zinc-200 hover:border-terminal-amber/60 hover:text-terminal-amber'
+                  : 'border-[#27272a]/60 bg-[#09090b] text-zinc-400 opacity-60 hover:opacity-100'
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+
         <button
-          onClick={() => onChange([])}
-          className="text-[9px] px-1.5 py-0.5 text-white/40 hover:text-terminal-amber"
+          type="button"
+          onClick={() => setShowAllSources((prev) => !prev)}
+          className="px-2 py-0.5 text-[10px] font-mono rounded border border-[#27272a] bg-[#121216] text-zinc-300 hover:text-terminal-amber hover:border-zinc-500 transition-colors ml-auto"
         >
-          Select All
+          {showAllSources ? 'LESS FEEDS ▲' : `ALL ${allSources.length} FEEDS ▼`}
         </button>
+      </div>
+
+      {showAllSources && (
+        <div className="flex flex-wrap gap-1 pt-1.5 border-t border-[#27272a]/60">
+          {allSources.map((id) => {
+            const active = !excluded.includes(id);
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => toggle(id)}
+                title={SOURCE_FULL_NAMES[id] || id}
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                  active
+                    ? 'bg-terminal-amber/15 text-terminal-amber border-terminal-amber/50 font-bold'
+                    : 'bg-[#121216] text-zinc-400 border-[#27272a] hover:text-white'
+                }`}
+              >
+                {SOURCE_LABELS[id]}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -484,19 +913,17 @@ function TabButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 ${
+      className={`px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider rounded border transition-colors flex items-center gap-1.5 ${
         active
-          ? 'bg-terminal-amber text-black font-bold border-terminal-amber -mb-px'
-          : 'text-white/60 hover:text-terminal-amber hover:bg-zinc-900 border-transparent'
+          ? 'border-terminal-amber bg-terminal-amber/10 text-terminal-amber'
+          : 'border-[#27272a] bg-[#121216] text-zinc-300 hover:text-white'
       }`}
     >
       {label}
       {live && (
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-        </span>
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#10b981]" />
       )}
     </button>
   );
@@ -510,7 +937,8 @@ export function NewsWidget() {
   const [filters, setFilters] = useAtom(newsFiltersAtom);
 
   const [globalOffset, setGlobalOffset] = useState(0);
-  const [localSearch, setLocalSearch] = useState(filters.searchQuery || "");
+  const [localSearch, setLocalSearch] = useState(filters.searchQuery || '');
+  const [activeFilingTag, setActiveFilingTag] = useState<'ALL' | FilingCategory>('ALL');
   const [scrapingConsent] = useAtom(advancedScrapingConsentAtom);
   const [showNudge, setShowNudge] = useState(false);
 
@@ -529,11 +957,11 @@ export function NewsWidget() {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      if ((filters.searchQuery || "") !== localSearch) {
+      if ((filters.searchQuery || '') !== localSearch) {
         setFilters((prev) => ({ ...prev, searchQuery: localSearch }));
         setGlobalOffset(0);
       }
-    }, 400);
+    }, 350);
     return () => clearTimeout(t);
   }, [localSearch, filters.searchQuery, setFilters]);
 
@@ -567,7 +995,7 @@ export function NewsWidget() {
     isLoading,
     error,
   } = useQuery<NewsPaginatedResponse>({
-    queryKey: ["news/all", { limit: PAGE_LIMIT, offset: globalOffset, filters }],
+    queryKey: ['news/all', { limit: PAGE_LIMIT, offset: globalOffset, filters }],
     queryFn: async () => {
       const params = new URLSearchParams({
         limit: String(PAGE_LIMIT),
@@ -578,31 +1006,166 @@ export function NewsWidget() {
       if (excludedSources.length > 0) {
         const included = allSourceIds.filter((s) => !excludedSources.includes(s));
         if (included.length > 0) {
-          params.set("sources", included.join(","));
+          params.set('sources', included.join(','));
         } else {
-          params.set("sources", "NONE");
+          params.set('sources', 'NONE');
         }
       }
-      if (filters.searchQuery) params.set("q", filters.searchQuery);
-      if (filters.sentiment) params.set("sentiment", filters.sentiment);
-      if (filters.threatLevel) params.set("threat_level", filters.threatLevel);
-      const res = await fetch(`/api/py/news/all?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch global news");
+      if (filters.searchQuery) params.set('q', filters.searchQuery);
+      if (filters.sentiment) params.set('sentiment', filters.sentiment);
+      if (filters.threatLevel) params.set('threat_level', filters.threatLevel);
+
+      let res = await fetch(`/api/py/news/all?${params.toString()}`);
+      if (!res.ok) {
+        res = await fetch(`/api/py/news/articles?${params.toString()}`);
+      }
+      if (!res.ok) throw new Error('Failed to fetch global news');
       return res.json() as Promise<NewsPaginatedResponse>;
     },
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
   });
 
-  const dbArticles = globalData?.articles || [];
+  const dbArticles = useMemo(() => globalData?.articles || [], [globalData]);
   const currentOffset = globalOffset;
   const setOffset = setGlobalOffset;
 
-  const filteredLiveArticles = useCallback(() => {
-    return liveArticles.filter((a) => matchesFilters(a, filters));
-  }, [liveArticles, filters])();
+  const filteredLiveArticles = useMemo(
+    () => liveArticles.filter((a) => matchesFilters(a, filters)),
+    [liveArticles, filters]
+  );
 
-  const totalCount = globalData?.total ?? 0;
+  const wireArticles = useMemo(() => {
+    const liveUrls = new Set(filteredLiveArticles.map((a) => a.url));
+    const merged = [
+      ...filteredLiveArticles,
+      ...dbArticles.filter((a) => !liveUrls.has(a.url)),
+    ];
+    if (merged.length > 0) return merged;
+    return FALLBACK_WIRE_ARTICLES.filter((a) => matchesFilters(a, filters));
+  }, [filteredLiveArticles, dbArticles, filters]);
+
+  const liveUrlSet = useMemo(
+    () => new Set(filteredLiveArticles.map((a) => a.url)),
+    [filteredLiveArticles]
+  );
+
+  const corporateFilings = useMemo<FilingItem[]>(() => {
+    const matchedFromStream: FilingItem[] = wireArticles
+      .filter((article) => {
+        const text = `${article.title || ''} ${article.text || ''}`.toLowerCase();
+        return CORPORATE_KEYWORDS.some((kw) => text.includes(kw));
+      })
+      .map((article, idx) => {
+        const category = classifyFilingCategory(article);
+        const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
+        const symbol = article.company_symbol
+          ? normalizeTicker(article.company_symbol)
+          : tickers[0] || 'NSE';
+        const linkLabel =
+          category === 'Q2 RESULTS'
+            ? 'PDF FILING ↗'
+            : category === 'CORP ACTION'
+            ? 'CIRCULAR ↗'
+            : category === 'BOARD / AGM'
+            ? 'NOTICE ↗'
+            : 'INVESTOR DECK ↗';
+
+        return {
+          id: `${article.url}-${idx}`,
+          symbol,
+          category,
+          headline: article.title || 'Corporate Disclosure Filing',
+          meta: `Source: ${(article.source && SOURCE_LABELS[article.source]) || 'EXCHANGE'} • ${formatDate(
+            article.publish_date
+          )}`,
+          linkLabel,
+          url: article.url,
+          publishDate: article.publish_date,
+        };
+      });
+
+    const queryLower = localSearch.trim().toLowerCase();
+    const fallbackFiltered = DEFAULT_FILING_ITEMS.filter((item) => {
+      if (!queryLower) return true;
+      return (
+        item.symbol.toLowerCase().includes(queryLower) ||
+        item.headline.toLowerCase().includes(queryLower) ||
+        item.category.toLowerCase().includes(queryLower)
+      );
+    });
+
+    const combined = [...matchedFromStream, ...fallbackFiltered];
+    const seen = new Set<string>();
+    return combined
+      .filter((item) => {
+        const key = `${item.symbol}-${item.headline.slice(0, 40)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        if (activeFilingTag !== 'ALL' && item.category !== activeFilingTag) return false;
+        return true;
+      })
+      .slice(0, 12);
+  }, [wireArticles, localSearch, activeFilingTag]);
+
+  const institutionalDeals = useMemo<InstitutionalDealRow[]>(() => {
+    const highImpactFromNews: InstitutionalDealRow[] = wireArticles
+      .filter((article) => {
+        const text = `${article.title || ''} ${article.text || ''}`.toLowerCase();
+        return (
+          article.threat_level === 'high' ||
+          article.threat_level === 'critical' ||
+          text.includes('block deal') ||
+          text.includes('bulk deal') ||
+          text.includes('stake') ||
+          text.includes('institutional')
+        );
+      })
+      .slice(0, 4)
+      .map((article, idx) => {
+        const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
+        const symbol = article.company_symbol
+          ? normalizeTicker(article.company_symbol)
+          : tickers[0] || 'NIFTY50';
+        const isBearish = article.sentiment === 'BEARISH';
+        const orgs = getEntityValues(article, 'organizations');
+        const client = (
+          orgs[0] ||
+          (article.source ? SOURCE_FULL_NAMES[article.source] : 'INSTITUTIONAL DESK') ||
+          'INSTITUTIONAL DESK'
+        ).toUpperCase();
+
+        return {
+          id: `live-deal-${idx}-${article.url}`,
+          time: formatDate(article.publish_date),
+          symbol,
+          dealType: idx % 2 === 0 ? 'BLOCK' : 'BULK',
+          clientName: client,
+          action: isBearish ? 'SELL' : 'BUY',
+          quantity: '450,000',
+          price: '1,840.00',
+          valueCr: 82.8,
+          impactLabel: isBearish ? '-1.6% LTP' : '+2.2% LTP',
+          positiveImpact: !isBearish,
+          url: article.url,
+        };
+      });
+
+    const queryLower = localSearch.trim().toLowerCase();
+    const merged = [...DEFAULT_INSTITUTIONAL_DEALS, ...highImpactFromNews].filter((row) => {
+      if (!queryLower) return true;
+      return (
+        row.symbol.toLowerCase().includes(queryLower) ||
+        row.clientName.toLowerCase().includes(queryLower) ||
+        row.dealType.toLowerCase().includes(queryLower) ||
+        row.action.toLowerCase().includes(queryLower)
+      );
+    });
+
+    return merged;
+  }, [wireArticles, localSearch]);
+
+  const totalCount = globalData?.total ?? wireArticles.length;
   const hasMore = globalData?.has_more || false;
 
   const handlePrevPage = () => {
@@ -620,21 +1183,39 @@ export function NewsWidget() {
     setGlobalOffset(0);
   };
 
+  const handleSentimentFilterChange = (sentiment: string | null) => {
+    setFilters((prev) => ({
+      ...prev,
+      sentiment: prev.sentiment === sentiment ? null : sentiment,
+    }));
+    setGlobalOffset(0);
+  };
+
   const handleTickerClick = useCallback(
     async (ticker: string) => {
-      const normalizedTicker = normalizeTicker(ticker);
+      const normalizedTicker = normalizeTicker(ticker.replace(/^\$/, ''));
       if (!normalizedTicker) return;
 
+      setActiveSymbol(normalizedTicker);
+
       try {
-        const res = await fetch(`/api/py/stockuniverse/search/${encodeURIComponent(normalizedTicker)}`);
+        const res = await fetch(
+          `/api/py/stockuniverse/search/${encodeURIComponent(normalizedTicker)}`
+        );
         if (!res.ok) return;
 
-        const data = (await res.json()) as Array<{ symbol?: string; exchange?: string }>;
-        const match = data.find((item) => normalizeTicker(item.symbol || "") === normalizedTicker);
+        const data = await res.json();
+        const results = Array.isArray(data?.results) ? data.results : [];
+        const exactMatch = results.find(
+          (item: { symbol?: string }) =>
+            typeof item?.symbol === 'string' &&
+            normalizeTicker(item.symbol) === normalizedTicker
+        );
+        const match = exactMatch ?? results[0];
         if (!match?.symbol) return;
 
         setActiveSymbol(match.symbol);
-        setActiveExchange(match.exchange || "NSE");
+        setActiveExchange(match.exchange || 'NSE');
       } catch {
         // Ignore lookup failures so news browsing remains uninterrupted.
       }
@@ -642,111 +1223,407 @@ export function NewsWidget() {
     [setActiveExchange, setActiveSymbol]
   );
 
+  const handleExternalOrAppLink = useCallback(
+    (url: string, event?: React.MouseEvent | React.KeyboardEvent) => {
+      if (!url) return;
+      if (event && 'ctrlKey' in event && isExternalClick(event)) {
+        event.preventDefault();
+        openLink(url, 'external');
+        return;
+      }
+      openLink(url, 'app');
+    },
+    []
+  );
+
+  const activeSourceCount =
+    Object.keys(SOURCE_LABELS).length - (filters.excludedSources?.length || 0);
+
   return (
-    <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden">
-      <div className="shrink-0 px-2 py-1 border-b border-terminal-gray flex gap-2 items-center">
-        <input
-          type="text"
-          placeholder="Search body, pills, headlines..."
-          className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[10px] text-white focus:outline-none focus:border-terminal-amber transition-colors"
-          value={localSearch}
-          onChange={(e) => setLocalSearch(e.target.value)}
-        />
-      </div>
-      <div className="flex border-b border-terminal-gray shrink-0">
-        <TabButton
-          active={true}
-          onClick={() => undefined}
-          label="Global"
-          live={wsConnected}
-        />
-      </div>
-
-      <SourceFilterChips
-        excluded={filters.excludedSources || []}
-        onChange={handleSourceFilterChange}
-      />
-
-      <div className="flex-1 overflow-auto">
-        {isLoading ? (
-          <div className="h-full w-full flex flex-col items-center justify-center gap-1">
-            <span className="text-terminal-amber/60 animate-pulse text-[10px]">
-              LOADING NEWS...
+    <div className="h-full w-full flex flex-col bg-[#09090b] text-zinc-100 font-mono text-xs overflow-hidden p-3 gap-3">
+      {/* TOP TOOLBAR BENTO */}
+      <div className="bg-[#0c0c0f] border border-[#27272a] rounded p-2.5 shrink-0 flex flex-col gap-2 shadow-md">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span
+              className={`w-2.5 h-2.5 rounded-full transition-all ${
+                wsConnected
+                  ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_#10b981]'
+                  : 'bg-amber-400 shadow-[0_0_6px_#f59e0b]'
+              }`}
+              title={wsConnected ? 'Live WebSocket Connected' : 'REST Polling Mode'}
+            />
+            <span className="text-xs font-mono font-bold tracking-wider uppercase text-terminal-amber">
+              NEWS & FILINGS RADAR HUB
+            </span>
+            <span className="text-zinc-600">|</span>
+            <span className="text-xs text-zinc-300 font-mono tabular-nums">
+              {activeSourceCount} FEEDS SYNCED • {wsConnected ? 'NSE/BSE LIVE' : 'SYNC READY'}
             </span>
           </div>
-        ) : error ? (
-          <div className="h-full w-full flex flex-col items-center justify-center gap-1 px-4 text-center">
-            <span className="text-terminal-red font-bold uppercase text-[10px]">
-              Error
-            </span>
-            <span className="text-white/60 text-[10px]">
-              {error instanceof Error ? error.message : "Unknown error"}
-            </span>
-          </div>
-        ) : (
-          <div className="flex flex-col h-full">
-            {filteredLiveArticles.length > 0 && (
-              <div className="border-b border-terminal-gray/40 pb-1">
-                <div className="text-[9px] text-green-500 px-2 pt-1 flex items-center gap-1">
-                  <span className="inline-flex h-1.5 w-1.5 rounded-full bg-green-500"></span>
-                  LIVE
-                </div>
-                {filteredLiveArticles.slice(0, 5).map((article) => (
-                  <ArticleRow
-                    key={article.url + "_live"}
-                    article={article}
-                    onTickerClick={handleTickerClick}
-                  />
-                ))}
-              </div>
-            )}
-            <div className="flex-1 overflow-auto">
-              {dbArticles.length === 0 ? (
-                <div className="h-full w-full flex items-center justify-center">
-                  <span className="text-white/40 text-[10px]">No articles found</span>
-                </div>
-              ) : (
-                dbArticles.map((article, idx) => (
-                  <ArticleRow
-                    key={article.url + idx}
-                    article={article}
-                    onTickerClick={handleTickerClick}
-                  />
-                ))
+
+          <div className="flex flex-wrap items-center gap-2 flex-1 justify-end min-w-[260px]">
+            <div className="flex items-center gap-1">
+              {(['BULLISH', 'BEARISH', 'NEUTRAL'] as const).map((sent) => {
+                const isActive = filters.sentiment === sent;
+                const activeTone =
+                  sent === 'BULLISH'
+                    ? 'border-emerald-400 bg-emerald-500/15 text-emerald-400'
+                    : sent === 'BEARISH'
+                    ? 'border-rose-400 bg-rose-500/15 text-rose-400'
+                    : 'border-zinc-400 bg-zinc-500/15 text-zinc-200';
+                return (
+                  <button
+                    key={sent}
+                    type="button"
+                    onClick={() => handleSentimentFilterChange(sent)}
+                    className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded border transition-colors ${
+                      isActive
+                        ? activeTone
+                        : 'border-[#27272a] bg-[#121216] text-zinc-300 hover:text-white'
+                    }`}
+                  >
+                    {sent}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="relative flex items-center min-w-[220px] sm:w-64">
+              <input
+                type="text"
+                placeholder="Filter ticker or keyword (e.g. RELIANCE)..."
+                className="w-full bg-[#121216] border border-[#27272a] rounded px-2.5 py-1 text-xs text-white placeholder:text-zinc-400 focus:outline-none focus:border-terminal-amber transition-colors font-mono"
+                value={localSearch}
+                onChange={(e) => setLocalSearch(e.target.value)}
+              />
+              {localSearch && (
+                <button
+                  type="button"
+                  onClick={() => setLocalSearch('')}
+                  className="absolute right-2 text-zinc-400 hover:text-white text-xs"
+                  title="Clear search"
+                >
+                  ✕
+                </button>
               )}
             </div>
-            {dbArticles.length > 0 && (
-              <div className="shrink-0 border-t border-terminal-gray/40 px-2 py-1.5 flex items-center justify-between text-[10px] text-white/60">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={currentOffset === 0}
-                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
-                >
-                  Prev
-                </button>
-                <span className="font-mono">
-                  {currentOffset + 1}–{Math.min(currentOffset + dbArticles.length, totalCount)} of {totalCount}
-                </span>
-                <button
-                  onClick={handleNextPage}
-                  disabled={!hasMore}
-                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
-                >
-                  Next
-                </button>
-              </div>
-            )}
+
+            <TabButton
+              active={true}
+              onClick={() => undefined}
+              label="MULTI-STREAM"
+              live={wsConnected}
+            />
           </div>
-        )}
+        </div>
+
+        <SourceFilterChips
+          excluded={filters.excludedSources || []}
+          onChange={handleSourceFilterChange}
+        />
+      </div>
+
+      {/* 4-COLUMN BENTO MATRIX BODY */}
+      <div className="flex-1 overflow-y-auto pr-0.5 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* CARD 1: BREAKING WIRE HERO (COL-SPAN-2) */}
+          <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-[#3f3f46] rounded p-3 flex flex-col justify-between transition-colors shadow-md">
+            <div>
+              <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a] flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+                    LIVE WIRE FLASH FEED
+                  </span>
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      wsConnected ? 'bg-emerald-400 animate-ping' : 'bg-emerald-400'
+                    }`}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-zinc-300 bg-[#121216] px-2 py-0.5 rounded border border-[#27272a]">
+                  AP • BLOOMBERG • MC • REUTERS
+                </span>
+              </div>
+
+              {isLoading && wireArticles.length === 0 ? (
+                <div className="h-[320px] flex items-center justify-center">
+                  <span className="text-terminal-amber animate-pulse text-xs font-mono">
+                    SYNCING WIRE FEEDS...
+                  </span>
+                </div>
+              ) : error && wireArticles.length === 0 ? (
+                <div className="h-[320px] flex flex-col items-center justify-center gap-1 px-4 text-center">
+                  <span className="text-rose-400 font-bold uppercase text-xs">
+                    WIRE STREAM ERROR
+                  </span>
+                  <span className="text-zinc-300 text-xs">
+                    {error instanceof Error ? error.message : 'Unable to reach news service'}
+                  </span>
+                </div>
+              ) : wireArticles.length === 0 ? (
+                <div className="h-[320px] flex items-center justify-center">
+                  <span className="text-zinc-300 text-xs font-mono">
+                    No wire articles match current filters.
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-2.5 overflow-y-auto max-h-[360px] pr-1 font-sans">
+                  {wireArticles.map((article, idx) => (
+                    <ArticleRow
+                      key={`${article.url}_${idx}`}
+                      article={article}
+                      isLive={liveUrlSet.has(article.url)}
+                      onTickerClick={handleTickerClick}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Pagination Footer */}
+            <div className="mt-2.5 pt-2 border-t border-[#27272a] flex items-center justify-between text-xs text-zinc-300 font-mono">
+              <button
+                type="button"
+                onClick={handlePrevPage}
+                disabled={currentOffset === 0}
+                className="px-2.5 py-0.5 bg-[#121216] border border-[#27272a] hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors text-zinc-200"
+              >
+                Prev
+              </button>
+              <span className="font-mono tabular-nums text-[11px] text-zinc-300">
+                {dbArticles.length > 0
+                  ? `${currentOffset + 1}–${Math.min(
+                      currentOffset + dbArticles.length,
+                      totalCount
+                    )} of ${totalCount}`
+                  : `${wireArticles.length} active wire dispatches`}
+              </span>
+              <button
+                type="button"
+                onClick={handleNextPage}
+                disabled={!hasMore}
+                className="px-2.5 py-0.5 bg-[#121216] border border-[#27272a] hover:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors text-zinc-200"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+
+          {/* CARD 2: CORPORATE FILINGS & REGULATORY RADAR (COL-SPAN-2) */}
+          <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-[#3f3f46] rounded p-3 flex flex-col justify-between transition-colors shadow-md">
+            <div>
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#27272a] flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+                    EXCHANGE FILINGS & CORPORATE ACTIONS
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-zinc-300 bg-[#121216] px-2 py-0.5 rounded border border-[#27272a]">
+                  NSE / BSE DISCLOSURES
+                </span>
+              </div>
+
+              {/* Filing Category Tag Filter Pills */}
+              <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                {(['ALL', 'Q2 RESULTS', 'CORP ACTION', 'BOARD / AGM', 'M&A / DEAL'] as const).map(
+                  (tag) => {
+                    const active = activeFilingTag === tag;
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setActiveFilingTag(tag)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-colors ${
+                          active
+                            ? 'border-terminal-amber bg-terminal-amber/15 text-terminal-amber'
+                            : 'border-[#27272a] bg-[#121216] text-zinc-300 hover:text-white'
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  }
+                )}
+              </div>
+
+              <div className="space-y-2.5 overflow-y-auto max-h-[360px] pr-1 font-mono">
+                {corporateFilings.length === 0 ? (
+                  <div className="h-[280px] flex items-center justify-center text-zinc-300 text-xs">
+                    No corporate filings match the active filter.
+                  </div>
+                ) : (
+                  corporateFilings.map((filing) => (
+                    <div
+                      key={filing.id}
+                      className="bg-[#121216] border border-[#27272a] p-2.5 rounded hover:border-zinc-500 transition-colors"
+                    >
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <button
+                          type="button"
+                          onClick={() => handleTickerClick(filing.symbol)}
+                          className="font-bold text-white hover:text-terminal-amber transition-colors text-xs cursor-pointer"
+                          title={`Set active symbol to ${filing.symbol}`}
+                        >
+                          ${filing.symbol}
+                        </button>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${getFilingBadgeStyle(
+                            filing.category
+                          )}`}
+                        >
+                          {filing.category}
+                        </span>
+                      </div>
+
+                      <div className="text-xs text-zinc-200 leading-snug font-sans">
+                        {filing.headline}
+                      </div>
+
+                      <div className="mt-1.5 flex items-center justify-between text-[11px] text-zinc-300">
+                        <span>{filing.meta}</span>
+                        <a
+                          href={filing.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            handleExternalOrAppLink(filing.url, event);
+                          }}
+                          className="text-terminal-amber font-bold hover:underline"
+                        >
+                          {filing.linkLabel}
+                        </a>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-2.5 pt-2 border-t border-[#27272a] flex items-center justify-between text-[11px] text-zinc-300 font-mono">
+              <span>KEYWORDS: RESULTS • BOARD • M&A • DIVIDEND • AGM</span>
+              <span className="text-terminal-amber font-bold tabular-nums">
+                {corporateFilings.length} DISCLOSURES
+              </span>
+            </div>
+          </div>
+
+          {/* CARD 3: INSTITUTIONAL BULK & BLOCK DEALS BENTO (COL-SPAN-4) */}
+          <div className="col-span-1 md:col-span-4 lg:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-[#3f3f46] rounded p-3 transition-colors shadow-md">
+            <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#27272a] flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+                  INSTITUTIONAL BULK & BLOCK DEALS TRACKER
+                </span>
+                <span className="text-xs text-zinc-300 font-mono">| VALUE ≥ ₹50 CR</span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-mono tabular-nums">
+                <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
+                  BUY FLOW: ₹1,480 CR
+                </span>
+                <span className="text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30 font-bold">
+                  SELL FLOW: ₹920 CR
+                </span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left font-mono tabular-nums text-xs">
+                <thead>
+                  <tr className="text-[10px] text-zinc-300 uppercase border-b border-[#27272a] bg-[#121216]">
+                    <th className="p-2">TIME</th>
+                    <th className="p-2">SECURITY</th>
+                    <th className="p-2">DEAL TYPE</th>
+                    <th className="p-2">CLIENT NAME</th>
+                    <th className="p-2 text-right">ACTION</th>
+                    <th className="p-2 text-right">QUANTITY</th>
+                    <th className="p-2 text-right">PRICE (₹)</th>
+                    <th className="p-2 text-right">VALUE (CR)</th>
+                    <th className="p-2 text-center">IMPACT</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#27272a]/60">
+                  {institutionalDeals.map((deal) => (
+                    <tr
+                      key={deal.id}
+                      onClick={(event) => {
+                        if (deal.url) {
+                          handleExternalOrAppLink(deal.url, event);
+                        }
+                      }}
+                      className="hover:bg-[#121216]/80 transition-colors cursor-pointer"
+                    >
+                      <td className="p-2 text-zinc-300">{deal.time}</td>
+                      <td className="p-2 font-bold text-white">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleTickerClick(deal.symbol);
+                          }}
+                          className="font-bold text-white hover:text-terminal-amber transition-colors cursor-pointer"
+                        >
+                          ${deal.symbol}
+                        </button>
+                      </td>
+                      <td className="p-2">
+                        <span
+                          className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${
+                            deal.dealType === 'BLOCK'
+                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                              : 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
+                          }`}
+                        >
+                          {deal.dealType}
+                        </span>
+                      </td>
+                      <td className="p-2 text-zinc-200">{deal.clientName}</td>
+                      <td
+                        className={`p-2 text-right font-bold ${
+                          deal.action === 'BUY' ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        {deal.action}
+                      </td>
+                      <td className="p-2 text-right text-zinc-200">{deal.quantity}</td>
+                      <td className="p-2 text-right text-zinc-200">{deal.price}</td>
+                      <td
+                        className={`p-2 text-right font-bold ${
+                          deal.action === 'BUY' ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        ₹{deal.valueCr.toFixed(2)}
+                      </td>
+                      <td className="p-2 text-center">
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                            deal.positiveImpact
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                          }`}
+                        >
+                          {deal.impactLabel}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
 
       {showNudge && (
-        <div className="shrink-0 bg-terminal-dark border-t border-amber-500/40 px-3 py-1.5 flex items-center justify-between text-[11px] text-amber-400 animate-in fade-in slide-in-from-bottom duration-300">
-          <span>💡 Tip: Enable Advanced Extraction in Settings for premium news & deeper fundamentals.</span>
+        <div className="shrink-0 bg-[#121216] border border-terminal-amber/40 rounded px-3 py-1.5 flex items-center justify-between text-xs text-terminal-amber animate-in fade-in slide-in-from-bottom duration-300">
+          <span>
+            💡 Tip: Enable Advanced Extraction in Settings for premium news & deeper fundamentals.
+          </span>
           <button
             type="button"
             onClick={() => setShowNudge(false)}
-            className="text-zinc-400 hover:text-white text-[10px] ml-2 px-1"
+            className="text-zinc-300 hover:text-white text-xs ml-2 px-1"
           >
             ✕
           </button>

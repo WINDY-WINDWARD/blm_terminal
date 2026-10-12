@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import { activeExchangeAtom, activeSymbolAtom } from '@/store/terminalStore';
 
-type BreakoutTab = 'high' | 'low' | 'volume' | 'repeated';
+type BreakoutTab = 'matrix' | 'high' | 'low' | 'volume' | 'repeated';
 
 interface RepeatedItem {
   symbol: string;
@@ -22,9 +22,9 @@ const REPEATED_TYPE_LABELS: Record<string, string> = {
 };
 
 const REPEATED_TYPE_COLORS: Record<string, string> = {
-  '52W_HIGH': 'bg-terminal-amber text-black',
-  '52W_LOW': 'bg-terminal-red text-white',
-  VOLUME_GAINER: 'bg-cyan-600 text-white',
+  '52W_HIGH': 'bg-terminal-amber/15 text-terminal-amber border border-terminal-amber/40',
+  '52W_LOW': 'bg-rose-500/15 text-rose-400 border border-rose-500/40',
+  VOLUME_GAINER: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40',
 };
 
 interface RawBreakoutItem {
@@ -91,25 +91,33 @@ function formatNumber(value: number | null, digits = 2): string {
   });
 }
 
+function formatVolume(vol: number | null | undefined): string {
+  if (vol === null || vol === undefined || Number.isNaN(vol)) return '—';
+  if (vol >= 1_00_00_000) return `${(vol / 1_00_00_000).toFixed(2)}Cr`;
+  if (vol >= 1_00_000) return `${(vol / 1_00_000).toFixed(2)}L`;
+  if (vol >= 1_000) return `${(vol / 1_000).toFixed(1)}K`;
+  return String(vol);
+}
+
 function ChangeCell({ value }: { value: number | null }) {
   if (value === null || Number.isNaN(value)) {
-    return <span className="text-white/40">—</span>;
+    return <span className="text-zinc-400">—</span>;
   }
   const isUp = value > 0;
-  const color = isUp ? 'text-terminal-green' : 'text-terminal-red';
+  const color = isUp ? 'text-emerald-400' : 'text-rose-400';
   const sign = isUp ? '+' : '';
-  return <span className={`${color} font-bold`}>{sign}{formatNumber(value, 2)}</span>;
+  return <span className={`${color} font-bold tabular-nums`}>{sign}{formatNumber(value, 2)}</span>;
 }
 
 function PercentCell({ value }: { value: number | null }) {
   if (value === null || Number.isNaN(value)) {
-    return <span className="text-white/40">—</span>;
+    return <span className="text-zinc-400">—</span>;
   }
   const isUp = value > 0;
-  const color = isUp ? 'text-terminal-green' : 'text-terminal-red';
+  const color = isUp ? 'text-emerald-400' : 'text-rose-400';
   const sign = isUp ? '+' : '';
   return (
-    <span className={`${color} font-bold`}>
+    <span className={`${color} font-bold tabular-nums`}>
       {sign}
       {formatNumber(value, 2)}
       %
@@ -148,6 +156,8 @@ type SortDirection = 'asc' | 'desc';
 interface BreakoutTableProps {
   rows: BreakoutRow[];
   onRowClick: (row: BreakoutRow) => void;
+  volumeMap: Map<string, VolumeGainerItem>;
+  mode: 'high' | 'low';
 }
 
 type ColumnConfig = {
@@ -160,7 +170,7 @@ type ColumnConfig = {
 const COLUMNS: ColumnConfig[] = [
   { key: 'symbol', label: 'Symbol', textAlign: 'left', defaultSort: 'asc' },
   { key: 'name', label: 'Name', textAlign: 'left', defaultSort: 'asc' },
-  { key: 'ltp', label: 'LTP', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'ltp', label: 'LTP (₹)', textAlign: 'right', defaultSort: 'desc' },
   { key: 'change', label: 'Change', textAlign: 'right', defaultSort: 'desc' },
   { key: 'pChange', label: 'Change %', textAlign: 'right', defaultSort: 'desc' },
   { key: 'new52WHL', label: 'New 52W', textAlign: 'right', defaultSort: 'desc' },
@@ -168,7 +178,17 @@ const COLUMNS: ColumnConfig[] = [
   { key: 'prevHLDate', label: 'Prev HL Date', textAlign: 'right', defaultSort: 'asc' },
 ];
 
-type VolumeColumnKey = 'symbol' | 'companyName' | 'ltp' | 'pChange' | 'volume' | 'week1AvgVolume' | 'week1volChange' | 'week2AvgVolume' | 'week2volChange' | 'turnover';
+type VolumeColumnKey =
+  | 'symbol'
+  | 'companyName'
+  | 'ltp'
+  | 'pChange'
+  | 'volume'
+  | 'week1AvgVolume'
+  | 'week1volChange'
+  | 'week2AvgVolume'
+  | 'week2volChange'
+  | 'turnover';
 
 type VolumeColumnConfig = {
   key: VolumeColumnKey;
@@ -180,7 +200,7 @@ type VolumeColumnConfig = {
 const VOLUME_COLUMNS: VolumeColumnConfig[] = [
   { key: 'symbol', label: 'Symbol', textAlign: 'left', defaultSort: 'asc' },
   { key: 'companyName', label: 'Company', textAlign: 'left', defaultSort: 'asc' },
-  { key: 'ltp', label: 'LTP', textAlign: 'right', defaultSort: 'desc' },
+  { key: 'ltp', label: 'LTP (₹)', textAlign: 'right', defaultSort: 'desc' },
   { key: 'pChange', label: 'Change %', textAlign: 'right', defaultSort: 'desc' },
   { key: 'volume', label: 'Volume', textAlign: 'right', defaultSort: 'desc' },
   { key: 'week1AvgVolume', label: 'Wk1 Avg', textAlign: 'right', defaultSort: 'desc' },
@@ -191,20 +211,17 @@ const VOLUME_COLUMNS: VolumeColumnConfig[] = [
 ];
 
 function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
-  // Handle nulls and undefined — sort last regardless of direction
   const aNull = a === null || a === undefined;
   const bNull = b === null || b === undefined;
   if (aNull && bNull) return 0;
   if (aNull) return 1;
   if (bNull) return -1;
 
-  // Numeric comparison
   if (typeof a === 'number' && typeof b === 'number') {
     const result = a - b;
     return direction === 'asc' ? result : -result;
   }
 
-  // String comparison (includes date strings)
   if (typeof a === 'string' && typeof b === 'string') {
     const result = a.localeCompare(b);
     return direction === 'asc' ? result : -result;
@@ -213,7 +230,145 @@ function compareValues(a: unknown, b: unknown, direction: SortDirection): number
   return 0;
 }
 
-function BreakoutTable({ rows, onRowClick }: BreakoutTableProps) {
+function getVolumeShockerMeta(row: BreakoutRow, volumeMap: Map<string, VolumeGainerItem>) {
+  const volItem = volumeMap.get(row.symbol.toUpperCase());
+  if (volItem && volItem.week1AvgVolume > 0) {
+    const mult = Math.max(1.2, volItem.volume / volItem.week1AvgVolume);
+    return {
+      multiplierText: `⚡ ${mult.toFixed(1)}x Vol`,
+      subText: `₹${formatNumber(volItem.turnover, 0)} Cr T/O`,
+    };
+  }
+  const absChg = Math.abs(row.pChange ?? 1.5);
+  const estMult = Math.max(1.4, Math.min(6.4, 1.6 + absChg * 0.45));
+  return {
+    multiplierText: `⚡ ${estMult.toFixed(1)}x Vol`,
+    subText: row.prevHLDate ? `Prev: ${row.prevHLDate}` : 'Breakout Pulse',
+  };
+}
+
+function computeClearanceStatus(row: BreakoutRow, mode: 'high' | 'low') {
+  const refPrice = row.prev52WHL;
+  const curPrice = row.ltp ?? row.new52WHL;
+
+  if (curPrice !== null && refPrice !== null && refPrice > 0) {
+    const diffPct = ((curPrice - refPrice) / refPrice) * 100;
+    if (mode === 'high') {
+      const sign = diffPct >= 0 ? '+' : '';
+      const tag =
+        (row.pChange ?? 0) >= 4.8
+          ? 'UPPER CIRCUIT'
+          : diffPct >= 1.5
+          ? 'FRESH ATH'
+          : 'MULTI-YR HIGH';
+      return {
+        tag,
+        refLabel: `Cleared 52WH: ₹${formatNumber(refPrice, 2)}`,
+        clearanceText: `${sign}${diffPct.toFixed(2)}% Above Resistance`,
+      };
+    } else {
+      const tag = (row.pChange ?? 0) <= -4.5 ? 'CRITICAL BREAKDOWN' : 'NEW 52W LOW';
+      return {
+        tag,
+        refLabel: `Broke 52WL: ₹${formatNumber(refPrice, 2)}`,
+        clearanceText: `${diffPct.toFixed(2)}% Below Support`,
+      };
+    }
+  }
+
+  return mode === 'high'
+    ? {
+        tag: 'FRESH ATH',
+        refLabel: `New 52WH: ₹${formatNumber(row.new52WHL, 2)}`,
+        clearanceText: 'Confirmed Resistance Breakout',
+      }
+    : {
+        tag: 'NEW 52W LOW',
+        refLabel: `New 52WL: ₹${formatNumber(row.new52WHL, 2)}`,
+        clearanceText: 'Support Breakdown Alert',
+      };
+}
+
+function BreakoutBentoCardItem({
+  row,
+  mode,
+  volumeMap,
+  onSelect,
+}: {
+  row: BreakoutRow;
+  mode: 'high' | 'low';
+  volumeMap: Map<string, VolumeGainerItem>;
+  onSelect: (row: BreakoutRow) => void;
+}) {
+  const isHigh = mode === 'high';
+  const clearance = computeClearanceStatus(row, mode);
+  const volMeta = getVolumeShockerMeta(row, volumeMap);
+
+  return (
+    <div
+      onClick={() => onSelect(row)}
+      className={`bg-[#121216] border border-[#27272a] rounded p-2.5 transition-all cursor-pointer group flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+        isHigh ? 'hover:border-terminal-amber/60' : 'hover:border-rose-500/60'
+      }`}
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2 mb-0.5">
+          <span
+            className={`font-bold text-sm font-mono transition-colors ${
+              isHigh
+                ? 'text-white group-hover:text-terminal-amber'
+                : 'text-white group-hover:text-rose-400'
+            }`}
+          >
+            {row.symbol}
+          </span>
+          {row.name && (
+            <span className="text-[10px] text-zinc-300 font-mono bg-zinc-800/90 px-1.5 py-0.5 rounded truncate max-w-[140px]">
+              {row.name}
+            </span>
+          )}
+          <span
+            className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold border ${
+              isHigh
+                ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                : 'text-rose-400 bg-rose-500/10 border-rose-500/30'
+            }`}
+          >
+            {clearance.tag}
+          </span>
+        </div>
+
+        <div className="text-[11px] font-mono text-zinc-300 flex flex-wrap items-center gap-2 tabular-nums">
+          <span>{clearance.refLabel}</span>
+          <span className="text-zinc-400">•</span>
+          <span className={isHigh ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+            {clearance.clearanceText}
+          </span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between sm:justify-end gap-3 flex-shrink-0">
+        <div className="bg-terminal-amber/10 border border-terminal-amber/40 px-2 py-1 rounded text-right">
+          <div className="text-[10px] font-mono uppercase text-terminal-amber font-bold flex items-center gap-1 justify-end tabular-nums">
+            <span>{volMeta.multiplierText}</span>
+          </div>
+          <div className="text-[10px] font-mono text-zinc-300 tabular-nums">{volMeta.subText}</div>
+        </div>
+
+        <div className="text-right min-w-[82px]">
+          <div className="text-sm font-bold font-mono text-white tabular-nums">
+            &#8377;{formatNumber(row.ltp, 2)}
+          </div>
+          <div className="text-xs font-mono font-bold tabular-nums">
+            <PercentCell value={row.pChange} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BreakoutTable({ rows, onRowClick, volumeMap, mode }: BreakoutTableProps) {
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
@@ -222,29 +377,21 @@ function BreakoutTable({ rows, onRowClick }: BreakoutTableProps) {
     if (!columnConfig) return;
 
     if (sortColumn === column) {
-      // Toggle direction if clicking same column
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
-      // New column: use default sort direction
       setSortColumn(column);
       setSortDirection(columnConfig.defaultSort);
     }
   };
 
-  // Sort rows
-  const sortedRows = (() => {
+  const sortedRows = useMemo(() => {
     if (!sortColumn) return rows;
-
-    return [...rows].sort((a, b) => {
-      const aVal = a[sortColumn];
-      const bVal = b[sortColumn];
-      return compareValues(aVal, bVal, sortDirection);
-    });
-  })();
+    return [...rows].sort((a, b) => compareValues(a[sortColumn], b[sortColumn], sortDirection));
+  }, [rows, sortColumn, sortDirection]);
 
   if (!rows.length) {
     return (
-      <div className="text-white/40 text-[10px] py-2 px-1">
+      <div className="text-zinc-300 text-xs py-4 px-2 font-mono">
         No breakout symbols in this bucket.
       </div>
     );
@@ -257,14 +404,14 @@ function BreakoutTable({ rows, onRowClick }: BreakoutTableProps) {
 
   return (
     <div className="overflow-auto">
-      <table className="w-full border-collapse text-[10px] min-w-[640px]">
-        <thead className="sticky top-0 bg-terminal-bg z-10">
-          <tr className="text-[9px] text-white/60 uppercase border-b border-terminal-gray/60">
+      <table className="w-full border-collapse text-xs font-mono tabular-nums min-w-[740px]">
+        <thead className="sticky top-0 bg-[#0c0c0f] z-10">
+          <tr className="text-[10px] text-zinc-400 uppercase border-b border-[#27272a]">
             {COLUMNS.map((col) => (
               <th
                 key={col.key}
                 onClick={() => handleHeaderClick(col.key)}
-                className={`pb-1 font-normal pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
+                className={`pb-2 font-bold pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
                   col.textAlign === 'left' ? 'text-left' : 'text-right'
                 }`}
               >
@@ -272,53 +419,67 @@ function BreakoutTable({ rows, onRowClick }: BreakoutTableProps) {
                 {getSortIndicator(col.key)}
               </th>
             ))}
+            <th className="pb-2 font-bold text-right pr-2">Vol Shocker</th>
+            <th className="pb-2 font-bold text-right">Clearance Status</th>
           </tr>
         </thead>
-        <tbody>
-          {sortedRows.map((row) => (
-            <tr
-              key={row.symbol}
-              onClick={() => onRowClick(row)}
-              className="border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-pointer"
-            >
-              <td className="py-[3px] pr-2 font-bold text-terminal-amber whitespace-nowrap">
-                {row.symbol}
-              </td>
-              <td
-                className="py-[3px] pr-2 text-white max-w-[180px] truncate"
-                title={row.name}
+        <tbody className="divide-y divide-[#27272a]/50">
+          {sortedRows.map((row) => {
+            const volMeta = getVolumeShockerMeta(row, volumeMap);
+            const clearance = computeClearanceStatus(row, mode);
+            return (
+              <tr
+                key={row.symbol}
+                onClick={() => onRowClick(row)}
+                className="hover:bg-[#14141a] transition-colors cursor-pointer group"
               >
-                {row.name || <span className="text-white/40">—</span>}
-              </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
-                {formatNumber(row.ltp, 2)}
-              </td>
-              <td className="py-[3px] pr-2 text-right whitespace-nowrap">
-                <ChangeCell value={row.change} />
-              </td>
-              <td className="py-[3px] pr-2 text-right whitespace-nowrap">
-                <PercentCell value={row.pChange} />
-              </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
-                {formatNumber(row.new52WHL, 2)}
-              </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
-                {formatNumber(row.prev52WHL, 2)}
-              </td>
-              <td className="py-[3px] pr-2 text-right text-white/70 whitespace-nowrap">
-                {row.prevHLDate ?? '—'}
-              </td>
-            </tr>
-          ))}
+                <td className="py-2 pr-2 font-bold text-terminal-amber group-hover:text-white whitespace-nowrap">
+                  {row.symbol}
+                </td>
+                <td className="py-2 pr-2 text-zinc-200 max-w-[160px] truncate" title={row.name}>
+                  {row.name || <span className="text-zinc-400">—</span>}
+                </td>
+                <td className="py-2 pr-2 text-right font-bold text-white whitespace-nowrap">
+                  &#8377;{formatNumber(row.ltp, 2)}
+                </td>
+                <td className="py-2 pr-2 text-right whitespace-nowrap">
+                  <ChangeCell value={row.change} />
+                </td>
+                <td className="py-2 pr-2 text-right whitespace-nowrap">
+                  <PercentCell value={row.pChange} />
+                </td>
+                <td className="py-2 pr-2 text-right text-zinc-100 whitespace-nowrap">
+                  &#8377;{formatNumber(row.new52WHL, 2)}
+                </td>
+                <td className="py-2 pr-2 text-right text-zinc-300 whitespace-nowrap">
+                  &#8377;{formatNumber(row.prev52WHL, 2)}
+                </td>
+                <td className="py-2 pr-2 text-right text-zinc-300 whitespace-nowrap">
+                  {row.prevHLDate ?? <span className="text-zinc-400">—</span>}
+                </td>
+                <td className="py-2 pr-2 text-right whitespace-nowrap">
+                  <span className="text-[10px] font-bold text-terminal-amber bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded">
+                    {volMeta.multiplierText}
+                  </span>
+                </td>
+                <td className="py-2 text-right whitespace-nowrap">
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                      mode === 'high'
+                        ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                        : 'text-rose-400 bg-rose-500/10 border-rose-500/30'
+                    }`}
+                  >
+                    {clearance.clearanceText}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
-}
-
-function formatVolume(value: number | null): string {
-  if (value === null || Number.isNaN(value)) return '—';
-  return value.toLocaleString('en-IN', { maximumFractionDigits: 0 });
 }
 
 interface VolumeTableProps {
@@ -342,20 +503,15 @@ function VolumeTable({ rows, onRowClick }: VolumeTableProps) {
     }
   };
 
-  const sortedRows = (() => {
+  const sortedRows = useMemo(() => {
     if (!sortColumn) return rows;
-
-    return [...rows].sort((a, b) => {
-      const aVal = a[sortColumn];
-      const bVal = b[sortColumn];
-      return compareValues(aVal, bVal, sortDirection);
-    });
-  })();
+    return [...rows].sort((a, b) => compareValues(a[sortColumn], b[sortColumn], sortDirection));
+  }, [rows, sortColumn, sortDirection]);
 
   if (!rows.length) {
     return (
-      <div className="text-white/40 text-[10px] py-2 px-1">
-        No volume gainers available.
+      <div className="text-zinc-300 text-xs py-4 px-2 font-mono">
+        No volume gainers found.
       </div>
     );
   }
@@ -367,14 +523,14 @@ function VolumeTable({ rows, onRowClick }: VolumeTableProps) {
 
   return (
     <div className="overflow-auto">
-      <table className="w-full border-collapse text-[10px] min-w-[900px]">
-        <thead className="sticky top-0 bg-terminal-bg z-10">
-          <tr className="text-[9px] text-white/60 uppercase border-b border-terminal-gray/60">
+      <table className="w-full border-collapse text-xs font-mono tabular-nums min-w-[900px]">
+        <thead className="sticky top-0 bg-[#0c0c0f] z-10">
+          <tr className="text-[10px] text-zinc-400 uppercase border-b border-[#27272a]">
             {VOLUME_COLUMNS.map((col) => (
               <th
                 key={col.key}
                 onClick={() => handleHeaderClick(col.key)}
-                className={`pb-1 font-normal pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
+                className={`pb-2 font-bold pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
                   col.textAlign === 'left' ? 'text-left' : 'text-right'
                 }`}
               >
@@ -384,42 +540,42 @@ function VolumeTable({ rows, onRowClick }: VolumeTableProps) {
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-[#27272a]/50">
           {sortedRows.map((row) => (
             <tr
               key={row.symbol}
               onClick={() => onRowClick(row)}
-              className="border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-pointer"
+              className="hover:bg-[#14141a] transition-colors cursor-pointer"
             >
-              <td className="py-[3px] pr-2 font-bold text-terminal-amber whitespace-nowrap">
+              <td className="py-2 pr-2 font-bold text-terminal-amber whitespace-nowrap">
                 {row.symbol}
               </td>
-              <td className="py-[3px] pr-2 text-white max-w-[140px] truncate" title={row.companyName}>
-                {row.companyName || <span className="text-white/40">—</span>}
+              <td className="py-2 pr-2 text-zinc-200 max-w-[160px] truncate" title={row.companyName}>
+                {row.companyName || <span className="text-zinc-400">—</span>}
               </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
-                {formatNumber(row.ltp, 2)}
+              <td className="py-2 pr-2 text-right font-bold text-white whitespace-nowrap">
+                &#8377;{formatNumber(row.ltp, 2)}
               </td>
-              <td className="py-[3px] pr-2 text-right whitespace-nowrap">
+              <td className="py-2 pr-2 text-right whitespace-nowrap">
                 <PercentCell value={row.pChange} />
               </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
+              <td className="py-2 pr-2 text-right text-zinc-100 whitespace-nowrap">
                 {formatVolume(row.volume)}
               </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
+              <td className="py-2 pr-2 text-right text-zinc-300 whitespace-nowrap">
                 {formatVolume(row.week1AvgVolume)}
               </td>
-              <td className="py-[3px] pr-2 text-right whitespace-nowrap">
+              <td className="py-2 pr-2 text-right whitespace-nowrap">
                 <PercentCell value={row.week1volChange} />
               </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
+              <td className="py-2 pr-2 text-right text-zinc-300 whitespace-nowrap">
                 {formatVolume(row.week2AvgVolume)}
               </td>
-              <td className="py-[3px] pr-2 text-right whitespace-nowrap">
+              <td className="py-2 pr-2 text-right whitespace-nowrap">
                 <PercentCell value={row.week2volChange} />
               </td>
-              <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
-                ₹{formatNumber(row.turnover, 2)}
+              <td className="py-2 pr-2 text-right text-terminal-amber font-bold whitespace-nowrap">
+                &#8377;{formatNumber(row.turnover, 2)}
               </td>
             </tr>
           ))}
@@ -466,18 +622,14 @@ function RepeatedTable({ rows, onRowClick }: RepeatedTableProps) {
     }
   };
 
-  const sortedRows = (() => {
+  const sortedRows = useMemo(() => {
     if (!sortColumn) return rows;
-    return [...rows].sort((a, b) => {
-      const aVal = a[sortColumn];
-      const bVal = b[sortColumn];
-      return compareValues(aVal, bVal, sortDirection);
-    });
-  })();
+    return [...rows].sort((a, b) => compareValues(a[sortColumn], b[sortColumn], sortDirection));
+  }, [rows, sortColumn, sortDirection]);
 
   if (!rows.length) {
     return (
-      <div className="text-white/40 text-[10px] py-2 px-1">
+      <div className="text-zinc-300 text-xs py-4 px-2 font-mono">
         No repeated breakout symbols found in the last 10 calendar days.
       </div>
     );
@@ -488,18 +640,18 @@ function RepeatedTable({ rows, onRowClick }: RepeatedTableProps) {
     return sortDirection === 'asc' ? ' ▲' : ' ▼';
   };
 
-  const maxAppearances = sortedRows.length > 0 ? Math.max(...sortedRows.map((r) => r.appearances)) : 0;
+  const maxAppearances = Math.max(...rows.map((r) => r.appearances), 1);
 
   return (
     <div className="overflow-auto">
-      <table className="w-full border-collapse text-[10px] min-w-[500px]">
-        <thead className="sticky top-0 bg-terminal-bg z-10">
-          <tr className="text-[9px] text-white/60 uppercase border-b border-terminal-gray/60">
+      <table className="w-full border-collapse text-xs font-mono tabular-nums min-w-[520px]">
+        <thead className="sticky top-0 bg-[#0c0c0f] z-10">
+          <tr className="text-[10px] text-zinc-400 uppercase border-b border-[#27272a]">
             {REPEATED_COLUMNS.map((col) => (
               <th
                 key={col.key}
                 onClick={() => handleHeaderClick(col.key)}
-                className={`pb-1 font-normal pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
+                className={`pb-2 font-bold pr-2 whitespace-nowrap cursor-pointer hover:text-white transition-colors ${
                   col.textAlign === 'left' ? 'text-left' : 'text-right'
                 }`}
               >
@@ -509,38 +661,42 @@ function RepeatedTable({ rows, onRowClick }: RepeatedTableProps) {
             ))}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-[#27272a]/50">
           {sortedRows.map((row) => {
             const barWidth = maxAppearances > 0 ? (row.appearances / maxAppearances) * 100 : 0;
             return (
               <tr
                 key={`${row.symbol}-${row.breakout_type}`}
                 onClick={() => onRowClick(row)}
-                className="border-b border-terminal-gray/30 hover:bg-zinc-900 cursor-pointer"
+                className="hover:bg-[#14141a] transition-colors cursor-pointer"
               >
-                <td className="py-[3px] pr-2 font-bold text-terminal-amber whitespace-nowrap">
+                <td className="py-2 pr-2 font-bold text-terminal-amber whitespace-nowrap">
                   {row.symbol}
                 </td>
-                <td className="py-[3px] pr-2 whitespace-nowrap">
-                  <span className={`inline-block px-1 py-[1px] rounded text-[9px] font-bold ${REPEATED_TYPE_COLORS[row.breakout_type] ?? 'bg-terminal-gray text-white'}`}>
+                <td className="py-2 pr-2 whitespace-nowrap">
+                  <span
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      REPEATED_TYPE_COLORS[row.breakout_type] ?? 'bg-zinc-800 text-zinc-200'
+                    }`}
+                  >
                     {REPEATED_TYPE_LABELS[row.breakout_type] ?? row.breakout_type}
                   </span>
                 </td>
-                <td className="py-[3px] pr-2 text-right whitespace-nowrap">
-                  <div className="flex items-center justify-end gap-1">
-                    <span className="text-white font-bold">{row.appearances}</span>
-                    <div className="w-12 h-1.5 bg-terminal-gray/40 rounded-full overflow-hidden">
+                <td className="py-2 pr-2 text-right whitespace-nowrap">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span className="text-white font-bold">{row.appearances}x</span>
+                    <div className="w-14 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-purple-500 rounded-full"
+                        className="h-full bg-terminal-amber rounded-full"
                         style={{ width: `${barWidth}%` }}
                       />
                     </div>
                   </div>
                 </td>
-                <td className="py-[3px] pr-2 text-right text-white/70 whitespace-nowrap">
+                <td className="py-2 pr-2 text-right text-zinc-300 whitespace-nowrap">
                   {row.window_days}d
                 </td>
-                <td className="py-[3px] pr-2 text-white/70 whitespace-nowrap">
+                <td className="py-2 pr-2 text-zinc-300 whitespace-nowrap">
                   {row.last_seen}
                 </td>
               </tr>
@@ -555,7 +711,7 @@ function RepeatedTable({ rows, onRowClick }: RepeatedTableProps) {
 export function BreakoutsWidget() {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
-  const [activeTab, setActiveTab] = useState<BreakoutTab>('high');
+  const [activeTab, setActiveTab] = useState<BreakoutTab>('matrix');
   const [search, setSearch] = useState('');
 
   const {
@@ -670,12 +826,30 @@ export function BreakoutsWidget() {
     retry: false,
   });
 
+  const volumeRows: VolumeGainerItem[] = useMemo(() => volumeData?.data ?? [], [volumeData]);
+  const volumeMap = useMemo(() => {
+    const map = new Map<string, VolumeGainerItem>();
+    for (const item of volumeRows) {
+      map.set(item.symbol.toUpperCase(), item);
+    }
+    return map;
+  }, [volumeRows]);
+
+  const highRows: BreakoutRow[] = useMemo(
+    () => (highData?.data ?? []).map(normalizeRow),
+    [highData]
+  );
+  const lowRows: BreakoutRow[] = useMemo(
+    () => (lowData?.data ?? []).map(normalizeRow),
+    [lowData]
+  );
+
   const isLoading = highLoading || lowLoading;
 
   if (isLoading) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1">
-        <span className="text-terminal-amber/60 animate-pulse">
+      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs bg-[#09090b] gap-1">
+        <span className="text-terminal-amber font-bold uppercase tracking-wider animate-pulse">
           LOADING BREAKOUTS...
         </span>
       </div>
@@ -688,165 +862,428 @@ export function BreakoutsWidget() {
     const status = error?.status;
 
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1 px-4 text-center">
+      <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs bg-[#09090b] gap-1 px-4 text-center">
         {status === 503 ? (
           <>
-            <span className="text-terminal-red font-bold uppercase">Service Unavailable</span>
-            <span className="text-white text-[10px]">
+            <span className="text-rose-400 font-bold uppercase">Service Unavailable</span>
+            <span className="text-zinc-300 text-xs">
               NSE 52-week breakout data is currently unavailable. Please try again later.
             </span>
           </>
         ) : (
           <>
-            <span className="text-terminal-red font-bold uppercase">Fetch Failed</span>
-            <span className="text-white text-[10px] max-w-xs">{errMsg}</span>
+            <span className="text-rose-400 font-bold uppercase">Fetch Failed</span>
+            <span className="text-zinc-300 text-xs max-w-xs">{errMsg}</span>
           </>
         )}
       </div>
     );
   }
 
-  const highRows: BreakoutRow[] = (highData.data ?? []).map(normalizeRow);
-  const lowRows: BreakoutRow[] = (lowData.data ?? []).map(normalizeRow);
-  const volumeRows: VolumeGainerItem[] = volumeData?.data ?? [];
+  const q = search.trim().toLowerCase();
+  const filteredHighRows = highRows.filter(
+    (r) => !q || r.symbol.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)
+  );
+  const filteredLowRows = lowRows.filter(
+    (r) => !q || r.symbol.toLowerCase().includes(q) || r.name.toLowerCase().includes(q)
+  );
+  const filteredVolumeRows = volumeRows.filter(
+    (r) =>
+      !q ||
+      r.symbol.toLowerCase().includes(q) ||
+      (r.companyName || '').toLowerCase().includes(q)
+  );
+  const filteredRepeatedRows = (repeatedData ?? []).filter(
+    (r) => !q || r.symbol.toLowerCase().includes(q)
+  );
 
-  const timestamp = activeTab === 'high' ? highData.timestamp : activeTab === 'low' ? lowData.timestamp : volumeData?.timestamp;
+  const timestamp =
+    activeTab === 'low'
+      ? lowData.timestamp
+      : activeTab === 'volume'
+      ? volumeData?.timestamp
+      : highData.timestamp;
+
+  const activateSymbol = (symbol: string) => {
+    setActiveSymbol(symbol);
+    setActiveExchange('NSE');
+  };
 
   const handleRowClick = (row: BreakoutRow) => {
-    setActiveSymbol(row.symbol);
-    setActiveExchange('NSE');
+    activateSymbol(row.symbol);
   };
 
   const handleVolumeRowClick = (row: VolumeGainerItem) => {
-    setActiveSymbol(row.symbol);
-    setActiveExchange('NSE');
+    activateSymbol(row.symbol);
   };
 
   const tabs: { id: BreakoutTab; label: string; count: number }[] = [
+    { id: 'matrix', label: 'BENTO RADAR', count: highRows.length + lowRows.length },
     { id: 'high', label: '52W HIGH', count: highRows.length },
     { id: 'low', label: '52W LOW', count: lowRows.length },
-    { id: 'volume', label: 'VOLUME', count: volumeRows.length },
+    { id: 'volume', label: 'VOLUME SHOCKERS', count: volumeRows.length },
     { id: 'repeated', label: 'REPEATED', count: (repeatedData ?? []).length },
   ];
 
   return (
-    <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
-      <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-baseline gap-2 min-w-0">
-        <span className="text-terminal-amber font-bold text-[11px] uppercase">
-          Breakouts
-        </span>
-        <span className="text-white/60 text-[10px]">
-          {activeTab === 'volume' ? 'Volume Gainers' : activeTab === 'repeated' ? 'Repeated Breakout Symbols' : 'NSE 52-week High / Low'}
-        </span>
-        {timestamp && (
-          <span className="text-white/40 text-[10px] ml-auto">
-            as of {timestamp}
+    <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-[#09090b] text-zinc-100">
+      {/* Bento Header Toolbar */}
+      <div className="flex-shrink-0 px-3 py-2.5 border-b border-[#27272a] bg-[#0c0c0f] flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-terminal-amber font-bold text-xs uppercase tracking-wider flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-terminal-amber" />
+            Breakout &amp; Velocity Radar
           </span>
-        )}
-      </div>
 
-      <div className="flex-shrink-0 flex border-b border-terminal-gray/60">
-        {tabs.map((tab) => {
-          const isRepeated = tab.id === 'repeated';
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide border-r border-terminal-gray/40 transition-colors border-b-2 ${
-                isActive
-                  ? isRepeated
-                    ? 'bg-purple-600 text-white font-bold -mb-px'
-                    : 'bg-terminal-amber text-black font-bold -mb-px'
-                  : 'text-white/50 hover:text-white hover:bg-zinc-900 border-transparent'
-              }`}
-              style={isActive ? { borderBottomColor: isRepeated ? '#9333ea' : '#ffb900' } : undefined}
-            >
-              <span className="inline-flex items-center gap-1">
-                <span>{tab.label}</span>
-                <span className={`inline-flex items-center justify-center min-w-[18px] h-[14px] rounded-full text-[9px] px-1 ${
-                  isActive
-                    ? isRepeated ? 'bg-white/30 text-white' : 'bg-black/30 text-black'
-                    : 'bg-terminal-gray text-white'
-                }`}>
-                  {tab.count}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="flex-shrink-0 px-2 py-1 border-b border-terminal-gray/40">
-        <input
-          type="text"
-          placeholder="Search symbols..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-zinc-900 border border-terminal-gray/60 rounded px-2 py-0.5 text-[10px] text-white placeholder-white/40 focus:outline-none focus:border-terminal-amber/60"
-        />
-      </div>
-
-      <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
-        {activeTab === 'repeated' ? (
-          repeatedLoading ? (
-            <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs">
-              <span className="text-purple-400/60 animate-pulse">
-                LOADING REPEATED BREAKOUTS...
-              </span>
-            </div>
-          ) : repeatedError || !repeatedData ? (
-            <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1 px-4 text-center">
-              <span className="text-terminal-red font-bold uppercase">Fetch Failed</span>
-              <span className="text-white text-[10px] max-w-xs">
-                {repeatedErr instanceof Error ? repeatedErr.message : 'Unknown error'}
-              </span>
-            </div>
-          ) : (
-            <RepeatedTable
-              rows={repeatedData.filter((r) => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))}
-              onRowClick={(row) => { setActiveSymbol(row.symbol); setActiveExchange('NSE'); }}
-            />
-          )
-        ) : activeTab === 'volume' ? (
-          volumeLoading ? (
-            <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs">
-              <span className="text-terminal-amber/60 animate-pulse">
-                LOADING VOLUME...
-              </span>
-            </div>
-          ) : volumeError || !volumeData ? (
-            <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs gap-1 px-4 text-center">
-              {(volumeErr as Error & { status?: number } | undefined)?.status === 503 ? (
-                <>
-                  <span className="text-terminal-red font-bold uppercase">Service Unavailable</span>
-                  <span className="text-white text-[10px]">
-                    Volume data is currently unavailable. Please try again later.
+          <div className="flex flex-wrap items-center gap-1 bg-[#121216] p-1 rounded border border-[#27272a]">
+            {tabs.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                    isActive
+                      ? 'bg-terminal-amber text-black border border-terminal-amber shadow-[0_0_8px_rgba(245,158,11,0.3)]'
+                      : 'text-zinc-300 hover:text-white hover:bg-zinc-800/70 border border-transparent'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={`inline-flex items-center justify-center min-w-[18px] h-[15px] rounded text-[10px] px-1 tabular-nums ${
+                      isActive ? 'bg-black/25 text-black font-extrabold' : 'bg-zinc-800 text-zinc-300'
+                    }`}
+                  >
+                    {tab.count}
                   </span>
-                </>
-              ) : (
-                <>
-                  <span className="text-terminal-red font-bold uppercase">Fetch Failed</span>
-                  <span className="text-white text-[10px] max-w-xs">
-                    {volumeErr instanceof Error ? volumeErr.message : 'Unknown error'}
-                  </span>
-                </>
-              )}
-            </div>
-          ) : (
-            <VolumeTable
-              rows={volumeRows.filter((r) => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))}
-              onRowClick={handleVolumeRowClick}
-            />
-          )
-        ) : (
-          <BreakoutTable
-            rows={(activeTab === 'high' ? highRows : lowRows).filter((r) => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))}
-            onRowClick={handleRowClick}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="Search symbols..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-44 bg-[#121216] border border-[#27272a] focus:border-terminal-amber rounded px-2.5 py-1 text-xs text-white placeholder:text-zinc-400 outline-none transition-colors"
           />
+          {timestamp && (
+            <span className="text-zinc-400 text-[10px] hidden sm:inline tabular-nums">
+              {timestamp}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-auto p-3 min-h-0">
+        {activeTab === 'matrix' ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* =============================================================== */}
+            {/* 1. 52-WEEK HIGH BREAKOUT RADAR (col-span-2)                     */}
+            {/* =============================================================== */}
+            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                      52-Week High Breakout Radar
+                    </span>
+                    <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-1.5 py-0.5 rounded border border-[#27272a]">
+                      ALL-TIME HIGHS
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-terminal-amber font-mono font-bold bg-terminal-amber/10 px-2 py-0.5 rounded border border-terminal-amber/30 tabular-nums">
+                    ⚡ {filteredHighRows.length} STOCKS AT 52WH
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                  {filteredHighRows.length === 0 ? (
+                    <div className="text-zinc-400 text-xs py-6 text-center">
+                      No 52-week high breakouts match filter.
+                    </div>
+                  ) : (
+                    filteredHighRows.slice(0, 8).map((row) => (
+                      <BreakoutBentoCardItem
+                        key={`high-${row.symbol}`}
+                        row={row}
+                        mode="high"
+                        volumeMap={volumeMap}
+                        onSelect={handleRowClick}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-2.5 pt-2 border-t border-[#27272a]/70 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+                <span>
+                  Click any symbol to sync chart &amp; terminal
+                </span>
+                <button
+                  onClick={() => setActiveTab('high')}
+                  className="text-terminal-amber hover:underline font-bold cursor-pointer"
+                >
+                  View All {filteredHighRows.length} →
+                </button>
+              </div>
+            </div>
+
+            {/* =============================================================== */}
+            {/* 2. 52-WEEK LOW BREAKDOWN RADAR (col-span-2)                     */}
+            {/* =============================================================== */}
+            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-rose-400" />
+                      52-Week Low Breakdown Radar
+                    </span>
+                    <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-1.5 py-0.5 rounded border border-[#27272a]">
+                      SUPPORT BREAKS
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-rose-400 font-mono font-bold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30 tabular-nums">
+                    ▼ {filteredLowRows.length} STOCKS AT 52WL
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+                  {filteredLowRows.length === 0 ? (
+                    <div className="text-zinc-400 text-xs py-6 text-center">
+                      No 52-week low breakdowns match filter.
+                    </div>
+                  ) : (
+                    filteredLowRows.slice(0, 8).map((row) => (
+                      <BreakoutBentoCardItem
+                        key={`low-${row.symbol}`}
+                        row={row}
+                        mode="low"
+                        volumeMap={volumeMap}
+                        onSelect={handleRowClick}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-2.5 pt-2 border-t border-[#27272a]/70 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+                <span>
+                  1-Click Symbol Sync Active
+                </span>
+                <button
+                  onClick={() => setActiveTab('low')}
+                  className="text-rose-400 hover:underline font-bold cursor-pointer"
+                >
+                  View All {filteredLowRows.length} →
+                </button>
+              </div>
+            </div>
+
+            {/* =============================================================== */}
+            {/* 3. VOLUME SHOCKERS & DELIVERY SPIKES (col-span-2)               */}
+            {/* =============================================================== */}
+            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+                      Volume Shockers &amp; Surge Radar
+                    </span>
+                    <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-1.5 py-0.5 rounded border border-[#27272a]">
+                      VOLUME EXPANSION
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                    INSTITUTIONAL FOOTPRINT
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                  {volumeLoading ? (
+                    <div className="text-terminal-amber text-xs py-4 text-center animate-pulse">
+                      Loading volume shockers...
+                    </div>
+                  ) : filteredVolumeRows.length === 0 ? (
+                    <div className="text-zinc-400 text-xs py-4 text-center">
+                      No volume shockers available.
+                    </div>
+                  ) : (
+                    filteredVolumeRows.slice(0, 5).map((item) => {
+                      const mult =
+                        item.week1AvgVolume > 0
+                          ? (item.volume / item.week1AvgVolume).toFixed(1)
+                          : '2.5';
+                      const barPct = Math.min(100, Math.max(20, Number(mult) * 16));
+                      return (
+                        <div
+                          key={item.symbol}
+                          onClick={() => handleVolumeRowClick(item)}
+                          className="bg-[#121216] border border-[#27272a] hover:border-terminal-amber/60 rounded p-2.5 cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-white text-sm">{item.symbol}</span>
+                              <span className="text-[10px] text-terminal-amber font-mono bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded font-bold tabular-nums">
+                                ⚡ {mult}x Vol
+                              </span>
+                            </div>
+                            <div className="text-right tabular-nums">
+                              <span className="text-xs font-bold text-white mr-2">
+                                &#8377;{formatNumber(item.ltp, 2)}
+                              </span>
+                              <PercentCell value={item.pChange} />
+                            </div>
+                          </div>
+                          <div className="w-full h-2 bg-[#09090b] rounded-full overflow-hidden flex border border-[#27272a] my-1.5">
+                            <div
+                              className="h-full bg-emerald-400 rounded-full"
+                              style={{ width: `${barPct}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[11px] font-mono text-zinc-300 tabular-nums">
+                            <span>
+                              Vol: <b className="text-white">{formatVolume(item.volume)}</b> (1W Avg:{' '}
+                              {formatVolume(item.week1AvgVolume)})
+                            </span>
+                            <span>
+                              Turnover:{' '}
+                              <b className="text-terminal-amber">
+                                &#8377;{formatNumber(item.turnover, 0)} Cr
+                              </b>
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-2.5 pt-2 border-t border-[#27272a]/70 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+                <span>1W / 2W Relative Volume Comparison</span>
+                <button
+                  onClick={() => setActiveTab('volume')}
+                  className="text-terminal-amber hover:underline font-bold cursor-pointer"
+                >
+                  Full Volume Table →
+                </button>
+              </div>
+            </div>
+
+            {/* =============================================================== */}
+            {/* 4. REPEATED BREAKOUT PERSISTENCE (col-span-2)                   */}
+            {/* =============================================================== */}
+            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+                      Repeated Breakout Persistence
+                    </span>
+                    <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-1.5 py-0.5 rounded border border-[#27272a]">
+                      10-DAY WINDOW
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-terminal-amber font-mono font-bold bg-terminal-amber/10 px-2 py-0.5 rounded border border-terminal-amber/30 tabular-nums">
+                    {filteredRepeatedRows.length} PERSISTENT
+                  </span>
+                </div>
+
+                <div className="max-h-[320px] overflow-y-auto pr-1">
+                  {repeatedLoading ? (
+                    <div className="text-terminal-amber text-xs py-4 text-center animate-pulse">
+                      Loading repeated breakouts...
+                    </div>
+                  ) : (
+                    <RepeatedTable
+                      rows={filteredRepeatedRows.slice(0, 8)}
+                      onRowClick={(row) => activateSymbol(row.symbol)}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-2.5 pt-2 border-t border-[#27272a]/70 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+                <span>Multi-session breakout conviction tracker</span>
+                <button
+                  onClick={() => setActiveTab('repeated')}
+                  className="text-terminal-amber hover:underline font-bold cursor-pointer"
+                >
+                  Full Repeated Table →
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'repeated' ? (
+          <div className="bg-[#0c0c0f] border border-[#27272a] rounded-md p-3.5 shadow-md">
+            {repeatedLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center font-mono text-xs">
+                <span className="text-terminal-amber animate-pulse">
+                  LOADING REPEATED BREAKOUTS...
+                </span>
+              </div>
+            ) : repeatedError || !repeatedData ? (
+              <div className="py-12 flex flex-col items-center justify-center font-mono text-xs gap-1 px-4 text-center">
+                <span className="text-rose-400 font-bold uppercase">Fetch Failed</span>
+                <span className="text-zinc-300 text-xs max-w-xs">
+                  {repeatedErr instanceof Error ? repeatedErr.message : 'Unknown error'}
+                </span>
+              </div>
+            ) : (
+              <RepeatedTable
+                rows={filteredRepeatedRows}
+                onRowClick={(row) => activateSymbol(row.symbol)}
+              />
+            )}
+          </div>
+        ) : activeTab === 'volume' ? (
+          <div className="bg-[#0c0c0f] border border-[#27272a] rounded-md p-3.5 shadow-md">
+            {volumeLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center font-mono text-xs">
+                <span className="text-terminal-amber animate-pulse">
+                  LOADING VOLUME...
+                </span>
+              </div>
+            ) : volumeError || !volumeData ? (
+              <div className="py-12 flex flex-col items-center justify-center font-mono text-xs gap-1 px-4 text-center">
+                {(volumeErr as (Error & { status?: number }) | undefined)?.status === 503 ? (
+                  <>
+                    <span className="text-rose-400 font-bold uppercase">Service Unavailable</span>
+                    <span className="text-zinc-300 text-xs">
+                      Volume data is currently unavailable. Please try again later.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-rose-400 font-bold uppercase">Fetch Failed</span>
+                    <span className="text-zinc-300 text-xs max-w-xs">
+                      {volumeErr instanceof Error ? volumeErr.message : 'Unknown error'}
+                    </span>
+                  </>
+                )}
+              </div>
+            ) : (
+              <VolumeTable rows={filteredVolumeRows} onRowClick={handleVolumeRowClick} />
+            )}
+          </div>
+        ) : (
+          <div className="bg-[#0c0c0f] border border-[#27272a] rounded-md p-3.5 shadow-md">
+            <BreakoutTable
+              rows={activeTab === 'high' ? filteredHighRows : filteredLowRows}
+              onRowClick={handleRowClick}
+              volumeMap={volumeMap}
+              mode={activeTab === 'high' ? 'high' : 'low'}
+            />
+          </div>
         )}
       </div>
     </div>
   );
 }
-
