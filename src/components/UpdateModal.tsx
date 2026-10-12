@@ -39,6 +39,7 @@ export function UpdateModal() {
         setErrorMessage(null);
       } else if (msg.status === 'error') {
         setDownloading(false);
+        setUpdateReady(false);
         setErrorMessage(typeof msg.data === 'string' ? msg.data : 'Download failed');
       }
     });
@@ -53,8 +54,10 @@ export function UpdateModal() {
       setDownloading(true);
       setDownloadProgress(0);
       setErrorMessage(null);
+      setUpdateReady(false);
       window.electronAPI.downloadUpdate().catch((err: unknown) => {
         setDownloading(false);
+        setUpdateReady(false);
         setErrorMessage(err instanceof Error ? err.message : String(err));
       });
     }
@@ -62,7 +65,9 @@ export function UpdateModal() {
 
   const handleInstallAndRestart = () => {
     if (window.electronAPI) {
-      window.electronAPI.installUpdate();
+      window.electronAPI.installUpdate().catch((err: unknown) => {
+        setErrorMessage(err instanceof Error ? err.message : String(err));
+      });
     }
   };
 
@@ -73,7 +78,7 @@ export function UpdateModal() {
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-terminal-amber animate-ping" />
             <span className="text-terminal-amber font-bold text-xs tracking-wider">
-              {updateReady ? 'UPDATE READY TO INSTALL' : 'NEW VERSION AVAILABLE'}
+              {updateReady && !errorMessage ? 'UPDATE READY TO INSTALL' : 'NEW VERSION AVAILABLE'}
             </span>
           </div>
           <span className="text-terminal-muted text-[10px]">
@@ -82,7 +87,7 @@ export function UpdateModal() {
         </div>
 
         <div className="py-2 text-xs text-terminal-text space-y-2">
-          {!updateReady ? (
+          {(!updateReady || errorMessage) ? (
             <p className="text-white/80">
               A new update for <span className="text-terminal-amber font-bold">BLM Terminal</span> is available. Would you like to update now or continue working?
             </p>
@@ -118,7 +123,7 @@ export function UpdateModal() {
         </div>
 
         <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-terminal-border">
-          {!updateReady ? (
+          {(!updateReady || errorMessage) ? (
             <>
               <button
                 type="button"

@@ -912,7 +912,9 @@ async function startApp() {
       sendStatusToWindow('error', err?.message || String(err));
     });
     autoUpdater.on('download-progress', (progressObj) => sendStatusToWindow('progress', progressObj));
-    autoUpdater.on('update-downloaded', (info) => sendStatusToWindow('downloaded', info));
+    autoUpdater.on('update-downloaded', (info) => {
+      log(`[autoUpdater] update binary downloaded to cache: ${info?.version || 'unknown'}; awaiting manifest verification`);
+    });
 
     ipcMain.handle('get-app-version', () => app.getVersion());
     ipcMain.handle('storage-get', (_event, key) => terminalStorageData[key] ?? null);
