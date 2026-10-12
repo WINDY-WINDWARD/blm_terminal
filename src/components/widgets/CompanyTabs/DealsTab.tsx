@@ -457,11 +457,11 @@ export function DealsTab({ symbol }: { symbol: string }) {
       <div className="flex-1 overflow-auto bg-[#0c0c0f] border border-[#27272a] rounded-lg min-h-0">
         {isAllLoading ? (
           <div className="h-full w-full flex items-center justify-center font-mono text-xs text-amber-400 animate-pulse">
-            LOADING ${activeTab.toUpperCase()} RECORDS...
+            LOADING {activeTab.toUpperCase()} RECORDS...
           </div>
         ) : false ? (
           <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-rose-400 gap-1 p-4 text-center">
-            <span>Failed to load ${activeTab} data</span>
+            <span>Failed to load {activeTab} data</span>
             <span className="text-zinc-500 text-[10px]">'Failed to load transactions'</span>
           </div>
         ) : activeTab === 'sast' ? (
@@ -477,7 +477,7 @@ export function DealsTab({ symbol }: { symbol: string }) {
             <span className="text-2xl mb-1">💼</span>
             <span className="font-bold text-zinc-400 uppercase">NO TRANSACTIONS RECORDED</span>
             <span className="text-[11px] text-zinc-600">
-              No ${activeTab} matching the current filters for {symbol}.
+              No {activeTab} transactions matching the current filters for {symbol}.
             </span>
           </div>
         ) : (

@@ -281,10 +281,12 @@ async def get_notifications_industry_summary(
     cat_res = await db.execute(cat_stmt)
 
     industry_map: dict[str, dict[str, Any]] = {}
+    matched_symbols = set()
     for symbol, cats in cat_res.all():
         count = symbol_counts.get(symbol, 0)
         if count == 0:
             continue
+        matched_symbols.add(symbol)
         ind = ""
         sec = ""
         if cats:
@@ -305,6 +307,19 @@ async def get_notifications_industry_summary(
             }
         industry_map[industry_name]["alertCount"] += count
         industry_map[industry_name]["symbols"].append(symbol)
+
+    # Aggregate any alerting symbols that were not cataloged in MarketCategoryStock
+    for symbol, count in symbol_counts.items():
+        if symbol not in matched_symbols and count > 0:
+            if "Diversified" not in industry_map:
+                industry_map["Diversified"] = {
+                    "industry": "Diversified",
+                    "sector": "General",
+                    "alertCount": 0,
+                    "symbols": [],
+                }
+            industry_map["Diversified"]["alertCount"] += count
+            industry_map["Diversified"]["symbols"].append(symbol)
 
     # Sort by highest alertCount descending
     sorted_industries = sorted(industry_map.values(), key=lambda x: x["alertCount"], reverse=True)

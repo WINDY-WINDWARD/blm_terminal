@@ -9,6 +9,7 @@ import {
   tickDataAtom,
   openAlgoAvailableAtom,
   fundsAtom,
+  focusedPanelAtom,
 } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 import type { PlaceOrderParams, OrderData, FundsData } from '@/lib/openalgo';
@@ -28,7 +29,8 @@ const QUICK_INSTRUMENTS = [
   { symbol: 'INFY' },
 ] as const;
 
-export function OrderWidget({ panelId: _panelId }: OrderWidgetProps) {
+export function OrderWidget({ panelId }: OrderWidgetProps) {
+  const focusedPanel = useAtomValue(focusedPanelAtom);
   const qc = useQueryClient();
   const [globalSymbol, setGlobalSymbol] = useAtom(activeSymbolAtom);
   const [globalExchange, setGlobalExchange] = useAtom(activeExchangeAtom);

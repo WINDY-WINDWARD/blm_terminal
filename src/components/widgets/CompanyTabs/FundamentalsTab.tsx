@@ -768,6 +768,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {/* Intrinsic Valuation Matrix (col-span-2) */}
           <BentoCard
             title="Intrinsic Valuation Matrix"
+            justify="start"
             className="col-span-1 md:col-span-2 lg:col-span-2"
             badge={
               valuationData?.cmp != null && (

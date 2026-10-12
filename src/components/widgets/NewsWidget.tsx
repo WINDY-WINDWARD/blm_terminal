@@ -148,55 +148,6 @@ const PRIMARY_SOURCE_PILLS: Array<{ id: string; label: string }> = [
   { id: 'livemint', label: 'MINT' },
 ];
 
-type FilingCategory = 'Q2 RESULTS' | 'BOARD / AGM' | 'CORP ACTION' | 'M&A / DEAL';
-
-interface FilingItem {
-  id: string;
-  symbol: string;
-  category: FilingCategory;
-  headline: string;
-  meta: string;
-  linkLabel: string;
-  url: string;
-  publishDate: string | null;
-}
-
-interface InstitutionalDealRow {
-  id: string;
-  time: string;
-  symbol: string;
-  dealType: 'BLOCK' | 'BULK';
-  clientName: string;
-  action: 'BUY' | 'SELL';
-  quantity: string;
-  price: string;
-  valueCr: number;
-  impactLabel: string;
-  positiveImpact: boolean;
-  url?: string;
-}
-
-const CORPORATE_KEYWORDS = [
-  'results',
-  'q1',
-  'q2',
-  'q3',
-  'q4',
-  'board',
-  'acquisition',
-  'merger',
-  'dividend',
-  'agm',
-  'egm',
-  'filing',
-  'disclosure',
-  'capex',
-  'qip',
-  'buyback',
-  'bonus',
-  'split',
-  'stake',
-];
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -572,54 +523,6 @@ function matchesFilters(
   return true;
 }
 
-function classifyFilingCategory(article: NewsArticle): FilingCategory {
-  const haystack = `${article.title || ''} ${article.text || ''}`.toLowerCase();
-  if (
-    haystack.includes('result') ||
-    haystack.includes('q1') ||
-    haystack.includes('q2') ||
-    haystack.includes('q3') ||
-    haystack.includes('q4') ||
-    haystack.includes('net profit') ||
-    haystack.includes('earnings')
-  ) {
-    return 'Q2 RESULTS';
-  }
-  if (
-    haystack.includes('acquisition') ||
-    haystack.includes('acquire') ||
-    haystack.includes('merger') ||
-    haystack.includes('amalgamation') ||
-    haystack.includes('joint-venture') ||
-    haystack.includes('stake')
-  ) {
-    return 'M&A / DEAL';
-  }
-  if (
-    haystack.includes('board') ||
-    haystack.includes('agm') ||
-    haystack.includes('egm') ||
-    haystack.includes('qip') ||
-    haystack.includes('fundraising') ||
-    haystack.includes('director')
-  ) {
-    return 'BOARD / AGM';
-  }
-  return 'CORP ACTION';
-}
-
-function getFilingBadgeStyle(category: FilingCategory): string {
-  switch (category) {
-    case 'Q2 RESULTS':
-      return 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
-    case 'CORP ACTION':
-      return 'bg-blue-500/10 text-blue-400 border border-blue-500/30';
-    case 'BOARD / AGM':
-      return 'bg-purple-500/10 text-purple-400 border border-purple-500/30';
-    case 'M&A / DEAL':
-      return 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
-  }
-}
 
 function SourceFilterChips({
   excluded,
@@ -765,7 +668,6 @@ export function NewsWidget() {
 
   const [globalOffset, setGlobalOffset] = useState(0);
   const [localSearch, setLocalSearch] = useState(filters.searchQuery || '');
-  const [activeFilingTag, setActiveFilingTag] = useState<'ALL' | FilingCategory>('ALL');
   const [scrapingConsent] = useAtom(advancedScrapingConsentAtom);
   const [showNudge, setShowNudge] = useState(false);
 
@@ -875,120 +777,6 @@ export function NewsWidget() {
     () => new Set(filteredLiveArticles.map((a) => a.url)),
     [filteredLiveArticles]
   );
-
-  const corporateFilings = useMemo<FilingItem[]>(() => {
-    const matchedFromStream: FilingItem[] = wireArticles
-      .filter((article) => {
-        const text = `${article.title || ''} ${article.text || ''}`.toLowerCase();
-        return CORPORATE_KEYWORDS.some((kw) => text.includes(kw));
-      })
-      .map((article, idx) => {
-        const category = classifyFilingCategory(article);
-        const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
-        const symbol = article.company_symbol
-          ? normalizeTicker(article.company_symbol)
-          : tickers[0] || 'NSE';
-        const linkLabel =
-          category === 'Q2 RESULTS'
-            ? 'PDF FILING ↗'
-            : category === 'CORP ACTION'
-            ? 'CIRCULAR ↗'
-            : category === 'BOARD / AGM'
-            ? 'NOTICE ↗'
-            : 'INVESTOR DECK ↗';
-
-        return {
-          id: `${article.url}-${idx}`,
-          symbol,
-          category,
-          headline: article.title || 'Corporate Disclosure Filing',
-          meta: `Source: ${(article.source && SOURCE_LABELS[article.source]) || 'EXCHANGE'} • ${formatDate(
-            article.publish_date
-          )}`,
-          linkLabel,
-          url: article.url,
-          publishDate: article.publish_date,
-        };
-      });
-
-    const queryLower = localSearch.trim().toLowerCase();
-    const filtered = matchedFromStream.filter((item) => {
-      if (!queryLower) return true;
-      return (
-        item.symbol.toLowerCase().includes(queryLower) ||
-        item.headline.toLowerCase().includes(queryLower) ||
-        item.category.toLowerCase().includes(queryLower)
-      );
-    });
-
-    const seen = new Set<string>();
-    return filtered
-      .filter((item) => {
-        const key = `${item.symbol}-${item.headline.slice(0, 40)}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        if (activeFilingTag !== 'ALL' && item.category !== activeFilingTag) return false;
-        return true;
-      })
-      .slice(0, 12);
-  }, [wireArticles, localSearch, activeFilingTag]);
-
-  const institutionalDeals = useMemo<InstitutionalDealRow[]>(() => {
-    const highImpactFromNews: InstitutionalDealRow[] = wireArticles
-      .filter((article) => {
-        const text = `${article.title || ''} ${article.text || ''}`.toLowerCase();
-        return (
-          article.threat_level === 'high' ||
-          article.threat_level === 'critical' ||
-          text.includes('block deal') ||
-          text.includes('bulk deal') ||
-          text.includes('stake') ||
-          text.includes('institutional')
-        );
-      })
-      .slice(0, 10)
-      .map((article, idx) => {
-        const tickers = getEntityValues(article, 'tickers').map(normalizeTicker);
-        const symbol = article.company_symbol
-          ? normalizeTicker(article.company_symbol)
-          : tickers[0] || 'NIFTY';
-        const isBearish = article.sentiment === 'BEARISH';
-        const orgs = getEntityValues(article, 'organizations');
-        const client = (
-          orgs[0] ||
-          (article.source ? SOURCE_FULL_NAMES[article.source] : 'INSTITUTIONAL DESK') ||
-          'INSTITUTIONAL DESK'
-        ).toUpperCase();
-
-        return {
-          id: `live-deal-${idx}-${article.url}`,
-          time: formatDate(article.publish_date),
-          symbol,
-          dealType: (article.text || article.title || '').toLowerCase().includes('block') ? 'BLOCK' : 'BULK',
-          clientName: client,
-          action: isBearish ? 'SELL' : 'BUY',
-          quantity: 'DISCLOSED IN WIRE',
-          price: 'MARKET',
-          valueCr: article.sentiment_score ? Math.round(article.sentiment_score * 100) : 0,
-          impactLabel: isBearish ? 'BEARISH FLOW' : 'BULLISH FLOW',
-          positiveImpact: !isBearish,
-          url: article.url,
-        };
-      });
-
-    const queryLower = localSearch.trim().toLowerCase();
-    const filtered = highImpactFromNews.filter((row) => {
-      if (!queryLower) return true;
-      return (
-        row.symbol.toLowerCase().includes(queryLower) ||
-        row.clientName.toLowerCase().includes(queryLower) ||
-        row.dealType.toLowerCase().includes(queryLower) ||
-        row.action.toLowerCase().includes(queryLower)
-      );
-    });
-
-    return filtered;
-  }, [wireArticles, localSearch]);
 
   const totalCount = globalData?.total ?? wireArticles.length;
   const hasMore = globalData?.has_more || false;

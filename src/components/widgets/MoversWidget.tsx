@@ -262,44 +262,22 @@ function mapItemToRow(item: TopMoverItem): MoverRow {
 interface HeatSegment {
   label: '1W' | '1M' | '3M' | '6M' | '1Y';
   value: number | null | undefined;
-  highlighted?: boolean;
 }
 
 function MomentumHeatStrip({
   ranges,
   pChange: _pChange,
-  timeframeFocus,
 }: {
   ranges: ChangeRanges | null;
   pChange?: number;
-  timeframeFocus: TimeframeFocus;
+  timeframeFocus?: TimeframeFocus;
 }) {
   const segments: HeatSegment[] = [
-    {
-      label: '1W',
-      value: ranges?.oneWeekPercent,
-      highlighted: timeframeFocus === '1-WEEK',
-    },
-    {
-      label: '1M',
-      value: ranges?.oneMonthPercent,
-      highlighted: timeframeFocus === '1-MONTH',
-    },
-    {
-      label: '3M',
-      value: ranges?.threeMonthPercent,
-      highlighted: timeframeFocus === '3-MONTH',
-    },
-    {
-      label: '6M',
-      value: ranges?.sixMonthPercent,
-      highlighted: false,
-    },
-    {
-      label: '1Y',
-      value: ranges?.oneYearPercent,
-      highlighted: timeframeFocus === '52-WEEK',
-    },
+    { label: '1W', value: ranges?.oneWeekPercent },
+    { label: '1M', value: ranges?.oneMonthPercent },
+    { label: '3M', value: ranges?.threeMonthPercent },
+    { label: '6M', value: ranges?.sixMonthPercent },
+    { label: '1Y', value: ranges?.oneYearPercent },
   ];
 
   return (
@@ -311,9 +289,7 @@ function MomentumHeatStrip({
             <div
               key={seg.label}
               title={`${seg.label}: Awaiting data`}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums border text-zinc-500 bg-[#121216] border-[#27272a] whitespace-nowrap ${
-                seg.highlighted ? 'ring-1 ring-terminal-amber' : ''
-              }`}
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums border text-zinc-500 bg-[#121216] border-[#27272a] whitespace-nowrap"
             >
               {seg.label} —
             </div>
@@ -333,13 +309,11 @@ function MomentumHeatStrip({
           ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
           : 'text-rose-400 bg-rose-500/10 border-rose-500/30';
 
-        const ringTone = seg.highlighted ? 'ring-1 ring-terminal-amber' : '';
-
         return (
           <div
             key={seg.label}
             title={`${seg.label}: ${sign}${effectiveVal.toFixed(2)}%`}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold tabular-nums border whitespace-nowrap transition-transform hover:scale-105 ${pillTone} ${ringTone}`}
+            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold tabular-nums border whitespace-nowrap transition-transform hover:scale-105 ${pillTone}`}
           >
             {arrow} {seg.label} {formatted}
           </div>
