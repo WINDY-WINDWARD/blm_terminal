@@ -1149,11 +1149,9 @@ export function NewsWidget() {
         />
       </div>
 
-      {/* 4-COLUMN BENTO MATRIX BODY */}
-      <div className="flex-1 overflow-y-auto pr-0.5 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* CARD 1: BREAKING WIRE HERO (COL-SPAN-2) */}
-          <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-[#3f3f46] rounded p-3 flex flex-col justify-between transition-colors shadow-md">
+      {/* FULL PANEL LIVE WIRE FEED */}
+      <div className="flex-1 overflow-y-auto pr-0.5">
+        <div className="h-full bg-[#0c0c0f] border border-[#27272a] rounded p-3 flex flex-col justify-between transition-colors shadow-md">
             <div>
               <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a] flex-wrap gap-2">
                 <div className="flex items-center gap-2">
@@ -1193,7 +1191,7 @@ export function NewsWidget() {
                   </span>
                 </div>
               ) : (
-                <div className="space-y-2.5 overflow-y-auto max-h-[360px] pr-1 font-sans">
+                <div className="space-y-2.5 overflow-y-auto max-h-[calc(100vh-250px)] pr-1 font-sans">
                   {wireArticles.map((article, idx) => (
                     <ArticleRow
                       key={`${article.url}_${idx}`}
@@ -1234,233 +1232,7 @@ export function NewsWidget() {
               </button>
             </div>
           </div>
-
-          {/* CARD 2: CORPORATE FILINGS & REGULATORY RADAR (COL-SPAN-2) */}
-          <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-[#3f3f46] rounded p-3 flex flex-col justify-between transition-colors shadow-md">
-            <div>
-              <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#27272a] flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
-                    EXCHANGE FILINGS & CORPORATE ACTIONS
-                  </span>
-                </div>
-                <span className="text-[10px] font-mono text-zinc-300 bg-[#121216] px-2 py-0.5 rounded border border-[#27272a]">
-                  NSE / BSE DISCLOSURES
-                </span>
-              </div>
-
-              {/* Filing Category Tag Filter Pills */}
-              <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-                {(['ALL', 'Q2 RESULTS', 'CORP ACTION', 'BOARD / AGM', 'M&A / DEAL'] as const).map(
-                  (tag) => {
-                    const active = activeFilingTag === tag;
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => setActiveFilingTag(tag)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition-colors ${
-                          active
-                            ? 'border-terminal-amber bg-terminal-amber/15 text-terminal-amber'
-                            : 'border-[#27272a] bg-[#121216] text-zinc-300 hover:text-white'
-                        }`}
-                      >
-                        {tag}
-                      </button>
-                    );
-                  }
-                )}
-              </div>
-
-              <div className="space-y-2.5 overflow-y-auto max-h-[360px] pr-1 font-mono">
-                {corporateFilings.length === 0 ? (
-                  <div className="h-[280px] flex items-center justify-center text-zinc-300 text-xs">
-                    No corporate filings match the active filter.
-                  </div>
-                ) : (
-                  corporateFilings.map((filing) => (
-                    <div
-                      key={filing.id}
-                      className="bg-[#121216] border border-[#27272a] p-2.5 rounded hover:border-zinc-500 transition-colors"
-                    >
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <button
-                          type="button"
-                          onClick={() => handleTickerClick(filing.symbol)}
-                          className="font-bold text-white hover:text-terminal-amber transition-colors text-xs cursor-pointer"
-                          title={`Set active symbol to ${filing.symbol}`}
-                        >
-                          ${filing.symbol}
-                        </button>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${getFilingBadgeStyle(
-                            filing.category
-                          )}`}
-                        >
-                          {filing.category}
-                        </span>
-                      </div>
-
-                      <div className="text-xs text-zinc-200 leading-snug font-sans">
-                        {filing.headline}
-                      </div>
-
-                      <div className="mt-1.5 flex items-center justify-between text-[11px] text-zinc-300">
-                        <span>{filing.meta}</span>
-                        <a
-                          href={filing.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            handleExternalOrAppLink(filing.url, event);
-                          }}
-                          className="text-terminal-amber font-bold hover:underline"
-                        >
-                          {filing.linkLabel}
-                        </a>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="mt-2.5 pt-2 border-t border-[#27272a] flex items-center justify-between text-[11px] text-zinc-300 font-mono">
-              <span>KEYWORDS: RESULTS • BOARD • M&A • DIVIDEND • AGM</span>
-              <span className="text-terminal-amber font-bold tabular-nums">
-                {corporateFilings.length} DISCLOSURES
-              </span>
-            </div>
-          </div>
-
-          {/* CARD 3: INSTITUTIONAL BULK & BLOCK DEALS BENTO (COL-SPAN-4) */}
-          <div className="col-span-1 md:col-span-4 lg:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-[#3f3f46] rounded p-3 transition-colors shadow-md">
-            <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#27272a] flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
-                  INSTITUTIONAL BULK & BLOCK DEALS TRACKER
-                </span>
-                <span className="text-xs text-zinc-300 font-mono">| VALUE ≥ ₹50 CR</span>
-              </div>
-              <div className="flex items-center gap-2 text-[10px] font-mono tabular-nums">
-                <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
-                  BUY FLOW: ₹1,480 CR
-                </span>
-                <span className="text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30 font-bold">
-                  SELL FLOW: ₹920 CR
-                </span>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono tabular-nums text-xs">
-                <thead>
-                  <tr className="text-[10px] text-zinc-300 uppercase border-b border-[#27272a] bg-[#121216]">
-                    <th className="p-2">TIME</th>
-                    <th className="p-2">SECURITY</th>
-                    <th className="p-2">DEAL TYPE</th>
-                    <th className="p-2">CLIENT NAME</th>
-                    <th className="p-2 text-right">ACTION</th>
-                    <th className="p-2 text-right">QUANTITY</th>
-                    <th className="p-2 text-right">PRICE (₹)</th>
-                    <th className="p-2 text-right">VALUE (CR)</th>
-                    <th className="p-2 text-center">IMPACT</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#27272a]/60">
-                  {institutionalDeals.length === 0 && (
-                    <tr>
-                      <td colSpan={9} className="p-8 text-center text-zinc-400 font-mono text-xs">
-                        No institutional block or bulk deals recorded in active stream.
-                      </td>
-                    </tr>
-                  )}
-                  {institutionalDeals.map((deal) => (
-                    <tr
-                      key={deal.id}
-                      onClick={(event) => {
-                        if (deal.url) {
-                          handleExternalOrAppLink(deal.url, event);
-                        }
-                      }}
-                      className="hover:bg-[#121216]/80 transition-colors cursor-pointer"
-                    >
-                      <td className="p-2 text-zinc-300">{deal.time}</td>
-                      <td className="p-2 font-bold text-white">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleTickerClick(deal.symbol);
-                          }}
-                          className="font-bold text-white hover:text-terminal-amber transition-colors cursor-pointer"
-                        >
-                          ${deal.symbol}
-                        </button>
-                      </td>
-                      <td className="p-2">
-                        <span
-                          className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${
-                            deal.dealType === 'BLOCK'
-                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                              : 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
-                          }`}
-                        >
-                          {deal.dealType}
-                        </span>
-                      </td>
-                      <td className="p-2 text-zinc-200">{deal.clientName}</td>
-                      <td
-                        className={`p-2 text-right font-bold ${
-                          deal.action === 'BUY' ? 'text-emerald-400' : 'text-rose-400'
-                        }`}
-                      >
-                        {deal.action}
-                      </td>
-                      <td className="p-2 text-right text-zinc-200">{deal.quantity}</td>
-                      <td className="p-2 text-right text-zinc-200">{deal.price}</td>
-                      <td
-                        className={`p-2 text-right font-bold ${
-                          deal.action === 'BUY' ? 'text-emerald-400' : 'text-rose-400'
-                        }`}
-                      >
-                        ₹{deal.valueCr.toFixed(2)}
-                      </td>
-                      <td className="p-2 text-center">
-                        <span
-                          className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
-                            deal.positiveImpact
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-                          }`}
-                        >
-                          {deal.impactLabel}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
-      </div>
-
-      {showNudge && (
-        <div className="shrink-0 bg-[#121216] border border-terminal-amber/40 rounded px-3 py-1.5 flex items-center justify-between text-xs text-terminal-amber animate-in fade-in slide-in-from-bottom duration-300">
-          <span>
-            💡 Tip: Enable Advanced Extraction in Settings for premium news & deeper fundamentals.
-          </span>
-          <button
-            type="button"
-            onClick={() => setShowNudge(false)}
-            className="text-zinc-300 hover:text-white text-xs ml-2 px-1"
-          >
-            ✕
-          </button>
-        </div>
-      )}
     </div>
   );
 }

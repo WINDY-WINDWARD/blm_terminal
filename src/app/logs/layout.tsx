@@ -2,10 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import "../globals.css";
 
-const jetBrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-});
+const jetBrainsMono = { variable: "font-mono" };
 
 export const metadata: Metadata = {
   title: "BLM Logs",

@@ -12,6 +12,10 @@ import {
   activeWatchlistIdAtom,
   activePanelsAtom,
   notifSymbolFilterAtom,
+  chartSymbolOverridesAtom,
+  companySymbolOverridesAtom,
+  type ChartSymbolOverride,
+  type CompanySymbolOverride,
   type Watchlist
 } from '@/store/terminalStore';
 import { marketDataService } from '@/lib/nseFetch';
@@ -384,7 +388,211 @@ async function createWatchlist(name: string): Promise<Watchlist> {
   return res.json() as Promise<Watchlist>;
 }
 
+
+interface WatchAlertsModalProps {
+  symbol: string;
+  watchlistId: number;
+  onClose: () => void;
+  onAlertDismissed?: () => void;
+}
+
+function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: WatchAlertsModalProps) {
+  const queryClient = useQueryClient();
+  const [, setChartOverrides] = useAtom(chartSymbolOverridesAtom);
+  const [, setCompanyOverrides] = useAtom(companySymbolOverridesAtom);
+
+  const { data: alerts = [], isLoading, refetch } = useQuery<Array<{
+    id: number;
+    symbol: string;
+    exchange?: string;
+    trigger_type: string;
+    message: string;
+    triggered_at: string;
+    triggered_date: string;
+    watchlist_id?: number;
+  }>>({
+    queryKey: ['watchlist-symbol-alerts', symbol, watchlistId],
+    queryFn: async () => {
+      const res = await fetch(`/api/py/notifications?symbol=${encodeURIComponent(symbol)}&watchlist_id=${watchlistId}&days=7&read_filter=unread`);
+      if (!res.ok) return [];
+      const list = await res.json();
+      if (Array.isArray(list) && list.length > 0) return list;
+      const gRes = await fetch(`/api/py/notifications/global?symbol=${encodeURIComponent(symbol)}&days=7&read_filter=unread`);
+      if (gRes.ok) {
+        const gList = await gRes.json();
+        if (Array.isArray(gList)) return gList;
+      }
+      return [];
+    },
+    staleTime: 5000,
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: async ({ id, wlId }: { id: number; wlId?: number }) => {
+      const url = wlId
+        ? `/api/py/notifications/${id}?watchlist_id=${wlId}`
+        : `/api/py/notifications/global/${id}`;
+      await fetch(url, { method: 'DELETE' });
+    },
+    onSuccess: () => {
+      refetch();
+      onAlertDismissed?.();
+    },
+  });
+
+  const handleDismissAll = async () => {
+    for (const a of alerts) {
+      await dismissMutation.mutateAsync({ id: a.id, wlId: a.watchlist_id });
+    }
+  };
+
+  const handleOpenChart = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const popoutKey = `popout_direct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    setChartOverrides((prev: Record<string, ChartSymbolOverride>) => ({
+      ...prev,
+      [popoutKey]: { symbol, exchange: 'NSE' },
+    }));
+    const query = new URLSearchParams({
+      symbol,
+      exchange: 'NSE',
+      popoutPanelId: popoutKey,
+    });
+    window.open(
+      `/widget/CHART?${query.toString()}`,
+      `blm_widget_CHART_${popoutKey}`,
+      'width=1100,height=720',
+    );
+  };
+
+  const handleOpenCompany = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const popoutKey = `popout_company_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    setCompanyOverrides((prev: Record<string, CompanySymbolOverride>) => ({
+      ...prev,
+      [popoutKey]: { symbol },
+    }));
+    const query = new URLSearchParams({
+      symbol,
+      popoutPanelId: popoutKey,
+    });
+    window.open(
+      `/widget/COMPANY?${query.toString()}`,
+      `blm_widget_COMPANY_${popoutKey}`,
+      'width=1200,height=800',
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 font-mono select-none">
+      <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="p-3.5 border-b border-[#27272a] flex items-center justify-between bg-[#121216]">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-extrabold text-amber-400 tracking-wider flex items-center gap-1.5">
+              <span>🔔</span>
+              <span>ALERTS: {symbol}</span>
+            </span>
+            <span className="text-xs bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded-full border border-amber-500/30">
+              {alerts.length} UNREAD
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenChart}
+              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+              title={`Open independent chart for ${symbol}`}
+            >
+              <span>⚡</span>
+              <span>Load Chart</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenCompany}
+              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+              title={`Open independent company widget for ${symbol}`}
+            >
+              <span>🏢</span>
+              <span>Company</span>
+            </button>
+
+            {alerts.length > 0 && (
+              <button
+                type="button"
+                onClick={handleDismissAll}
+                className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition-all cursor-pointer"
+              >
+                Dismiss All
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 transition-colors ml-1 cursor-pointer"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
+          {isLoading ? (
+            <div className="py-12 text-center text-amber-400 text-xs animate-pulse">
+              LOADING ALERTS FOR {symbol}...
+            </div>
+          ) : alerts.length === 0 ? (
+            <div className="py-12 text-center text-zinc-500 text-xs flex flex-col items-center gap-2">
+              <span className="text-2xl">✨</span>
+              <span className="text-zinc-400 font-bold uppercase">NO ACTIVE ALERTS</span>
+              <span>All signals for {symbol} have been acknowledged or expired.</span>
+            </div>
+          ) : (
+            alerts.map((a) => (
+              <div
+                key={a.id}
+                className="bg-[#121216] border border-[#27272a] hover:border-zinc-600 rounded-md p-3 transition-colors flex flex-col gap-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-amber-400/10 text-amber-400 border border-amber-400/30 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
+                      {a.trigger_type}
+                    </span>
+                    <span className="text-zinc-400 text-[11px] tabular-nums">
+                      {a.triggered_at ? new Date(a.triggered_at).toLocaleString('en-IN') : a.triggered_date}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => dismissMutation.mutate({ id: a.id, wlId: a.watchlist_id })}
+                    disabled={dismissMutation.isPending}
+                    className="text-[10px] text-zinc-400 hover:text-rose-400 px-2 py-0.5 rounded border border-zinc-700/60 hover:border-rose-500/40 bg-zinc-800/40 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+
+                <div className="text-xs text-zinc-200 leading-relaxed font-sans">
+                  {a.message}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function WatchWidget() {
+  const queryClient = useQueryClient();
+  const [alertModalSymbol, setAlertModalSymbol] = useState<string | null>(null);
   const qc = useQueryClient();
   const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [activeExchange, setActiveExchange] = useAtom(activeExchangeAtom);
@@ -608,6 +816,7 @@ export function WatchWidget() {
   // Cross-widget: set symbol filter on NotifWidget when NOTIF panel is open
   const handleAlertClick = useCallback(
     (symbol: string) => {
+      setAlertModalSymbol(symbol);
       const isNotifOpen = Object.values(activePanels).includes('NOTIF');
       if (isNotifOpen) setNotifSymbolFilter(symbol);
     },
@@ -1053,6 +1262,16 @@ export function WatchWidget() {
           </div>
         )}
       </div>
+      {alertModalSymbol && (
+        <WatchAlertsModal
+          symbol={alertModalSymbol}
+          watchlistId={activeWatchlistId}
+          onClose={() => setAlertModalSymbol(null)}
+          onAlertDismissed={() => {
+            queryClient.invalidateQueries({ queryKey: ['notifications-count'] });
+          }}
+        />
+      )}
     </div>
   );
 }

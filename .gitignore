@@ -78,3 +78,6 @@ dist-*/
 # BLM license system: baked build-time config (regenerate via scripts/gen-license-config.js)
 /electron/licenseConfig.js
 
+
+# Precomputed dependency tree for desktop builds
+npm-deps.json

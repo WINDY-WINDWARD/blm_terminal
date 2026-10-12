@@ -92,7 +92,7 @@ function makeFakeWebSocket(this: unknown, url: string): FakeWebSocket {
       ws.onmessage?.({ data: payload });
     },
     __close() {
-      ws.close();
+      (ws.close as any)();
     },
     __error(e: unknown = new Error('socket error')) {
       ws.onerror?.(e);

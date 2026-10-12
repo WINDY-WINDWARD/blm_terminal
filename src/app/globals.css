@@ -6,6 +6,7 @@
   --color-terminal-green: #00ff00;
   --color-terminal-red: #ff0000;
   --color-terminal-gray: #333333;
+  --font-jetbrains-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --font-sans: var(--font-jetbrains-mono), monospace;
   --font-mono: var(--font-jetbrains-mono), monospace;
 }

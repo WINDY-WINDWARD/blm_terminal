@@ -155,7 +155,11 @@ if (-not $cssHit) {
 $prevPref = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {
-    npx electron-builder --win --config electron-builder.json
+    Remove-Item env:HTTP_PROXY -ErrorAction SilentlyContinue
+    Remove-Item env:HTTPS_PROXY -ErrorAction SilentlyContinue
+    Remove-Item env:ALL_PROXY -ErrorAction SilentlyContinue
+    $env:ELECTRON_BUILDER_OFFLINE = 'true'
+    npx electron-builder --win --config electron-builder.json -p never
     $builderExit = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $prevPref

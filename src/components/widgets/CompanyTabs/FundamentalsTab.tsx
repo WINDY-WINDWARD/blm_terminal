@@ -225,15 +225,18 @@ function BentoCard({
   className = '',
   title,
   badge,
+  justify = 'start',
 }: {
   children: React.ReactNode;
   className?: string;
   title?: string;
   badge?: React.ReactNode;
+  justify?: 'start' | 'between';
 }) {
+  const justifyClass = justify === 'between' ? 'justify-between' : 'justify-start';
   return (
     <div
-      className={`bg-[#09090b] border border-[#27272a] rounded p-3 flex flex-col justify-between transition-colors duration-200 hover:bg-zinc-900/80 ${className}`}
+      className={`bg-[#09090b] border border-[#27272a] rounded p-3 flex flex-col ${justifyClass} transition-colors duration-200 hover:bg-zinc-900/80 ${className}`}
     >
       {(title || badge) && (
         <div className="flex items-center justify-between mb-2">

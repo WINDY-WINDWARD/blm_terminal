@@ -932,7 +932,7 @@ export function BreakoutsWidget() {
   };
 
   const tabs: { id: BreakoutTab; label: string; count: number }[] = [
-    { id: 'matrix', label: 'BENTO RADAR', count: highRows.length + lowRows.length },
+    { id: 'matrix', label: 'ALL MATRIX', count: highRows.length + lowRows.length },
     { id: 'high', label: '52W HIGH', count: highRows.length },
     { id: 'low', label: '52W LOW', count: lowRows.length },
     { id: 'volume', label: 'VOLUME SHOCKERS', count: volumeRows.length },

@@ -328,6 +328,34 @@ export const chartSymbolOverridesAtom = atom(
   },
 );
 
+export interface CompanySymbolOverride {
+  symbol: string;
+}
+type CompanyOverrides = Record<string, CompanySymbolOverride>;
+type CompanyOverridesUpdate = CompanyOverrides | ((prev: CompanyOverrides) => CompanyOverrides);
+const companySymbolOverridesBaseAtom = atomWithStorage<CompanyOverrides>(
+  'terminal.companyOverrides',
+  {},
+);
+export const companySymbolOverridesAtom = atom(
+  (get): CompanyOverrides => {
+    const v = get(companySymbolOverridesBaseAtom);
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) return v;
+    return {};
+  },
+  (_get, set, update: CompanyOverridesUpdate) => {
+    const base = _get(companySymbolOverridesBaseAtom);
+    const clean: CompanyOverrides =
+      base !== null && typeof base === 'object' && !Array.isArray(base) ? base : {};
+    set(
+      companySymbolOverridesBaseAtom,
+      typeof update === 'function'
+        ? (update as (prev: CompanyOverrides) => CompanyOverrides)(clean)
+        : update,
+    );
+  },
+);
+
 // ─── Other Atoms ─────────────────────────────────────────────────────────────
 
 /** Live tick data keyed by "SYMBOL.EXCHANGE" — updated by marketWs */

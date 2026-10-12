@@ -4,7 +4,7 @@ import React, { use, useState, useEffect, useRef } from 'react';
 import { WidgetRenderer } from '@/components/WidgetRenderer';
 import { useSearchParams } from 'next/navigation';
 import { useSetAtom, useAtomValue } from 'jotai';
-import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom } from '@/store/terminalStore';
+import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom, companySymbolOverridesAtom } from '@/store/terminalStore';
 import { useIsMac } from '@/lib/usePlatform';
 import { cn } from '@/lib/utils';
 
@@ -16,6 +16,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
   const setWatchlistId = useSetAtom(activeWatchlistIdAtom);
   const setMoversCategory = useSetAtom(moversCategoryAtom);
   const overrides = useAtomValue(chartSymbolOverridesAtom);
+  const companyOverrides = useAtomValue(companySymbolOverridesAtom);
 
   const [isRestoring, setIsRestoring] = useState(false);
   const pendingReqIdRef = useRef<string | null>(null);
@@ -40,10 +41,13 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
     const watchlistId = searchParams.get('watchlistId');
     const category = searchParams.get('category');
 
-    if (symbol && !(widgetTitle === 'CHART' && overrides[panelId] !== undefined)) setSymbol(symbol);
+    const popoutPanelId = searchParams.get('popoutPanelId');
+    const isIndependentChart = widgetTitle === 'CHART' && (Boolean(popoutPanelId) || overrides[panelId] !== undefined);
+    const isIndependentCompany = widgetTitle === 'COMPANY' && (Boolean(popoutPanelId) || companyOverrides[panelId] !== undefined);
+    if (symbol && !isIndependentChart && !isIndependentCompany) setSymbol(symbol);
     if (watchlistId) setWatchlistId(Number(watchlistId));
     if (category) setMoversCategory(category);
-  }, [searchParams, setSymbol, setWatchlistId, setMoversCategory, widgetTitle, overrides, panelId]);
+  }, [searchParams, setSymbol, setWatchlistId, setMoversCategory, widgetTitle, overrides, companyOverrides, panelId]);
 
   // Listen for handshake response from main window
   useEffect(() => {
@@ -107,7 +111,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
       <div className="flex-1 min-h-0 relative overflow-hidden select-text">
         {/* originPanelId keeps per-panel state (e.g. chart symbol overrides)
             shared between the home panel and its popout. */}
-        <WidgetRenderer title={widgetTitle} panelId={panelId} />
+        <WidgetRenderer title={widgetTitle} panelId={panelId} symbolOverride={searchParams.get('symbol') || undefined} />
       </div>
     </div>
   );

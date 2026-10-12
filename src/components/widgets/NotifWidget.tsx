@@ -5,6 +5,10 @@ import { useAtomValue, useAtom } from 'jotai';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import ReactDOM from 'react-dom';
 import {
+  chartSymbolOverridesAtom,
+  companySymbolOverridesAtom,
+  type ChartSymbolOverride,
+  type CompanySymbolOverride,
   activeExchangeAtom,
   activeSymbolAtom,
   watchlistsAtom,
@@ -715,12 +719,12 @@ function SubFilterBar({
 }
 // ─── Main Widget ──────────────────────────────────────────────────────────────
 
-export function NotifWidget() {
+export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 'all' } = {}) {
   const queryClient = useQueryClient();
   const watchlists = useAtomValue(watchlistsAtom);
   const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
-  const [selectedWatchlistId, setSelectedWatchlistId] = useState<number>(
-    watchlists.length > 0 ? watchlists[0].id : 1,
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<number | 'all'>(
+    defaultWatchlist ?? (watchlists.length > 0 ? watchlists[0].id : 1),
   );
   const [activeView, setActiveView] = useState<NotifViewMode>('stream');
   const [activeTab, setActiveTab] = useState<NotifTab>('all');
@@ -738,25 +742,21 @@ export function NotifWidget() {
   const [compactStream, setCompactStream] = useState<boolean>(false);
   const [expandedCards, setExpandedCards] = useState<Record<number, boolean>>({});
   const [exchangeFilter, setExchangeFilter] = useState<string>('ALL');
-  const [heatmapInspector, setHeatmapInspector] = useState<string>(
-    'Hover over any matrix cell above to inspect session trigger breakdown.',
-  );
 
   useEffect(() => {
-    if (symbolFilter !== null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (symbolFilter !== null && selectedWatchlistId !== 'all') {
       setSelectedWatchlistId(activeWatchlistId);
     }
-  }, [symbolFilter, activeWatchlistId]);
-
-  const [hoveredNotif, setHoveredNotif] = useState<{ id: number; rect: DOMRect } | null>(null);
+  }, [symbolFilter, activeWatchlistId, selectedWatchlistId]);
 
   const { data, isLoading, isError, error, refetch } = useQuery<Notification[]>({
     queryKey: ['notifications', selectedWatchlistId, readFilter],
     queryFn: async () => {
-      const res = await fetch(
-        `/api/py/notifications?watchlist_id=${selectedWatchlistId}&days=14&read_filter=${readFilter}`,
-      );
+      const url =
+        selectedWatchlistId === 'all'
+          ? `/api/py/notifications/global?days=7&limit=500&read_filter=${readFilter}`
+          : `/api/py/notifications?watchlist_id=${selectedWatchlistId}&days=7&limit=500&read_filter=${readFilter}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -766,9 +766,11 @@ export function NotifWidget() {
 
   const dismissMutation = useMutation({
     mutationFn: async (id: number) => {
-      const res = await fetch(`/api/py/notifications/${id}?watchlist_id=${selectedWatchlistId}`, {
-        method: 'DELETE',
-      });
+      const url =
+        selectedWatchlistId === 'all'
+          ? `/api/py/notifications/global/${id}`
+          : `/api/py/notifications/${id}?watchlist_id=${selectedWatchlistId}`;
+      const res = await fetch(url, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     },
     onSuccess: () => {
@@ -778,10 +780,11 @@ export function NotifWidget() {
 
   const markReadMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(
-        `/api/py/notifications?all=true&watchlist_id=${selectedWatchlistId}`,
-        { method: 'DELETE' },
-      );
+      const url =
+        selectedWatchlistId === 'all'
+          ? `/api/py/notifications/global?all=true`
+          : `/api/py/notifications?all=true&watchlist_id=${selectedWatchlistId}`;
+      const res = await fetch(url, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     },
     onSuccess: () => {
@@ -791,10 +794,75 @@ export function NotifWidget() {
 
   const clearAllMutation = markReadMutation;
 
-  const handleRowClick = (n: Notification) => {
-    setActiveSymbol(n.symbol);
-    setActiveExchange(n.exchange || 'NSE');
-  };
+  const [, setChartOverrides] = useAtom(chartSymbolOverridesAtom);
+  const [, setCompanyOverrides] = useAtom(companySymbolOverridesAtom);
+
+  const handleOpenIndependentChart = useCallback((e: React.MouseEvent, symbol: string, exchange?: string) => {
+    e.stopPropagation();
+    const popoutKey = `popout_direct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    setChartOverrides((prev: Record<string, ChartSymbolOverride>) => ({
+      ...prev,
+      [popoutKey]: { symbol, exchange: exchange || 'NSE' },
+    }));
+    const query = new URLSearchParams({
+      symbol,
+      exchange: exchange || 'NSE',
+      popoutPanelId: popoutKey,
+    });
+    window.open(
+      `/widget/CHART?${query.toString()}`,
+      `blm_widget_CHART_${popoutKey}`,
+      'width=1100,height=720',
+    );
+  }, [setChartOverrides]);
+
+  const handleOpenIndependentCompany = useCallback((e: React.MouseEvent, symbol: string) => {
+    e.stopPropagation();
+    const popoutKey = `popout_company_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    setCompanyOverrides((prev: Record<string, CompanySymbolOverride>) => ({
+      ...prev,
+      [popoutKey]: { symbol },
+    }));
+    const query = new URLSearchParams({
+      symbol,
+      popoutPanelId: popoutKey,
+    });
+    window.open(
+      `/widget/COMPANY?${query.toString()}`,
+      `blm_widget_COMPANY_${popoutKey}`,
+      'width=1200,height=800',
+    );
+  }, [setCompanyOverrides]);
+
+  const [selectedIndustryModal, setSelectedIndustryModal] = useState<{
+    industry: string;
+    sector: string;
+    notifications: Notification[];
+  } | null>(null);
+
+  
+  const { data: globalIndustrySummary } = useQuery<{
+    industries: Array<{ industry: string; sector: string; alertCount: number; symbols: string[] }>;
+  }>({
+    queryKey: ['notifications/industry-summary', selectedDate === 'today' ? 2 : 7],
+    queryFn: async () => {
+      const days = selectedDate === 'today' ? 2 : 7;
+      const res = await fetch(`/api/py/notifications/industry-summary?days=${days}`);
+      if (!res.ok) return { industries: [] };
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const { data: stockCategories } = useQuery<Record<string, { industry: string; sector: string }>>({
+    queryKey: ['market/stocks-categories'],
+    queryFn: async () => {
+      const res = await fetch('/api/py/markets/stocks-categories');
+      if (!res.ok) return {};
+      return res.json();
+    },
+    staleTime: 60 * 60 * 1000,
+  });
 
   const handleDismiss = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
@@ -805,8 +873,6 @@ export function NotifWidget() {
     e.stopPropagation();
     setExpandedCards((prev) => ({ ...prev, [id]: !prev[id] }));
   };
-
-  const activeSubFilters = subFilters[activeTab] ?? [];
 
   const todayStr = useMemo(() => {
     const now = new Date();
@@ -830,6 +896,7 @@ export function NotifWidget() {
     }
     return [
       { label: 'Today', value: 'today' },
+      { label: 'ALL DATES', value: 'all' },
       ...sorted.filter((d) => d !== todayStr).map((d) => ({ label: labels[d], value: d })),
     ];
   }, [data, todayStr]);
@@ -838,8 +905,9 @@ export function NotifWidget() {
 
   const dateScopedNotifications = useMemo(() => {
     const all = data ?? [];
+    if (selectedDate === 'all') return all;
     return all.filter((n) => n.triggered_date === targetDate);
-  }, [data, targetDate]);
+  }, [data, selectedDate, targetDate]);
 
   const unreadCount = useMemo(() => {
     return (data ?? []).filter((n) => !n.is_read).length;
@@ -862,150 +930,110 @@ export function NotifWidget() {
     for (const n of dateScopedNotifications) {
       if (symbolFilter && n.symbol !== symbolFilter) continue;
       counts.all += 1;
-      (Object.keys(TAB_TRIGGERS) as NotifTab[]).forEach((tabKey) => {
-        if (tabKey !== 'all' && TAB_TRIGGERS[tabKey].includes(n.trigger_type)) {
+      for (const [tabKey, triggers] of Object.entries(TAB_TRIGGERS) as [NotifTab, string[]][]) {
+        if (tabKey === 'all') continue;
+        if (triggers.includes(n.trigger_type)) {
           counts[tabKey] += 1;
         }
-      });
+      }
     }
     return counts;
   }, [dateScopedNotifications, symbolFilter]);
 
+  const streakFilterActive = activeTab === 'all' || activeTab === 'streaks';
+
   const filteredNotifications = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return (data ?? []).filter((n) => {
-      if (symbolFilter && n.symbol !== symbolFilter) return false;
-      if (activeTab !== 'all' && !TAB_TRIGGERS[activeTab].includes(n.trigger_type)) return false;
-      if (activeSubFilters.length > 0 && !activeSubFilters.includes(n.trigger_type)) return false;
-      if (STREAK_TRIGGER_TYPES.has(n.trigger_type)) {
+    let list = dateScopedNotifications;
+    if (symbolFilter) {
+      list = list.filter((n) => n.symbol === symbolFilter);
+    }
+    if (exchangeFilter !== 'ALL') {
+      list = list.filter((n) => (n.exchange || 'NSE').toUpperCase() === exchangeFilter);
+    }
+    if (activeTab !== 'all') {
+      const allowed = TAB_TRIGGERS[activeTab] ?? [];
+      list = list.filter((n) => allowed.includes(n.trigger_type));
+    }
+    const activeSubFilterList = subFilters[activeTab] ?? [];
+    if (activeSubFilterList.length > 0) {
+      list = list.filter((n) => activeSubFilterList.includes(n.trigger_type));
+    }
+    if (streakFilterActive && streakMinDays > 0) {
+      list = list.filter((n) => {
+        if (!STREAK_TRIGGER_TYPES.has(n.trigger_type)) return true;
         const days = parseStreakDays(n.message);
-        if (streakMinDays > STREAK_MIN && (days === null || days < streakMinDays)) return false;
-        if (days !== null && days < streakMinDays) return false;
-      }
-      if (n.triggered_date !== targetDate) return false;
-      if (exchangeFilter !== 'ALL' && (n.exchange || 'NSE').toUpperCase() !== exchangeFilter) {
-        return false;
-      }
-      if (q) {
-        const label = (TRIGGER_LABELS[n.trigger_type] ?? n.trigger_type).toLowerCase();
-        const hay = `${n.symbol} ${n.exchange} ${label} ${n.message}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+        return days !== null && days >= streakMinDays;
+      });
+    }
+    if (searchQuery.trim().length > 0) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(
+        (n) =>
+          n.symbol.toLowerCase().includes(q) ||
+          n.message.toLowerCase().includes(q) ||
+          n.trigger_type.toLowerCase().includes(q),
+      );
+    }
+    return list;
   }, [
-    data,
+    dateScopedNotifications,
     symbolFilter,
-    activeTab,
-    activeSubFilters,
-    streakMinDays,
-    targetDate,
     exchangeFilter,
+    activeTab,
+    subFilters,
+    streakFilterActive,
+    streakMinDays,
     searchQuery,
   ]);
-  const streakRadarNotifications = useMemo(() => {
-    const all = data ?? [];
-    return all.filter((n) => {
-      const isStreak =
-        STREAK_TRIGGER_TYPES.has(n.trigger_type) ||
-        n.trigger_type === 'repeated_52w_high' ||
-        n.trigger_type === 'repeated_52w_low' ||
-        parseStreakDays(n.message) !== null;
-      if (!isStreak) return false;
-      const days = parseStreakDays(n.message);
-      if (days !== null && days < streakMinDays) return false;
-      return true;
-    });
-  }, [data, streakMinDays]);
 
-  const heatmapMatrix = useMemo(() => {
-    const rows: {
-      id: NotifTab;
-      label: string;
-      triggers: string[];
-    }[] = [
-      { id: 'breakout', label: 'BREAKOUT (52W)', triggers: TAB_TRIGGERS.breakout },
-      { id: 'technical', label: 'TECHNICAL / RSI', triggers: TAB_TRIGGERS.technical },
-      { id: 'volume', label: 'VOLUME & SURGE', triggers: [...TAB_TRIGGERS.volume, ...TAB_TRIGGERS.movers] },
-      { id: 'deals', label: 'DEALS & INSIDER', triggers: [...TAB_TRIGGERS.deals, ...TAB_TRIGGERS.insider] },
-      { id: 'momentum', label: 'MOMENTUM & VOL', triggers: [...TAB_TRIGGERS.momentum, ...TAB_TRIGGERS.volatility] },
-      { id: 'streaks', label: 'STREAKS & FLOW', triggers: TAB_TRIGGERS.streaks },
-    ];
-
-    const pool = dateScopedNotifications.length > 0 ? dateScopedNotifications : (data ?? []);
-
-    let peakCount = 0;
-    let peakSummary = 'N/A';
-    let hotRowLabel = 'BREAKOUT (52W)';
-    let hotRowMax = -1;
-
-    const matrix = rows.map((row) => {
-      let rowTotal = 0;
-      const cells = SESSION_SLOTS.map((slot) => {
-        const matches = pool.filter((n) => {
-          if (!row.triggers.includes(n.trigger_type)) return false;
-          const hr = getIstHour(n.triggered_at);
-          if (hr === null) return false;
-          return hr >= slot.startHour && hr < slot.endHour;
-        });
-        const count = matches.length;
-        rowTotal += count;
-        if (count > peakCount) {
-          peakCount = count;
-          peakSummary = `${slot.label} ${row.label.split(' ')[0]} (${count} Signals)`;
-        }
-        const sampleSymbols = Array.from(new Set(matches.slice(0, 4).map((m) => m.symbol))).join(', ');
-        const detail =
-          count > 0
-            ? `${count} Triggers: ${sampleSymbols}${matches.length > 4 ? '...' : ''}`
-            : '0 Triggers in this session hour';
+  const industryHeatmapGroups = useMemo(() => {
+    // If global scan is active and backend returned pre-aggregated industry summary, use it for instant response
+    if (selectedWatchlistId === 'all' && globalIndustrySummary?.industries && globalIndustrySummary.industries.length > 0) {
+      return globalIndustrySummary.industries.map((ind) => {
+        const notifs = dateScopedNotifications.filter((n) => ind.symbols.includes(n.symbol));
         return {
-          slotId: slot.id,
-          slotLabel: slot.label,
-          count,
-          detail,
+          industry: ind.industry,
+          sector: ind.sector,
+          alertCount: ind.alertCount,
+          notifications: notifs,
+          symbols: new Set(ind.symbols),
         };
       });
+    }
 
-      if (rowTotal > hotRowMax) {
-        hotRowMax = rowTotal;
-        hotRowLabel = `${row.label} (${rowTotal} Signals)`;
+    const groups: Record<
+      string,
+      {
+        industry: string;
+        sector: string;
+        alertCount: number;
+        notifications: Notification[];
+        symbols: Set<string>;
       }
+    > = {};
 
-      return {
-        ...row,
-        rowTotal,
-        cells,
-      };
-    });
+    for (const n of dateScopedNotifications) {
+      if (symbolFilter && n.symbol !== symbolFilter) continue;
+      const cat = stockCategories?.[n.symbol];
+      const ind = cat?.industry || 'Diversified / General';
+      const sec = cat?.sector || 'General';
+      const key = `${ind}___${sec}`;
+      if (!groups[key]) {
+        groups[key] = {
+          industry: ind,
+          sector: sec,
+          alertCount: 0,
+          notifications: [],
+          symbols: new Set(),
+        };
+      }
+      groups[key].notifications.push(n);
+      groups[key].alertCount += 1;
+      groups[key].symbols.add(n.symbol);
+    }
 
-    return {
-      rows: matrix,
-      peakSummary: peakCount > 0 ? peakSummary : 'Awaiting Session Burst',
-      hotRowLabel,
-    };
-  }, [dateScopedNotifications, data]);
-
-  const selectedWatchlist = watchlists.find((wl) => wl.id === selectedWatchlistId);
-
-  const categoryPills: {
-    id: NotifTab;
-    label: string;
-    icon: string;
-    accentText: string;
-  }[] = [
-    { id: 'all', label: 'All Signals', icon: '◈', accentText: 'text-amber-400' },
-    { id: 'breakout', label: 'Breakout', icon: '⚡', accentText: 'text-amber-400' },
-    { id: 'volume', label: 'Volume', icon: '🌊', accentText: 'text-cyan-400' },
-    { id: 'movers', label: 'Movers', icon: '🚀', accentText: 'text-emerald-400' },
-    { id: 'deals', label: 'Deals', icon: '🏛', accentText: 'text-amber-300' },
-    { id: 'insider', label: 'Insider', icon: '🛡', accentText: 'text-purple-400' },
-    { id: 'technical', label: 'Technical', icon: '📐', accentText: 'text-purple-300' },
-    { id: 'momentum', label: 'Momentum', icon: '📈', accentText: 'text-sky-400' },
-    { id: 'volatility', label: 'Volatility', icon: '⚡', accentText: 'text-rose-400' },
-    { id: 'streaks', label: 'Streaks', icon: '🔥', accentText: 'text-emerald-400' },
-    { id: 'results', label: 'Results', icon: '📅', accentText: 'text-teal-300' },
-  ];
+    return Object.values(groups).sort((a, b) => b.alertCount - a.alertCount);
+  }, [dateScopedNotifications, stockCategories, symbolFilter, selectedWatchlistId, globalIndustrySummary]);
 
   if (isLoading) {
     return (
@@ -1046,10 +1074,11 @@ export function NotifWidget() {
           </div>
 
           <select
-            value={selectedWatchlistId}
-            onChange={(e) => setSelectedWatchlistId(Number(e.target.value))}
-            className="bg-[#121216] text-amber-400 font-bold text-xs border border-[#27272a] hover:border-zinc-500 rounded px-2 py-1 max-w-[140px] truncate outline-none"
+            value={String(selectedWatchlistId)}
+            onChange={(e) => setSelectedWatchlistId(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+            className="bg-[#121216] text-amber-400 font-bold text-xs border border-[#27272a] hover:border-terminal-amber rounded px-2 py-1 max-w-[155px] truncate outline-none cursor-pointer transition-colors"
           >
+            <option value="all">ALL (GLOBAL SCAN)</option>
             {watchlists.map((wl: Watchlist) => (
               <option key={wl.id} value={wl.id}>
                 {wl.name}
@@ -1060,7 +1089,7 @@ export function NotifWidget() {
           <select
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
-            className="bg-[#121216] text-zinc-200 text-xs border border-[#27272a] hover:border-zinc-500 rounded px-2 py-1 max-w-[120px] outline-none"
+            className="bg-[#121216] text-zinc-200 text-xs border border-[#27272a] hover:border-terminal-amber rounded px-2 py-1 max-w-[125px] outline-none cursor-pointer transition-colors"
           >
             {dateOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -1078,12 +1107,12 @@ export function NotifWidget() {
             onClick={() => setActiveView('stream')}
             className={`px-3 py-1 rounded text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
               activeView === 'stream'
-                ? 'bg-amber-400 text-black shadow'
-                : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
+                ? 'bg-amber-400 text-black font-extrabold shadow-[0_0_12px_rgba(245,158,11,0.4)]'
+                : 'text-zinc-400 border border-[#27272a] hover:text-white hover:bg-zinc-800/60'
             }`}
           >
             <span>⚡</span>
-            <span>[LIVE SPLIT STREAM]</span>
+            <span>[LIVE ALERTS]</span>
           </button>
 
           <button
@@ -1093,23 +1122,25 @@ export function NotifWidget() {
             onClick={() => setActiveView('heatmap')}
             className={`px-3 py-1 rounded text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
               activeView === 'heatmap'
-                ? 'bg-amber-400 text-black shadow'
-                : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
+                ? 'bg-amber-400 text-black font-extrabold shadow-[0_0_12px_rgba(245,158,11,0.4)]'
+                : 'text-zinc-400 border border-[#27272a] hover:text-white hover:bg-zinc-800/60'
             }`}
           >
             <span>📊</span>
-            <span>[SIGNAL HEATMAP &amp; RADAR]</span>
+            <span>[INDUSTRY HEATMAP]</span>
           </button>
         </div>
       </div>
 
-      <SubFilterBar
-        activeTab={activeTab}
-        subFilters={subFilters}
-        onSubFiltersChange={setSubFilters}
-        streakMinDays={streakMinDays}
-        onStreakMinDaysChange={(d) => setStreakMinDays(Math.max(2, d))}
-      />
+      {activeView === 'stream' && (
+        <SubFilterBar
+          activeTab={activeTab}
+          subFilters={subFilters}
+          onSubFiltersChange={setSubFilters}
+          streakMinDays={streakMinDays}
+          onStreakMinDaysChange={(d) => setStreakMinDays(Math.max(2, d))}
+        />
+      )}
 
       {symbolFilter && (
         <div className="flex-shrink-0 flex items-center gap-2 px-3 py-1 bg-blue-950/90 border-b border-blue-700/60">
@@ -1128,7 +1159,7 @@ export function NotifWidget() {
       <div className="flex-1 overflow-y-auto p-3 min-h-0">
         {activeView === 'stream' ? (
           <div id="alerts-concept-2" className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-4 gap-3 max-w-full">
-            {/* LEFT FILTER COLUMN (col-span-1 md:col-span-1 lg:col-span-1) */}
+            {/* LEFT FILTER COLUMN (col-span-1) */}
             <div className="col-span-1 md:col-span-1 lg:col-span-1 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col gap-3.5 shadow-xl transition-colors">
               <div className="pb-2.5 border-b border-[#27272a]">
                 <div className="flex items-center justify-between">
@@ -1144,19 +1175,14 @@ export function NotifWidget() {
                 </div>
               </div>
 
-              {/* Unread Count Badge & Mark All Read Action */}
+              {/* Mark All Read Action (Unread badge removed per spec) */}
               <div className="flex flex-col gap-2 pb-2.5 border-b border-[#27272a]">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 font-mono font-bold text-xs">
-                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                    <span className="tabular-nums">{unreadCount} Unread</span>
-                  </div>
-
                   <button
                     type="button"
                     onClick={() => clearAllMutation.mutate()}
                     disabled={markReadMutation.isPending || unreadCount === 0}
-                    className="px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:pointer-events-none text-black font-bold text-xs font-mono transition-all shadow flex items-center gap-1"
+                    className="w-full px-2.5 py-1.5 rounded bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:pointer-events-none text-black font-bold text-xs font-mono transition-all shadow flex items-center justify-center gap-1 cursor-pointer"
                   >
                     <span>✓</span>
                     <span>Mark All Read</span>
@@ -1186,44 +1212,48 @@ export function NotifWidget() {
                 </div>
               </div>
 
-              {/* Category Filter Pills with Live Counters */}
-              <div>
-                <div className="text-[11px] font-bold text-white uppercase font-mono tracking-wider mb-2 flex items-center justify-between">
-                  <span>TRIGGER CATEGORIES</span>
-                  <span className="text-[10px] text-zinc-300 font-bold tabular-nums">
-                    {categoryCounts.all} TOTAL
-                  </span>
+              {/* Category Triggers Pill List */}
+              <div className="flex flex-col gap-1.5 flex-1">
+                <div className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider">
+                  SIGNAL CATEGORIES
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  {categoryPills.map((cat) => {
-                    const isActive = activeTab === cat.id;
-                    const count = categoryCounts[cat.id] ?? 0;
-                    const hasSubFilters = (subFilters[cat.id] ?? []).length > 0;
+                <div className="flex flex-col gap-1">
+                  {(
+                    [
+                      { id: 'all', label: 'ALL TRIGGERS', icon: '⚡' },
+                      { id: 'breakout', label: '52W / BREAKOUT', icon: '▲' },
+                      { id: 'volume', label: 'VOLUME SURGE', icon: '📊' },
+                      { id: 'movers', label: 'TOP MOVERS', icon: '↕' },
+                      { id: 'deals', label: 'BULK & BLOCK', icon: '💼' },
+                      { id: 'insider', label: 'INSIDER TRADES', icon: '👥' },
+                      { id: 'technical', label: 'TECHNICAL (RSI/MACD)', icon: '📈' },
+                      { id: 'momentum', label: 'MOMENTUM & 1W', icon: '🔥' },
+                      { id: 'volatility', label: 'VOLATILITY & ATR', icon: '⚡' },
+                      { id: 'streaks', label: 'STREAKS RADAR', icon: '⏱' },
+                      { id: 'results', label: 'EARNINGS & RES', icon: '📋' },
+                    ] as { id: NotifTab; label: string; icon: string }[]
+                  ).map((cat) => {
+                    const count = categoryCounts[cat.id];
+                    const isSelected = activeTab === cat.id;
+
                     return (
                       <button
                         key={cat.id}
                         type="button"
                         onClick={() => setActiveTab(cat.id)}
-                        className={`w-full p-2 rounded text-xs font-mono flex items-center justify-between transition-all border ${
-                          isActive
-                            ? 'bg-amber-400 text-black border-amber-400 font-bold shadow'
-                            : 'bg-[#121216] text-zinc-200 hover:text-white border-[#27272a] hover:border-zinc-500 font-semibold'
+                        className={`flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono transition-all border text-left ${
+                          isSelected
+                            ? 'bg-amber-400 text-black font-extrabold border-amber-400 shadow-md'
+                            : 'bg-[#121216] text-zinc-300 hover:text-white border-[#27272a] hover:border-zinc-500 hover:bg-zinc-800/40'
                         }`}
                       >
                         <span className="flex items-center gap-1.5 truncate">
-                          <span className={isActive ? 'text-black font-bold' : `${cat.accentText} font-bold`}>
-                            {cat.icon}
-                          </span>
+                          <span>{cat.icon}</span>
                           <span className="truncate">{cat.label}</span>
-                          {hasSubFilters && !isActive && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                          )}
                         </span>
                         <span
-                          className={`text-[10px] px-1.5 py-0.5 rounded font-bold tabular-nums ${
-                            isActive
-                              ? 'bg-black/20 text-black'
-                              : 'bg-zinc-800 text-amber-400'
+                          className={`px-1.5 py-0.2 rounded text-[10px] tabular-nums ${
+                            isSelected ? 'bg-black text-amber-400 font-bold' : 'bg-zinc-800 text-zinc-400'
                           }`}
                         >
                           {count}
@@ -1234,116 +1264,114 @@ export function NotifWidget() {
                 </div>
               </div>
 
-              {/* Streak Min Days Selector (2, 4, 6, 8, 12 days) bound to notifStreakMinDaysAtom */}
-              <div className="pt-2.5 border-t border-[#27272a]">
-                <div className="text-[11px] font-bold text-white uppercase font-mono tracking-wider mb-1.5 flex items-center justify-between">
-                  <span>STREAK MIN DAYS</span>
-                  <span className="text-amber-400 font-bold text-[10px] tabular-nums">
-                    ≥ {streakMinDays} DAYS
+              {/* Streak Min Days Selector */}
+              <div className="pt-2 border-t border-[#27272a]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider font-mono">
+                    STREAK MIN DAYS
+                  </span>
+                  <span className="text-amber-400 font-bold text-xs tabular-nums">
+                    ≥ {streakMinDays} Days
                   </span>
                 </div>
                 <div className="grid grid-cols-5 gap-1">
-                  {STREAK_PRESET_DAYS.map((days) => {
-                    const isSelected = streakMinDays === days;
-                    return (
-                      <button
-                        key={days}
-                        type="button"
-                        onClick={() => setStreakMinDays(days)}
-                        className={`py-1 rounded text-center text-xs font-mono font-bold transition-all border ${
-                          isSelected
-                            ? 'bg-amber-400 text-black border-amber-400 shadow'
-                            : 'bg-[#121216] text-zinc-200 hover:text-white border-[#27272a] hover:border-zinc-500'
-                        }`}
-                      >
-                        {days}d
-                      </button>
-                    );
-                  })}
+                  {STREAK_PRESET_DAYS.map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setStreakMinDays(days)}
+                      className={`py-1 text-center rounded text-xs font-mono font-bold transition-all border ${
+                        streakMinDays === days
+                          ? 'bg-amber-400 text-black border-amber-400 shadow'
+                          : 'bg-[#121216] text-zinc-300 hover:text-white border-[#27272a] hover:border-zinc-500'
+                      }`}
+                    >
+                      {days}d
+                    </button>
+                  ))}
                 </div>
-                <p className="text-[11px] text-zinc-300 mt-1.5 font-mono leading-snug">
-                  Filters consecutive day directional closes or volume escalation.
-                </p>
               </div>
             </div>
 
-            {/* RIGHT LIVE STREAM BENTO (col-span-1 md:col-span-3 lg:col-span-3) */}
-            <div className="col-span-1 md:col-span-3 lg:col-span-3 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col shadow-xl transition-colors">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#27272a] mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full ${
-                        streamPaused ? 'bg-amber-400' : 'bg-emerald-400 animate-pulse'
-                      }`}
-                    />
-                    <span className="font-bold text-white text-xs tracking-wider uppercase font-mono">
-                      LIVE TRIGGER FEED
-                    </span>
-                  </div>
-                  <span className="text-xs font-mono text-zinc-300 bg-[#121216] px-2 py-0.5 rounded border border-[#27272a] tabular-nums">
-                    Showing {filteredNotifications.length} of {dateScopedNotifications.length} Signals ({activeTab.toUpperCase()})
+            {/* RIGHT LIVE STREAM MATRIX (col-span-3) */}
+            <div className="col-span-1 md:col-span-3 lg:col-span-3 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col shadow-xl transition-colors min-h-[500px]">
+              {/* Stream Header & Controls */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-[#27272a]">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="font-bold text-white text-xs tracking-wider uppercase font-mono">
+                    LIVE ALERTS STREAM
+                  </span>
+                  <span className="text-[10px] font-mono text-zinc-400 bg-[#121216] px-2 py-0.5 rounded border border-[#27272a]">
+                    {filteredNotifications.length} Active Triggers
                   </span>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Filter ticker / trigger / RSI..."
-                      className="bg-[#121216] border border-[#27272a] rounded px-2.5 py-1 text-xs text-white placeholder-zinc-400 font-mono focus:border-amber-400 focus:outline-none w-52"
-                    />
-                    {searchQuery && (
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search symbol, trigger…"
+                    className="bg-[#121216] border border-[#27272a] hover:border-zinc-500 focus:border-amber-400 rounded px-2.5 py-1 text-xs text-white placeholder-zinc-500 outline-none w-44 font-mono transition-colors"
+                  />
+
+                  <div className="flex items-center bg-[#121216] border border-[#27272a] rounded overflow-hidden">
+                    {(['ALL', 'NSE', 'BSE'] as const).map((ex) => (
                       <button
+                        key={ex}
                         type="button"
-                        onClick={() => setSearchQuery('')}
-                        className="absolute right-2 top-1 text-zinc-300 hover:text-white text-xs"
+                        onClick={() => setExchangeFilter(ex)}
+                        className={`px-2 py-1 text-[10px] font-mono font-bold transition-colors ${
+                          exchangeFilter === ex
+                            ? 'bg-amber-400 text-black'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
                       >
-                        ×
+                        {ex}
                       </button>
-                    )}
+                    ))}
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => setStreamPaused((p) => !p)}
-                    className={`px-2.5 py-1 rounded font-mono text-xs transition-colors flex items-center gap-1 border ${
-                      streamPaused
-                        ? 'bg-amber-400 text-black border-amber-400 font-bold'
-                        : 'bg-[#121216] border-[#27272a] hover:border-zinc-500 text-zinc-200'
+                    onClick={() => setCompactStream((p) => !p)}
+                    className={`px-2.5 py-1 rounded text-xs font-mono font-bold border transition-colors ${
+                      compactStream
+                        ? 'bg-zinc-800 text-amber-400 border-amber-400/40'
+                        : 'bg-[#121216] text-zinc-300 border-[#27272a] hover:text-white'
                     }`}
                   >
-                    <span>{streamPaused ? '▶' : '⏸'}</span>
-                    <span>{streamPaused ? 'Resume' : 'Pause'}</span>
+                    {compactStream ? 'Dense' : 'Spacious'}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setCompactStream((c) => !c)}
-                    className={`px-2.5 py-1 rounded font-mono text-xs transition-colors border ${
-                      compactStream
-                        ? 'bg-amber-400/15 border-amber-400/50 text-amber-400 font-bold'
-                        : 'bg-[#121216] border-[#27272a] hover:border-zinc-500 text-zinc-200'
+                    onClick={() => setStreamPaused((p) => !p)}
+                    className={`px-2.5 py-1 rounded text-xs font-mono font-bold border transition-colors flex items-center gap-1.5 ${
+                      streamPaused
+                        ? 'bg-rose-500/10 text-rose-400 border-rose-500/40'
+                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                     }`}
                   >
-                    Compact
+                    <span>{streamPaused ? '❚❚ Paused' : '▶ Live'}</span>
                   </button>
                 </div>
               </div>
 
+              {/* Alert Cards Feed */}
               {filteredNotifications.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 px-4 text-center bg-[#121216] border border-[#27272a] rounded-md">
-                  <span className="text-amber-400 font-bold text-sm mb-1">
-                    NO SIGNALS MATCH CURRENT MATRIX FILTERS
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-zinc-500 font-mono">
+                  <span className="text-3xl mb-2">⚡</span>
+                  <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                    NO ALERTS MATCHING CRITERIA
                   </span>
-                  <span className="text-zinc-300 text-xs max-w-md">
-                    No alerts found for {selectedWatchlist?.name ?? `Watchlist #${selectedWatchlistId}`} under the active filter criteria. Try switching to ALL SIGNALS or adjusting the date/read filter.
+                  <span className="text-[11px] text-zinc-500 mt-1 max-w-sm">
+                    No signals triggered for the selected timeframe, category, or watchlist filters.
                   </span>
                 </div>
               ) : (
-                <div className={`flex flex-col ${compactStream ? 'gap-1.5' : 'gap-2.5'} overflow-y-auto pr-1`}>
+                <div className="flex flex-col gap-2.5 overflow-y-auto max-h-[640px] pr-1">
                   {filteredNotifications.map((n) => {
                     const severity = getTriggerSeverity(n.trigger_type);
                     const indicator = extractIndicatorParameter(n);
@@ -1352,12 +1380,7 @@ export function NotifWidget() {
                     return (
                       <div
                         key={n.id}
-                        onClick={() => handleRowClick(n)}
-                        onMouseEnter={(e) =>
-                          setHoveredNotif({ id: n.id, rect: e.currentTarget.getBoundingClientRect() })
-                        }
-                        onMouseLeave={() => setHoveredNotif(null)}
-                        className="p-3 bg-[#121216] border border-[#27272a] hover:border-zinc-500 rounded-md transition-all cursor-pointer"
+                        className="p-3 bg-[#121216] border border-[#27272a] hover:border-zinc-500 rounded-md transition-all"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1394,7 +1417,7 @@ export function NotifWidget() {
                             <button
                               type="button"
                               onClick={(e) => handleDismiss(e, n.id)}
-                              className="text-zinc-300 hover:text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-rose-500/10 transition-colors"
+                              className="text-zinc-400 hover:text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-rose-500/10 transition-colors cursor-pointer"
                               title="Dismiss trigger"
                             >
                               ✕
@@ -1438,10 +1461,7 @@ export function NotifWidget() {
                         )}
 
                         {isExpanded && (
-                          <div
-                            onClick={(e) => e.stopPropagation()}
-                            className="mb-2.5 p-2.5 bg-[#09090b] border border-[#27272a] rounded text-xs font-mono leading-relaxed"
-                          >
+                          <div className="mb-2.5 p-2.5 bg-[#09090b] border border-[#27272a] rounded text-xs font-mono leading-relaxed">
                             <div className="text-amber-400 font-bold mb-1">
                               {'// SCANNER ENGINE PARAMETER SNAPSHOT'}
                             </div>
@@ -1460,31 +1480,40 @@ export function NotifWidget() {
                           </div>
                         )}
 
+                        {/* Card Actions: Tactile Independent Chart and Company Popouts */}
                         <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#27272a]/60">
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRowClick(n);
-                              }}
-                              className="px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs font-mono transition-all flex items-center gap-1 shadow-sm"
+                              onClick={(e) => handleOpenIndependentChart(e, n.symbol, n.exchange)}
+                              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-terminal-amber/20 hover:text-terminal-amber border border-zinc-700/80 hover:border-terminal-amber/60 text-zinc-200 text-[11px] font-mono font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                              title={`Open independent chart for ${n.symbol}`}
                             >
                               <span>⚡</span>
-                              <span>LOAD CHART</span>
+                              <span>Load Chart</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenIndependentCompany(e, n.symbol)}
+                              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-terminal-amber/20 hover:text-terminal-amber border border-zinc-700/80 hover:border-terminal-amber/60 text-zinc-200 text-[11px] font-mono font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                              title={`Open independent company panel for ${n.symbol}`}
+                            >
+                              <span>🏢</span>
+                              <span>Company</span>
                             </button>
 
                             <button
                               type="button"
                               onClick={(e) => toggleCardDetails(e, n.id)}
-                              className="px-2 py-1 rounded bg-[#18181f] hover:bg-zinc-700 text-zinc-200 border border-[#27272a] text-xs font-mono transition-colors"
+                              className="px-2 py-1 rounded bg-[#18181f] hover:bg-zinc-700 text-zinc-300 border border-[#27272a] text-xs font-mono transition-colors cursor-pointer"
                             >
-                              {isExpanded ? '▴ Hide Details' : '▾ Show Details'}
+                              {isExpanded ? '▴ Hide' : '▾ Details'}
                             </button>
                           </div>
 
-                          <div className="text-[10px] text-zinc-300 font-mono">
-                            Engine: <span className="text-zinc-100">NotifScanner_v2.6</span>
+                          <div className="text-[10px] text-zinc-400 font-mono">
+                            Engine: <span className="text-zinc-300">NotifScanner_v2.6</span>
                           </div>
                         </div>
                       </div>
@@ -1496,376 +1525,221 @@ export function NotifWidget() {
           </div>
         ) : (
           /* =====================================================================
-           * VIEW 2 — SIGNAL HEATMAP & STREAK RADAR (#alerts-concept-3)
+           * VIEW 2 — INDUSTRY / SECTOR ALERT HEATMAP (Strictly per spec)
            * ===================================================================== */
-          <div id="alerts-concept-3" className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-4 gap-3 max-w-full">
-            {/* 1. SIGNAL FREQUENCY HEATMAP (col-span-1 md:col-span-2 lg:col-span-2) */}
-            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col justify-between shadow-xl transition-colors">
+          <div className="flex flex-col gap-3 max-w-full">
+            <div className="p-3 bg-[#0c0c0f] border border-[#27272a] rounded-lg flex flex-wrap items-center justify-between gap-2 shadow-lg">
               <div>
-                <div className="flex items-center justify-between mb-3 pb-2 border-b border-[#27272a]">
-                  <div className="flex items-center gap-2">
-                    <span className="text-amber-400 font-bold text-sm">📊</span>
-                    <span className="font-bold text-white text-xs tracking-wider uppercase font-mono">
-                      SIGNAL FREQUENCY HEATMAP
-                    </span>
-                  </div>
-                  <div className="text-[10px] font-mono text-zinc-300 bg-[#121216] px-2 py-0.5 rounded border border-[#27272a]">
-                    HOURLY SESSION DENSITY
-                  </div>
-                </div>
-
-                <p className="text-xs text-zinc-300 mb-2.5 font-mono leading-relaxed">
-                  Hourly density breakdown of notifications across market trading sessions. Hover over cells to inspect trigger distribution.
-                </p>
-
-                {/* Heatmap Matrix Table */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-center font-mono text-xs border-collapse">
-                    <thead>
-                      <tr className="text-[10px] text-zinc-300 uppercase border-b border-[#27272a]">
-                        <th className="text-left py-1.5 px-2">CATEGORY</th>
-                        {SESSION_SLOTS.map((slot) => (
-                          <th key={slot.id} className="py-1 px-1">
-                            {slot.label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#27272a]/40 text-xs">
-                      {heatmapMatrix.rows.map((row) => (
-                        <tr key={row.id}>
-                          <td className="text-left py-1.5 px-2 font-bold text-white whitespace-nowrap">
-                            {row.label}
-                          </td>
-                          {row.cells.map((cell) => {
-                            const cellStyle =
-                              cell.count >= 6
-                                ? 'bg-amber-400 text-black font-extrabold shadow'
-                                : cell.count >= 3
-                                ? 'bg-amber-500/30 text-amber-300 font-bold border border-amber-500/40'
-                                : cell.count >= 1
-                                ? 'bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30'
-                                : 'bg-[#121216] text-zinc-400';
-
-                            return (
-                              <td key={cell.slotId} className="p-1">
-                                <div
-                                  onMouseEnter={() =>
-                                    setHeatmapInspector(
-                                      `${row.label} [${cell.slotLabel} IST]: ${cell.detail}`,
-                                    )
-                                  }
-                                  onClick={() => {
-                                    setActiveTab(row.id);
-                                    setActiveView('stream');
-                                  }}
-                                  className={`rounded py-1 px-1.5 cursor-pointer transition-transform hover:scale-105 tabular-nums ${cellStyle}`}
-                                >
-                                  {cell.count > 0 ? cell.count : '-'}
-                                </div>
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Heatmap Inspector Panel */}
-                <div className="mt-3 p-2 bg-[#121216] border border-[#27272a] rounded text-xs font-mono">
-                  <span className="text-amber-400 font-bold">INSPECTOR:</span>
-                  <span className="text-zinc-200 ml-1.5">{heatmapInspector}</span>
-                </div>
-              </div>
-
-              {/* Heatmap Summary Stats */}
-              <div className="mt-3 pt-2 border-t border-[#27272a] flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-zinc-300">
-                <span>
-                  Peak Burst: <span className="text-amber-400 font-bold">{heatmapMatrix.peakSummary}</span>
-                </span>
-                <span>
-                  Hot Group: <span className="text-emerald-400 font-bold">{heatmapMatrix.hotRowLabel}</span>
-                </span>
-              </div>
-            </div>
-
-            {/* 2. CONSECUTIVE STREAK RADAR (col-span-1 md:col-span-2 lg:col-span-2) */}
-            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col justify-between shadow-xl transition-colors">
-              <div>
-                <div className="flex items-center justify-between mb-3 pb-2 border-b border-[#27272a]">
-                  <div className="flex items-center gap-2">
-                    <span className="text-emerald-400 font-bold text-sm">🔥</span>
-                    <span className="font-bold text-white text-xs tracking-wider uppercase font-mono">
-                      CONSECUTIVE STREAK RADAR
-                    </span>
-                  </div>
-                  <div className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-bold">
-                    {streakRadarNotifications.length} MOMENTUM RUNS DETECTED
-                  </div>
-                </div>
-
-                {/* Streak Cards */}
-                {streakRadarNotifications.length === 0 ? (
-                  <div className="p-6 bg-[#121216] border border-[#27272a] rounded text-center">
-                    <div className="text-amber-400 font-bold text-xs mb-1">
-                      NO ACTIVE MULTI-DAY STREAKS (≥ {streakMinDays} DAYS)
-                    </div>
-                    <div className="text-zinc-300 text-xs">
-                      Lower the Streak Min Days threshold or select another watchlist to inspect multi-session runs.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2.5 max-h-[340px] overflow-y-auto pr-1">
-                    {streakRadarNotifications.slice(0, 6).map((sn) => {
-                      const days = parseStreakDays(sn.message) ?? Math.max(streakMinDays, 5);
-                      const isBearish =
-                        sn.trigger_type === 'streak_down_5d' ||
-                        sn.trigger_type === 'repeated_52w_low' ||
-                        /down/i.test(sn.message);
-                      const blockCount = Math.min(Math.max(days, 3), 8);
-
-                      return (
-                        <div
-                          key={sn.id}
-                          className="p-2.5 bg-[#121216] border border-[#27272a] hover:border-zinc-500 rounded transition-colors"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-bold text-white tracking-wider">
-                                {sn.symbol}
-                              </span>
-                              <span className="text-[10px] text-zinc-300 font-mono">
-                                {sn.exchange || 'NSE'}
-                              </span>
-                              <span
-                                className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${
-                                  isBearish
-                                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-                                    : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                                }`}
-                              >
-                                {isBearish
-                                  ? `🔻 ${days}-DAY CONSECUTIVE LOW STREAK`
-                                  : `⚡ ${days}-DAY CONSECUTIVE HIGH STREAK`}
-                              </span>
-                            </div>
-                            <span className="text-[10px] text-zinc-300 font-mono tabular-nums">
-                              {formatDateTime(sn.triggered_at)}
-                            </span>
-                          </div>
-
-                          {/* Streak Visual Day-Blocks Strip */}
-                          <div
-                            className="grid gap-1 mb-2"
-                            style={{ gridTemplateColumns: `repeat(${blockCount}, minmax(0, 1fr))` }}
-                          >
-                            {Array.from({ length: blockCount }).map((_, idx) => {
-                              const isLast = idx === blockCount - 1;
-                              return (
-                                <div
-                                  key={idx}
-                                  className={`rounded p-1 text-center text-[10px] font-mono font-bold ${
-                                    isLast
-                                      ? 'bg-amber-400 text-black font-extrabold shadow'
-                                      : isBearish
-                                      ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300'
-                                      : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                                  }`}
-                                >
-                                  D{idx + 1}
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          <div className="flex items-center justify-between gap-2 text-xs font-mono">
-                            <span className="text-zinc-200 truncate" title={sn.message}>
-                              {sn.message}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleRowClick(sn)}
-                              className="text-amber-400 hover:underline font-bold text-xs shrink-0"
-                            >
-                              ⚡ Load Chart
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Bottom Footer */}
-              <div className="mt-3 pt-2 border-t border-[#27272a] flex items-center justify-between text-xs font-mono text-zinc-300">
-                <span>Threshold: ≥ {streakMinDays} Days Consecutive Trend</span>
-                <span className="text-amber-400 font-bold">Algorithm: ScanStreakEngine</span>
-              </div>
-            </div>
-
-            {/* 3. ACTIVE TRIGGER TABLE (col-span-1 md:col-span-4 lg:col-span-4) */}
-            <div className="col-span-1 md:col-span-4 lg:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-4 shadow-xl transition-colors">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-2.5 border-b border-[#27272a]">
                 <div className="flex items-center gap-2">
-                  <span className="text-amber-400 font-bold text-sm">📋</span>
-                  <span className="font-bold text-white text-xs tracking-wider uppercase font-mono">
-                    ACTIVE TRIGGER TABLE
-                  </span>
-                  <span className="text-[10px] text-zinc-300 font-mono">
-                    {'// HIGH-DENSITY SCANNER MATRIX & 1-CLICK EXECUTION'}
+                  <span className="text-amber-400 text-sm font-bold">📊</span>
+                  <span className="font-bold text-white text-xs font-mono tracking-wider uppercase">
+                    INDUSTRY &amp; SECTOR ALERT HEATMAP
                   </span>
                 </div>
-
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-mono text-zinc-300 mr-1">FILTER EXCH:</span>
-                  {(['ALL', 'NSE', 'BSE', 'NFO'] as const).map((exch) => (
-                    <button
-                      key={exch}
-                      type="button"
-                      onClick={() => setExchangeFilter(exch)}
-                      className={`px-2 py-0.5 rounded text-xs font-mono transition-colors ${
-                        exchangeFilter === exch
-                          ? 'bg-amber-400 text-black font-bold'
-                          : 'bg-[#121216] border border-[#27272a] text-zinc-200 hover:text-white'
-                      }`}
-                    >
-                      {exch}
-                    </button>
-                  ))}
+                <div className="text-[11px] text-zinc-400 font-mono mt-0.5">
+                  Sectoral concentration of alerts for {selectedDate === 'all' ? 'all recorded dates' : selectedDate}. Click any industry card to view all alerting stocks.
                 </div>
               </div>
-
-              {/* High-Density Tabular Bento Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left font-mono text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#27272a] text-[10px] text-zinc-300 uppercase tracking-wider bg-[#121216]/60">
-                      <th className="py-2.5 px-3">TIMESTAMP</th>
-                      <th className="py-2.5 px-3">TICKER / EXCH</th>
-                      <th className="py-2.5 px-3">TRIGGER TYPE</th>
-                      <th className="py-2.5 px-2">SEVERITY</th>
-                      <th className="py-2.5 px-4">TRIGGER PARAMETERS &amp; CONTEXT</th>
-                      <th className="py-2.5 px-3 text-right">1-CLICK ACTION</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#27272a]/60">
-                    {filteredNotifications.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="py-8 text-center text-zinc-300 text-xs">
-                          No active triggers match the selected filters.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredNotifications.map((n) => {
-                        const severity = getTriggerSeverity(n.trigger_type);
-                        return (
-                          <tr
-                            key={n.id}
-                            onClick={() => handleRowClick(n)}
-                            className="hover:bg-zinc-900/60 transition-colors cursor-pointer"
-                          >
-                            <td className="py-2 px-3 text-zinc-200 tabular-nums whitespace-nowrap">
-                              {formatDateTime(n.triggered_at)}
-                            </td>
-                            <td className="py-2 px-3 whitespace-nowrap">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-amber-400">{n.symbol}</span>
-                                <span className="text-[10px] text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded border border-[#27272a]">
-                                  {n.exchange || 'NSE'}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="py-2 px-3 whitespace-nowrap">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${getBentoBadgeStyle(
-                                  n.trigger_type,
-                                )}`}
-                              >
-                                {TRIGGER_LABELS[n.trigger_type] ?? getBadgeLabel(n.trigger_type)}
-                              </span>
-                            </td>
-                            <td className="py-2 px-2 whitespace-nowrap">
-                              <span
-                                className={`text-[10px] font-bold ${
-                                  severity === 'CRITICAL'
-                                    ? 'text-rose-400'
-                                    : severity === 'HIGH'
-                                    ? 'text-amber-400'
-                                    : 'text-emerald-400'
-                                }`}
-                              >
-                                {severity}
-                              </span>
-                            </td>
-                            <td className="py-2 px-4 text-zinc-200 text-xs max-w-md truncate" title={n.message}>
-                              {n.message}
-                            </td>
-                            <td className="py-2 px-3 text-right whitespace-nowrap">
-                              <div className="flex items-center justify-end gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRowClick(n);
-                                  }}
-                                  className="px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-black font-bold text-[10px]"
-                                >
-                                  ⚡ CHART
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => handleDismiss(e, n.id)}
-                                  className="px-2 py-1 rounded bg-[#121216] hover:bg-rose-500/15 text-zinc-300 hover:text-rose-400 border border-[#27272a] font-bold text-[10px]"
-                                  title="Dismiss"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
+              <div className="flex items-center gap-2 font-mono text-xs">
+                <span className="bg-[#121216] border border-[#27272a] px-2 py-1 rounded text-zinc-300">
+                  Industries: <span className="text-amber-400 font-bold">{industryHeatmapGroups.length}</span>
+                </span>
+                <span className="bg-[#121216] border border-[#27272a] px-2 py-1 rounded text-zinc-300">
+                  Total Signals: <span className="text-emerald-400 font-bold">{dateScopedNotifications.length}</span>
+                </span>
               </div>
             </div>
+
+            {industryHeatmapGroups.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-12 text-center text-zinc-500 font-mono bg-[#0c0c0f] border border-[#27272a] rounded-lg">
+                <span className="text-3xl mb-2">📊</span>
+                <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
+                  NO ALERTS IN THIS TIMEFRAME
+                </span>
+                <span className="text-[11px] text-zinc-500 mt-1">
+                  Try switching the date selector to ALL DATES or selecting a different watchlist.
+                </span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {industryHeatmapGroups.map((group) => {
+                  const alertCount = group.notifications.length;
+                  const intensityStyle =
+                    alertCount >= 6
+                      ? 'bg-amber-400 text-black font-extrabold shadow-[0_0_12px_rgba(245,158,11,0.5)]'
+                      : alertCount >= 3
+                      ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40 font-bold'
+                      : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold';
+
+                  const uniqueSymbols = Array.from(group.symbols);
+
+                  return (
+                    <div
+                      key={`${group.industry}-${group.sector}`}
+                      onClick={() => setSelectedIndustryModal(group)}
+                      className="p-3.5 bg-[#0c0c0f] hover:bg-[#121216] border border-[#27272a] hover:border-terminal-amber rounded-lg transition-all cursor-pointer shadow-md flex flex-col justify-between group"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1.5 mb-2">
+                          <span className="text-[10px] font-mono uppercase bg-zinc-800/80 text-zinc-400 px-1.5 py-0.5 rounded border border-[#27272a] truncate max-w-[130px]">
+                            {group.sector}
+                          </span>
+                          <span className={`text-xs font-mono px-2 py-0.5 rounded tabular-nums ${intensityStyle}`}>
+                            {alertCount} {alertCount === 1 ? 'Alert' : 'Alerts'}
+                          </span>
+                        </div>
+
+                        <div className="font-bold text-white text-xs font-mono tracking-wide mb-2 group-hover:text-amber-400 transition-colors line-clamp-2">
+                          {group.industry}
+                        </div>
+
+                        <div className="flex flex-wrap gap-1 mb-3">
+                          {uniqueSymbols.slice(0, 4).map((sym) => (
+                            <span
+                              key={sym}
+                              className="text-[10px] font-mono font-bold bg-[#18181f] text-zinc-300 px-1.5 py-0.5 rounded border border-[#27272a]"
+                            >
+                              {sym}
+                            </span>
+                          ))}
+                          {uniqueSymbols.length > 4 && (
+                            <span className="text-[10px] font-mono text-zinc-500 self-center">
+                              +{uniqueSymbols.length - 4} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-[#27272a]/60 flex items-center justify-between text-[11px] font-mono text-zinc-400 group-hover:text-amber-400 transition-colors">
+                        <span>Inspect Stocks</span>
+                        <span>→</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Hover tooltip portal */}
-      {hoveredNotif &&
-        typeof document !== 'undefined' &&
-        ReactDOM.createPortal(
+      {/* ─── Industry Alert Stocks Drill-Down Modal ──────────────────────────── */}
+      {selectedIndustryModal && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setSelectedIndustryModal(null)}
+        >
           <div
-            className="fixed z-[99999] pointer-events-none"
-            style={{
-              left: hoveredNotif.rect.left,
-              top: hoveredNotif.rect.top - 4,
-              transform: 'translateY(-100%)',
-            }}
+            className="bg-[#0c0c0f] border border-zinc-700 rounded-lg max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl font-mono overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="bg-[#121216] border border-amber-400/60 rounded-md shadow-2xl p-3 max-w-80 mb-1">
-              <div className="text-amber-400 text-xs font-bold mb-1">
-                {getBadgeLabel(
-                  filteredNotifications.find((n) => n.id === hoveredNotif.id)?.trigger_type ?? '',
-                )}
+            {/* Modal Header */}
+            <div className="p-3.5 bg-[#121216] border-b border-[#27272a] flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="text-amber-400 text-base">📊</span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white text-sm">
+                      {selectedIndustryModal.industry}
+                    </span>
+                    <span className="text-[10px] text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded border border-[#27272a]">
+                      {selectedIndustryModal.sector}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5">
+                    {selectedIndustryModal.notifications.length} alerts triggered in this industry
+                  </div>
+                </div>
               </div>
-              <div className="text-zinc-200 text-xs mb-1 leading-snug">
-                {getTooltipDescription(
-                  filteredNotifications.find((n) => n.id === hoveredNotif.id)?.trigger_type ?? '',
-                )}
-              </div>
-              <div className="text-zinc-300 text-[11px] truncate">
-                {filteredNotifications.find((n) => n.id === hoveredNotif.id)?.message}
-              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedIndustryModal(null)}
+                className="w-7 h-7 rounded bg-[#18181f] hover:bg-zinc-700 text-zinc-300 hover:text-white flex items-center justify-center text-sm font-bold border border-[#27272a] transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
-          </div>,
-          document.body,
-        )}
+
+            {/* Modal List */}
+            <div className="flex-1 overflow-y-auto p-3.5 flex flex-col gap-2 min-h-0">
+              {selectedIndustryModal.notifications.map((n) => {
+                const indicator = extractIndicatorParameter(n);
+                return (
+                  <div
+                    key={n.id}
+                    className="p-3 bg-[#121216] border border-[#27272a] hover:border-zinc-500 rounded-md transition-colors"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-amber-400 text-sm">
+                          {n.symbol}
+                        </span>
+                        <span className="text-[10px] text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded border border-[#27272a]">
+                          {n.exchange || 'NSE'}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${getBentoBadgeStyle(
+                            n.trigger_type,
+                          )}`}
+                        >
+                          {TRIGGER_LABELS[n.trigger_type] ?? getBadgeLabel(n.trigger_type)}
+                        </span>
+                      </div>
+
+                      <span className="text-xs text-zinc-400 tabular-nums">
+                        {formatDateTime(n.triggered_at)}
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-zinc-200 mb-2 leading-relaxed">
+                      {n.message}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#27272a]/60">
+                      <div className="text-[11px] text-zinc-400">
+                        {indicator.paramLabel}: <span className="text-emerald-400 font-bold">{indicator.paramValue}</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenIndependentChart(e, n.symbol, n.exchange)}
+                          className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-terminal-amber/20 hover:text-terminal-amber border border-zinc-700/80 hover:border-terminal-amber/60 text-zinc-200 text-[11px] font-mono font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                        >
+                          <span>⚡</span>
+                          <span>Load Chart</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenIndependentCompany(e, n.symbol)}
+                          className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-terminal-amber/20 hover:text-terminal-amber border border-zinc-700/80 hover:border-terminal-amber/60 text-zinc-200 text-[11px] font-mono font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                        >
+                          <span>🏢</span>
+                          <span>Company</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-2.5 bg-[#121216] border-t border-[#27272a] flex items-center justify-between text-xs text-zinc-400">
+              <span>Independent chart &amp; company popouts do not modify the main terminal grid symbol.</span>
+              <button
+                type="button"
+                onClick={() => setSelectedIndustryModal(null)}
+                className="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

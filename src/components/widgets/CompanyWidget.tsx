@@ -2,15 +2,17 @@
 
 import React, { useState } from 'react';
 import { useAtomValue } from 'jotai';
-import { activeSymbolAtom } from '@/store/terminalStore';
+import { activeSymbolAtom, companySymbolOverridesAtom } from '@/store/terminalStore';
 import { FundamentalsTab } from './CompanyTabs/FundamentalsTab';
 import { DealsTab } from './CompanyTabs/DealsTab';
 import { CompanyNewsTab } from './CompanyTabs/CompanyNewsTab';
 import { AlertsTab } from './CompanyTabs/AlertsTab';
 import { CorporateTab } from './CompanyTabs/CorporateTab';
 
-export function CompanyWidget() {
-  const symbol = useAtomValue(activeSymbolAtom);
+export function CompanyWidget({ panelId, symbolOverride }: { panelId?: string; symbolOverride?: string } = {}) {
+  const globalSymbol = useAtomValue(activeSymbolAtom);
+  const companyOverrides = useAtomValue(companySymbolOverridesAtom);
+  const symbol = (panelId && companyOverrides[panelId]?.symbol) || symbolOverride || globalSymbol;
   const [activeTab, setActiveTab] = useState<'fundamentals' | 'deals' | 'news' | 'alerts' | 'corporate'>('fundamentals');
 
   if (!symbol) {

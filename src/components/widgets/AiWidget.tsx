@@ -574,6 +574,138 @@ function SessionSidebar({
 // Sentinel key for an unsent "new chat" scratch session
 const NEW_CHAT_KEY = null;
 
+interface AiModelDropdownProps {
+  value: string;
+  onChange: (id: string) => void;
+  availableModels: ModelOption[];
+  disabled?: boolean;
+}
+
+function AiModelDropdown({
+  value,
+  onChange,
+  availableModels,
+  disabled = false,
+}: AiModelDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selectedModel = availableModels.find((m) => m.id === value);
+  const displayLabel = selectedModel ? selectedModel.label : (value || 'Select Model…');
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isOpen]);
+
+  const hasFree = availableModels.some((m) => m.is_free !== undefined);
+  const freeModels = hasFree ? availableModels.filter((m) => m.is_free) : [];
+  const paidModels = hasFree ? availableModels.filter((m) => !m.is_free) : [];
+
+  return (
+    <div ref={containerRef} className="relative inline-block">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setIsOpen((prev) => !prev)}
+        data-testid="ai-model-select"
+        className="flex items-center justify-between gap-2 bg-[#121216] hover:bg-[#18181f] border border-zinc-700 hover:border-amber-400 focus:border-amber-400 focus:ring-1 focus:ring-terminal-amber/50 rounded px-3 py-1.5 text-xs text-white font-mono cursor-pointer transition-all shadow-sm hover:shadow-[0_0_12px_rgba(245,158,11,0.3)] min-w-[210px] max-w-[280px] disabled:opacity-50 select-none"
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Provider Active" />
+        <span className="truncate">{displayLabel}</span>
+        <span className="text-[10px] text-zinc-400 ml-1">▼</span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-1.5 w-72 bg-[#09090b] border border-zinc-700 hover:border-amber-400/60 rounded-md shadow-2xl z-50 max-h-80 overflow-y-auto font-mono text-xs p-1.5 transition-colors">
+          {availableModels.length === 0 ? (
+            <div className="p-2 text-zinc-400 text-center">Loading models…</div>
+          ) : hasFree ? (
+            <>
+              {freeModels.length > 0 && (
+                <div className="mb-1">
+                  <div className="px-2 py-1 text-[10px] font-bold text-terminal-amber uppercase tracking-wider bg-terminal-amber/10 rounded">
+                    Free Models
+                  </div>
+                  {freeModels.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        onChange(m.id);
+                        setIsOpen(false);
+                      }}
+                      className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between border transition-all ${
+                        m.id === value
+                          ? 'bg-terminal-amber text-black font-bold border-terminal-amber shadow'
+                          : 'text-zinc-200 border-transparent hover:border-amber-400/60 hover:bg-zinc-800/90 hover:text-white'
+                      }`}
+                    >
+                      <span className="truncate">{m.label}</span>
+                      {m.id === value && <span>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {paidModels.length > 0 && (
+                <div>
+                  <div className="px-2 py-1 text-[10px] font-bold text-zinc-400 uppercase tracking-wider bg-zinc-800/40 rounded">
+                    Paid / Pro Models
+                  </div>
+                  {paidModels.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        onChange(m.id);
+                        setIsOpen(false);
+                      }}
+                      className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between border transition-all ${
+                        m.id === value
+                          ? 'bg-terminal-amber text-black font-bold border-terminal-amber shadow'
+                          : 'text-zinc-200 border-transparent hover:border-amber-400/60 hover:bg-zinc-800/90 hover:text-white'
+                      }`}
+                    >
+                      <span className="truncate">{m.label}</span>
+                      {m.id === value && <span>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            availableModels.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  onChange(m.id);
+                  setIsOpen(false);
+                }}
+                className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between border transition-all ${
+                  m.id === value
+                    ? 'bg-terminal-amber text-black font-bold border-terminal-amber shadow'
+                    : 'text-zinc-200 border-transparent hover:border-amber-400/60 hover:bg-zinc-800/90 hover:text-white'
+                }`}
+              >
+                <span className="truncate">{m.label}</span>
+                {m.id === value && <span>✓</span>}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AiWidget() {
   const symbol = useAtomValue(activeSymbolAtom);
   const exchange = useAtomValue(activeExchangeAtom);
@@ -1193,7 +1325,7 @@ export function AiWidget() {
                 'flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-mono transition-colors',
                 sidebarOpen
                   ? 'bg-terminal-amber/15 border-terminal-amber/50 text-terminal-amber font-bold'
-                  : 'bg-[#121216] border-[#27272a] text-zinc-300 hover:border-terminal-amber/40 hover:text-white',
+                  : 'bg-[#121216] border-[#27272a] text-zinc-300 hover:border-amber-400/40 hover:text-white',
               )}
               title="Toggle Session Drawer"
             >
@@ -1206,88 +1338,13 @@ export function AiWidget() {
               )}
             </button>
 
-            {/* Model Selector Bento Pill */}
-            <div className="flex items-center bg-[#121216] border border-[#27272a] rounded px-2 py-0.5 focus-within:border-terminal-amber">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 shrink-0" title="Provider Active" />
-              <select
-                value={model || defaultModel}
-                onChange={(e) => patchSession(activeKey, { model: e.target.value })}
-                disabled={isStreaming}
-                data-testid="ai-model-select"
-                className="bg-transparent text-xs text-white font-mono outline-none cursor-pointer pr-1 py-0.5 disabled:opacity-50 max-w-[170px]"
-              >
-                {availableModels.length > 0 ? (
-                  availableModels.some((m) => m.is_free !== undefined) ? (
-                    <>
-                      {availableModels.some((m) => m.is_free) && (
-                        <optgroup label="Free Models" className="bg-[#121418] text-terminal-amber font-bold">
-                          {availableModels
-                            .filter((m) => m.is_free)
-                            .map((m) => (
-                              <option key={m.id} value={m.id} className="text-white font-normal">
-                                {m.label}
-                              </option>
-                            ))}
-                        </optgroup>
-                      )}
-                      {availableModels.some((m) => !m.is_free) && (
-                        <optgroup label="Paid Models" className="bg-[#121418] text-zinc-400 font-bold">
-                          {availableModels
-                            .filter((m) => !m.is_free)
-                            .map((m) => (
-                              <option key={m.id} value={m.id} className="text-white font-normal">
-                                {m.label}
-                              </option>
-                            ))}
-                        </optgroup>
-                      )}
-                    </>
-                  ) : (
-                    (() => {
-                      const groups = new Map<string, ModelOption[]>();
-                      const ungrouped: ModelOption[] = [];
-                      for (const m of availableModels) {
-                        const match = /^\[([^\]]+)\]\s*/.exec(m.label);
-                        if (match) {
-                          const g = groups.get(match[1]) ?? [];
-                          g.push(m);
-                          groups.set(match[1], g);
-                        } else {
-                          ungrouped.push(m);
-                        }
-                      }
-                      if (groups.size === 0) {
-                        return availableModels.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ));
-                      }
-                      return (
-                        <>
-                          {[...groups.entries()].map(([name, items]) => (
-                            <optgroup key={name} label={name} className="bg-[#121418] text-terminal-amber font-bold">
-                              {items.map((m) => (
-                                <option key={m.id} value={m.id} className="text-white font-normal">
-                                  {m.label}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                          {ungrouped.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.label}
-                            </option>
-                          ))}
-                        </>
-                      );
-                    })()
-                  )
-                ) : (
-                  <option value="">Loading models…</option>
-                )}
-              </select>
-            </div>
+            {/* Model Selector Bento Dropdown */}
+            <AiModelDropdown
+              value={model || defaultModel}
+              onChange={(newModel) => patchSession(activeKey, { model: newModel })}
+              disabled={isStreaming}
+              availableModels={availableModels}
+            />
 
             {/* Active Context Stock Pill */}
             <div className="flex items-center gap-1.5 bg-terminal-amber/10 border border-terminal-amber/30 px-2.5 py-1 rounded text-xs font-mono">
@@ -1343,7 +1400,7 @@ export function AiWidget() {
             {/* New Chat Button */}
             <button
               onClick={() => startNewChat(sessionMode)}
-              className="px-2.5 py-1 rounded bg-[#121216] border border-[#27272a] hover:border-terminal-amber hover:text-terminal-amber text-zinc-200 text-xs font-mono font-semibold transition-colors"
+              className="px-2.5 py-1 rounded bg-[#121216] border border-[#27272a] hover:border-amber-400 hover:text-terminal-amber text-zinc-200 text-xs font-mono font-semibold transition-colors"
               title="Create new scratch session"
             >
               + New
@@ -1392,7 +1449,7 @@ export function AiWidget() {
                     key={idx}
                     onClick={() => void sendMessage(p.prompt)}
                     disabled={isStreaming}
-                    className="group flex flex-col justify-between p-3 rounded-lg bg-[#0c0c0f] border border-[#27272a] hover:border-terminal-amber/60 hover:bg-[#121217] transition-all text-left shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="group flex flex-col justify-between p-3 rounded-lg bg-[#0c0c0f] border border-[#27272a] hover:border-amber-400/60 hover:bg-[#121217] transition-all text-left shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <div>
                       <div className="flex items-center justify-between mb-1">

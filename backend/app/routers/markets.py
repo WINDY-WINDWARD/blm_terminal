@@ -126,6 +126,32 @@ async def get_industry_stocks(
     stocks.sort(key=lambda x: x.market_cap or 0, reverse=True)
     return stocks
 
+@router.get(
+    "/stocks-categories",
+    summary="Get category (industry and sector) mapping for all stocks",
+)
+async def get_stocks_categories(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, dict[str, str]]:
+    stmt = select(MarketCategoryStock.symbol, MarketCategoryStock.categories)
+    res = await db.execute(stmt)
+    mapping: dict[str, dict[str, str]] = {}
+    for symbol, cats in res.all():
+        if not cats:
+            continue
+        ind = ""
+        sec = ""
+        for c in cats:
+            if c.get("type") == "industry" and not ind:
+                ind = c.get("name") or c.get("slug") or ""
+            elif c.get("type") == "sector" and not sec:
+                sec = c.get("name") or c.get("slug") or ""
+        mapping[symbol] = {
+            "industry": ind or "Diversified",
+            "sector": sec or "General",
+        }
+    return mapping
+
 
 @router.get(
     "/sectors/{slug}/stocks",

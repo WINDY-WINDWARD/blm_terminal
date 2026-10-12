@@ -5,7 +5,7 @@ import { Provider as JotaiProvider, createStore } from 'jotai';
 import type { WritableAtom } from 'jotai';
 
 interface RenderWithProvidersOptions {
-  initialAtomValues?: [WritableAtom<unknown, unknown>, unknown][];
+  initialAtomValues?: [WritableAtom<any, any[], any>, unknown][];
   queryClientOptions?: Partial<QueryClient>;
 }
 
@@ -33,11 +33,11 @@ function createTestQueryClient(options?: Partial<QueryClient>) {
 }
 
 // Create a fresh Jotai store for each test
-function createTestStore(initialValues?: [WritableAtom<unknown, unknown>, unknown][]) {
+function createTestStore(initialValues?: [WritableAtom<any, any[], any>, unknown][]) {
   const testStore = createStore();
   if (initialValues) {
     initialValues.forEach(([atom, value]) => {
-      testStore.set(atom as WritableAtom<unknown, unknown>, value);
+      testStore.set(atom as WritableAtom<any, any[], any>, value);
     });
   }
   return testStore;

@@ -11,10 +11,7 @@ import { AdvancedScrapingModal } from "@/components/modals/AdvancedScrapingModal
 import { FirstLaunchModal } from "@/components/modals/FirstLaunchModal";
 import { TourGuide } from "@/components/tutorial/TourGuide";
 
-const jetBrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-});
+const jetBrainsMono = { variable: "font-mono" };
 
 export const metadata: Metadata = {
   title: "BLM Terminal",

@@ -161,7 +161,7 @@ export function Panel({ id, title }: PanelProps) {
       case 'ANALYSIS': return <AnalysisWidget />;
       case 'NOTIF':   return <NotifWidget />;
       case 'ANNC':    return <AnnouncementsWidget />;
-      case 'SCAN':    return <ScanWidget />;
+      case 'SCAN':    return <NotifWidget defaultWatchlist="all" />;
       case 'SCREENER': return <ScreenerWidget />;
       case 'DOCS':    return <DocsWidget />;
       case 'AI':      return <AiWidget />;

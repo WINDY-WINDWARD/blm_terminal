@@ -235,6 +235,6 @@ describe('notifSymbolFilterAtom', () => {
   it('is not persisted to storage (in-memory atom)', () => {
     // notifSymbolFilterAtom uses atom() not atomWithStorage() —
     // verify the atom has no key property (atomWithStorage adds one)
-    expect((notifSymbolFilterAtom as Record<string, unknown>)['init']).toBeNull();
+    expect((notifSymbolFilterAtom as unknown as Record<string, unknown>)['init']).toBeNull();
   });
 });

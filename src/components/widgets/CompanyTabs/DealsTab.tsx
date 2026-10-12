@@ -1,7 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSetAtom } from 'jotai';
+import {
+  chartSymbolOverridesAtom,
+  type ChartSymbolOverride,
+} from '@/store/terminalStore';
 import {
   fetchIinvestAll,
   type IinvestAllResponse,
@@ -32,7 +37,7 @@ interface ScreenerTradesResponse {
   block_deals: TradeRecord[];
 }
 
-type Tab = 'insider' | 'bulk' | 'block' | 'sast';
+type Tab = 'bulk' | 'block' | 'insider' | 'sast';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -41,100 +46,57 @@ function fmt(n: number | null, decimals = 0): string {
   return n.toLocaleString('en-IN', { maximumFractionDigits: decimals });
 }
 
-function DirectionCell({ record }: { record: TradeRecord }) {
-  // Insider trades have direction + quantity; deals have quantity_raw like "B"/"Sale"
+function DirectionBadge({ record }: { record: TradeRecord }) {
   if (record.direction === 'up') {
     const qty = record.quantity !== null ? fmt(record.quantity) : record.quantity_raw ?? '—';
-    return <span className="text-terminal-green font-bold">▲ {qty}</span>;
+    return (
+      <span className="inline-flex items-center gap-1 text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 text-xs">
+        <span>▲ BUY</span>
+        <span className="tabular-nums font-mono">{qty}</span>
+      </span>
+    );
   }
   if (record.direction === 'down') {
     const qty = record.quantity !== null ? fmt(Math.abs(record.quantity)) : record.quantity_raw ?? '—';
-    return <span className="text-terminal-red font-bold">▼ {qty}</span>;
+    return (
+      <span className="inline-flex items-center gap-1 text-rose-400 font-bold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20 text-xs">
+        <span>▼ SELL</span>
+        <span className="tabular-nums font-mono">{qty}</span>
+      </span>
+    );
   }
-  // Bulk/block: quantity_raw holds "B" / "Sale" etc., quantity is null
-  const raw = record.quantity_raw ?? '—';
-  const upper = raw.toUpperCase();
-  if (upper === 'B' || upper === 'BUY')
-    return <span className="text-terminal-green font-bold">BUY</span>;
-  if (upper === 'S' || upper === 'SALE' || upper === 'SELL')
-    return <span className="text-terminal-red font-bold">SELL</span>;
-  return <span className="text-white/60">{raw}</span>;
+  const raw = (record.quantity_raw ?? '—').toUpperCase();
+  if (raw === 'B' || raw === 'BUY') {
+    return (
+      <span className="inline-flex items-center gap-1 text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 text-xs">
+        <span>▲ BUY</span>
+        {record.quantity !== null && <span className="tabular-nums font-mono">{fmt(record.quantity)}</span>}
+      </span>
+    );
+  }
+  if (raw === 'S' || raw === 'SALE' || raw === 'SELL') {
+    return (
+      <span className="inline-flex items-center gap-1 text-rose-400 font-bold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20 text-xs">
+        <span>▼ SELL</span>
+        {record.quantity !== null && <span className="tabular-nums font-mono">{fmt(record.quantity)}</span>}
+      </span>
+    );
+  }
+  return <span className="text-zinc-400 text-xs">{record.quantity_raw ?? '—'}</span>;
 }
 
-function ValueCell({ record }: { record: TradeRecord }) {
-  if (record.value === null) return <span className="text-white/60">—</span>;
-  const suffix = record.value_in === 'lacs' ? 'L' : record.value_in === 'price' ? '₹' : '';
+function ValueBadge({ record }: { record: TradeRecord }) {
+  if (record.value === null) return <span className="text-zinc-500 font-mono text-xs">—</span>;
+  const suffix = record.value_in === 'lacs' ? ' L' : record.value_in === 'price' ? '₹' : '';
   return (
-    <span className="text-terminal-amber">
+    <span className="text-amber-400 font-mono font-bold text-xs tabular-nums">
       {record.value_in === 'price' ? `${suffix}${fmt(record.value)}` : `${fmt(record.value)}${suffix}`}
     </span>
   );
 }
 
-interface SectionTableProps {
-  rows: TradeRecord[];
-  showCategory: boolean;
-}
+// ─── Component ────────────────────────────────────────────────────────────────
 
-function SectionTable({ rows, showCategory }: SectionTableProps) {
-  if (rows.length === 0) {
-    return <div className="text-white/60 text-sm py-2 px-1">No records</div>;
-  }
-
-  return (
-    <table className="w-full border-collapse text-sm">
-      <thead className="sticky top-0 bg-terminal-bg z-10">
-        <tr className="text-xs text-white/60 uppercase border-b border-terminal-gray/60">
-          <th className="text-left pb-1 font-normal pr-2 whitespace-nowrap">Period</th>
-          <th className="text-left pb-1 font-normal pr-2 whitespace-nowrap">Person</th>
-          {showCategory && (
-            <th className="text-left pb-1 font-normal pr-2 whitespace-nowrap">Category</th>
-          )}
-          <th className="text-left pb-1 font-normal pr-2 whitespace-nowrap">Qty / Dir</th>
-          <th className="text-right pb-1 font-normal pr-2 whitespace-nowrap">Avg Price</th>
-          <th className="text-right pb-1 font-normal whitespace-nowrap">Value</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, i) => (
-          <tr
-            key={`${row.period}-${row.person}-${i}`}
-            className="border-b border-terminal-gray/30 hover:bg-zinc-900"
-          >
-            <td className="py-[3px] pr-2 text-white whitespace-nowrap">
-              {row.period ?? '—'}
-            </td>
-            <td
-              className="py-[3px] pr-2 text-white max-w-[120px] truncate"
-              title={row.person ?? undefined}
-            >
-              {row.person ?? <span className="text-white/60">—</span>}
-            </td>
-            {showCategory && (
-              <td
-                className="py-[3px] pr-2 text-white/60 max-w-[100px] truncate text-xs"
-                title={row.category ?? undefined}
-              >
-                {row.category || <span className="text-white/60">—</span>}
-              </td>
-            )}
-            <td className="py-[3px] pr-2 whitespace-nowrap">
-              <DirectionCell record={row} />
-            </td>
-            <td className="py-[3px] pr-2 text-right text-white whitespace-nowrap">
-              {row.avg_price !== null ? fmt(row.avg_price) : (row.avg_price_raw ?? '—')}
-            </td>
-            <td className="py-[3px] text-right whitespace-nowrap">
-              <ValueCell record={row} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-// ─── iinvest → TradeRecord mapper ────────────────────────────────────────────
 
 function mapIinvestInsiderToTradeRecords(rows: IinvestInsiderRow[]): TradeRecord[] {
   const toNum = (v: string | number | undefined): number | null => {
@@ -194,166 +156,377 @@ function mapIinvestBlockToTradeRecords(rows: Array<Record<string, unknown>>): Tr
   });
 }
 
-// ─── Main Widget ──────────────────────────────────────────────────────────────
-
 export function DealsTab({ symbol }: { symbol: string }) {
-  const [activeTab, setActiveTab] = useState<string>('bulk');
-const { data: allData, isLoading: isAllLoading } = useQuery<[ScreenerTradesResponse, IinvestAllResponse]>({
-    queryKey: ['deals/all', symbol],
-    queryFn: async () => {
-      const fetchScreener = async (): Promise<ScreenerTradesResponse> => {
-        const res = await fetch(`/api/py/screener/trades/${encodeURIComponent(symbol)}`);
-        if (!res.ok) {
-          let detail = `HTTP ${res.status}`;
-          try {
-            const json = (await res.json()) as { detail?: string };
-            if (json.detail) detail = json.detail;
-          } catch { /* ignore */ }
-          const err = new Error(detail);
-          (err as Error & { status: number }).status = res.status;
-          throw err;
-        }
-        return res.json() as Promise<ScreenerTradesResponse>;
-      };
+  const [activeTab, setActiveTab] = useState<Tab>('bulk');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [actionFilter, setActionFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
+  const setChartOverrides = useSetAtom(chartSymbolOverridesAtom);
 
-      const [screenerRes, iinvestRes] = await Promise.all([
-        fetchScreener().catch(() => {
-          return { insider_trades: [], bulk_deals: [], block_deals: [] } as ScreenerTradesResponse;
-        }),
-        fetchIinvestAll(symbol).catch(() => {
-          return {} as IinvestAllResponse;
-        }),
-      ]);
-      return [screenerRes, iinvestRes];
+  const handleOpenChart = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const popoutKey = `popout_direct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    setChartOverrides((prev: Record<string, ChartSymbolOverride>) => ({
+      ...prev,
+      [popoutKey]: { symbol, exchange: 'NSE' },
+    }));
+    const query = new URLSearchParams({
+      symbol,
+      exchange: 'NSE',
+      popoutPanelId: popoutKey,
+    });
+    window.open(
+      `/widget/CHART?${query.toString()}`,
+      `blm_widget_CHART_${popoutKey}`,
+      'width=1100,height=720',
+    );
+  };
+
+  const { data, isLoading: screenerLoading } = useQuery<ScreenerTradesResponse>({
+    queryKey: ['screener/trades', symbol],
+    queryFn: async () => {
+      try {
+        const res = await fetch(`/api/py/screener/trades/${encodeURIComponent(symbol)}`);
+        if (!res.ok) return { insider_trades: [], bulk_deals: [], block_deals: [] };
+        return res.json() as Promise<ScreenerTradesResponse>;
+      } catch {
+        return { insider_trades: [], bulk_deals: [], block_deals: [] };
+      }
     },
-    enabled: !!symbol,
     staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
     retry: false,
   });
 
-  const [screenerTradesData, iinvestAllData] = allData ?? [
-    { insider_trades: [], bulk_deals: [], block_deals: [] },
-    {},
-  ];
+  const { data: iinvestData, isLoading: iinvestLoading } = useQuery<IinvestAllResponse>({
+    queryKey: ['iinvest/all', symbol],
+    queryFn: () => fetchIinvestAll(symbol).catch(() => ({} as IinvestAllResponse)),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
 
-  const sastData = iinvestAllData?.sast;
-  const iinvestInsider = iinvestAllData?.insider_trading;
-  const iinvestBlockData = iinvestAllData?.block_deals;
-  const iinvestBulkData = iinvestAllData?.bulk_deals;
+  const isLoading = screenerLoading && iinvestLoading;
 
-  const iinvestBulkCount = iinvestBulkData?.response?.data?.length ?? 0;
-  const iinvestBlockCount = iinvestBlockData?.response?.data?.length ?? 0;
+  const iinvestInsiderRows = useMemo(() => {
+    const raw = iinvestData?.insider_trading?.response?.data;
+    return raw ? mapIinvestInsiderToTradeRecords(raw) : [];
+  }, [iinvestData]);
 
-  if (!symbol) {
-    return (
-      <div className="h-full w-full flex items-center justify-center font-mono text-xs text-white/60">
-        No symbol selected
-      </div>
-    );
-  }
+  const iinvestBulkRows = useMemo(() => {
+    const raw = iinvestData?.bulk_deals?.response?.data;
+    return raw ? mapIinvestBlockToTradeRecords(raw) : [];
+  }, [iinvestData]);
 
-  const screenerData: ScreenerTradesResponse = screenerTradesData ?? {
-    insider_trades: [],
-    bulk_deals: [],
-    block_deals: [],
-  };
+  const iinvestBlockRows = useMemo(() => {
+    const raw = iinvestData?.block_deals?.response?.data;
+    return raw ? mapIinvestBlockToTradeRecords(raw) : [];
+  }, [iinvestData]);
 
-  const iinvestInsiderRows = iinvestInsider?.response?.data
-    ? mapIinvestInsiderToTradeRecords(iinvestInsider.response.data)
-    : [];
+  const allBulk = useMemo(() => {
+    const screener = data?.bulk_deals ?? [];
+    return screener.length > 0 ? screener : iinvestBulkRows;
+  }, [data, iinvestBulkRows]);
 
-  const insiderRows = screenerData.insider_trades.length > 0
-    ? screenerData.insider_trades
-    : iinvestInsiderRows;
-    
-  const iinvestBulkRawRows = iinvestBulkData?.response?.data ?? [];
-  const iinvestBlockRawRows = iinvestBlockData?.response?.data ?? [];
-  const iinvestBulkTradeRecords = mapIinvestBlockToTradeRecords(iinvestBulkRawRows);
-  const iinvestBlockTradeRecords = mapIinvestBlockToTradeRecords(iinvestBlockRawRows);
-  
-  const useIinvestBulk = iinvestBulkCount > 0 && iinvestBulkCount >= screenerData.bulk_deals.length;
-  const bulkRows = useIinvestBulk ? iinvestBulkTradeRecords : screenerData.bulk_deals;
+  const allBlock = useMemo(() => {
+    const screener = data?.block_deals ?? [];
+    return screener.length > 0 ? screener : iinvestBlockRows;
+  }, [data, iinvestBlockRows]);
 
-  const useIinvestBlock = iinvestBlockCount > 0 && iinvestBlockCount >= screenerData.block_deals.length;
-  const blockRows = useIinvestBlock ? iinvestBlockTradeRecords : screenerData.block_deals;
+  const allInsider = useMemo(() => {
+    const screener = data?.insider_trades ?? [];
+    return screener.length > 0 ? screener : iinvestInsiderRows;
+  }, [data, iinvestInsiderRows]);
 
-  const tabs: { id: Tab; label: string; count: number; description: string }[] = [
-    { id: 'insider', label: 'Insider', count: insiderRows.length, description: 'Buys/sells by directors, officers, promoters, and their relatives (SEBI Reg. 7(2))' },
-    { id: 'bulk',    label: 'Bulk',    count: bulkRows.length,    description: 'Bulk deals — single transaction crossing 0.5% of a company’s paid-up capital' },
-    { id: 'block',   label: 'Block',   count: blockRows.length,   description: 'Block deals — negotiated trade window 09:15–09:40 IST for 5%+ block size' },
-    { id: 'sast',    label: 'SAST',    count: sastData?.response?.data?.length ?? 0, description: 'Substantial Acquisition of Shares & Takeovers (SEBI Reg. 29(2))' },
-  ];
+  const allSast = useMemo(() => iinvestData?.sast?.response?.data ?? [], [iinvestData]);
 
-  const activeRows: TradeRecord[] =
-    activeTab === 'insider' ? insiderRows :
-    activeTab === 'bulk'    ? bulkRows    :
-    activeTab === 'block'   ? blockRows   :
-    [];
+  // Compute Bento KPI Metrics
+  const kpis = useMemo(() => {
+    const combined = [...allBulk, ...allBlock, ...allInsider];
+    let buyCount = 0;
+    let sellCount = 0;
+    let totalValLacs = 0;
+
+    for (const r of (combined as TradeRecord[])) {
+      const isBuy = r.direction === 'up' || (r.quantity_raw && ['B', 'BUY'].includes(r.quantity_raw.toUpperCase()));
+      const isSell = r.direction === 'down' || (r.quantity_raw && ['S', 'SELL', 'SALE'].includes(r.quantity_raw.toUpperCase()));
+      if (isBuy) buyCount += 1;
+      if (isSell) sellCount += 1;
+
+      if (r.value !== null && Number.isFinite(r.value)) {
+        if (r.value_in === 'lacs') {
+          totalValLacs += r.value;
+        } else {
+          totalValLacs += r.value / 100000;
+        }
+      }
+    }
+
+    const netBias = buyCount > sellCount ? 'BUY ACCUMULATION' : sellCount > buyCount ? 'NET DISTRIBUTION' : 'NEUTRAL';
+    const netColor = buyCount > sellCount ? 'text-emerald-400' : sellCount > buyCount ? 'text-rose-400' : 'text-zinc-400';
+
+    return {
+      totalRecords: combined.length,
+      buyCount,
+      sellCount,
+      totalValLacs,
+      netBias,
+      netColor,
+    };
+  }, [allBulk, allBlock, allInsider]);
+
+  const activeRawRows = useMemo(() => {
+    switch (activeTab) {
+      case 'bulk':    return allBulk;
+      case 'block':   return allBlock;
+      case 'insider': return allInsider;
+      default:        return [];
+    }
+  }, [activeTab, allBulk, allBlock, allInsider]);
+
+  const filteredRows = useMemo(() => {
+    let rows = activeRawRows;
+    if (actionFilter === 'BUY') {
+      rows = rows.filter((r) => r.direction === 'up' || (r.quantity_raw && ['B', 'BUY'].includes(r.quantity_raw.toUpperCase())));
+    } else if (actionFilter === 'SELL') {
+      rows = rows.filter((r) => r.direction === 'down' || (r.quantity_raw && ['S', 'SELL', 'SALE'].includes(r.quantity_raw.toUpperCase())));
+    }
+    if (searchQuery.trim().length > 0) {
+      const q = searchQuery.toLowerCase().trim();
+      rows = rows.filter(
+        (r) =>
+          (r.person && r.person.toLowerCase().includes(q)) ||
+          (r.category && r.category.toLowerCase().includes(q)) ||
+          (r.period && r.period.toLowerCase().includes(q)),
+      );
+    }
+    return rows;
+  }, [activeRawRows, actionFilter, searchQuery]);
+
+  const isAllLoading = isLoading || (activeTab === 'sast' && iinvestLoading);
 
   return (
-    <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-terminal-bg">
+    <div className="h-full w-full flex flex-col font-mono text-xs bg-[#09090b] text-white p-3 gap-3 overflow-hidden select-text">
+      {/* ─── Top Header & Independent Popout Button ─────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#27272a] shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-amber-400/10 border border-amber-400/30 text-amber-400 font-bold text-xs">
+            💼
+          </span>
+          <span className="text-amber-400 font-bold text-xs uppercase tracking-wider">
+            DEALS &amp; INSIDER MATRIX
+          </span>
+          <span className="text-white font-extrabold text-sm bg-zinc-800 px-2 py-0.5 rounded border border-[#27272a]">
+            {symbol}
+          </span>
+        </div>
 
-      {/* Header */}
-      <div className="flex-shrink-0 px-3 py-1 border-b border-terminal-gray flex items-baseline gap-2 min-w-0">
-        <span className="text-terminal-amber font-bold text-[11px] uppercase">
-          Deals &amp; Insider Trades
-        </span>
-        <span className="text-white text-sm flex-shrink-0">{symbol}</span>
+        <button
+          type="button"
+          onClick={handleOpenChart}
+          className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-terminal-amber/20 hover:text-terminal-amber border border-zinc-700 hover:border-terminal-amber text-zinc-200 text-xs font-mono font-semibold transition-all inline-flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+          title={`Open independent chart for ${symbol}`}
+        >
+          <span>⚡</span>
+          <span>Load Chart</span>
+        </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex-shrink-0 flex border-b border-terminal-gray/60 overflow-x-auto">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1 text-sm font-mono uppercase tracking-wide border-r border-terminal-gray/40 transition-colors border-b-2 whitespace-nowrap ${
-              activeTab === tab.id
-                ? 'bg-terminal-amber text-black font-bold -mb-px'
-                : 'text-white/80 hover:text-white hover:bg-zinc-900 border-transparent'
-            }`}
-            style={activeTab === tab.id ? { borderBottomColor: '#ffb900' } : undefined}
-            title={tab.description}
-          >
-            {tab.label}
-            <span className={`ml-1 text-xs ${activeTab === tab.id ? 'text-black/60' : 'text-white/60'}`}>
-              ({tab.count})
-            </span>
-          </button>
-        ))}
+      {/* ─── 4 Bento KPI Cards ──────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 shrink-0">
+        {/* Card 1: Recorded Turnover */}
+        <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
+          <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">
+            RECORDED TURNOVER
+          </div>
+          <div className="text-base font-extrabold text-amber-400 tabular-nums">
+            {kpis.totalValLacs > 100
+              ? `₹${(kpis.totalValLacs / 100).toFixed(2)} Cr`
+              : `₹${kpis.totalValLacs.toFixed(1)} L`}
+          </div>
+          <div className="text-[10px] text-zinc-500 mt-0.5">
+            {kpis.totalRecords} total transactions
+          </div>
+        </div>
+
+        {/* Card 2: Buy Accumulation */}
+        <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
+          <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">
+            BUY ACCUMULATION
+          </div>
+          <div className="text-base font-extrabold text-emerald-400 tabular-nums flex items-center gap-1">
+            <span>▲</span>
+            <span>{kpis.buyCount} Trades</span>
+          </div>
+          <div className="text-[10px] text-zinc-500 mt-0.5">
+            Institutional &amp; Insider buys
+          </div>
+        </div>
+
+        {/* Card 3: Sell Distribution */}
+        <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
+          <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">
+            SELL DISTRIBUTION
+          </div>
+          <div className="text-base font-extrabold text-rose-400 tabular-nums flex items-center gap-1">
+            <span>▼</span>
+            <span>{kpis.sellCount} Trades</span>
+          </div>
+          <div className="text-[10px] text-zinc-500 mt-0.5">
+            Disposals &amp; Block exits
+          </div>
+        </div>
+
+        {/* Card 4: Institutional Bias */}
+        <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
+          <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">
+            INSTITUTIONAL BIAS
+          </div>
+          <div className={`text-xs font-extrabold tabular-nums ${kpis.netColor} truncate`}>
+            {kpis.netBias}
+          </div>
+          <div className="text-[10px] text-zinc-500 mt-0.5">
+            Ratio: {kpis.buyCount}:{kpis.sellCount}
+          </div>
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto px-2 py-1 min-h-0">
-        {activeTab === 'insider' && isAllLoading ? (
-          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
-            LOADING INSIDER TRADES...
+      {/* ─── Bento Category Tab Bar & Filter Controls ───────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-2 shrink-0 bg-[#0c0c0f] border border-[#27272a] p-1.5 rounded-lg">
+        <div className="flex items-center gap-1" role="tablist">
+          {(
+            [
+              { id: 'bulk', label: 'BULK DEALS', count: allBulk.length },
+              { id: 'block', label: 'BLOCK DEALS', count: allBlock.length },
+              { id: 'insider', label: 'INSIDER TRADES', count: allInsider.length },
+              { id: 'sast', label: 'SAST DISCLOSURES', count: allSast.length },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`px-2.5 py-1 rounded text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeTab === t.id
+                  ? 'bg-amber-400 text-black font-extrabold shadow'
+                  : 'bg-[#121216] text-zinc-400 border border-[#27272a] hover:text-white hover:bg-zinc-800'
+              }`}
+            >
+              <span>{t.label}</span>
+              <span
+                className={`px-1.5 py-0.2 rounded text-[10px] tabular-nums ${
+                  activeTab === t.id ? 'bg-black text-amber-400' : 'bg-zinc-800 text-zinc-400'
+                }`}
+              >
+                {t.count}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {activeTab !== 'sast' && (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search person / entity…"
+              className="bg-[#121216] border border-[#27272a] hover:border-zinc-500 focus:border-amber-400 rounded px-2.5 py-1 text-xs text-white placeholder-zinc-500 outline-none w-44 font-mono transition-colors"
+            />
+
+            <div className="flex items-center bg-[#121216] border border-[#27272a] rounded overflow-hidden">
+              {(['ALL', 'BUY', 'SELL'] as const).map((af) => (
+                <button
+                  key={af}
+                  type="button"
+                  onClick={() => setActionFilter(af)}
+                  className={`px-2 py-1 text-[10px] font-mono font-bold transition-colors ${
+                    actionFilter === af
+                      ? 'bg-amber-400 text-black'
+                      : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {af}
+                </button>
+              ))}
+            </div>
           </div>
-        ) : activeTab === 'bulk' && isAllLoading ? (
-          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
-            LOADING BULK DEALS...
+        )}
+      </div>
+
+      {/* ─── Table Content Container ────────────────────────────────────────── */}
+      <div className="flex-1 overflow-auto bg-[#0c0c0f] border border-[#27272a] rounded-lg min-h-0">
+        {isAllLoading ? (
+          <div className="h-full w-full flex items-center justify-center font-mono text-xs text-amber-400 animate-pulse">
+            LOADING ${activeTab.toUpperCase()} RECORDS...
           </div>
-        ) : activeTab === 'block' && isAllLoading ? (
-          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
-            LOADING BLOCK DEALS...
+        ) : false ? (
+          <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-rose-400 gap-1 p-4 text-center">
+            <span>Failed to load ${activeTab} data</span>
+            <span className="text-zinc-500 text-[10px]">'Failed to load transactions'</span>
           </div>
-        ) : activeTab === 'sast' && isAllLoading ? (
-          <div className="h-full flex items-center justify-center font-mono text-xs text-terminal-amber/60 animate-pulse">
-            LOADING SAST DISCLOSURES...
-          </div>
-        ) : activeTab === 'insider' || activeTab === 'bulk' || activeTab === 'block' ? (
-          <SectionTable
-            rows={activeRows}
-            showCategory={activeTab === 'insider'}
-          />
         ) : activeTab === 'sast' ? (
-          <IinvestGenericTable
-            data={sastData?.response?.data ?? []}
-            columns={(sastData?.response?.columns ?? []) as IinvestColumn[]}
-            emptyMsg="No SAST disclosures on record"
-          />
-        ) : null}
+          <div className="p-2">
+            <IinvestGenericTable
+              data={iinvestData?.sast?.response?.data ?? []}
+              columns={(iinvestData?.sast?.response?.columns ?? []) as IinvestColumn[]}
+              emptyMsg="No SAST disclosures on record"
+            />
+          </div>
+        ) : filteredRows.length === 0 ? (
+          <div className="h-full w-full flex flex-col items-center justify-center font-mono text-xs text-zinc-500 gap-1 p-8 text-center">
+            <span className="text-2xl mb-1">💼</span>
+            <span className="font-bold text-zinc-400 uppercase">NO TRANSACTIONS RECORDED</span>
+            <span className="text-[11px] text-zinc-600">
+              No ${activeTab} matching the current filters for {symbol}.
+            </span>
+          </div>
+        ) : (
+          <table className="w-full text-left font-mono text-xs border-collapse">
+            <thead className="sticky top-0 bg-[#121216] border-b border-[#27272a] z-10">
+              <tr className="text-[10px] text-zinc-400 uppercase">
+                <th className="py-2 px-3 font-semibold whitespace-nowrap">PERIOD / DATE</th>
+                <th className="py-2 px-3 font-semibold whitespace-nowrap">PERSON / INSTITUTION</th>
+                {activeTab === 'insider' && (
+                  <th className="py-2 px-3 font-semibold whitespace-nowrap">CATEGORY</th>
+                )}
+                <th className="py-2 px-3 font-semibold whitespace-nowrap">ACTION &amp; QTY</th>
+                <th className="py-2 px-3 font-semibold text-right whitespace-nowrap">AVG PRICE</th>
+                <th className="py-2 px-3 font-semibold text-right whitespace-nowrap">VALUE</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#27272a]/60">
+              {filteredRows.map((row: TradeRecord, idx: number) => (
+                <tr
+                  key={`${row.period}-${row.person}-${idx}`}
+                  className="hover:bg-zinc-900/60 transition-colors"
+                >
+                  <td className="py-2.5 px-3 text-zinc-300 tabular-nums whitespace-nowrap">
+                    {row.period ?? '—'}
+                  </td>
+                  <td className="py-2.5 px-3 text-white font-medium">
+                    <div className="max-w-xs truncate" title={row.person ?? '—'}>
+                      {row.person ?? '—'}
+                    </div>
+                  </td>
+                  {activeTab === 'insider' && (
+                    <td className="py-2.5 px-3 text-zinc-400 text-[11px] whitespace-nowrap">
+                      {row.category ?? '—'}
+                    </td>
+                  )}
+                  <td className="py-2.5 px-3 whitespace-nowrap">
+                    <DirectionBadge record={row} />
+                  </td>
+                  <td className="py-2.5 px-3 text-right text-zinc-200 tabular-nums whitespace-nowrap">
+                    {row.avg_price !== null ? `₹${fmt(row.avg_price, 2)}` : row.avg_price_raw ?? '—'}
+                  </td>
+                  <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                    <ValueBadge record={row} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

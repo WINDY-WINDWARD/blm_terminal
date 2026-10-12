@@ -39,6 +39,7 @@ function isTextInputFocused(): boolean {
 const VALID_WIDGETS = [
   'TOP', 'COMPANY',
   'POS',
+  'ORDER',
   'CHART',
   'WATCH',
   'SETTINGS',

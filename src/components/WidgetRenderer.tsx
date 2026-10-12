@@ -25,16 +25,16 @@ import { AiPicksWidget } from './widgets/AiPicksWidget';
 interface WidgetRendererProps {
   title: string;
   panelId: string;
+  symbolOverride?: string;
 }
 
-export function WidgetRenderer({ title, panelId }: WidgetRendererProps) {
+export function WidgetRenderer({ title, panelId, symbolOverride }: WidgetRendererProps) {
   switch (title) {
     case 'TOP':      return <MoversWidget />;
     case 'POS':      return <PosWidget />;
     case 'ORDER':    return <OrderWidget panelId={panelId} />;
-    case 'COMPANY':
-      return <CompanyWidget />;
-    case 'CHART':    return <ChartWidget panelId={panelId} />;
+    case 'COMPANY':  return <CompanyWidget panelId={panelId} symbolOverride={symbolOverride} />;
+    case 'CHART':    return <ChartWidget panelId={panelId} symbolOverride={symbolOverride} />;
     case 'WATCH':    return <WatchWidget />;
     case 'SETTINGS': return <SettingsWidget />;
             case 'LARGEDEALS': return <LargedealsWidget />;
@@ -43,7 +43,7 @@ export function WidgetRenderer({ title, panelId }: WidgetRendererProps) {
     case 'ANALYSIS': return <AnalysisWidget />;
     case 'NOTIF':   return <NotifWidget />;
     case 'ANNC':    return <AnnouncementsWidget />;
-    case 'SCAN':    return <ScanWidget />;
+    case 'SCAN':    return <NotifWidget defaultWatchlist="all" />;
     case 'SCREENER': return <ScreenerWidget />;
     case 'DOCS':    return <DocsWidget />;
     case 'AI':      return <AiWidget />;

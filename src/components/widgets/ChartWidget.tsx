@@ -112,6 +112,7 @@ interface SymbolSearchResult {
 
 interface ChartWidgetProps {
   panelId: string;
+  symbolOverride?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +204,7 @@ function toChartBars(
 // Component
 // ---------------------------------------------------------------------------
 
-export function ChartWidget({ panelId }: ChartWidgetProps) {
+export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick', Time> | null>(null);
@@ -247,7 +248,7 @@ export function ChartWidget({ panelId }: ChartWidgetProps) {
   const override = overrides[panelId];
   // `||` (not `??`): a persisted empty-string exchange must also fall back,
   // otherwise the tick key `SYM.` never matches the market feed.
-  const symbol = override?.symbol || globalSymbol;
+  const symbol = symbolOverride || override?.symbol || globalSymbol;
   const exchange = override?.exchange || globalExchange;
   const [focusedPanel] = useAtom(focusedPanelAtom);
   const [tickMap, setTickData] = useAtom(tickDataAtom);

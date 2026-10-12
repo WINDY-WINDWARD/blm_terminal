@@ -683,6 +683,7 @@ export function MoversWidget() {
 
   const [timeframeFocus, setTimeframeFocus] = useState<TimeframeFocus>('1-MONTH');
   const [matrixFilter, setMatrixFilter] = useState<MatrixFilter>('ALL');
+  const [allSortOrder, setAllSortOrder] = useState<'gains' | 'drops'>('gains');
   const [searchQuery, setSearchQuery] = useState('');
 
   const { data: categories = [] } = useMoverCategories();
@@ -727,16 +728,17 @@ export function MoversWidget() {
   }, [loserRows, searchQuery]);
 
   const matrixRows = useMemo(() => {
-    if (matrixFilter === 'GAINERS') return filteredGainers.slice(0, 10);
-    if (matrixFilter === 'LOSERS') return filteredLosers.slice(0, 10);
-    const combined = [...filteredGainers.slice(0, 5), ...filteredLosers.slice(0, 3)];
-    const seen = new Set<string>();
-    return combined.filter((r) => {
-      if (seen.has(r.symbol)) return false;
-      seen.add(r.symbol);
-      return true;
-    });
-  }, [filteredGainers, filteredLosers, matrixFilter]);
+    if (matrixFilter === 'GAINERS') return filteredGainers;
+    if (matrixFilter === 'LOSERS') return filteredLosers;
+    const map = new Map<string, MoverRow>();
+    for (const r of filteredGainers) map.set(r.symbol, r);
+    for (const r of filteredLosers) map.set(r.symbol, r);
+    const combined = Array.from(map.values());
+    if (allSortOrder === 'drops') {
+      return combined.sort((a, b) => a.pChange - b.pChange);
+    }
+    return combined.sort((a, b) => b.pChange - a.pChange);
+  }, [filteredGainers, filteredLosers, matrixFilter, allSortOrder]);
 
   const handleRowClick = (row: MoverRow) => {
     setActiveSymbol(row.symbol);
@@ -794,36 +796,14 @@ export function MoversWidget() {
           </div>
         </div>
 
-        {/* Timeframe Focus & Quick Filter */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 bg-[#121216] p-1 rounded border border-[#27272a]">
-            <span className="text-[10px] font-mono font-bold uppercase text-terminal-amber px-1.5">
-              TF:
-            </span>
-            {TIMEFRAME_PILLS.map((tf) => {
-              const active = timeframeFocus === tf;
-              return (
-                <button
-                  key={tf}
-                  onClick={() => setTimeframeFocus(tf)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
-                    active
-                      ? 'bg-terminal-amber/20 text-terminal-amber border border-terminal-amber/50'
-                      : 'text-zinc-400 hover:text-white border border-transparent'
-                  }`}
-                >
-                  [{tf}]
-                </button>
-              );
-            })}
-          </div>
-
+        {/* Quick Filter */}
+        <div className="flex items-center gap-2">
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Filter ticker..."
-            className="w-36 bg-[#121216] border border-[#27272a] focus:border-terminal-amber text-xs text-white px-2.5 py-1 rounded outline-none placeholder:text-zinc-400 font-mono transition-colors"
+            className="w-48 bg-[#121216] border border-[#27272a] focus:border-terminal-amber text-xs text-white px-2.5 py-1 rounded outline-none placeholder:text-zinc-400 font-mono transition-colors"
           />
         </div>
       </div>
@@ -846,31 +826,55 @@ export function MoversWidget() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 bg-[#121216] p-0.5 rounded border border-[#27272a]">
+              <div className="flex items-center gap-1 bg-[#121216] p-1 rounded-md border border-[#27272a]">
                 {(['ALL', 'GAINERS', 'LOSERS'] as MatrixFilter[]).map((mode) => (
                   <button
                     key={mode}
                     onClick={() => setMatrixFilter(mode)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase cursor-pointer transition-colors ${
+                    className={`px-3 py-1 rounded text-[11px] font-mono font-extrabold uppercase cursor-pointer transition-all ${
                       matrixFilter === mode
-                        ? 'bg-terminal-amber text-black'
-                        : 'text-zinc-300 hover:text-white'
+                        ? 'bg-amber-400 text-black border border-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.5)]'
+                        : 'text-zinc-400 hover:text-white hover:bg-zinc-800 border border-transparent'
                     }`}
-                  >
+                  > 
                     {mode}
                   </button>
                 ))}
               </div>
-              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
+              <button
+                type="button"
+                onClick={() => {
+                  setAllSortOrder('gains');
+                  if (matrixFilter === 'LOSERS') setMatrixFilter('ALL');
+                }}
+                className={`text-[11px] font-mono px-3 py-1 rounded border font-extrabold transition-all cursor-pointer ${
+                  allSortOrder === 'gains' && (matrixFilter === 'ALL' || matrixFilter === 'GAINERS')
+                    ? 'text-black bg-emerald-400 border-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                    : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20'
+                }`}
+                title="Sort by highest % gains first"
+              >
                 ▲ Gains
-              </span>
-              <span className="text-[10px] font-mono text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30 font-bold">
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAllSortOrder('drops');
+                  if (matrixFilter === 'GAINERS') setMatrixFilter('ALL');
+                }}
+                className={`text-[11px] font-mono px-3 py-1 rounded border font-extrabold transition-all cursor-pointer ${
+                  allSortOrder === 'drops' && (matrixFilter === 'ALL' || matrixFilter === 'LOSERS')
+                    ? 'text-black bg-rose-400 border-rose-300 shadow-[0_0_12px_rgba(244,63,94,0.5)]'
+                    : 'text-rose-400 bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/20'
+                }`}
+                title="Sort by steepest % drops first"
+              >
                 ▼ Drops
-              </span>
+              </button>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-h-[500px] overflow-y-auto pr-1">
             <table className="w-full text-left font-mono tabular-nums border-collapse min-w-[780px]">
               <thead>
                 <tr className="text-[10px] uppercase text-zinc-400 border-b border-[#27272a]">
