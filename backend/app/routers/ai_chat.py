@@ -127,6 +127,24 @@ class SessionDetail(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def normalize_gemini_model_id(model: str) -> str:
+    """Normalize legacy/deprecated Gemini models to Gemini 3.8 Flash tiers."""
+    m = model.strip() if model else ""
+    if not m:
+        return "gemini-3.8-flash-medium"
+    if not m.startswith("gemini-") and m != "gemini":
+        return model
+    if m.startswith("gemini-3.8-flash"):
+        if m in ("gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"):
+            return m
+        return "gemini-3.8-flash-medium"
+    if m.endswith("-high"):
+        return "gemini-3.8-flash-high"
+    if m.endswith("-medium"):
+        return "gemini-3.8-flash-medium"
+    return "gemini-3.8-flash-low"
+
+
 def _make_title(first_user_content: str) -> str:
     title = first_user_content.strip().replace("\n", " ")
     return title[:80] if len(title) > 80 else title
@@ -152,8 +170,6 @@ FALLBACK_ZEN_MODELS = [
     {"id": "claude-sonnet-4-5", "label": "claude-sonnet-4-5", "is_free": False},
     {"id": "claude-haiku-4-5", "label": "claude-haiku-4-5", "is_free": False},
     {"id": "gemini-3.8-flash", "label": "gemini-3.8-flash", "is_free": False},
-    {"id": "gemini-3.7-flash", "label": "gemini-3.7-flash", "is_free": False},
-    {"id": "gemini-3.5-flash", "label": "gemini-3.5-flash", "is_free": False},
     {"id": "gpt-5.4-mini", "label": "gpt-5.4-mini", "is_free": False},
     {"id": "deepseek-v4-flash", "label": "deepseek-v4-flash", "is_free": False},
     {"id": "kimi-k2.5", "label": "kimi-k2.5", "is_free": False},
@@ -230,7 +246,7 @@ _AISTUDIO_NONCHAT = (
 # Retired model families — verified 404 ("no longer available to new users")
 # on the chat endpoint. The whole gemini-1.x / gemini-2.x generation is gone;
 # Google points to gemini-3.x replacements instead.
-_AISTUDIO_RETIRED_PREFIXES = ("gemini-1.", "gemini-2.")
+_AISTUDIO_RETIRED_PREFIXES = ("gemini-1.", "gemini-2.", "gemini-3.1-pro", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash")
 
 # Groq models that are not general text chat (speech, transcription, guards).
 _GROQ_NONCHAT = ("whisper", "orpheus", "prompt-guard")
@@ -517,14 +533,9 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
     prov = provider.lower().strip()
     if prov == "gemini":
         return [
-            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
             {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
             {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
-            {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
-            {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
-            {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
-            {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
-            {"id": "gemini-3.1-pro-high",     "label": "Gemini 3.1 Pro (Reasoning / High)"},
         ]
 
     if prov == "zen-free":
@@ -633,13 +644,9 @@ async def get_chat_models() -> list[dict]:
     provider = await get_dynamic_ai_provider()
     if provider == "gemini":
         return [
-            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
             {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
             {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
-            {"id": "gemini-3.7-flash-low",    "label": "Gemini 3.7 Flash (Fast / Low)"},
-            {"id": "gemini-3.7-flash-medium", "label": "Gemini 3.7 Flash (Medium)"},
-            {"id": "gemini-3.7-flash-high",   "label": "Gemini 3.7 Flash (Reasoning / High)"},
-            {"id": "gemini-3.1-pro",          "label": "Gemini 3.1 Pro (Quality)"},
         ]
 
     if provider == "zen-free":
@@ -696,7 +703,7 @@ async def list_sessions(
             SessionSummary(
                 id=session.id,
                 title=session.title,
-                model=session.model,
+                model=normalize_gemini_model_id(session.model) if (session.model and session.model.startswith("gemini")) else session.model,
                 symbol=session.symbol,
                 exchange=session.exchange,
                 message_count=count,
@@ -736,7 +743,7 @@ async def get_session(
     return SessionDetail(
         id=session.id,
         title=session.title,
-        model=session.model,
+        model=normalize_gemini_model_id(session.model) if (session.model and session.model.startswith("gemini")) else session.model,
         symbol=session.symbol,
         exchange=session.exchange,
         created_at=session.created_at,
@@ -781,6 +788,7 @@ async def chat(
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     symbol = request.symbol.upper()
     exchange = request.exchange.upper()
+    active_model = normalize_gemini_model_id(request.model) if (request.model and request.model.startswith("gemini")) else request.model
     
     current_user_id.set(current_user.id)
 
@@ -803,10 +811,14 @@ async def chat(
             session = result.scalar_one_or_none()
             if session is None:
                 return _sse_error_response("Session not found")
+            if session.model and session.model.startswith("gemini"):
+                norm_m = normalize_gemini_model_id(session.model)
+                if session.model != norm_m:
+                    session.model = norm_m
         else:
             session = ChatSession(
                 title=_make_title(last_user_content),
-                model=request.model,
+                model=active_model,
                 symbol=symbol,
                 exchange=exchange,
                 user_id=current_user.id,
@@ -840,7 +852,7 @@ async def chat(
                 messages=messages,
                 symbol=symbol,
                 exchange=exchange,
-                model=request.model,
+                model=active_model,
                 persona=request.persona,
                 session_id=session_id,
                 mode=request.mode,

@@ -508,6 +508,70 @@ def _ensure_user_layouts_columns() -> None:
         conn.close()
 
 
+def _migrate_deprecated_gemini_models() -> None:
+    """Migrate legacy Gemini models in system_config and chat_sessions to Gemini 3.8 Flash tiers.
+
+    Google now exclusively supports Gemini 3.8 Flash (High, Medium, and Low tiers).
+    This function migrates historical database rows to avoid 404/400 errors from
+    Google Cloud Code / Antigravity endpoints.
+    """
+    import sqlite3
+    from app.database import _apply_sqlite_pragmas
+
+    db_path = Path(settings.db_path)
+    if not db_path.exists():
+        return
+
+    conn = sqlite3.connect(str(db_path), timeout=15, check_same_thread=False, isolation_level=None)
+    cur = conn.cursor()
+    _apply_sqlite_pragmas(cur)
+    cur.close()
+    try:
+        # 1. Update system_config
+        hunter_row = conn.execute("SELECT value FROM system_config WHERE key = 'ai.hunter_model'").fetchone()
+        if hunter_row and hunter_row[0] and hunter_row[0].startswith("gemini"):
+            val = hunter_row[0]
+            if val not in ("gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"):
+                new_val = "gemini-3.8-flash-high"
+                if val.endswith("-medium"):
+                    new_val = "gemini-3.8-flash-medium"
+                elif val.endswith("-low"):
+                    new_val = "gemini-3.8-flash-low"
+                conn.execute("UPDATE system_config SET value = ? WHERE key = 'ai.hunter_model'", (new_val,))
+                logger.info("_migrate_deprecated_gemini_models: updated ai.hunter_model from %s to %s", val, new_val)
+
+        verifier_row = conn.execute("SELECT value FROM system_config WHERE key = 'ai.verifier_model'").fetchone()
+        if verifier_row and verifier_row[0] and verifier_row[0].startswith("gemini"):
+            val = verifier_row[0]
+            if val not in ("gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"):
+                new_val = "gemini-3.8-flash-low"
+                if val.endswith("-high"):
+                    new_val = "gemini-3.8-flash-high"
+                elif val.endswith("-medium"):
+                    new_val = "gemini-3.8-flash-medium"
+                conn.execute("UPDATE system_config SET value = ? WHERE key = 'ai.verifier_model'", (new_val,))
+                logger.info("_migrate_deprecated_gemini_models: updated ai.verifier_model from %s to %s", val, new_val)
+
+        # 2. Update chat_sessions
+        sessions = conn.execute("SELECT id, model FROM chat_sessions WHERE model LIKE 'gemini%'").fetchall()
+        for sess_id, model in sessions:
+            if model not in ("gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"):
+                if model.endswith("-high"):
+                    new_m = "gemini-3.8-flash-high"
+                elif model.endswith("-medium"):
+                    new_m = "gemini-3.8-flash-medium"
+                else:
+                    new_m = "gemini-3.8-flash-low"
+                conn.execute("UPDATE chat_sessions SET model = ? WHERE id = ?", (new_m, sess_id))
+                logger.info("_migrate_deprecated_gemini_models: updated chat_session %s model from %s to %s", sess_id, model, new_m)
+        conn.commit()
+
+    except Exception:
+        logger.exception("_migrate_deprecated_gemini_models: migration failed")
+    finally:
+        conn.close()
+
+
 def _ensure_admin_user() -> None:
     """No-op placeholder kept for lifespan ordering.
 
@@ -721,6 +785,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await asyncio.to_thread(_ensure_watchlist_data)
     await asyncio.to_thread(_ensure_stock_universe)
     await asyncio.to_thread(_backfill_entities_double_encoding)
+    await asyncio.to_thread(_migrate_deprecated_gemini_models)
 
     # Start the priority write queue writer thread (serialises non-critical writes)
     from app.services.write_queue import start_writer

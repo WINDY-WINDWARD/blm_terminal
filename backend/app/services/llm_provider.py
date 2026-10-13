@@ -797,13 +797,20 @@ async def _run_antigravity_loop(
         yield json.dumps({"type": "done"})
         return
 
-    _TIERS = ("-low", "-medium", "-high")
-    if not any(model.endswith(t) for t in _TIERS):
-        if "flash" in model:
-            model += "-low"
-        elif "pro" in model:
-            model += "-low"
-        
+    # Google now exclusively supports gemini-3.8-flash with high, medium, and low tiers
+    m_clean = (model or "").strip().lower()
+    if m_clean.endswith("-high"):
+        thinking_level = "high"
+        wire_model = "gemini-3.8-flash-high"
+    elif m_clean.endswith("-medium") or m_clean in ("gemini-3.8-flash", "gemini"):
+        thinking_level = "medium"
+        wire_model = "gemini-3.8-flash-medium"
+    elif m_clean.endswith("-low"):
+        thinking_level = "low"
+        wire_model = "gemini-3.8-flash-low"
+    else:
+        thinking_level = "low"
+        wire_model = "gemini-3.8-flash-low"
     url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
     headers = _get_antigravity_headers(token)
 
@@ -883,7 +890,7 @@ async def _run_antigravity_loop(
             "generationConfig": {
                 "thinkingConfig": {
                     "includeThoughts": True,
-                    "thinkingLevel": "high" if model.endswith("-high") else ("low" if model.endswith("-low") else "medium")
+                    "thinkingLevel": thinking_level,
                 }
             }
         }
@@ -895,15 +902,6 @@ async def _run_antigravity_loop(
             }
         if gemini_tools[0]["functionDeclarations"]:
             request_body["tools"] = gemini_tools
-
-        # Fix model name for PRO models (API rejects -high/-medium suffix in the model string itself)
-        # We must send -low in the model string, but keep thinkingLevel=high in generationConfig
-        wire_model = model
-        if "pro" in wire_model:
-            for t in _TIERS:
-                if wire_model.endswith(t):
-                    wire_model = wire_model[:-len(t)] + "-low"
-                    break
 
         payload = {
             "project": "rising-fact-p41fc",

@@ -1260,6 +1260,10 @@ export function SettingsWidget() {
                         {aiProvider === 'gemini' ? (
                           <div className="flex flex-col gap-1 mt-1">
                             <span className="text-white/70 text-[10px]">Use your existing Google subscription via the Google Antigravity proxy — no API key needed.</span>
+                            <div className="p-2 border border-terminal-amber/30 bg-terminal-amber/10 rounded text-[10px] text-zinc-300 leading-relaxed">
+                              <span className="text-terminal-amber font-semibold block mb-0.5">Notice: Gemini Model Updates</span>
+                              Google now exclusively supports Gemini 3.8 Flash (High, Medium, and Low tiers). Gemini 3.1 Pro and Flash models below 3.8 have been retired by Google. All existing sessions and worker configurations are automatically remapped to Gemini 3.8 Flash internally.
+                            </div>
                             <span className="text-white/70 text-[10px]">Gemini Authentication:</span>
                             <button
                               type="button"

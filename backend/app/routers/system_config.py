@@ -118,6 +118,22 @@ DEFAULT_NOTIF_CONFIG: dict[str, float] = {
     "notif.deal_absolute_threshold_cr": 2.0,
 }
 
+def normalize_gemini_worker_model(model: str, default_tier: str = "high") -> str:
+    """Normalize legacy/deprecated Gemini models for background workers."""
+    m = model.strip() if model else ""
+    if not m or not m.startswith("gemini"):
+        return model
+    if m in ("gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"):
+        return m
+    if m.endswith("-high"):
+        return "gemini-3.8-flash-high"
+    if m.endswith("-medium"):
+        return "gemini-3.8-flash-medium"
+    if m.endswith("-low"):
+        return "gemini-3.8-flash-low"
+    return f"gemini-3.8-flash-{default_tier}"
+
+
 ALLOWED_STRING_KEYS: set[str] = {
     "openalgo.url",
     "openalgo.api_key",
@@ -270,7 +286,12 @@ async def get_system_config(
     # Runtime string configs (OpenAlgo, AI keys)
     for key in ALLOWED_STRING_KEYS:
         str_row = next((row[1] for row in rows if row[0] == key), None)
-        values[key] = str_row if str_row is not None else ""
+        val = str_row if str_row is not None else ""
+        if key == "ai.hunter_model" and val.startswith("gemini"):
+            val = normalize_gemini_worker_model(val, default_tier="high")
+        elif key == "ai.verifier_model" and val.startswith("gemini"):
+            val = normalize_gemini_worker_model(val, default_tier="low")
+        values[key] = val
 
     return values
 
@@ -286,6 +307,10 @@ async def update_system_config(
         raise HTTPException(status_code=404, detail=f"Unknown system config key: {key}")
 
     val_str = str(payload.value).strip() if payload.value is not None else ""
+    if key == "ai.hunter_model" and val_str.startswith("gemini"):
+        val_str = normalize_gemini_worker_model(val_str, default_tier="high")
+    elif key == "ai.verifier_model" and val_str.startswith("gemini"):
+        val_str = normalize_gemini_worker_model(val_str, default_tier="low")
     stmt = sqlite_insert(SystemConfig).values(
         key=key,
         value=val_str,
@@ -297,4 +322,4 @@ async def update_system_config(
     await db.execute(stmt)
     await db.commit()
 
-    return {"key": key, "value": payload.value}
+    return {"key": key, "value": val_str}

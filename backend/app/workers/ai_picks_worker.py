@@ -112,7 +112,14 @@ async def get_dynamic_models():
                 verifier = configs["ai.verifier_model"]
     except Exception as e:
         logger.warning("Failed to fetch dynamic AI models: %s", e)
-        
+
+    if hunter.startswith("gemini-"):
+        from app.routers.system_config import normalize_gemini_worker_model
+        hunter = normalize_gemini_worker_model(hunter, default_tier="high")
+    if verifier.startswith("gemini-"):
+        from app.routers.system_config import normalize_gemini_worker_model
+        verifier = normalize_gemini_worker_model(verifier, default_tier="low")
+
     return hunter, verifier
 
 

@@ -66,6 +66,7 @@ export const AI_PROVIDERS: AiProviderMeta[] = [
     label: 'Google Pro',
     kind: 'oauth',
     requiresSubscription: 'Uses your existing Google subscription via the Antigravity proxy.',
+    hint: 'Google now exclusively supports Gemini 3.8 Flash (High, Medium, Low). Older models are automatically mapped.',
     steps: [
       'Click “Login to Gemini” below.',
       'Complete Google sign-in in the browser window.',
