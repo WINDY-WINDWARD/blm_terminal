@@ -26,7 +26,8 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "verify:release": "node scripts/verify_release.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",

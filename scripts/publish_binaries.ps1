@@ -1,5 +1,12 @@
 $ErrorActionPreference = "Stop"
 
+# Clear local proxy variables that interfere with network requests and CLI tools
+Remove-Item env:HTTP_PROXY -ErrorAction SilentlyContinue
+Remove-Item env:HTTPS_PROXY -ErrorAction SilentlyContinue
+Remove-Item env:ALL_PROXY -ErrorAction SilentlyContinue
+Remove-Item env:GIT_HTTP_PROXY -ErrorAction SilentlyContinue
+Remove-Item env:GIT_HTTPS_PROXY -ErrorAction SilentlyContinue
+
 # Define the repository structure
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
@@ -55,13 +62,26 @@ if (Test-Path $OfflineKey) {
     exit 1
 }
 
-# 4. Check for the output directory
+# 4. Run automated pre-flight integrity verification before uploading
+Write-Host ">>> Running release pre-flight cryptographic and hash verification..." -ForegroundColor Yellow
+$VerifyScript = Join-Path $ScriptDir "verify_release.js"
+if (Test-Path $VerifyScript) {
+    node $VerifyScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Release pre-flight verification FAILED! Refusing to publish invalid artifacts."
+        exit 1
+    }
+} else {
+    Write-Warning "verify_release.js not found at $VerifyScript; skipping automated pre-flight verification."
+}
+
+# 5. Check for the output directory
 if (-not (Test-Path $DistDesktopDir)) {
     Write-Error "Build output directory not found: $DistDesktopDir"
     exit 1
 }
 
-# 5. Find artifacts to upload (.exe, latest.yml, .blockmap, .json, .sig)
+# 6. Find artifacts to upload (.exe, latest.yml, .blockmap, .json, .sig)
 $Artifacts = Get-ChildItem -Path $DistDesktopDir -File | Where-Object { 
     ($_.Extension -eq ".exe" -and $_.Name -like "*$Version*") -or 
     $_.Extension -eq ".yml" -or 
@@ -77,11 +97,8 @@ if ($Artifacts.Count -eq 0) {
 
 Write-Host ">>> Found $($Artifacts.Count) artifacts for release." -ForegroundColor Cyan
 
-# 6. Create the GitHub Release using gh cli
-Write-Host ">>> Creating GitHub Release $TagName on $GithubRepo..." -ForegroundColor Yellow
-
-$ArtifactPaths = $Artifacts | ForEach-Object { $_.FullName }
-$ArtifactPathsStr = ($ArtifactPaths | ForEach-Object { "`"$_`"" }) -join " "
+# 7. Create the GitHub Release using gh cli
+Write-Host ">>> Publishing GitHub Release $TagName on $GithubRepo..." -ForegroundColor Yellow
 
 try {
     # Check if gh is available
@@ -95,14 +112,21 @@ try {
 $ErrorActionPreference = "Continue"
 $ReleaseCheck = gh release view $TagName --repo $GithubRepo 2>&1
 $ErrorActionPreference = "Stop"
+
+$ArtifactPaths = $Artifacts | ForEach-Object { $_.FullName }
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "Release $TagName already exists. Uploading artifacts..." -ForegroundColor Yellow
-    Invoke-Expression "gh release upload $TagName $ArtifactPathsStr --repo $GithubRepo --clobber"
+    Write-Host "Release $TagName already exists. Uploading artifacts with --clobber..." -ForegroundColor Yellow
+    gh release upload $TagName @ArtifactPaths --repo $GithubRepo --clobber
 } else {
     Write-Host "Creating new release $TagName..." -ForegroundColor Yellow
     $Title = "BLM Terminal $Version"
     $Notes = "Release version $Version"
-    Invoke-Expression "gh release create $TagName $ArtifactPathsStr --repo $GithubRepo --title `"$Title`" --notes `"$Notes`""
+    gh release create $TagName @ArtifactPaths --repo $GithubRepo --title $Title --notes $Notes
+}
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to publish release artifacts to GitHub Releases."
+    exit 1
 }
 
 Write-Host ">>> Successfully published artifacts to GitHub Releases!" -ForegroundColor Green
