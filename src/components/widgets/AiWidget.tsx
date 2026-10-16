@@ -284,6 +284,24 @@ export function removeAttachedDocument(
   return existing.filter((item) => item.id !== documentId);
 }
 
+export async function detachSessionDocument(
+  sessionId: number | null,
+  documentId: number,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  if (sessionId === null || sessionId === undefined) {
+    return true;
+  }
+  try {
+    const res = await fetchFn(`/api/py/ai/documents/${documentId}/sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -1079,7 +1097,11 @@ export function AiWidget() {
   );
 
   const removeSessionDocument = useCallback(
-    (documentId: number) => {
+    async (documentId: number) => {
+      if (typeof activeKey === 'number') {
+        const ok = await detachSessionDocument(activeKey, documentId);
+        if (!ok) return;
+      }
       setSessionMap((prev) => {
         const next = new Map(prev);
         const currentState = next.get(activeKey) ?? emptySessionState(defaultModel);
@@ -1089,8 +1111,9 @@ export function AiWidget() {
         });
         return next;
       });
+      void refreshLibrary();
     },
-    [activeKey, defaultModel],
+    [activeKey, defaultModel, refreshLibrary],
   );
 
   const attachLibraryDocument = useCallback(
@@ -1873,7 +1896,7 @@ export function AiWidget() {
                   <span className="max-w-[180px] truncate">{document.filename}</span>
                   <span className="text-zinc-500">{formatBytes(document.file_size)}</span>
                   <button
-                    onClick={() => removeSessionDocument(document.id)}
+                    onClick={() => void removeSessionDocument(document.id)}
                     className="text-zinc-400 hover:text-rose-400 transition-colors"
                     title="Remove attachment"
                   >

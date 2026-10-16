@@ -32,6 +32,7 @@ from app.services.document_service import (
     build_document_context,
     create_document,
     delete_document,
+    detach_document,
     document_file_path,
     get_document,
     list_documents,
@@ -841,6 +842,18 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ) -> DocumentOut:
     """Upload a PDF/CSV into the user's document library, optionally attaching it."""
+    if session_id is not None:
+        session = (
+            await db.execute(
+                select(ChatSession).where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == current_user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+
     content = await file.read()
     try:
         document = await create_document(
@@ -851,16 +864,6 @@ async def upload_document(
             file.content_type,
         )
         if session_id is not None:
-            session = (
-                await db.execute(
-                    select(ChatSession).where(
-                        ChatSession.id == session_id,
-                        ChatSession.user_id == current_user.id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if session is None:
-                raise HTTPException(status_code=404, detail="Session not found")
             await attach_documents(db, current_user.id, session_id, [document.id])
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -902,6 +905,31 @@ async def attach_session_documents(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     documents = await session_documents(db, current_user.id, request.session_id)
     return [_document_out(document, [request.session_id]) for document in documents]
+
+
+@router.delete("/documents/{document_id}/sessions/{session_id}")
+async def detach_session_document(
+    document_id: int,
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Detach a library document from a chat session."""
+    session = (
+        await db.execute(
+            select(ChatSession).where(
+                ChatSession.id == session_id,
+                ChatSession.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    detached = await detach_document(db, current_user.id, session_id, document_id)
+    if not detached:
+        raise HTTPException(status_code=404, detail="Document attachment not found")
+    return {"ok": True, "document_id": document_id, "session_id": session_id}
 
 
 @router.get("/documents/{document_id}", response_model=DocumentOut)

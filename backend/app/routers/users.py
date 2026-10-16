@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.watchlist import Watchlist
 from app.routers.auth import UserResponse
+from app.services.document_service import delete_user_documents
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -79,7 +80,8 @@ async def delete_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
+    await delete_user_documents(db, user_id)
     await db.delete(user)
     await db.commit()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from pathlib import Path
@@ -185,3 +186,69 @@ def test_csv_query_allows_scoped_select_with_filter_and_aggregate(monkeypatch):
         table, f'SELECT COUNT(*) AS n FROM "{table}"'
     )
     assert aggregated["rows"][0]["n"] == 5
+
+def test_csv_ingest_truncates_oversized_cells_and_caps_columns(monkeypatch):
+    _use_temp_db(monkeypatch)
+
+    # 1. Oversized cell value > 200 chars
+    long_val = "x" * 350
+    csv_bytes = f"col_a,col_b\nval1,{long_val}\n".encode()
+    summary, row_count = document_service._ingest_csv_sync("csv_stage_long", csv_bytes)
+
+    assert row_count == 1
+    col_b = next(c for c in summary["columns"] if c["name"] == "col_b")
+    assert len(col_b["sample_values"][0]) <= document_service.MAX_SUMMARY_VALUE_CHARS + 3
+    assert col_b["sample_values"][0].endswith("...")
+    assert len(summary["sample_rows"][0]["col_b"]) <= document_service.MAX_SUMMARY_VALUE_CHARS + 3
+    assert summary["sample_rows"][0]["col_b"].endswith("...")
+
+    # 2. Columns exceeding MAX_SUMMARY_COLUMNS (100)
+    col_headers = [f"c{i}" for i in range(120)]
+    row_data = [str(i) for i in range(120)]
+    many_cols_csv = (",".join(col_headers) + "\n" + ",".join(row_data) + "\n").encode()
+    summary_many, _ = document_service._ingest_csv_sync("csv_stage_many", many_cols_csv)
+    assert len(summary_many["columns"]) == document_service.MAX_SUMMARY_COLUMNS
+
+
+def test_pdf_outline_truncates_long_titles_and_caps_entries():
+    # Long title > 200 chars
+    long_title = "A" * 300
+    dummy_reader = object()
+    items = [{"title": long_title}]
+    nodes = document_service._flatten_outline(dummy_reader, items)
+    assert len(nodes) == 1
+    assert len(nodes[0]["title"]) == document_service.MAX_OUTLINE_TITLE_CHARS + 3
+    assert nodes[0]["title"].endswith("...")
+
+    # > 200 entries
+    many_items = [{"title": f"Section {i}"} for i in range(250)]
+    many_nodes = document_service._flatten_outline(dummy_reader, many_items)
+    assert len(many_nodes) == document_service.MAX_OUTLINE_ENTRIES
+
+
+@pytest.mark.asyncio
+async def test_build_document_context_truncates_oversized_context():
+    from unittest.mock import AsyncMock, MagicMock
+    from app.models.ai_chat import ChatDocument
+
+    mock_db = AsyncMock()
+    large_summary = {
+        "columns": [{"sqlite_name": f"col_{i}", "dtype": "TEXT", "null_count": 0} for i in range(50)],
+        "sample_rows": [{"col": "x" * 100} for _ in range(500)],
+    }
+    mock_doc = MagicMock(spec=ChatDocument)
+    mock_doc.id = 1
+    mock_doc.filename = "big.csv"
+    mock_doc.file_type = "csv"
+    mock_doc.row_count = 1000
+    mock_doc.summary_json = json.dumps(large_summary)
+    mock_doc.pages = []
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_doc]
+    mock_db.execute.return_value = mock_result
+
+    context = await document_service.build_document_context(mock_db, user_id=1, document_ids=[1])
+    assert len(context) <= document_service.MAX_DOCUMENT_CONTEXT_CHARS + len("\n\n[document context truncated]")
+    assert context.endswith("\n\n[document context truncated]")
+

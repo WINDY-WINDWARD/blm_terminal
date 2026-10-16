@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models.ai_chat import ChatDocument, ChatDocumentPage, ChatDocumentSession
+from app.models.ai_chat import ChatDocument, ChatDocumentPage, ChatDocumentSession, ChatSession
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,11 @@ MAX_PDF_PAGES_PER_READ = 5
 MAX_PDF_READ_CHARS = 20_000
 PDF_INLINE_MAX_PAGES = 5
 PDF_INLINE_MAX_CHARS = 12_000
+MAX_SUMMARY_VALUE_CHARS = 200
+MAX_OUTLINE_TITLE_CHARS = 200
+MAX_OUTLINE_ENTRIES = 200
+MAX_DOCUMENT_CONTEXT_CHARS = 32_000
+MAX_SUMMARY_COLUMNS = 100
 
 
 class DocumentError(ValueError):
@@ -85,7 +90,7 @@ def _sanitize_columns(columns: list[Any]) -> list[str]:
     return safe
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(value: Any, max_chars: int = MAX_SUMMARY_VALUE_CHARS) -> Any:
     if value is None:
         return None
     try:
@@ -93,9 +98,12 @@ def _json_safe(value: Any) -> Any:
             return None
     except (TypeError, ValueError):
         pass
-    if isinstance(value, (int, float, bool, str)):
+    if isinstance(value, (int, float, bool)):
         return value
-    return str(value)
+    text_val = str(value)
+    if len(text_val) > max_chars:
+        return text_val[:max_chars] + "..."
+    return text_val
 
 
 def _connect_sync() -> sqlite3.Connection:
@@ -124,12 +132,12 @@ def _ingest_csv_sync(staging_table: str, content: bytes) -> tuple[dict[str, Any]
     row_count = int(len(frame))
 
     columns_summary = []
-    for original, safe_name in zip(original_columns, safe_columns):
+    for original, safe_name in zip(original_columns[:MAX_SUMMARY_COLUMNS], safe_columns[:MAX_SUMMARY_COLUMNS]):
         series = frame[safe_name]
         samples = [_json_safe(value) for value in series.dropna().head(3).tolist()]
         columns_summary.append(
             {
-                "name": original,
+                "name": original[:MAX_SUMMARY_VALUE_CHARS],
                 "sqlite_name": safe_name,
                 "dtype": str(series.dtype),
                 "null_count": int(series.isna().sum()),
@@ -137,7 +145,11 @@ def _ingest_csv_sync(staging_table: str, content: bytes) -> tuple[dict[str, Any]
             }
         )
 
-    sample_rows = json.loads(frame.head(3).to_json(orient="records"))
+    sample_rows = []
+    for _, row in frame.head(3).iterrows():
+        sample_rows.append(
+            {col: _json_safe(row[col]) for col in safe_columns[:MAX_SUMMARY_COLUMNS]}
+        )
     summary = {"columns": columns_summary, "sample_rows": sample_rows}
 
     conn = _connect_sync()
@@ -158,16 +170,24 @@ def _flatten_outline(reader: Any, items: Any, depth: int = 0) -> list[dict[str, 
     if not items:
         return nodes
     for item in items:
+        if len(nodes) >= MAX_OUTLINE_ENTRIES:
+            break
         if isinstance(item, list):
             nodes.extend(_flatten_outline(reader, item, depth + 1))
+            if len(nodes) >= MAX_OUTLINE_ENTRIES:
+                nodes = nodes[:MAX_OUTLINE_ENTRIES]
+                break
             continue
         title = getattr(item, "title", None) or (item.get("title") if isinstance(item, dict) else None)
         try:
             page_number = reader.get_destination_page_number(item) + 1
         except Exception:  # noqa: BLE001 - malformed bookmarks fall back to depth only
             page_number = None
-        nodes.append({"depth": depth, "title": str(title or "Untitled"), "page_number": page_number})
-    return nodes
+        safe_title = str(title or "Untitled").strip()
+        if len(safe_title) > MAX_OUTLINE_TITLE_CHARS:
+            safe_title = safe_title[:MAX_OUTLINE_TITLE_CHARS] + "..."
+        nodes.append({"depth": depth, "title": safe_title, "page_number": page_number})
+    return nodes[:MAX_OUTLINE_ENTRIES]
 
 
 def _ingest_pdf_sync(content: bytes) -> tuple[dict[str, Any], int, bool, bool, list[str]]:
@@ -386,30 +406,90 @@ async def delete_document(db: AsyncSession, user_id: int, document_id: int) -> b
     return True
 
 
+async def delete_user_documents(db: AsyncSession, user_id: int) -> int:
+    """Delete all documents, files, CSV tables, and FTS rows belonging to a user."""
+    result = await db.execute(
+        select(ChatDocument).where(ChatDocument.user_id == user_id)
+    )
+    documents = list(result.scalars().all())
+    for document in documents:
+        if document.file_type == "csv":
+            await asyncio.to_thread(_drop_table, f"csv_doc_{document.id}")
+        else:
+            await asyncio.to_thread(_delete_pdf_fts, document.id)
+        try:
+            (_uploads_root() / document.storage_key).unlink(missing_ok=True)
+        except OSError as exc:  # pragma: no cover
+            logger.warning("Could not remove uploaded file %s: %s", document.storage_key, exc)
+        await db.delete(document)
+
+    user_dir = _uploads_root() / str(user_id)
+    try:
+        if user_dir.exists() and not any(user_dir.iterdir()):
+            user_dir.rmdir()
+    except OSError:
+        pass
+
+    await db.commit()
+    return len(documents)
+
+
 async def attach_documents(
     db: AsyncSession, user_id: int, session_id: int, document_ids: list[int]
 ) -> list[ChatDocument]:
     if not document_ids:
         return []
-    if len(set(document_ids)) > MAX_ATTACHMENTS_PER_TURN:
+    requested_ids = set(document_ids)
+    if len(requested_ids) > MAX_ATTACHMENTS_PER_TURN:
         raise DocumentError(f"Attach at most {MAX_ATTACHMENTS_PER_TURN} documents per message.")
 
     result = await db.execute(
-        select(ChatDocument).where(ChatDocument.user_id == user_id, ChatDocument.id.in_(set(document_ids)))
+        select(ChatDocument).where(ChatDocument.user_id == user_id, ChatDocument.id.in_(requested_ids))
     )
     documents = list(result.scalars().all())
-    if len(documents) != len(set(document_ids)):
+    if len(documents) != len(requested_ids):
         raise DocumentError("One or more attached documents were not found.")
 
     existing = await db.execute(
         select(ChatDocumentSession.document_id).where(ChatDocumentSession.session_id == session_id)
     )
     attached = set(existing.scalars().all())
+    combined = attached | requested_ids
+    if len(combined) > MAX_ATTACHMENTS_PER_TURN:
+        raise DocumentError(f"A chat session can have at most {MAX_ATTACHMENTS_PER_TURN} attached documents.")
+
     for document in documents:
         if document.id not in attached:
             db.add(ChatDocumentSession(document_id=document.id, session_id=session_id))
     await db.commit()
     return documents
+
+
+async def detach_document(
+    db: AsyncSession, user_id: int, session_id: int, document_id: int
+) -> bool:
+    """Detach a single document from a chat session.
+
+    Enforces ownership of both the session and the document by user_id.
+    Returns True if an association was found and deleted, False otherwise.
+    """
+    result = await db.execute(
+        select(ChatDocumentSession)
+        .join(ChatDocument, ChatDocument.id == ChatDocumentSession.document_id)
+        .join(ChatSession, ChatSession.id == ChatDocumentSession.session_id)
+        .where(
+            ChatDocumentSession.document_id == document_id,
+            ChatDocumentSession.session_id == session_id,
+            ChatDocument.user_id == user_id,
+            ChatSession.user_id == user_id,
+        )
+    )
+    link = result.scalar_one_or_none()
+    if link is None:
+        return False
+    await db.delete(link)
+    await db.commit()
+    return True
 
 
 async def session_documents(db: AsyncSession, user_id: int, session_id: int) -> list[ChatDocument]:
@@ -479,7 +559,10 @@ async def build_document_context(
                 f"Outline:\n{outline_text or '(no bookmarks)'}\n"
                 "Use search_pdf and read_pdf_pages to inspect relevant sections."
             )
-    return "\n\n".join(blocks)
+    context = "\n\n".join(blocks)
+    if len(context) > MAX_DOCUMENT_CONTEXT_CHARS:
+        context = context[:MAX_DOCUMENT_CONTEXT_CHARS] + "\n\n[document context truncated]"
+    return context
 
 
 def _fts_match_query(query: str) -> str:

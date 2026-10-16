@@ -115,7 +115,7 @@ async def chat_env(monkeypatch):
         session.add_all(
             [
                 User(id=1, username="alice", hashed_password="x", is_admin=False),
-                User(id=2, username="bob", hashed_password="x", is_admin=False),
+                User(id=2, username="bob", hashed_password="x", is_admin=True),
             ]
         )
         await session.commit()
@@ -131,7 +131,7 @@ async def chat_env(monkeypatch):
             id=auth.user_id,
             username=f"user{auth.user_id}",
             hashed_password="x",
-            is_admin=False,
+            is_admin=getattr(auth, "is_admin", False),
         )
 
     app.dependency_overrides[get_db] = override_get_db
@@ -258,6 +258,22 @@ async def test_upload_rejects_file_over_size_limit(chat_env, monkeypatch):
 async def test_upload_rejects_unknown_session_id(chat_env):
     response = await _upload(chat_env, "holdings.csv", CSV_BYTES, "text/csv", session_id=999)
     assert response.status_code == 404
+
+    # Verify no document was saved in library, no CSV table created, and no file stored
+    library = await chat_env.client.get("/api/ai/documents")
+    assert library.status_code == 200
+    assert library.json() == []
+
+    with sqlite3.connect(chat_env.db_file) as conn:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'csv_doc_%'"
+        ).fetchall()
+        assert tables == []
+
+    uploads_dir = chat_env.scratch / "uploads"
+    if uploads_dir.exists():
+        stored_files = list(uploads_dir.rglob("*.*"))
+        assert stored_files == []
 
 
 async def test_upload_can_attach_immediately(chat_env):
@@ -680,3 +696,154 @@ async def test_chat_context_inlines_small_pdf_and_outlines_large_pdf(chat_env):
     assert "Margin guidance raised." in context
     assert f"pages={large.json()['page_count']}" in context
     assert "Use search_pdf and read_pdf_pages" in context
+
+
+async def test_detach_endpoint_lifecycle_and_ownership(chat_env):
+    created = await chat_env.client.post(
+        "/api/ai/chat", json={"messages": [{"role": "user", "content": "hello"}]}
+    )
+    assert created.status_code == 200
+    session_id = json.loads(_sse_events(created.text)[0])["id"]
+
+    csv_doc = await _upload_csv(chat_env, session_id=session_id)
+    doc_id = csv_doc["id"]
+
+    detail = await chat_env.client.get(f"/api/ai/chat/sessions/{session_id}")
+    assert detail.status_code == 200
+    assert any(d["id"] == doc_id for d in detail.json().get("documents", []))
+
+    detach_resp = await chat_env.client.delete(f"/api/ai/documents/{doc_id}/sessions/{session_id}")
+    assert detach_resp.status_code == 200
+    assert detach_resp.json() == {"ok": True, "document_id": doc_id, "session_id": session_id}
+
+    detail_after = await chat_env.client.get(f"/api/ai/chat/sessions/{session_id}")
+    assert detail_after.status_code == 200
+    assert not any(d["id"] == doc_id for d in detail_after.json().get("documents", []))
+
+    library = await chat_env.client.get("/api/ai/documents")
+    assert library.status_code == 200
+    doc_entry = next(d for d in library.json() if d["id"] == doc_id)
+    assert session_id not in doc_entry.get("attached_session_ids", [])
+
+    # Idempotency failure behavior: second detach returns 404
+    detach_again = await chat_env.client.delete(f"/api/ai/documents/{doc_id}/sessions/{session_id}")
+    assert detach_again.status_code == 404
+    assert detach_again.json()["detail"] == "Document attachment not found"
+
+    # Foreign session: user 2 cannot detach user 1's session
+    chat_env.auth.user_id = 2
+    foreign_detach = await chat_env.client.delete(f"/api/ai/documents/{doc_id}/sessions/{session_id}")
+    assert foreign_detach.status_code == 404
+    assert foreign_detach.json()["detail"] == "Session not found"
+
+    # Missing session
+    chat_env.auth.user_id = 1
+    missing_session_detach = await chat_env.client.delete(f"/api/ai/documents/{doc_id}/sessions/99999")
+    assert missing_session_detach.status_code == 404
+    assert missing_session_detach.json()["detail"] == "Session not found"
+
+
+async def test_cumulative_attachment_cap_enforced(chat_env):
+    created = await chat_env.client.post(
+        "/api/ai/chat", json={"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert created.status_code == 200
+    session_id = json.loads(_sse_events(created.text)[0])["id"]
+
+    doc_ids = []
+    for i in range(6):
+        resp = await _upload(
+            chat_env, f"file_{i}.csv", f"a,b\n{i},1\n".encode(), "text/csv"
+        )
+        assert resp.status_code == 200
+        doc_ids.append(resp.json()["id"])
+
+    # Attach first 3 documents
+    resp1 = await chat_env.client.post(
+        "/api/ai/documents/attach",
+        json={"session_id": session_id, "document_ids": doc_ids[:3]},
+    )
+    assert resp1.status_code == 200
+
+    # Attach next 2 documents (cumulative 5)
+    resp2 = await chat_env.client.post(
+        "/api/ai/documents/attach",
+        json={"session_id": session_id, "document_ids": doc_ids[3:5]},
+    )
+    assert resp2.status_code == 200
+
+    # Attaching a 6th document exceeds the cumulative cap
+    resp3 = await chat_env.client.post(
+        "/api/ai/documents/attach",
+        json={"session_id": session_id, "document_ids": [doc_ids[5]]},
+    )
+    assert resp3.status_code == 400
+    assert "at most 5 attached documents" in resp3.json()["detail"]
+
+    # Re-attaching already attached documents succeeds
+    resp4 = await chat_env.client.post(
+        "/api/ai/documents/attach",
+        json={"session_id": session_id, "document_ids": [doc_ids[0]]},
+    )
+    assert resp4.status_code == 200
+
+
+async def test_admin_user_deletion_cleans_up_all_resources(chat_env):
+    csv_doc = await _upload_csv(chat_env)
+    pdf_bytes = _build_pdf(["Revenue grew 20% in Q3."])
+    pdf_resp = await _upload(chat_env, "report.pdf", pdf_bytes, "application/pdf")
+    assert pdf_resp.status_code == 200
+    pdf_doc = pdf_resp.json()
+
+    created = await chat_env.client.post(
+        "/api/ai/chat",
+        json={"messages": [{"role": "user", "content": "hi"}], "document_ids": [csv_doc["id"], pdf_doc["id"]]},
+    )
+    assert created.status_code == 200
+
+    assert await _table_exists(chat_env.db_file, f"csv_doc_{csv_doc['id']}")
+    with sqlite3.connect(chat_env.db_file) as conn:
+        fts_rows = conn.execute(
+            "SELECT count(*) FROM pdf_pages_fts WHERE document_id = ?", (pdf_doc["id"],)
+        ).fetchone()[0]
+        assert fts_rows > 0
+
+    user_upload_dir = chat_env.scratch / "uploads" / "1"
+    assert user_upload_dir.exists()
+
+    # Admin user 2 deletes user 1
+    chat_env.auth.user_id = 2
+    chat_env.auth.is_admin = True
+
+    del_resp = await chat_env.client.delete("/api/users/1")
+    assert del_resp.status_code == 204
+
+    # CSV table dropped
+    assert not await _table_exists(chat_env.db_file, f"csv_doc_{csv_doc['id']}")
+
+    # FTS rows deleted and database records cleaned up
+    with sqlite3.connect(chat_env.db_file) as conn:
+        fts_rows = conn.execute(
+            "SELECT count(*) FROM pdf_pages_fts WHERE document_id = ?", (pdf_doc["id"],)
+        ).fetchone()[0]
+        assert fts_rows == 0
+
+        doc_count = conn.execute("SELECT count(*) FROM chat_documents WHERE user_id = 1").fetchone()[0]
+        assert doc_count == 0
+
+        link_count = conn.execute(
+            "SELECT count(*) FROM chat_document_sessions WHERE document_id IN (?, ?)",
+            (csv_doc["id"], pdf_doc["id"]),
+        ).fetchone()[0]
+        assert link_count == 0
+
+        page_count = conn.execute(
+            "SELECT count(*) FROM chat_document_pages WHERE document_id = ?", (pdf_doc["id"],)
+        ).fetchone()[0]
+        assert page_count == 0
+
+        user_count = conn.execute("SELECT count(*) FROM users WHERE id = 1").fetchone()[0]
+        assert user_count == 0
+
+    # User directory deleted
+    assert not user_upload_dir.exists()

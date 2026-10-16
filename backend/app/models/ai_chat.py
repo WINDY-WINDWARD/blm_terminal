@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 
 from app.database import Base
 
@@ -40,7 +40,7 @@ class ChatSession(Base):
         back_populates="session",
         cascade="all, delete-orphan",
     )
-    user = relationship("User", backref="chat_sessions")
+    user = relationship("User", backref=backref("chat_sessions", passive_deletes=True))
 
 
 class ChatMessageRecord(Base):
