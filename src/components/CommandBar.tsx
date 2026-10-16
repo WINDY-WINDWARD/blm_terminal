@@ -26,6 +26,8 @@ interface SymbolSuggestion {
 const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'CHART', desc: 'Candlestick chart' },
   { cmd: 'WATCH', desc: 'Watchlist' },
+  { cmd: 'IMPORT', desc: 'Import TradingView watchlist (.txt, paste, URL)' },
+  { cmd: 'IMPORT WATCHLIST', desc: 'Import TradingView watchlist (.txt, paste, URL)' },
   { cmd: 'POS', desc: 'Positions & P&L' },
   { cmd: 'TOP', desc: 'Top movers' },
   { cmd: 'COMPANY', desc: 'Company Overview' },

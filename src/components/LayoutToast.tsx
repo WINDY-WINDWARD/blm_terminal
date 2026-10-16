@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useAtom } from 'jotai';
@@ -123,7 +123,7 @@ export function LayoutToast() {
                       toast.type === 'success' ? 'text-terminal-green' : 'text-terminal-red'
                     }`}
                   >
-                    {toast.type === 'success' ? 'Layout' : 'Error'}
+                    {toast.source || (toast.type === 'success' ? 'Layout' : 'Error')}
                   </div>
                   <div className="text-white/80 text-[11px] mt-0.5">{toast.message}</div>
                 </div>

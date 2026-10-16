@@ -10,6 +10,7 @@ import {
   watchlistColumnsAtom,
   watchlistsAtom,
   activeWatchlistIdAtom,
+  showTradingViewImportModalAtom,
   activePanelsAtom,
   notifSymbolFilterAtom,
   chartSymbolOverridesAtom,
@@ -611,6 +612,7 @@ export function WatchWidget() {
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useAtom(showTradingViewImportModalAtom);
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const debounceRef = React.useRef<NodeJS.Timeout | null>(null);
   const prevPricesRef = useRef<Map<string, number>>(new Map());
@@ -1064,7 +1066,7 @@ export function WatchWidget() {
     const name = newWatchlistName.trim();
     if (!name) return;
     if (name.length > 32) return;
-    if (!/^[A-Za-z-]+$/.test(name)) return;
+    if (!/^[A-Za-z0-9 _-]+$/.test(name)) return;
     createWatchlistMutation.mutate(name);
   };
 
@@ -1097,6 +1099,13 @@ export function WatchWidget() {
             title="Create new watchlist"
           >
             +
+          </button>
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="text-terminal-amber hover:text-black hover:bg-terminal-amber text-xs font-bold border border-terminal-amber/50 hover:border-terminal-amber rounded px-2 py-0.5 transition-colors cursor-pointer"
+            title="Import TradingView Watchlist"
+          >
+            IMPORT
           </button>
         </div>
 
@@ -1166,9 +1175,9 @@ export function WatchWidget() {
                 type="text"
                 value={newWatchlistName}
                 onChange={(e) => setNewWatchlistName(e.target.value)}
-                placeholder="NAME (LETTERS, HYPHEN)"
+                placeholder="NAME (LETTERS, NUMBERS, SPACES, -_)"
                 maxLength={32}
-                pattern="^[A-Za-z-]+$"
+                pattern="^[A-Za-z0-9 _-]+$"
                 className="w-full bg-[#141418] border border-[#27272a] focus:border-terminal-amber text-terminal-amber px-2 py-1.5 uppercase mb-3 rounded text-xs outline-none transition-colors"
                 autoFocus
               />
@@ -1185,7 +1194,7 @@ export function WatchWidget() {
                 </button>
                 <button
                   type="submit"
-                  disabled={createWatchlistMutation.isPending || !newWatchlistName.trim() || !/^[A-Za-z-]+$/.test(newWatchlistName.trim())}
+                  disabled={createWatchlistMutation.isPending || !newWatchlistName.trim() || !/^[A-Za-z0-9 _-]+$/.test(newWatchlistName.trim())}
                   className="px-3 py-1 bg-terminal-amber text-black font-bold hover:bg-amber-400 rounded text-xs disabled:opacity-50 transition-colors cursor-pointer"
                 >
                   CREATE

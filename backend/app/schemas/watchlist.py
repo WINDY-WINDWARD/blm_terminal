@@ -2,10 +2,11 @@
 
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-WATCHLIST_NAME_REGEX = re.compile(r"^[A-Za-z0-9-]+$")
+WATCHLIST_NAME_REGEX = re.compile(r"^[A-Za-z0-9 _-]+$")
 
 
 class WatchlistCreate(BaseModel):
@@ -22,7 +23,7 @@ class WatchlistCreate(BaseModel):
         if len(v) > 32:
             raise ValueError("must be at most 32 characters")
         if not WATCHLIST_NAME_REGEX.match(v):
-            raise ValueError("must contain only letters and hyphens")
+            raise ValueError("must contain only letters, numbers, spaces, underscores, and hyphens")
         return v
 
 
@@ -100,3 +101,91 @@ class WatchlistBulkReplace(BaseModel):
         if not isinstance(v, str) or not v.strip():
             raise ValueError("must be a non-empty string")
         return v.strip().upper()
+
+
+class WatchlistImportItem(BaseModel):
+    """Input schema for an item in a watchlist import section."""
+
+    symbol: str
+    exchange: str = "NSE"
+
+    @field_validator("symbol", "exchange", mode="before")
+    @classmethod
+    def upper_strip(cls, v: object) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v.strip().upper()
+
+
+class WatchlistImportSection(BaseModel):
+    """Section containing a group of symbols."""
+
+    name: str = Field(default="DEFAULT", max_length=64)
+    items: list[WatchlistImportItem] = Field(default_factory=list)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def clean_name(cls, v: object) -> str:
+        if not isinstance(v, str) or not v.strip():
+            return "DEFAULT"
+        return v.strip()
+
+
+class WatchlistImportRequest(BaseModel):
+    """Input schema for importing a watchlist."""
+
+    base_name: str = Field(..., min_length=1, max_length=32)
+    mode: Literal["create", "append", "replace"] = Field(default="create")
+    split_sections: bool = Field(default=False)
+    target_watchlist_id: int | None = Field(default=None)
+    sections: list[WatchlistImportSection] = Field(..., min_length=1)
+
+    @field_validator("base_name", mode="before")
+    @classmethod
+    def validate_base_name(cls, v: object) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("must be a non-empty string")
+        v = v.strip()
+        if len(v) > 32:
+            raise ValueError("must be at most 32 characters")
+        if not WATCHLIST_NAME_REGEX.match(v):
+            raise ValueError("must contain only letters, numbers, spaces, underscores, and hyphens")
+        return v
+
+
+class WatchlistImportSkippedItem(BaseModel):
+    """Detail of a symbol skipped during import."""
+
+    symbol: str
+    exchange: str = "NSE"
+    reason: str
+
+
+class WatchlistImportResponse(BaseModel):
+    """Output schema for a completed watchlist import."""
+
+    ok: bool
+    created_watchlists: list[WatchlistOut] = Field(default_factory=list)
+    target_watchlist_id: int | None = None
+    total_imported: int
+    skipped_symbols: list[WatchlistImportSkippedItem] = Field(default_factory=list)
+
+
+class WatchlistImportUrlRequest(BaseModel):
+    """Input schema for fetching a public TradingView watchlist URL."""
+
+    url: str = Field(..., min_length=5, max_length=1024)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def validate_url(cls, v: object) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("must be a non-empty string")
+        return v.strip()
+
+
+class WatchlistImportUrlResponse(BaseModel):
+    """Output schema for fetched TradingView symbols."""
+
+    source_name: str
+    raw_symbols: list[str]

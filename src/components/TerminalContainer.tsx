@@ -1,5 +1,7 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
+
 import React, { useEffect } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
@@ -17,6 +19,9 @@ import {
   layoutToastAtom,
   layoutConfirmAtom,
   authAtom,
+  showTradingViewImportModalAtom,
+  watchlistsAtom,
+  activeWatchlistIdAtom,
 } from '@/store/terminalStore';
 import type { SavedLayout, PanelCount } from '@/store/terminalStore';
 import {
@@ -25,6 +30,7 @@ import {
   normalizeSaveNameWithFlag,
 } from '@/lib/layouts';
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
+import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
 
 function isTextInputFocused(): boolean {
   const el = document.activeElement;
@@ -63,6 +69,10 @@ const VALID_WIDGETS = [
 export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const [activeCommand, setActiveCommand] = useAtom(activeCommandAtom);
   const setActivePanels = useSetAtom(activePanelsAtom);
+  const queryClient = useQueryClient();
+  const [showTradingViewImportModal, setShowTradingViewImportModal] = useAtom(showTradingViewImportModalAtom);
+  const [watchlists] = useAtom(watchlistsAtom);
+  const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
   const setChartOverrides = useSetAtom(chartSymbolOverridesAtom);
   const [focusedPanel, setFocusedPanel] = useAtom(focusedPanelAtom);
   const [panelCount, setPanelCount] = useAtom(panelCountAtom);
@@ -167,6 +177,13 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
     if (activeCommand === 'LOGOUT') {
       fetch('/api/py/auth/logout', { method: 'POST' }).catch(() => {});
       window.dispatchEvent(new Event('auth-expired'));
+      setActiveCommand('');
+      return;
+    }
+
+    if (activeCommand === 'IMPORT' || activeCommand === 'IMPORT WATCHLIST') {
+      setActivePanels((prev) => ({ ...prev, [focusedPanel]: 'WATCH' }));
+      setShowTradingViewImportModal(true);
       setActiveCommand('');
       return;
     }

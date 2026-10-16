@@ -1,4 +1,4 @@
-import { atom } from 'jotai';
+﻿import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 import type { FundsData } from '@/lib/openalgo';
 import type { NewsArticle } from '@/lib/newsSocket';
@@ -399,6 +399,8 @@ export const watchlistsAtom = atom<Watchlist[]>([]);
 
 export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWatchlistId', 1);
 
+export const showTradingViewImportModalAtom = atom<boolean>(false);
+
 // ─── Notif / Scan Sub-Filters ─────────────────────────────────────────────────
 
 /**
@@ -482,7 +484,7 @@ export const savedLayoutsAtom = atomWithStorage<Record<string, SavedLayout>>(
 
 // ─── Layout Toast & Confirm ──────────────────────────────────────────────────
 
-export const layoutToastAtom = atom<{ visible: boolean; message: string; type: 'success' | 'error' }>({
+export const layoutToastAtom = atom<{ visible: boolean; message: string; type: 'success' | 'error'; source?: string }>({
   visible: false,
   message: '',
   type: 'success',
