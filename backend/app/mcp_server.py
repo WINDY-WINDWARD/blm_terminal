@@ -2435,7 +2435,7 @@ async def _owned_document(document_id: int, user_id: int):
 
 
 @mcp.tool()
-async def query_csv(document_id: int, sql_query: str, user_id: int = 1) -> dict[str, Any]:
+async def query_csv(document_id: int, sql_query: str) -> dict[str, Any]:
     """Run one read-only SELECT against an uploaded CSV document.
 
     The only readable table is ``csv_doc_<document_id>``. Writes, PRAGMA,
@@ -2446,7 +2446,7 @@ async def query_csv(document_id: int, sql_query: str, user_id: int = 1) -> dict[
     from app.services.document_service import DocumentError, query_csv_sync
 
     try:
-        document = await _owned_document(document_id, user_id)
+        document = await _owned_document(document_id, await _get_user_id_or_default())
         if document.file_type != "csv":
             return {"error": "Document is not a CSV."}
         table = f"csv_doc_{document.id}"
@@ -2459,14 +2459,14 @@ async def query_csv(document_id: int, sql_query: str, user_id: int = 1) -> dict[
 
 
 @mcp.tool()
-async def describe_csv(document_id: int, column: str | None = None, user_id: int = 1) -> dict[str, Any]:
+async def describe_csv(document_id: int, column: str | None = None) -> dict[str, Any]:
     """Describe an uploaded CSV document or one of its columns."""
     import asyncio
 
     from app.services.document_service import DocumentError, describe_csv_sync
 
     try:
-        document = await _owned_document(document_id, user_id)
+        document = await _owned_document(document_id, await _get_user_id_or_default())
         if document.file_type != "csv":
             return {"error": "Document is not a CSV."}
         return await asyncio.to_thread(describe_csv_sync, f"csv_doc_{document.id}", column)
@@ -2478,14 +2478,14 @@ async def describe_csv(document_id: int, column: str | None = None, user_id: int
 
 
 @mcp.tool()
-async def search_pdf(document_id: int, query: str, top_k: int = 5, user_id: int = 1) -> dict[str, Any]:
+async def search_pdf(document_id: int, query: str, top_k: int = 5) -> dict[str, Any]:
     """Search an uploaded PDF with SQLite FTS5 BM25 ranking."""
     import asyncio
 
     from app.services.document_service import DocumentError, search_pdf_sync
 
     try:
-        document = await _owned_document(document_id, user_id)
+        document = await _owned_document(document_id, await _get_user_id_or_default())
         if document.file_type != "pdf":
             return {"error": "Document is not a PDF."}
         if document.needs_ocr:
@@ -2500,14 +2500,14 @@ async def search_pdf(document_id: int, query: str, top_k: int = 5, user_id: int 
 
 
 @mcp.tool()
-async def read_pdf_pages(document_id: int, start_page: int, end_page: int | None = None, user_id: int = 1) -> dict[str, Any]:
+async def read_pdf_pages(document_id: int, start_page: int, end_page: int | None = None) -> dict[str, Any]:
     """Read up to five exact pages from an uploaded PDF."""
     import asyncio
 
     from app.services.document_service import DocumentError, read_pdf_pages_sync
 
     try:
-        document = await _owned_document(document_id, user_id)
+        document = await _owned_document(document_id, await _get_user_id_or_default())
         if document.file_type != "pdf":
             return {"error": "Document is not a PDF."}
         if document.needs_ocr:
@@ -2521,14 +2521,14 @@ async def read_pdf_pages(document_id: int, start_page: int, end_page: int | None
 
 
 @mcp.tool()
-async def get_pdf_outline(document_id: int, user_id: int = 1) -> dict[str, Any]:
+async def get_pdf_outline(document_id: int) -> dict[str, Any]:
     """Return the flattened bookmark outline of an uploaded PDF."""
     import json
 
     from app.services.document_service import DocumentError
 
     try:
-        document = await _owned_document(document_id, user_id)
+        document = await _owned_document(document_id, await _get_user_id_or_default())
         if document.file_type != "pdf":
             return {"error": "Document is not a PDF."}
         summary = json.loads(document.summary_json or "{}")
