@@ -94,6 +94,28 @@ interface ChatMessage {
   toolCalls?: string[];
   isError?: boolean;
   card?: ScriptCard;
+  attachments?: number[];
+}
+
+export interface AttachedDocument {
+  id: number;
+  filename: string;
+  file_type: 'pdf' | 'csv';
+  mime_type: string;
+  file_size: number;
+  row_count: number | null;
+  page_count: number | null;
+  needs_ocr: boolean;
+  is_inlineable: boolean;
+  summary?: Record<string, unknown>;
+  attached_session_ids?: number[];
+}
+
+interface UploadJob {
+  tempId: string;
+  filename: string;
+  progress: number;
+  error?: string;
 }
 
 interface ModelOption {
@@ -124,8 +146,10 @@ interface SessionDetail {
     role: string;
     content: string;
     tool_calls: string[] | null;
+    attachments: number[] | null;
     created_at: string;
   }>;
+  documents: AttachedDocument[];
 }
 
 type StreamEvent =
@@ -215,6 +239,7 @@ interface SessionState {
   input: string;
   model: string;
   mode: AiMode;
+  documents: AttachedDocument[];
   abortController: AbortController | null;
 }
 
@@ -226,8 +251,61 @@ function emptySessionState(defaultModel = '', mode: AiMode = 'research'): Sessio
     input: '',
     model: defaultModel,
     mode,
+    documents: [],
     abortController: null,
   };
+}
+
+export const SUPPORTED_DOCUMENT_EXTENSIONS = ['.pdf', '.csv', '.tsv'];
+export const MAX_ATTACHMENTS_PER_TURN = 5;
+
+export function isSupportedDocument(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return SUPPORTED_DOCUMENT_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+export function filterSupportedDocuments(files: ArrayLike<File>): File[] {
+  return Array.from(files).filter(isSupportedDocument);
+}
+
+export function addAttachedDocument(
+  existing: AttachedDocument[],
+  document: AttachedDocument,
+): AttachedDocument[] {
+  if (existing.some((item) => item.id === document.id)) return existing;
+  if (existing.length >= MAX_ATTACHMENTS_PER_TURN) return existing;
+  return [...existing, document];
+}
+
+export function removeAttachedDocument(
+  existing: AttachedDocument[],
+  documentId: number,
+): AttachedDocument[] {
+  return existing.filter((item) => item.id !== documentId);
+}
+
+export async function detachSessionDocument(
+  sessionId: number | null,
+  documentId: number,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  if (sessionId === null || sessionId === undefined) {
+    return true;
+  }
+  try {
+    const res = await fetchFn(`/api/py/ai/documents/${documentId}/sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ─── Module-level persistence (survives unmount/remount) ───────────────────────
@@ -310,6 +388,7 @@ function ScriptCardView({ card, onAccept, onDiscard }: ScriptCardViewProps) {
 
 interface MessageBubbleProps {
   msg: ChatMessage;
+  documents?: AttachedDocument[];
   isLastAssistant?: boolean;
   toolsDone?: boolean;
   onRetry?: () => void;
@@ -400,7 +479,7 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard, onDiscardCard }: MessageBubbleProps) {
+function MessageBubble({ msg, documents = [], isLastAssistant, toolsDone, onRetry, onAcceptCard, onDiscardCard }: MessageBubbleProps) {
   const isUser = msg.role === 'user';
   const toolCalls = msg.toolCalls ?? [];
   const hasError = !isUser && msg.isError;
@@ -408,6 +487,25 @@ function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard,
   if (isUser) {
     return (
       <div className="flex flex-col gap-1 items-end max-w-full">
+        {(msg.attachments ?? []).length > 0 && (
+          <div className="flex flex-wrap justify-end gap-1.5 max-w-[85%]">
+            {(msg.attachments ?? []).map((documentId) => {
+              const document = documents.find((item) => item.id === documentId);
+              return (
+                <span
+                  key={documentId}
+                  className="inline-flex items-center gap-1 rounded border border-[#27272a] bg-[#121216] px-2 py-0.5 text-[10px] font-mono text-zinc-300"
+                  title={document?.filename ?? `Document #${documentId}`}
+                >
+                  <span className={document?.file_type === 'pdf' ? 'text-rose-400' : 'text-emerald-400'}>
+                    {document?.file_type === 'pdf' ? 'PDF' : 'CSV'}
+                  </span>
+                  <span className="max-w-[180px] truncate">{document?.filename ?? `Document #${documentId}`}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
         <div className="bg-[#14141a] text-zinc-100 border border-[#27272a] border-r-2 border-r-terminal-amber rounded-lg px-3 py-2 text-xs font-mono leading-relaxed max-w-[85%] break-words whitespace-pre-wrap shadow-md">
           {msg.content || <span className="opacity-40 animate-pulse">▋</span>}
         </div>
@@ -472,20 +570,28 @@ function MessageBubble({ msg, isLastAssistant, toolsDone, onRetry, onAcceptCard,
 
 interface SessionSidebarProps {
   sessions: SessionSummary[];
+  libraryDocuments: AttachedDocument[];
+  attachedDocumentIds: number[];
   activeKey: number | null;
   streamingKeys: Set<number | null>;
   onSelectSession: (id: number) => void;
   onDeleteSession: (id: number) => void;
   onNewChat: () => void;
+  onAttachDocument: (document: AttachedDocument) => void;
+  onDeleteDocument: (id: number) => void;
 }
 
 function SessionSidebar({
   sessions,
+  libraryDocuments,
+  attachedDocumentIds,
   activeKey,
   streamingKeys,
   onSelectSession,
   onDeleteSession,
   onNewChat,
+  onAttachDocument,
+  onDeleteDocument,
 }: SessionSidebarProps) {
   const fmt = (iso: string) => {
     try {
@@ -563,6 +669,58 @@ function SessionSidebar({
               </div>
             );
           })
+        )}
+      </div>
+
+      <div className="max-h-56 shrink-0 overflow-y-auto border-t border-[#27272a] p-2 custom-scroll">
+        <div className="mb-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+          Document Library
+        </div>
+        {libraryDocuments.length === 0 ? (
+          <div className="px-1 py-3 text-[10px] text-zinc-400 font-mono">No uploaded files</div>
+        ) : (
+          <div className="space-y-1">
+            {libraryDocuments.map((document) => {
+              const attached = attachedDocumentIds.includes(document.id);
+              return (
+                <div
+                  key={document.id}
+                  className="flex items-center justify-between gap-1 rounded border border-[#27272a] bg-[#121216] px-2 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <div className={cn('text-[10px] font-bold', document.file_type === 'pdf' ? 'text-rose-400' : 'text-emerald-400')}>
+                      {document.file_type === 'pdf' ? 'PDF' : 'CSV'}
+                    </div>
+                    <div className="truncate text-[10px] text-zinc-300" title={document.filename}>
+                      {document.filename}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={() => onAttachDocument(document)}
+                      disabled={attached}
+                      className={cn(
+                        'rounded border px-1.5 py-0.5 text-[10px] font-mono transition-colors',
+                        attached
+                          ? 'border-[#27272a] text-zinc-500'
+                          : 'border-terminal-amber/40 text-terminal-amber hover:bg-terminal-amber/10',
+                      )}
+                      title={attached ? 'Already attached' : 'Attach to current chat'}
+                    >
+                      {attached ? '✓' : '+'}
+                    </button>
+                    <button
+                      onClick={() => onDeleteDocument(document.id)}
+                      className="rounded border border-[#27272a] px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-rose-500/40 hover:text-rose-400"
+                      title="Delete from library"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>
@@ -769,7 +927,7 @@ export function AiWidget() {
   const [activePersona, setActivePersona] = useState<PersonaId | null>(null);
 
   const current = sessionMap.get(activeKey) ?? emptySessionState(defaultModel);
-  const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research' } = current;
+  const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research', documents } = current;
 
   useEffect(() => {
     if (!defaultModel) return;
@@ -840,10 +998,185 @@ export function AiWidget() {
     refetchOnMount: true,
   });
 
+  // ── Document library + upload staging ─────────────────────────────────────
+
+  const [libraryDocuments, setLibraryDocuments] = useState<AttachedDocument[]>([]);
+  const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
+  const [dragActive, setDragActive] = useState(false);
+
+  const refreshLibrary = useCallback(async () => {
+    try {
+      const res = await fetch('/api/py/ai/documents');
+      if (!res.ok) return;
+      setLibraryDocuments((await res.json()) as AttachedDocument[]);
+    } catch (err) {
+      console.error('Failed to load document library:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshLibrary();
+  }, [refreshLibrary]);
+
+  const uploadFile = useCallback(
+    (file: File) => {
+      const targetKey = activeKey;
+      if (!isSupportedDocument(file)) {
+        setUploadJobs((prev) => [
+          ...prev,
+          { tempId: `${Date.now()}-${file.name}`, filename: file.name, progress: 0, error: 'Unsupported file type' },
+        ]);
+        return;
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        setUploadJobs((prev) => [
+          ...prev,
+          { tempId: `${Date.now()}-${file.name}`, filename: file.name, progress: 0, error: 'File is larger than 50 MB' },
+        ]);
+        return;
+      }
+      const currentDocuments = sessionMap.get(targetKey)?.documents ?? [];
+      if (currentDocuments.length >= MAX_ATTACHMENTS_PER_TURN) {
+        setUploadJobs((prev) => [
+          ...prev,
+          { tempId: `${Date.now()}-${file.name}`, filename: file.name, progress: 0, error: 'Attachment limit reached (5)' },
+        ]);
+        return;
+      }
+
+      const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      setUploadJobs((prev) => [...prev, { tempId, filename: file.name, progress: 0 }]);
+
+      const form = new FormData();
+      form.append('file', file);
+      if (typeof targetKey === 'number') form.append('session_id', String(targetKey));
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/py/ai/documents/upload');
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const progress = Math.round((event.loaded / event.total) * 100);
+        setUploadJobs((prev) => prev.map((job) => (job.tempId === tempId ? { ...job, progress } : job)));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const document = JSON.parse(xhr.responseText) as AttachedDocument;
+            setSessionMap((prev) => {
+              const next = new Map(prev);
+              const currentState = next.get(targetKey) ?? emptySessionState(defaultModel);
+              const existing = currentState.documents ?? [];
+              const merged = addAttachedDocument(existing, document);
+              if (merged !== existing) {
+                next.set(targetKey, { ...currentState, documents: merged });
+              }
+              return next;
+            });
+          } catch (err) {
+            console.error('Upload response parse failed:', err);
+          }
+          setUploadJobs((prev) => prev.filter((job) => job.tempId !== tempId));
+          void refreshLibrary();
+        } else {
+          let message = `Upload failed (${xhr.status})`;
+          try {
+            const parsed = JSON.parse(xhr.responseText) as { detail?: string };
+            if (parsed.detail) message = parsed.detail;
+          } catch {
+            /* non-JSON error */
+          }
+          setUploadJobs((prev) => prev.map((job) => (job.tempId === tempId ? { ...job, error: message } : job)));
+        }
+      };
+      xhr.onerror = () => {
+        setUploadJobs((prev) => prev.map((job) => (job.tempId === tempId ? { ...job, error: 'Upload failed' } : job)));
+      };
+      xhr.send(form);
+    },
+    [activeKey, sessionMap, refreshLibrary, defaultModel],
+  );
+
+  const removeSessionDocument = useCallback(
+    async (documentId: number) => {
+      if (typeof activeKey === 'number') {
+        const ok = await detachSessionDocument(activeKey, documentId);
+        if (!ok) return;
+      }
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const currentState = next.get(activeKey) ?? emptySessionState(defaultModel);
+        next.set(activeKey, {
+          ...currentState,
+          documents: removeAttachedDocument(currentState.documents ?? [], documentId),
+        });
+        return next;
+      });
+      void refreshLibrary();
+    },
+    [activeKey, defaultModel, refreshLibrary],
+  );
+
+  const attachLibraryDocument = useCallback(
+    (document: AttachedDocument) => {
+      const currentDocuments = sessionMap.get(activeKey)?.documents ?? [];
+      if (currentDocuments.some((item) => item.id === document.id)) return;
+      if (currentDocuments.length >= MAX_ATTACHMENTS_PER_TURN) return;
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const currentState = next.get(activeKey) ?? emptySessionState(defaultModel);
+        const existing = currentState.documents ?? [];
+        const merged = addAttachedDocument(existing, document);
+        if (merged !== existing) {
+          next.set(activeKey, { ...currentState, documents: merged });
+        }
+        return next;
+      });
+      if (typeof activeKey === 'number') {
+        const ids = addAttachedDocument(currentDocuments, document).map((item) => item.id);
+        void fetch('/api/py/ai/documents/attach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: activeKey, document_ids: ids }),
+        }).then(() => refreshLibrary());
+      }
+    },
+    [activeKey, sessionMap, defaultModel, refreshLibrary],
+  );
+
+  const deleteLibraryDocument = useCallback(
+    async (documentId: number) => {
+      const res = await fetch(`/api/py/ai/documents/${documentId}`, { method: 'DELETE' });
+      if (!res.ok) return;
+      setLibraryDocuments((prev) => prev.filter((item) => item.id !== documentId));
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        for (const [key, state] of next) {
+          if (state.documents.some((item) => item.id === documentId)) {
+            next.set(key, { ...state, documents: state.documents.filter((item) => item.id !== documentId) });
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleDocumentDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setDragActive(false);
+      const files = filterSupportedDocuments(event.dataTransfer.files);
+      files.forEach((file) => uploadFile(file));
+    },
+    [uploadFile],
+  );
+
   // ── DOM refs ───────────────────────────────────────────────────────────────
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sessionDocuments = documents ?? [];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -887,11 +1220,13 @@ export function AiWidget() {
         );
         patchSession(id, {
           model: data.model,
+          documents: data.documents ?? [],
           messages: reattachStashedCards(
             data.messages.map((m) => ({
               role: m.role as 'user' | 'assistant',
               content: m.content,
               toolCalls: m.tool_calls ?? undefined,
+              attachments: m.attachments ?? undefined,
             })),
             getStashedCards(id),
           ),
@@ -948,7 +1283,12 @@ export function AiWidget() {
 
       if (!trimmed || sessionState.isStreaming) return;
 
-      const userMessage: ChatMessage = { role: 'user', content: trimmed };
+      const documentIds = (sessionState.documents ?? []).map((document) => document.id);
+      const userMessage: ChatMessage = {
+        role: 'user',
+        content: trimmed,
+        attachments: documentIds.length ? documentIds : undefined,
+      };
       const priorMessages = replaceLastAssistant
         ? sessionState.messages.filter(
             (_, i, arr) => !(arr[i].role === 'assistant' && i === arr.length - 1),
@@ -978,6 +1318,7 @@ export function AiWidget() {
         toolsDone: false,
         model: sessionState.model || defaultModel,
         mode: sessionState.mode ?? 'research',
+        documents: sessionState.documents ?? [],
         abortController: abort,
       };
 
@@ -1010,6 +1351,7 @@ export function AiWidget() {
             session_id: sessionKey,
             persona: activePersona,
             mode: sessionState.mode ?? 'research',
+            document_ids: documentIds,
           }),
         });
 
@@ -1304,11 +1646,15 @@ export function AiWidget() {
         <aside className="w-64 bg-[#0c0c0f] border-r border-[#27272a] flex flex-col shrink-0 z-20 transition-all">
           <SessionSidebar
             sessions={sessions}
+            libraryDocuments={libraryDocuments}
+            attachedDocumentIds={sessionDocuments.map((document) => document.id)}
             activeKey={activeKey}
             streamingKeys={streamingKeys}
             onSelectSession={loadSession}
             onDeleteSession={deleteSession}
             onNewChat={startNewChat}
+            onAttachDocument={attachLibraryDocument}
+            onDeleteDocument={deleteLibraryDocument}
           />
         </aside>
       )}
@@ -1483,6 +1829,7 @@ export function AiWidget() {
                 <MessageBubble
                   key={i}
                   msg={msg}
+                  documents={documents}
                   isLastAssistant={isLastAssistant}
                   toolsDone={isLastAssistant ? toolsDone : undefined}
                   onRetry={isLastAssistant ? retryLastMessage : undefined}
@@ -1524,8 +1871,74 @@ export function AiWidget() {
         </div>
 
         {/* Elevated Bento Input Bar */}
-        <div className="p-2.5 bg-[#09090b] border-t border-[#27272a] shrink-0">
+        <div
+          className={cn(
+            'p-2.5 bg-[#09090b] border-t border-[#27272a] shrink-0 transition-colors',
+            dragActive && 'bg-terminal-amber/10 border-terminal-amber/50',
+          )}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={handleDocumentDrop}
+        >
+          {(sessionDocuments.length > 0 || uploadJobs.length > 0) && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {sessionDocuments.map((document) => (
+                <span
+                  key={document.id}
+                  className="inline-flex items-center gap-1.5 rounded border border-[#27272a] bg-[#121216] px-2 py-1 text-[10px] font-mono text-zinc-200"
+                >
+                  <span className={document.file_type === 'pdf' ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                    {document.file_type === 'pdf' ? 'PDF' : 'CSV'}
+                  </span>
+                  <span className="max-w-[180px] truncate">{document.filename}</span>
+                  <span className="text-zinc-500">{formatBytes(document.file_size)}</span>
+                  <button
+                    onClick={() => void removeSessionDocument(document.id)}
+                    className="text-zinc-400 hover:text-rose-400 transition-colors"
+                    title="Remove attachment"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              {uploadJobs.map((job) => (
+                <span
+                  key={job.tempId}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px] font-mono',
+                    job.error
+                      ? 'border-rose-500/50 bg-rose-950/20 text-rose-300'
+                      : 'border-[#27272a] bg-[#121216] text-zinc-300',
+                  )}
+                >
+                  {job.error ? <span>⚠ {job.filename}: {job.error}</span> : <><span className="animate-pulse">▲</span><span className="max-w-[160px] truncate">{job.filename}</span><span>{job.progress}%</span></>}
+                </span>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.csv,.tsv,application/pdf,text/csv"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              Array.from(event.target.files ?? []).forEach((file) => uploadFile(file));
+              event.target.value = '';
+            }}
+          />
           <div className="flex items-end gap-2 bg-[#121216] border border-[#27272a] focus-within:border-terminal-amber rounded-md p-2 transition-colors">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming || sessionDocuments.length >= MAX_ATTACHMENTS_PER_TURN}
+              className="shrink-0 rounded border border-[#27272a] bg-[#0c0c0f] px-2 py-1.5 text-sm text-zinc-300 transition-colors hover:border-terminal-amber hover:text-terminal-amber disabled:cursor-not-allowed disabled:opacity-40"
+              title="Attach PDF or CSV"
+            >
+              📎
+            </button>
             <textarea
               ref={inputRef}
               value={input}

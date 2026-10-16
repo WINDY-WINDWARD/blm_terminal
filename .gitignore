@@ -13,6 +13,13 @@
 # testing
 /coverage
 
+# pytest scratch state (sandboxed runs cannot use the OS temp dir)
+/.tmp/
+/backend/.tmp/
+/backend/tests/_tmp_documents/
+/backend/.pytest_local/
+/backend/pytest-cache-files-*/
+
 # next.js
 /.next/
 /out/

@@ -30,3 +30,17 @@
 - [x] Configure `electron-builder` to package `.next`, `server.js`, `public`, and `node_modules`.
 - [x] Add `asarUnpack` for `sharp`.
 - [x] Add `build:desktop` orchestration script to `package.json`.
+
+## Phase 5: AI Chat Document Uploads (PDF & CSV)
+- [x] Add `chat_documents` / `chat_document_sessions` / `chat_document_pages` tables plus the `pdf_pages_fts` FTS5 virtual table (Alembic `j88888888888`).
+- [x] Add document endpoints: `POST /api/ai/documents/upload`, `GET /api/ai/documents`, `POST /api/ai/documents/attach`, `GET /api/ai/documents/{id}`, `GET /api/ai/documents/{id}/file`, `DELETE /api/ai/documents/{id}`.
+- [x] Build `backend/app/services/document_service.py` (CSV -> `csv_doc_<id>` SQLite tables, PDF -> per-page storage + FTS5 index).
+- [x] Add read-only, ownership-checked agent tools: `query_csv`, `describe_csv`, `search_pdf`, `read_pdf_pages`, `get_pdf_outline` (chat + MCP).
+- [x] Inject CSV schema/samples and inlined PDF text or outline into the chat system prompt.
+- [x] Add paperclip upload, drag-and-drop, attachment tray and library panel to `AiWidget.tsx`.
+- [x] Make the Next.js catch-all proxy binary-safe for multipart bodies (`request.arrayBuffer()`).
+- [x] Bundle `pypdf` and `python_multipart` in `scripts/build_backend.ps1` / `scripts/build_backend.sh`.
+- [x] Backend tests: `tests/test_document_service.py` (16) and `tests/test_ai_documents.py` (30) — 46 passed.
+- [x] Install `pypdf` into `backend/.venv` (`pip install pypdf` -> 6.21.0); the PDF tests now run with no PYTHONPATH shim.
+- [x] Run the new frontend tests (`vitest run`) — 13 passed (3 proxy byte-preservation + 10 attachment helpers).
+- [x] Regression check vs. the untouched `feat/desktop-conversion` checkout: backend failure/error set identical (169 items) with +46 new passing; full frontend failure set identical (8 pre-existing `DealsWidget` / `PosWidget` timeouts).

@@ -2418,3 +2418,130 @@ async def delete_position(trade_id: int) -> dict[str, Any]:
         logger.exception(f"Failed to delete position {trade_id}")
         return {"error": str(e)}
 
+
+# ---------------------------------------------------------------------------
+# Chat document tools (PDF / CSV uploads)
+# ---------------------------------------------------------------------------
+
+
+async def _owned_document(document_id: int, user_id: int):
+    from app.services.document_service import DocumentError, get_document
+
+    async with AsyncSessionLocal() as session:
+        document = await get_document(session, user_id, document_id)
+    if document is None:
+        raise DocumentError("Document not found.")
+    return document
+
+
+@mcp.tool()
+async def query_csv(document_id: int, sql_query: str) -> dict[str, Any]:
+    """Run one read-only SELECT against an uploaded CSV document.
+
+    The only readable table is ``csv_doc_<document_id>``. Writes, PRAGMA,
+    ATTACH, cross-table reads, and multiple statements are denied.
+    """
+    import asyncio
+
+    from app.services.document_service import DocumentError, query_csv_sync
+
+    try:
+        document = await _owned_document(document_id, await _get_user_id_or_default())
+        if document.file_type != "csv":
+            return {"error": "Document is not a CSV."}
+        table = f"csv_doc_{document.id}"
+        return await asyncio.to_thread(query_csv_sync, table, sql_query)
+    except DocumentError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("query_csv failed")
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def describe_csv(document_id: int, column: str | None = None) -> dict[str, Any]:
+    """Describe an uploaded CSV document or one of its columns."""
+    import asyncio
+
+    from app.services.document_service import DocumentError, describe_csv_sync
+
+    try:
+        document = await _owned_document(document_id, await _get_user_id_or_default())
+        if document.file_type != "csv":
+            return {"error": "Document is not a CSV."}
+        return await asyncio.to_thread(describe_csv_sync, f"csv_doc_{document.id}", column)
+    except DocumentError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("describe_csv failed")
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def search_pdf(document_id: int, query: str, top_k: int = 5) -> dict[str, Any]:
+    """Search an uploaded PDF with SQLite FTS5 BM25 ranking."""
+    import asyncio
+
+    from app.services.document_service import DocumentError, search_pdf_sync
+
+    try:
+        document = await _owned_document(document_id, await _get_user_id_or_default())
+        if document.file_type != "pdf":
+            return {"error": "Document is not a PDF."}
+        if document.needs_ocr:
+            return {"error": "This PDF has no extractable text layer (scanned PDF)."}
+        matches = await asyncio.to_thread(search_pdf_sync, document.id, query, top_k)
+        return {"document_id": document.id, "query": query, "matches": matches}
+    except DocumentError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("search_pdf failed")
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def read_pdf_pages(document_id: int, start_page: int, end_page: int | None = None) -> dict[str, Any]:
+    """Read up to five exact pages from an uploaded PDF."""
+    import asyncio
+
+    from app.services.document_service import DocumentError, read_pdf_pages_sync
+
+    try:
+        document = await _owned_document(document_id, await _get_user_id_or_default())
+        if document.file_type != "pdf":
+            return {"error": "Document is not a PDF."}
+        if document.needs_ocr:
+            return {"error": "This PDF has no extractable text layer (scanned PDF)."}
+        return await asyncio.to_thread(read_pdf_pages_sync, document.id, start_page, end_page)
+    except DocumentError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("read_pdf_pages failed")
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+async def get_pdf_outline(document_id: int) -> dict[str, Any]:
+    """Return the flattened bookmark outline of an uploaded PDF."""
+    import json
+
+    from app.services.document_service import DocumentError
+
+    try:
+        document = await _owned_document(document_id, await _get_user_id_or_default())
+        if document.file_type != "pdf":
+            return {"error": "Document is not a PDF."}
+        summary = json.loads(document.summary_json or "{}")
+        return {
+            "document_id": document.id,
+            "filename": document.filename,
+            "page_count": document.page_count,
+            "needs_ocr": document.needs_ocr,
+            "outline": summary.get("outline", []),
+        }
+    except DocumentError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("get_pdf_outline failed")
+        return {"error": str(exc)}
+
