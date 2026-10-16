@@ -105,6 +105,37 @@ Fetch the iinvest overview HTML page for identity fields, or resolve a symbol to
 - `iinvest_pledged_shares`: Promoter pledged shares.
 - `iinvest_sast`: SAST (Substantial Acquisition of Shares & Takeovers) disclosures.
 
+## User-Uploaded Documents (PDF & CSV)
+
+Documents uploaded through the AI chat (paperclip / drag-and-drop) live in a
+per-user library and stay available after a chat session is deleted. CSV files
+are materialised as one read-only SQLite table per document (`csv_doc_<id>`);
+PDFs are stored page-by-page and indexed in SQLite FTS5 (`pdf_pages_fts`).
+Every tool below is ownership-checked against the authenticated user.
+
+### `query_csv`
+Run a single read-only `SELECT` against one uploaded CSV. `PRAGMA query_only=ON`
+plus a SQLite authorizer restrict access to the document's own table, so writes,
+`PRAGMA`, `ATTACH`, and cross-table reads are rejected. Results are capped at 50
+rows (`truncated` flags the cut-off).
+
+### `describe_csv`
+Return the schema (column names/types), row count, per-column null counts,
+numeric min/avg/max, and the top 10 categorical values. Pass `column` for a
+single-column deep dive.
+
+### `search_pdf`
+Full-text search over an uploaded PDF's pages. Returns the best-matching pages
+with BM25 ranking and a highlighted snippet.
+
+### `read_pdf_pages`
+Return the exact text of a page range (max 5 pages and 20,000 characters per
+call).
+
+### `get_pdf_outline`
+Return the PDF's flattened bookmark outline as `(depth, title, page_number)`
+entries.
+
 ## System
 
 ### `health_check`

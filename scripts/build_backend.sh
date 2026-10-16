@@ -48,6 +48,8 @@ rm -rf build dist
     --hidden-import "newspaper" \
     --hidden-import "newspaper.extractors" \
     --hidden-import "passlib.handlers.bcrypt" \
+    --hidden-import "python_multipart" \
+    --collect-all "pypdf" \
     --collect-all "camoufox" \
     --exclude-module "camoufox.gui" \
     --collect-all "apify_fingerprint_datapoints" \

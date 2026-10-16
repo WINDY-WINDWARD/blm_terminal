@@ -33,6 +33,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "camoufox==0.5.6",
     "cryptography>=44.0.0,<51",
+    "pypdf>=5.1.0",
 ]
 
 [project.optional-dependencies]

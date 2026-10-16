@@ -12,8 +12,8 @@ from typing import Any, Literal
 
 import httpx
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,17 @@ from app.models.user import User
 from app.services.ai_chat_service import AVAILABLE_MODELS, run_chat_agent
 from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
 from app.services.antigravity_auth import get_antigravity_token
+from app.services.document_service import (
+    DocumentError,
+    attach_documents,
+    build_document_context,
+    create_document,
+    delete_document,
+    document_file_path,
+    get_document,
+    list_documents,
+    session_documents,
+)
 
 from app.config import settings
 
@@ -84,6 +95,12 @@ class ChatRequest(BaseModel):
     session_id: int | None = Field(default=None, description="Existing session ID to continue; null to create new.")
     persona: str | None = Field(default=None, description="Optional analyst persona key: value | earnings | fno | macro")
     mode: Literal["research", "script"] | None = Field(default=None, description="Chat mode: research (default) or script (Script Lab — AI writes chart scripts).")
+    document_ids: list[int] = Field(default_factory=list, description="Library documents to attach to this turn (max 5).")
+
+
+class AttachDocumentsRequest(BaseModel):
+    session_id: int
+    document_ids: list[int]
 
 
 class SessionSummary(BaseModel):
@@ -104,6 +121,7 @@ class MessageOut(BaseModel):
     role: str
     content: str
     tool_calls: list[str] | None
+    attachments: list[int] | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -118,8 +136,52 @@ class SessionDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     messages: list[MessageOut]
+    documents: list["DocumentOut"] = []
 
     model_config = {"from_attributes": True}
+
+
+class DocumentOut(BaseModel):
+    id: int
+    filename: str
+    file_type: str
+    mime_type: str
+    file_size: int
+    row_count: int | None
+    page_count: int | None
+    needs_ocr: bool
+    is_inlineable: bool
+    summary: dict[str, Any] = {}
+    attached_session_ids: list[int] = []
+    created_at: datetime
+
+
+def _document_out(document, attached_session_ids: list[int] | None = None) -> DocumentOut:
+    try:
+        summary = json.loads(document.summary_json or "{}")
+    except (TypeError, ValueError):
+        summary = {}
+    return DocumentOut(
+        id=document.id,
+        filename=document.filename,
+        file_type=document.file_type,
+        mime_type=document.mime_type,
+        file_size=document.file_size,
+        row_count=document.row_count,
+        page_count=document.page_count,
+        needs_ocr=document.needs_ocr,
+        is_inlineable=document.is_inlineable,
+        summary=summary,
+        attached_session_ids=(
+            attached_session_ids
+            if attached_session_ids is not None
+            else [link.session_id for link in document.session_links]
+        ),
+        created_at=document.created_at,
+    )
+
+
+SessionDetail.model_rebuild()
 
 
 # ---------------------------------------------------------------------------
@@ -736,10 +798,12 @@ async def get_session(
             role=m.role,
             content=m.content,
             tool_calls=json.loads(m.tool_calls_json) if m.tool_calls_json else None,
+            attachments=json.loads(m.attachments_json) if m.attachments_json else None,
             created_at=m.created_at,
         )
         for m in session.messages
     ]
+    documents = await session_documents(db, current_user.id, session_id)
     return SessionDetail(
         id=session.id,
         title=session.title,
@@ -749,6 +813,7 @@ async def get_session(
         created_at=session.created_at,
         updated_at=session.updated_at,
         messages=messages_out,
+        documents=[_document_out(document, [session_id]) for document in documents],
     )
 
 
@@ -766,6 +831,116 @@ async def delete_session(
     await db.delete(session)
     await db.commit()
     return {"ok": True, "id": session_id}
+
+
+@router.post("/documents/upload", response_model=DocumentOut)
+async def upload_document(
+    file: UploadFile = File(...),
+    session_id: int | None = Form(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentOut:
+    """Upload a PDF/CSV into the user's document library, optionally attaching it."""
+    content = await file.read()
+    try:
+        document = await create_document(
+            db,
+            current_user.id,
+            file.filename or "document",
+            content,
+            file.content_type,
+        )
+        if session_id is not None:
+            session = (
+                await db.execute(
+                    select(ChatSession).where(
+                        ChatSession.id == session_id,
+                        ChatSession.user_id == current_user.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if session is None:
+                raise HTTPException(status_code=404, detail="Session not found")
+            await attach_documents(db, current_user.id, session_id, [document.id])
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    document = await get_document(db, current_user.id, document.id)
+    return _document_out(document)
+
+
+@router.get("/documents", response_model=list[DocumentOut])
+async def list_user_documents(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[DocumentOut]:
+    """Return the user's persistent PDF/CSV library."""
+    documents = await list_documents(db, current_user.id)
+    return [_document_out(document) for document in documents]
+
+
+@router.post("/documents/attach", response_model=list[DocumentOut])
+async def attach_session_documents(
+    request: AttachDocumentsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[DocumentOut]:
+    """Attach library documents to an existing chat session."""
+    session = (
+        await db.execute(
+            select(ChatSession).where(
+                ChatSession.id == request.session_id,
+                ChatSession.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        await attach_documents(db, current_user.id, request.session_id, request.document_ids)
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    documents = await session_documents(db, current_user.id, request.session_id)
+    return [_document_out(document, [request.session_id]) for document in documents]
+
+
+@router.get("/documents/{document_id}", response_model=DocumentOut)
+async def get_user_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DocumentOut:
+    document = await get_document(db, current_user.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return _document_out(document)
+
+
+@router.get("/documents/{document_id}/file")
+async def download_user_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    document = await get_document(db, current_user.id, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = document_file_path(document)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Stored file is missing")
+    return FileResponse(path, media_type=document.mime_type, filename=document.filename)
+
+
+@router.delete("/documents/{document_id}")
+async def delete_user_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    deleted = await delete_document(db, current_user.id, document_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"ok": True, "id": document_id}
 
 
 @router.post("/chat")
@@ -828,11 +1003,19 @@ async def chat(
 
         session_id = session.id
 
+        document_ids = list(dict.fromkeys(request.document_ids or []))
+        try:
+            await attach_documents(db, current_user.id, session_id, document_ids)
+        except DocumentError as exc:
+            return _sse_error_response(str(exc))
+        document_context = await build_document_context(db, current_user.id, document_ids)
+
         # Persist the user message
         user_msg_record = ChatMessageRecord(
             session_id=session_id,
             role="user",
             content=last_user_content,
+            attachments_json=json.dumps(document_ids) if document_ids else None,
         )
         db.add(user_msg_record)
         await db.commit()
@@ -856,6 +1039,8 @@ async def chat(
                 persona=request.persona,
                 session_id=session_id,
                 mode=request.mode,
+                user_id=current_user.id,
+                document_context=document_context,
             ):
                 # Track content and tool calls for persistence
                 try:

@@ -924,6 +924,82 @@ BLM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_csv",
+            "description": "Run one read-only SELECT against an uploaded CSV document. Only the document's csv_doc_<document_id> table is readable; writes, PRAGMA, ATTACH, and cross-table reads are rejected. Prefer aggregations (COUNT/SUM/AVG/GROUP BY) over returning raw rows.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "Attached CSV document id."},
+                    "sql_query": {"type": "string", "description": "Single SELECT statement against csv_doc_<document_id>. Quote identifiers when needed."},
+                },
+                "required": ["document_id", "sql_query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_csv",
+            "description": "Describe an uploaded CSV document or one of its columns (null counts, average/min/max, top categorical values).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "Attached CSV document id."},
+                    "column": {"type": "string", "description": "Optional sanitized column name to describe."},
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_pdf",
+            "description": "Search an attached PDF with SQLite FTS5 BM25 ranking. Returns matching page numbers and snippets. Use this before read_pdf_pages on long PDFs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "Attached PDF document id."},
+                    "query": {"type": "string", "description": "Keywords to search for."},
+                    "top_k": {"type": "integer", "description": "Maximum matches (1-10, default 5)."},
+                },
+                "required": ["document_id", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_pdf_pages",
+            "description": "Read up to five exact pages from an attached PDF. Use after search_pdf identifies the relevant pages, and cite page numbers in your answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "Attached PDF document id."},
+                    "start_page": {"type": "integer", "description": "First page number (1-based)."},
+                    "end_page": {"type": "integer", "description": "Optional last page number (at most start_page + 4)."},
+                },
+                "required": ["document_id", "start_page"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pdf_outline",
+            "description": "Return the flattened bookmark outline and page count of an attached PDF.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "integer", "description": "Attached PDF document id."},
+                },
+                "required": ["document_id"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -992,6 +1068,11 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         search_stock_universe,
         get_upcoming_events,
         get_recent_announcements,
+        query_csv,
+        describe_csv,
+        search_pdf,
+        read_pdf_pages,
+        get_pdf_outline,
     )
     from app.services.script_ai_tools import (
         list_scripts,
@@ -1051,6 +1132,11 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "validate_script_code": validate_script_code,
         "create_script": create_script,
         "revise_script": revise_script,
+        "query_csv": query_csv,
+        "describe_csv": describe_csv,
+        "search_pdf": search_pdf,
+        "read_pdf_pages": read_pdf_pages,
+        "get_pdf_outline": get_pdf_outline,
     }
 
     fn = dispatch.get(name)
@@ -1187,6 +1273,7 @@ async def _run_tools_parallel(
     tool_calls: list[dict[str, Any]],
     seen_calls: set[str],
     session_id: int | str | None = None,
+    user_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Execute tool calls in parallel. Returns (sse_events, tool_result_messages) in OpenAI format."""
 
@@ -1209,6 +1296,12 @@ async def _run_tools_parallel(
                 args = {**args, "chat_session_id": int(session_id)}
             except (TypeError, ValueError):
                 pass
+
+        if tool_name in ("query_csv", "describe_csv", "search_pdf", "read_pdf_pages", "get_pdf_outline"):
+            if user_id is None:
+                content_str = json.dumps({"error": "Document tools are unavailable outside an authenticated chat."})
+                return tool_name, tc["id"], content_str, None
+            args = {**args, "user_id": int(user_id)}
 
         extra_event: str | None = None
         if already_seen:
@@ -1266,12 +1359,21 @@ async def run_chat_agent(
     persona: str | None = None,
     session_id: str | int | None = None,
     mode: str | None = None,
+    user_id: int | None = None,
+    document_context: str | None = None,
 ) -> AsyncGenerator[str, None]:
     system_prompt = _get_system_prompt(symbol, exchange, persona, mode)
+    if document_context:
+        system_prompt = (
+            f"{system_prompt}\n\n"
+            "The user attached the following documents to this conversation. Use the read-only document tools "
+            "to inspect them precisely, and cite document filenames and PDF page numbers where applicable.\n\n"
+            f"{document_context}"
+        )
 
     seen_calls = set()
     async def executor(tool_calls: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
-        return await _run_tools_parallel(tool_calls, seen_calls, session_id)
+        return await _run_tools_parallel(tool_calls, seen_calls, session_id, user_id)
 
     tools = BLM_TOOLS if model not in {"minimax-m2.5", "minimax-m2.7"} else BLM_TOOLS_ANTHROPIC
 

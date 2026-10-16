@@ -56,9 +56,13 @@ async function proxyRequest(
   }
 
   try {
+    const incomingContentType = request.headers.get('content-type') ?? ''
+    const isMultipart = incomingContentType.toLowerCase().includes('multipart/form-data')
     const body =
       request.method !== 'GET' && request.method !== 'HEAD'
-        ? await request.text()
+        ? isMultipart
+          ? await request.arrayBuffer()
+          : await request.text()
         : undefined
 
     const isSse = request.headers.get('accept')?.includes('text/event-stream')
