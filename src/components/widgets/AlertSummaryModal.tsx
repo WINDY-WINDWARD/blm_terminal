@@ -3,10 +3,13 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAtom } from 'jotai';
 import {
+  ALERT_SUMMARY_CACHE_VERSION,
   alertSummariesCacheAtom,
   isAlertSummaryValid,
+  isAlertDigestBias,
   getAlertsSnapshotFingerprint,
   getTodayLocalDateString,
+  type AlertDigestBias,
   type AlertSummarySourceItem,
   type CachedAlertSummary,
 } from '@/store/terminalStore';
@@ -16,6 +19,24 @@ interface AlertSummaryModalProps {
   alerts: AlertSummarySourceItem[];
   onClose: () => void;
 }
+
+type ActiveAlertDigest = Pick<
+  CachedAlertSummary,
+  'summary' | 'bias' | 'trigger' | 'invalidation' | 'risk'
+>;
+
+interface AlertDigestResponse extends ActiveAlertDigest {
+  input_tokens?: number;
+  output_tokens?: number;
+  model?: string;
+}
+
+const BIAS_STYLES: Record<AlertDigestBias, string> = {
+  bullish: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/35',
+  bearish: 'bg-rose-500/10 text-rose-300 border-rose-500/35',
+  mixed: 'bg-amber-500/10 text-amber-300 border-amber-500/35',
+  neutral: 'bg-zinc-500/10 text-zinc-300 border-zinc-500/35',
+};
 
 export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModalProps) {
   const normSymbol = symbol.trim().toUpperCase();
@@ -32,8 +53,16 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
     return isAlertSummaryValid(cachedEntry, alerts);
   }, [cachedEntry, alerts]);
 
-  const [activeSummary, setActiveSummary] = useState<string>(
-    isValidCached && cachedEntry ? cachedEntry.summary : ''
+  const [activeDigest, setActiveDigest] = useState<ActiveAlertDigest | null>(
+    isValidCached && cachedEntry
+      ? {
+          summary: cachedEntry.summary,
+          bias: cachedEntry.bias,
+          trigger: cachedEntry.trigger,
+          invalidation: cachedEntry.invalidation,
+          risk: cachedEntry.risk,
+        }
+      : null
   );
   const [isFromCache, setIsFromCache] = useState<boolean>(isValidCached);
   const [summaryTimestamp, setSummaryTimestamp] = useState<number>(
@@ -59,7 +88,7 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
           triggered_at: a.triggered_at,
           triggered_date: a.triggered_date,
         })),
-        max_tokens: 350,
+        max_tokens: 500,
       };
 
       const res = await fetch('/api/py/ai/alerts/summarize', {
@@ -78,19 +107,36 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
         throw new Error(errJson?.detail || `AI summarizer failed (${res.status})`);
       }
 
-      const data: { summary: string; model?: string } = await res.json();
-      const generatedSummary = data.summary.trim();
+      const data = (await res.json()) as AlertDigestResponse;
+      if (
+        !data.summary?.trim() ||
+        !isAlertDigestBias(data.bias) ||
+        !data.trigger?.trim() ||
+        !data.invalidation?.trim() ||
+        !data.risk?.trim()
+      ) {
+        throw new Error('AI returned an incomplete alert digest. Please regenerate.');
+      }
+
+      const generatedDigest: ActiveAlertDigest = {
+        summary: data.summary.trim(),
+        bias: data.bias,
+        trigger: data.trigger.trim(),
+        invalidation: data.invalidation.trim(),
+        risk: data.risk.trim(),
+      };
       const now = Date.now();
       const todayDate = getTodayLocalDateString();
       const fingerprint = getAlertsSnapshotFingerprint(alerts);
 
       const newEntry: CachedAlertSummary = {
         symbol: normSymbol,
-        summary: generatedSummary,
+        ...generatedDigest,
         cachedAt: now,
         localDate: todayDate,
         alertCount: alerts.length,
         latestAlertFingerprint: fingerprint,
+        cacheVersion: ALERT_SUMMARY_CACHE_VERSION,
         model: data.model,
       };
 
@@ -99,7 +145,7 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
         [normSymbol]: newEntry,
       }));
 
-      setActiveSummary(generatedSummary);
+      setActiveDigest(generatedDigest);
       setIsFromCache(false);
       setSummaryTimestamp(now);
     } catch (err: unknown) {
@@ -118,7 +164,13 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
     initialCheckedRef.current = true;
 
     if (isValidCached && cachedEntry) {
-      setActiveSummary(cachedEntry.summary);
+      setActiveDigest({
+        summary: cachedEntry.summary,
+        bias: cachedEntry.bias,
+        trigger: cachedEntry.trigger,
+        invalidation: cachedEntry.invalidation,
+        risk: cachedEntry.risk,
+      });
       setIsFromCache(true);
       setSummaryTimestamp(cachedEntry.cachedAt);
     } else {
@@ -138,9 +190,17 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
   }, [onClose]);
 
   const handleCopy = async () => {
-    if (!activeSummary) return;
+    if (!activeDigest) return;
+    const copyText = [
+      `${normSymbol} — ${activeDigest.bias.toUpperCase()}`,
+      activeDigest.summary,
+      '',
+      `TRIGGER: ${activeDigest.trigger}`,
+      `INVALIDATION: ${activeDigest.invalidation}`,
+      `RISK: ${activeDigest.risk}`,
+    ].join('\n');
     try {
-      await navigator.clipboard.writeText(activeSummary);
+      await navigator.clipboard.writeText(copyText);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -239,10 +299,31 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
                   Retry
                 </button>
               </div>
+            ) : activeDigest ? (
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <span className={`shrink-0 text-[10px] font-extrabold px-2 py-0.5 rounded border tracking-wider ${BIAS_STYLES[activeDigest.bias]}`}>
+                    {activeDigest.bias.toUpperCase()}
+                  </span>
+                  <p className="text-zinc-100 text-sm leading-relaxed whitespace-normal selection:bg-amber-400 selection:text-black">
+                    {activeDigest.summary}
+                  </p>
+                </div>
+                <div className="grid gap-2 border-t border-zinc-800 pt-3">
+                  {[
+                    ['TRIGGER', activeDigest.trigger],
+                    ['INVALIDATION', activeDigest.invalidation],
+                    ['RISK', activeDigest.risk],
+                  ].map(([label, value]) => (
+                    <div key={label} className="grid grid-cols-[86px_1fr] gap-2 text-xs leading-relaxed">
+                      <span className="text-[10px] font-bold tracking-wider text-zinc-500 pt-0.5">{label}</span>
+                      <span className="text-zinc-200">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : (
-              <p className="text-zinc-100 text-sm leading-relaxed whitespace-normal selection:bg-amber-400 selection:text-black">
-                {activeSummary || 'No summary generated yet.'}
-              </p>
+              <p className="text-zinc-500 text-sm">No digest generated yet.</p>
             )}
           </div>
         </div>
@@ -257,7 +338,7 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
             <button
               type="button"
               onClick={handleCopy}
-              disabled={isLoading || !activeSummary}
+              disabled={isLoading || !activeDigest}
               className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-zinc-800 text-zinc-200 hover:text-white border border-zinc-700 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <span>{copied ? '✓' : '📋'}</span>

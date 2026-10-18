@@ -4,6 +4,7 @@ import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { render } from '@/__tests__/utils/renderWithProviders';
 import { AlertSummaryModal } from '@/components/widgets/AlertSummaryModal';
 import {
+  ALERT_SUMMARY_CACHE_VERSION,
   alertSummariesCacheAtom,
   isAlertSummaryValid,
   getAlertsSnapshotFingerprint,
@@ -29,6 +30,13 @@ const mockAlerts: AlertSummarySourceItem[] = [
   },
 ];
 
+const digestFields = {
+  bias: 'bullish' as const,
+  trigger: 'Sustained follow-through above the alert-session high.',
+  invalidation: 'Momentum fades and price closes back below VWAP.',
+  risk: 'Overbought RSI raises failed-breakout risk.',
+};
+
 describe('Alert Summary Cache Logic', () => {
   const today = getTodayLocalDateString();
   const fingerprint = getAlertsSnapshotFingerprint(mockAlerts);
@@ -36,10 +44,12 @@ describe('Alert Summary Cache Logic', () => {
   const validCache: CachedAlertSummary = {
     symbol: 'RELIANCE',
     summary: 'Reliance shows strong volume breakout with near-term overbought conditions.',
+    ...digestFields,
     cachedAt: Date.now() - 60000,
     localDate: today,
     alertCount: 2,
     latestAlertFingerprint: fingerprint,
+    cacheVersion: ALERT_SUMMARY_CACHE_VERSION,
   };
 
   it('validates cache for the same day and exact alert fingerprint', () => {
@@ -53,6 +63,20 @@ describe('Alert Summary Cache Logic', () => {
       localDate: yesterday,
     };
     expect(isAlertSummaryValid(staleCache, mockAlerts, today)).toBe(false);
+  });
+
+  it('expires cache from an older digest schema', () => {
+    expect(isAlertSummaryValid({ ...validCache, cacheVersion: 1 }, mockAlerts, today)).toBe(false);
+  });
+
+  it('expires cache missing structured digest fields', () => {
+    const incomplete = { ...validCache, trigger: '' };
+    expect(isAlertSummaryValid(incomplete, mockAlerts, today)).toBe(false);
+  });
+
+  it('expires cache with an invalid bias value', () => {
+    const invalidBias = { ...validCache, bias: 'strong-buy' } as unknown as CachedAlertSummary;
+    expect(isAlertSummaryValid(invalidBias, mockAlerts, today)).toBe(false);
   });
 
   it('expires cache if a new alert arrives (fingerprint changes)', () => {
@@ -96,10 +120,12 @@ describe('AlertSummaryModal Component', () => {
     const cachedEntry: CachedAlertSummary = {
       symbol: 'RELIANCE',
       summary: 'Cached summary for Reliance indicating strong momentum.',
+      ...digestFields,
       cachedAt: 1729245600000,
       localDate: today,
       alertCount: 2,
       latestAlertFingerprint: fingerprint,
+      cacheVersion: ALERT_SUMMARY_CACHE_VERSION,
     };
 
     const fetchSpy = vi.spyOn(global, 'fetch');
@@ -124,6 +150,7 @@ describe('AlertSummaryModal Component', () => {
   it('calls API and renders newly generated summary when cache is missing', async () => {
     const mockApiResponse = {
       summary: 'Newly synthesized alert paragraph from OpenAI.',
+      ...digestFields,
       input_tokens: 80,
       output_tokens: 30,
       model: 'gpt-4o-mini',
@@ -150,6 +177,10 @@ describe('AlertSummaryModal Component', () => {
     });
 
     expect(screen.getByText('GENERATED')).toBeInTheDocument();
+    expect(screen.getByText('BULLISH')).toBeInTheDocument();
+    expect(screen.getByText(digestFields.trigger)).toBeInTheDocument();
+    expect(screen.getByText('INVALIDATION')).toBeInTheDocument();
+    expect(screen.getByText(digestFields.risk)).toBeInTheDocument();
   });
 
   it('handles 503 unconfigured error with clear instructions', async () => {
@@ -185,10 +216,12 @@ describe('AlertSummaryModal Component', () => {
     const cachedEntry: CachedAlertSummary = {
       symbol: 'RELIANCE',
       summary: 'Summary to copy.',
+      ...digestFields,
       cachedAt: Date.now(),
       localDate: today,
       alertCount: 2,
       latestAlertFingerprint: fingerprint,
+      cacheVersion: ALERT_SUMMARY_CACHE_VERSION,
     };
 
     render(
@@ -203,7 +236,16 @@ describe('AlertSummaryModal Component', () => {
     const copyBtn = screen.getByRole('button', { name: /COPY/i });
     fireEvent.click(copyBtn);
 
-    expect(writeTextMock).toHaveBeenCalledWith('Summary to copy.');
+    expect(writeTextMock).toHaveBeenCalledWith(
+      [
+        'RELIANCE — BULLISH',
+        'Summary to copy.',
+        '',
+        `TRIGGER: ${digestFields.trigger}`,
+        `INVALIDATION: ${digestFields.invalidation}`,
+        `RISK: ${digestFields.risk}`,
+      ].join('\n')
+    );
     await waitFor(() => {
       expect(screen.getByText('COPIED')).toBeInTheDocument();
     });
@@ -213,10 +255,12 @@ describe('AlertSummaryModal Component', () => {
     const cachedEntry: CachedAlertSummary = {
       symbol: 'RELIANCE',
       summary: 'Some summary.',
+      ...digestFields,
       cachedAt: Date.now(),
       localDate: today,
       alertCount: 2,
       latestAlertFingerprint: fingerprint,
+      cacheVersion: ALERT_SUMMARY_CACHE_VERSION,
     };
 
     render(

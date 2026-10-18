@@ -1,13 +1,14 @@
 """Tests for the AI summarizer service and router."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 import main as main_mod
 from main import app
-from app.services.ai_summarizer import ai_summarizer
 
 
 @pytest.fixture
@@ -30,8 +31,23 @@ def mock_alerts_payload():
                 "triggered_date": "2026-10-18",
             },
         ],
-        "max_tokens": 300,
+        "max_tokens": 500,
     }
+
+
+def _digest_json(**overrides: str) -> str:
+    payload = {
+        "bias": "bullish",
+        "summary": (
+            "Volume expansion above VWAP supports near-term upside. "
+            "The overbought RSI argues for waiting for follow-through rather than chasing."
+        ),
+        "trigger": "Sustained follow-through above the alert-session high.",
+        "invalidation": "Momentum fades and price closes back below VWAP.",
+        "risk": "An overbought RSI increases the risk of a failed breakout.",
+    }
+    payload.update(overrides)
+    return f"<digest>{json.dumps(payload)}</digest>"
 
 
 @pytest.fixture
@@ -56,39 +72,50 @@ async def test_summarize_alerts_unconfigured(api_client, mock_alerts_payload):
 
 @pytest.mark.asyncio
 async def test_summarize_alerts_success(api_client, mock_alerts_payload):
+    digest = _digest_json()
+
     async def mock_stream(*args, **kwargs):
-        yield json.dumps({"type": "token", "text": "Reliance is showing sustained upside momentum "})
-        yield json.dumps({"type": "token", "text": "led by volume expansion above VWAP, "})
-        yield json.dumps({"type": "token", "text": "though an overbought RSI reading near resistance indicates near-term consolidation risk."})
+        midpoint = len(digest) // 2
+        yield json.dumps({"type": "token", "text": digest[:midpoint]})
+        yield json.dumps({"type": "token", "text": digest[midpoint:]})
         yield json.dumps({"type": "done"})
 
     with (
         patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
         patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
-        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert "Reliance is showing sustained upside momentum" in data["summary"]
-        assert data["model"] == "gemini-3.8-flash-low"
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {
+        "summary": (
+            "Volume expansion above VWAP supports near-term upside. "
+            "The overbought RSI argues for waiting for follow-through rather than chasing."
+        ),
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "model": "gemini-3.8-flash-low",
+        "bias": "bullish",
+        "trigger": "Sustained follow-through above the alert-session high.",
+        "invalidation": "Momentum fades and price closes back below VWAP.",
+        "risk": "An overbought RSI increases the risk of a failed breakout.",
+    }
 
 
 @pytest.mark.asyncio
-async def test_summarize_alerts_empty_alerts(api_client):
-    with patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)):
-        response = await api_client.post(
-            "/api/ai/alerts/summarize",
-            json={"symbol": "RELIANCE", "alerts": []},
-        )
-        assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_summarize_alerts_whitespace_collapse(api_client, mock_alerts_payload):
+async def test_summarize_alerts_collapses_whitespace_in_every_field(api_client, mock_alerts_payload):
     async def mock_stream(*args, **kwargs):
-        yield json.dumps({"type": "token", "text": "Line 1 sentence.\n\nLine 2 sentence.\n   Line 3 sentence."})
+        yield json.dumps({
+            "type": "token",
+            "text": _digest_json(
+                summary="Line 1.\n\nLine 2.\n  Line 3.",
+                trigger="Trigger one.\n Trigger two.",
+                invalidation="Invalidation one.\n Invalidation two.",
+                risk="Risk one.\n Risk two.",
+            ),
+        })
         yield json.dumps({"type": "done"})
 
     with (
@@ -97,20 +124,41 @@ async def test_summarize_alerts_whitespace_collapse(api_client, mock_alerts_payl
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert "\n" not in data["summary"]
-        assert data["summary"] == "Line 1 sentence. Line 2 sentence. Line 3 sentence."
-        assert data["model"] == "test-verifier-model"
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["summary"] == "Line 1. Line 2. Line 3."
+    assert data["trigger"] == "Trigger one. Trigger two."
+    assert data["invalidation"] == "Invalidation one. Invalidation two."
+    assert data["risk"] == "Risk one. Risk two."
 
 
 @pytest.mark.asyncio
-async def test_summarize_alerts_gemini_verifier_model(api_client, mock_alerts_payload):
+async def test_summarize_alerts_accepts_json_code_fence(api_client, mock_alerts_payload):
+    fenced = f"```json\n{_digest_json()[len('<digest>'):-len('</digest>')]}\n```"
+
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": fenced})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="test-verifier-model")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+
+    assert response.status_code == 200
+    assert response.json()["bias"] == "bullish"
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_uses_configured_verifier_model(api_client, mock_alerts_payload):
     captured_kwargs = {}
 
     async def mock_stream(*args, **kwargs):
         captured_kwargs.update(kwargs)
-        yield json.dumps({"type": "token", "text": "Gemini alert digest summary."})
+        yield json.dumps({"type": "token", "text": _digest_json()})
         yield json.dumps({"type": "done"})
 
     with (
@@ -119,11 +167,11 @@ async def test_summarize_alerts_gemini_verifier_model(api_client, mock_alerts_pa
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["summary"] == "Gemini alert digest summary."
-        assert data["model"] == "gemini-3.8-flash-medium"
-        assert captured_kwargs.get("model") == "gemini-3.8-flash-medium"
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "gemini-3.8-flash-medium"
+    assert captured_kwargs["model"] == "gemini-3.8-flash-medium"
+    assert captured_kwargs["max_tokens"] == 500
 
 
 @pytest.mark.asyncio
@@ -132,61 +180,114 @@ async def test_summarize_alerts_honors_max_tokens(api_client, mock_alerts_payloa
 
     async def mock_stream(*args, **kwargs):
         captured_kwargs.update(kwargs)
-        yield json.dumps({"type": "token", "text": "Token-limited summary."})
+        yield json.dumps({"type": "token", "text": _digest_json()})
         yield json.dumps({"type": "done"})
 
     with (
         patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
         patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
-        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json={**mock_alerts_payload, "max_tokens": 300})
+
+    assert response.status_code == 200
+    assert captured_kwargs["max_tokens"] == 300
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_rejects_invalid_json(api_client, mock_alerts_payload):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": "<digest>{not-json}</digest>"})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
-        assert response.status_code == 200
-        assert captured_kwargs.get("max_tokens") == 300
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "LLM returned an invalid alert digest"
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_rejects_missing_field(api_client, mock_alerts_payload):
+    payload = json.loads(_digest_json()[len("<digest>"):-len("</digest>")])
+    payload.pop("risk")
+
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": f"<digest>{json.dumps(payload)}</digest>"})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "LLM returned an invalid alert digest"
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_rejects_invalid_bias(api_client, mock_alerts_payload):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": _digest_json(bias="strong-buy")})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "LLM returned an invalid alert digest"
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_rejects_empty_output(api_client, mock_alerts_payload):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "LLM returned an empty summary"
 
 
 @pytest.mark.asyncio
 async def test_summarize_alerts_propagates_stream_error_after_partial_tokens(api_client, mock_alerts_payload):
     async def mock_stream(*args, **kwargs):
-        yield json.dumps({"type": "token", "text": "Partial alert summary content..."})
+        yield json.dumps({"type": "token", "text": "Partial alert digest content..."})
         yield json.dumps({"type": "error", "message": "Inference quota exceeded on worker"})
 
     with (
         patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
         patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
-        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
-        assert response.status_code == 500
-        assert "Inference quota exceeded on worker" in response.json()["detail"]
 
-
-@pytest.mark.asyncio
-async def test_summarize_alerts_preserves_token_usage(api_client, mock_alerts_payload):
-    async def mock_stream(*args, **kwargs):
-        yield json.dumps({"type": "token", "text": "Summary with reported token usage."})
-        yield json.dumps({"type": "usage", "input_tokens": 128, "output_tokens": 42})
-        yield json.dumps({"type": "done"})
-
-    with (
-        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
-        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
-        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
-        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
-    ):
-        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["input_tokens"] == 128
-        assert data["output_tokens"] == 42
+    assert response.status_code == 500
+    assert "Inference quota exceeded on worker" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
 async def test_ai_health_ping_success(api_client):
+    captured_kwargs = {}
+
     async def mock_stream(*args, **kwargs):
-        yield json.dumps({"type": "token", "text": "pong"})
+        captured_kwargs.update(kwargs)
+        yield json.dumps({"type": "token", "text": "OK"})
         yield json.dumps({"type": "done"})
 
     with (
@@ -196,10 +297,10 @@ async def test_ai_health_ping_success(api_client):
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.get("/api/ai/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "ready"
-        assert data["model"] == "gemini-3.8-flash-low"
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "model": "gemini-3.8-flash-low"}
+    assert captured_kwargs["max_tokens"] == 32
 
 
 @pytest.mark.asyncio
@@ -214,7 +315,59 @@ async def test_ai_health_ping_failure(api_client):
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.get("/api/ai/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "unreachable"
-        assert data["model"] is None
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "unreachable", "model": None}
+
+
+@pytest.mark.asyncio
+async def test_ai_health_ping_rejects_done_only(api_client):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.get("/api/ai/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "unreachable", "model": None}
+
+
+@pytest.mark.asyncio
+async def test_ai_health_ping_rejects_malformed_stream(api_client):
+    async def mock_stream(*args, **kwargs):
+        yield "not-json"
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.get("/api/ai/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "unreachable", "model": None}
+
+
+@pytest.mark.asyncio
+async def test_ai_health_ping_timeout(api_client):
+    async def mock_stream(*args, **kwargs):
+        await asyncio.sleep(1)
+        yield json.dumps({"type": "token", "text": "late"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+        patch("app.services.ai_summarizer._PING_TIMEOUT_SECONDS", 0.01),
+    ):
+        response = await api_client.get("/api/ai/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "unreachable", "model": None}

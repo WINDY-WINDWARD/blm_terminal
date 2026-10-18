@@ -575,13 +575,26 @@ export interface AlertSummarySourceItem {
   triggered_date?: string;
 }
 
+export type AlertDigestBias = 'bullish' | 'bearish' | 'mixed' | 'neutral';
+
+export const ALERT_SUMMARY_CACHE_VERSION = 2;
+
+export function isAlertDigestBias(value: unknown): value is AlertDigestBias {
+  return value === 'bullish' || value === 'bearish' || value === 'mixed' || value === 'neutral';
+}
+
 export interface CachedAlertSummary {
   symbol: string;
   summary: string;
+  bias: AlertDigestBias;
+  trigger: string;
+  invalidation: string;
+  risk: string;
   cachedAt: number;
   localDate: string;
   alertCount: number;
   latestAlertFingerprint: string;
+  cacheVersion: number;
   model?: string;
 }
 
@@ -621,6 +634,9 @@ export function isAlertSummaryValid(
   currentDate: string = getTodayLocalDateString(),
 ): boolean {
   if (!cached || !cached.summary) return false;
+  if (cached.cacheVersion !== ALERT_SUMMARY_CACHE_VERSION) return false;
+  if (!isAlertDigestBias(cached.bias)) return false;
+  if (!cached.trigger || !cached.invalidation || !cached.risk) return false;
   if (cached.localDate !== currentDate) return false;
   if (!alerts || alerts.length === 0) return false;
   const currentFingerprint = getAlertsSnapshotFingerprint(alerts);

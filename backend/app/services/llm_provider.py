@@ -524,17 +524,6 @@ async def _run_openai_loop(
                         except json.JSONDecodeError:
                             continue
 
-                        usage = chunk.get("usage")
-                        if usage:
-                            in_tok = usage.get("prompt_tokens", 0)
-                            out_tok = usage.get("completion_tokens", 0)
-                            if in_tok or out_tok:
-                                yield json.dumps({
-                                    "type": "usage",
-                                    "input_tokens": in_tok,
-                                    "output_tokens": out_tok,
-                                })
-
                         choices = chunk.get("choices")
                         if not choices:
                             continue
@@ -707,23 +696,6 @@ async def _run_anthropic_loop(
                     except json.JSONDecodeError: continue
 
                     etype = ev.get("type", "")
-
-                    if etype == "message_start":
-                        msg_usage = ev.get("message", {}).get("usage", {})
-                        if msg_usage:
-                            yield json.dumps({
-                                "type": "usage",
-                                "input_tokens": msg_usage.get("input_tokens", 0),
-                                "output_tokens": msg_usage.get("output_tokens", 0),
-                            })
-                    elif etype == "message_delta":
-                        delta_usage = ev.get("usage", {})
-                        if delta_usage:
-                            yield json.dumps({
-                                "type": "usage",
-                                "input_tokens": 0,
-                                "output_tokens": delta_usage.get("output_tokens", 0),
-                            })
 
                     if etype == "content_block_start":
                         idx = ev["index"]
@@ -969,13 +941,6 @@ async def _run_antigravity_loop(
                     except json.JSONDecodeError: continue
 
                     response_wrapper = chunk.get("response", chunk)
-                    usage_meta = response_wrapper.get("usageMetadata", {})
-                    if usage_meta:
-                        yield json.dumps({
-                            "type": "usage",
-                            "input_tokens": usage_meta.get("promptTokenCount", 0),
-                            "output_tokens": usage_meta.get("candidatesTokenCount", 0),
-                        })
                     candidates = response_wrapper.get("candidates", [])
                     if not candidates: continue
                     parts = (candidates[0].get("content") or {}).get("parts", [])

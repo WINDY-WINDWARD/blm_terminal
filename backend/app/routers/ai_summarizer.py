@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.config import settings
-from app.schemas.ai_summarizer import AlertSummarizeRequest, SummarizeRequest, SummaryResult
+from app.schemas.ai_summarizer import AlertDigestResult, AlertSummarizeRequest, SummarizeRequest, SummaryResult
 from app.services.ai_summarizer import ai_summarizer
 from app.services.ai_config import get_configured_verifier_model
 
@@ -38,9 +38,9 @@ async def summarize(request: SummarizeRequest) -> SummaryResult:
         )
 
 
-@router.post("/alerts/summarize", response_model=SummaryResult)
-async def summarize_alerts(request: AlertSummarizeRequest) -> SummaryResult:
-    """Summarize stock alerts into a single cohesive paragraph."""
+@router.post("/alerts/summarize", response_model=AlertDigestResult)
+async def summarize_alerts(request: AlertSummarizeRequest) -> AlertDigestResult:
+    """Summarize stock alerts into a structured, decision-ready digest."""
     is_configured = await ai_summarizer.is_configured()
     if not is_configured:
         raise HTTPException(

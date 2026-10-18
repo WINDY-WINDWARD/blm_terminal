@@ -136,10 +136,12 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
         />
       )}
 
-      <SettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-      />
+      {showSettingsModal && (
+        <SettingsModal
+          isOpen
+          onClose={() => setShowSettingsModal(false)}
+        />
+      )}
     </div>
   );
 }
