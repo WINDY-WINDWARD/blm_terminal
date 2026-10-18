@@ -374,6 +374,17 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   return (
     <main className="flex flex-col h-screen w-screen bg-terminal-bg text-terminal-amber overflow-hidden">
       {children}
+      <TradingViewImportModal
+        isOpen={showTradingViewImportModal}
+        onClose={() => setShowTradingViewImportModal(false)}
+        onSuccess={(targetWatchlistId) => {
+          setActiveWatchlistId(targetWatchlistId);
+          queryClient.invalidateQueries({ queryKey: ['watchlists'] });
+          queryClient.invalidateQueries({ queryKey: ['watchlist', targetWatchlistId] });
+        }}
+        watchlists={watchlists}
+        activeWatchlistId={activeWatchlistId}
+      />
     </main>
   );
 }

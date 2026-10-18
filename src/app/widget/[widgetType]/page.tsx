@@ -3,10 +3,12 @@
 import React, { use, useState, useEffect, useRef } from 'react';
 import { WidgetRenderer } from '@/components/WidgetRenderer';
 import { useSearchParams } from 'next/navigation';
-import { useSetAtom, useAtomValue } from 'jotai';
-import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom, companySymbolOverridesAtom } from '@/store/terminalStore';
+import { useSetAtom, useAtomValue, useAtom } from 'jotai';
+import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom, companySymbolOverridesAtom, showTradingViewImportModalAtom, watchlistsAtom } from '@/store/terminalStore';
 import { useIsMac } from '@/lib/usePlatform';
 import { cn } from '@/lib/utils';
+import { useQueryClient } from '@tanstack/react-query';
+import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
 
 export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetType: string }> }) {
   const unwrappedParams = use(params);
@@ -17,6 +19,10 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
   const setMoversCategory = useSetAtom(moversCategoryAtom);
   const overrides = useAtomValue(chartSymbolOverridesAtom);
   const companyOverrides = useAtomValue(companySymbolOverridesAtom);
+  const queryClient = useQueryClient();
+  const [showImportModal, setShowImportModal] = useAtom(showTradingViewImportModalAtom);
+  const [watchlists] = useAtom(watchlistsAtom);
+  const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
 
   const [isRestoring, setIsRestoring] = useState(false);
   const pendingReqIdRef = useRef<string | null>(null);
@@ -113,6 +119,20 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
             shared between the home panel and its popout. */}
         <WidgetRenderer title={widgetTitle} panelId={panelId} symbolOverride={searchParams.get('symbol') || undefined} />
       </div>
+
+      {widgetTitle === 'WATCH' && (
+        <TradingViewImportModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={(targetWatchlistId) => {
+            setWatchlistId(targetWatchlistId);
+            queryClient.invalidateQueries({ queryKey: ['watchlists'] });
+            queryClient.invalidateQueries({ queryKey: ['watchlist', targetWatchlistId] });
+          }}
+          watchlists={watchlists}
+          activeWatchlistId={activeWatchlistId}
+        />
+      )}
     </div>
   );
 }
