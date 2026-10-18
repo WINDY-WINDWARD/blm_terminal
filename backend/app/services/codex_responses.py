@@ -252,6 +252,12 @@ class CodexStreamParser:
             if self.status == "incomplete":
                 reason = ((response.get("incomplete_details") or {}).get("reason")) or "unknown"
                 self.error_message = f"Response incomplete: {reason}"
+            usage = response.get("usage", {})
+            if usage:
+                in_tok = usage.get("input_tokens", 0)
+                out_tok = usage.get("output_tokens", 0)
+                if in_tok or out_tok:
+                    out.append({"type": "usage", "input_tokens": in_tok, "output_tokens": out_tok})
         elif etype == "response.failed":
             self.saw_terminal = True
             response = ev.get("response", {}) or {}

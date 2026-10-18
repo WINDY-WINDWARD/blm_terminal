@@ -4,11 +4,12 @@ import React, { use, useState, useEffect, useRef } from 'react';
 import { WidgetRenderer } from '@/components/WidgetRenderer';
 import { useSearchParams } from 'next/navigation';
 import { useSetAtom, useAtomValue, useAtom } from 'jotai';
-import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom, companySymbolOverridesAtom, showTradingViewImportModalAtom, watchlistsAtom } from '@/store/terminalStore';
+import { activeSymbolAtom, activeWatchlistIdAtom, moversCategoryAtom, chartSymbolOverridesAtom, companySymbolOverridesAtom, showTradingViewImportModalAtom, showSettingsModalAtom, watchlistsAtom } from '@/store/terminalStore';
 import { useIsMac } from '@/lib/usePlatform';
 import { cn } from '@/lib/utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
+import { SettingsModal } from '@/components/modals/SettingsModal';
 
 export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetType: string }> }) {
   const unwrappedParams = use(params);
@@ -21,6 +22,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
   const companyOverrides = useAtomValue(companySymbolOverridesAtom);
   const queryClient = useQueryClient();
   const [showImportModal, setShowImportModal] = useAtom(showTradingViewImportModalAtom);
+  const [showSettingsModal, setShowSettingsModal] = useAtom(showSettingsModalAtom);
   const [watchlists] = useAtom(watchlistsAtom);
   const activeWatchlistId = useAtomValue(activeWatchlistIdAtom);
 
@@ -133,6 +135,11 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
           activeWatchlistId={activeWatchlistId}
         />
       )}
+
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+      />
     </div>
   );
 }

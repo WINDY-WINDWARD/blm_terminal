@@ -453,6 +453,7 @@ async def _run_openai_loop(
     passthrough_thought_signature: bool = False,
     request_timeout: float | None = None,
     extra_headers: dict[str, str] | None = None,
+    max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     endpoint = base_url or settings.zen_base_url
     url = f"{endpoint}/chat/completions"
@@ -471,7 +472,7 @@ async def _run_openai_loop(
             "model": model,
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens if max_tokens is not None else 4096,
             "stream": True,
             "messages": messages,
         }
@@ -522,6 +523,17 @@ async def _run_openai_loop(
                             chunk = json.loads(raw)
                         except json.JSONDecodeError:
                             continue
+
+                        usage = chunk.get("usage")
+                        if usage:
+                            in_tok = usage.get("prompt_tokens", 0)
+                            out_tok = usage.get("completion_tokens", 0)
+                            if in_tok or out_tok:
+                                yield json.dumps({
+                                    "type": "usage",
+                                    "input_tokens": in_tok,
+                                    "output_tokens": out_tok,
+                                })
 
                         choices = chunk.get("choices")
                         if not choices:
@@ -630,6 +642,7 @@ async def _run_anthropic_loop(
     session_id: str | int | None = None,
     auth_mode: str = "api_key",
     opencode_headers: bool = True,
+    max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     endpoint = base_url or settings.zen_base_url
     url = f"{endpoint}/messages"
@@ -661,7 +674,7 @@ async def _run_anthropic_loop(
     for _iteration in range(max_iter):
         payload = {
             "model": model,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens if max_tokens is not None else 4096,
             "system": system_prompt,
             "stream": True,
             "messages": messages,
@@ -694,6 +707,23 @@ async def _run_anthropic_loop(
                     except json.JSONDecodeError: continue
 
                     etype = ev.get("type", "")
+
+                    if etype == "message_start":
+                        msg_usage = ev.get("message", {}).get("usage", {})
+                        if msg_usage:
+                            yield json.dumps({
+                                "type": "usage",
+                                "input_tokens": msg_usage.get("input_tokens", 0),
+                                "output_tokens": msg_usage.get("output_tokens", 0),
+                            })
+                    elif etype == "message_delta":
+                        delta_usage = ev.get("usage", {})
+                        if delta_usage:
+                            yield json.dumps({
+                                "type": "usage",
+                                "input_tokens": 0,
+                                "output_tokens": delta_usage.get("output_tokens", 0),
+                            })
 
                     if etype == "content_block_start":
                         idx = ev["index"]
@@ -790,6 +820,7 @@ async def _run_antigravity_loop(
     tools: list[dict[str, Any]],
     tool_executor: ToolExecutor,
     max_iter: int = 10,
+    max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     token = await get_antigravity_token()
     if not token:
@@ -884,15 +915,19 @@ async def _run_antigravity_loop(
                 else:
                     contents.append({"role": "user", "parts": [part]})
 
+        gen_config: dict[str, Any] = {
+            "thinkingConfig": {
+                "includeThoughts": True,
+                "thinkingLevel": thinking_level,
+            }
+        }
+        if max_tokens is not None:
+            gen_config["maxOutputTokens"] = max_tokens
+
         request_body: dict[str, Any] = {
             "sessionId": "terminal-session",
             "contents": contents,
-            "generationConfig": {
-                "thinkingConfig": {
-                    "includeThoughts": True,
-                    "thinkingLevel": thinking_level,
-                }
-            }
+            "generationConfig": gen_config,
         }
         if system_text:
             # Mirror plugin: systemInstruction.role = "user", parts[0].text
@@ -934,6 +969,13 @@ async def _run_antigravity_loop(
                     except json.JSONDecodeError: continue
 
                     response_wrapper = chunk.get("response", chunk)
+                    usage_meta = response_wrapper.get("usageMetadata", {})
+                    if usage_meta:
+                        yield json.dumps({
+                            "type": "usage",
+                            "input_tokens": usage_meta.get("promptTokenCount", 0),
+                            "output_tokens": usage_meta.get("candidatesTokenCount", 0),
+                        })
                     candidates = response_wrapper.get("candidates", [])
                     if not candidates: continue
                     parts = (candidates[0].get("content") or {}).get("parts", [])
@@ -1018,6 +1060,7 @@ async def _run_codex_loop(
     max_iter: int = 10,
     base_url: str | None = None,
     session_id: str | int | None = None,
+    max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     """Agentic loop over the OpenAI Responses API (ChatGPT Codex backend).
 
@@ -1071,6 +1114,7 @@ async def _run_codex_loop(
             instructions=instructions,
             messages=messages,
             tools=tools,
+            max_tokens=max_tokens or 4096,
         )
         parser = CodexStreamParser()
         refreshed_once = False
@@ -1186,6 +1230,7 @@ async def stream_chat_completion(
     system_prompt: str | None = None,
     max_iter: int = 10,
     session_id: str | int | None = None,
+    max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
     provider = await get_dynamic_ai_provider()
     if provider == "gemini":
@@ -1193,7 +1238,7 @@ async def stream_chat_completion(
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
-        async for chunk in _run_antigravity_loop(full_messages, model, tools, tool_executor, max_iter):
+        async for chunk in _run_antigravity_loop(full_messages, model, tools, tool_executor, max_iter, max_tokens=max_tokens):
             yield chunk
         return
 
@@ -1203,6 +1248,7 @@ async def stream_chat_completion(
         async for chunk in _run_codex_loop(
             full_messages, system_prompt or "", model, tools, tool_executor, max_iter,
             session_id=session_id,
+            max_tokens=max_tokens,
         ):
             yield chunk
         return
@@ -1241,6 +1287,7 @@ async def stream_chat_completion(
             session_id=session_id,
             auth_mode="oauth" if oauth_mode else "api_key",
             opencode_headers=False,
+            max_tokens=max_tokens,
         ):
             yield chunk
         return
@@ -1261,6 +1308,7 @@ async def stream_chat_completion(
             base_url=copilot_base_url, session_id=session_id,
             api_label="Copilot", opencode_headers=False,
             extra_headers=_COPILOT_EDITOR_HEADERS,
+            max_tokens=max_tokens,
         ):
             yield chunk
         return
@@ -1325,12 +1373,12 @@ async def stream_chat_completion(
     if model in ANTHROPIC_MODELS and provider in ("zen-free", "zen-paid", "zen", "go"):
         anthropic_messages = [m for m in messages if m.get("role") != "system"]
         sys_prompt = system_prompt or ""
-        async for chunk in _run_anthropic_loop(anthropic_messages, sys_prompt, model, api_key, tools, tool_executor, max_iter, base_url=base_url, session_id=session_id):
+        async for chunk in _run_anthropic_loop(anthropic_messages, sys_prompt, model, api_key, tools, tool_executor, max_iter, base_url=base_url, session_id=session_id, max_tokens=max_tokens):
             yield chunk
     else:
         full_messages = []
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
-        async for chunk in _run_openai_loop(full_messages, model, api_key, tools, tool_executor, max_iter, base_url=base_url, session_id=session_id, api_label=api_label, opencode_headers=use_opencode_headers, passthrough_thought_signature=passthrough_thought_signature, request_timeout=request_timeout, extra_headers=extra_headers):
+        async for chunk in _run_openai_loop(full_messages, model, api_key, tools, tool_executor, max_iter, base_url=base_url, session_id=session_id, api_label=api_label, opencode_headers=use_opencode_headers, passthrough_thought_signature=passthrough_thought_signature, request_timeout=request_timeout, extra_headers=extra_headers, max_tokens=max_tokens):
             yield chunk

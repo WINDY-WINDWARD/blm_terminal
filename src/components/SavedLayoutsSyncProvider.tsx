@@ -407,10 +407,11 @@ export function SavedLayoutsSyncProvider({ children }: { children: ReactNode }) 
  * Hook to access the centralized sync controller.
  * Components should call this hook instead of instantiating their own sync processor.
  */
+const DEFAULT_SYNC_FALLBACK: SavedLayoutsSyncContextType = {
+  processPendingQueue: async () => {},
+};
+
 export function useSavedLayoutsSync() {
   const context = useContext(SavedLayoutsSyncContext);
-  if (!context) {
-    throw new Error('useSavedLayoutsSync must be used within SavedLayoutsSyncProvider');
-  }
-  return context;
+  return context ?? DEFAULT_SYNC_FALLBACK;
 }

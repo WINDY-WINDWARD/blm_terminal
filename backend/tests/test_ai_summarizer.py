@@ -65,6 +65,7 @@ async def test_summarize_alerts_success(api_client, mock_alerts_payload):
     with (
         patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
         patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
         patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
@@ -123,3 +124,97 @@ async def test_summarize_alerts_gemini_verifier_model(api_client, mock_alerts_pa
         assert data["summary"] == "Gemini alert digest summary."
         assert data["model"] == "gemini-3.8-flash-medium"
         assert captured_kwargs.get("model") == "gemini-3.8-flash-medium"
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_honors_max_tokens(api_client, mock_alerts_payload):
+    captured_kwargs = {}
+
+    async def mock_stream(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        yield json.dumps({"type": "token", "text": "Token-limited summary."})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+        assert response.status_code == 200
+        assert captured_kwargs.get("max_tokens") == 300
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_propagates_stream_error_after_partial_tokens(api_client, mock_alerts_payload):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": "Partial alert summary content..."})
+        yield json.dumps({"type": "error", "message": "Inference quota exceeded on worker"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+        assert response.status_code == 500
+        assert "Inference quota exceeded on worker" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_preserves_token_usage(api_client, mock_alerts_payload):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": "Summary with reported token usage."})
+        yield json.dumps({"type": "usage", "input_tokens": 128, "output_tokens": 42})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["input_tokens"] == 128
+        assert data["output_tokens"] == 42
+
+
+@pytest.mark.asyncio
+async def test_ai_health_ping_success(api_client):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": "pong"})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.get("/api/ai/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ready"
+        assert data["model"] == "gemini-3.8-flash-low"
+
+
+@pytest.mark.asyncio
+async def test_ai_health_ping_failure(api_client):
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "error", "message": "Invalid API Key"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.routers.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.get("/api/ai/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "unreachable"
+        assert data["model"] is None
