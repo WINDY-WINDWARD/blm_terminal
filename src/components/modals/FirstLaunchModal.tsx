@@ -931,8 +931,7 @@ export function FirstLaunchModal() {
             <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-[#d1d5db] border border-[#2d3139]">
               Please note: the best results come from a paid subscription provider
               or a pay-as-you-go API provider. Free models work well too, depending
-              on the provider and model — if you want a free option, grab a free
-              key from Google AI Studio.
+              on the provider and model — Google Pro has a good free tier and also comes free with Jio Sub and can be used with this app.
             </div>
             {aiStatus && (
               <div

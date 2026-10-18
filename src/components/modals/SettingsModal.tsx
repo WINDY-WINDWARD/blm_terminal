@@ -1316,7 +1316,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                     <div className="flex flex-col gap-2">
                       <div className="flex flex-col gap-1.5 text-xs">
                         <span className="text-white/50 text-[10px] leading-relaxed">
-                          Best results need a paid subscription or pay-as-you-go provider. Free models work well too depending on provider/model — Google AI Studio offers a free key.
+                          Best results need a paid subscription or pay-as-you-go provider. Free models work well too depending on provider/model — Google Pro has a good free tier and also comes free with Jio Sub and can be used with this app.
                         </span>
                         <label className="flex flex-col gap-0.5">
                           <span className="text-white/70 text-[10px]">Provider:</span>
