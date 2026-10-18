@@ -3,6 +3,7 @@ import { atomWithStorage } from 'jotai/utils';
 import type { FundsData } from '@/lib/openalgo';
 import type { NewsArticle } from '@/lib/newsSocket';
 import type { ActiveIndicator } from '@/lib/indicators/types';
+import { DEFAULT_MOVERS_COLUMN_ORDER } from '@/lib/moversColumns';
 
 /** Live tick data shape — LTP-centric, populated by marketWs SymbolData */
 export interface TickData {
@@ -377,6 +378,10 @@ export const DEFAULT_MOVERS_COLUMNS = ['vol'];
 
 export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
 export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS);
+export const moversColumnOrderAtom = atomWithStorage<string[]>(
+  'terminal.moversColumnOrder',
+  [...DEFAULT_MOVERS_COLUMN_ORDER],
+);
 
 /** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
 export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec');

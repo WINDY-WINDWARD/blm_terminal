@@ -20,6 +20,7 @@ import {
   type Watchlist
 } from '@/store/terminalStore';
 import { marketDataService } from '@/lib/nseFetch';
+import { reorderColumns, type ColumnDropPlacement } from '@/lib/columnOrder';
 import type { ChangeRanges, SymbolDataExtract } from '@/lib/nseTypes';
 import type { EventCalendarItem } from '@/app/api/event-calendar/route';
 import { AlertSummaryModal } from './AlertSummaryModal';
@@ -398,7 +399,7 @@ interface WatchAlertsModalProps {
   onAlertDismissed?: () => void;
 }
 
-function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: WatchAlertsModalProps) {
+export function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: WatchAlertsModalProps) {
   const [showAiSummary, setShowAiSummary] = useState(false);
   const queryClient = useQueryClient();
   const [, setChartOverrides] = useAtom(chartSymbolOverridesAtom);
@@ -490,35 +491,46 @@ function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: Wa
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 font-mono select-none">
       <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="p-3.5 border-b border-[#27272a] flex items-center justify-between bg-[#121216]">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-extrabold text-amber-400 tracking-wider flex items-center gap-1.5">
-              <span>🔔</span>
-              <span>ALERTS: {symbol}</span>
-            </span>
-            <span className="text-xs bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded-full border border-amber-500/30">
-              {alerts.length} UNREAD
-            </span>
+        <div className="border-b border-[#27272a] bg-[#121216] p-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="flex items-center gap-1.5 whitespace-nowrap text-sm font-extrabold tracking-wider text-amber-400">
+                <span aria-hidden>🔔</span>
+                <span>ALERTS: {symbol}</span>
+              </span>
+              <span className="shrink-0 whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/20 px-2 py-0.5 text-xs font-bold text-amber-300">
+                {alerts.length} UNREAD
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 cursor-pointer rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+              aria-label="Close"
+            >
+              ✕
+            </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div data-testid="watch-alerts-actions" className="mt-2.5 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={handleOpenChart}
-              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+              className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded border border-zinc-700 bg-[#18181b] px-2.5 py-1 text-xs font-bold text-zinc-200 shadow-sm transition-all hover:border-amber-400 hover:bg-amber-400/20 hover:text-amber-300 active:scale-95"
               title={`Open independent chart for ${symbol}`}
             >
-              <span>⚡</span>
+              <span aria-hidden>⚡</span>
               <span>Load Chart</span>
             </button>
 
             <button
               type="button"
               onClick={handleOpenCompany}
-              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+              className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded border border-zinc-700 bg-[#18181b] px-2.5 py-1 text-xs font-bold text-zinc-200 shadow-sm transition-all hover:border-amber-400 hover:bg-amber-400/20 hover:text-amber-300 active:scale-95"
               title={`Open independent company widget for ${symbol}`}
             >
-              <span>🏢</span>
+              <span aria-hidden>🏢</span>
               <span>Company</span>
             </button>
 
@@ -526,10 +538,10 @@ function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: Wa
               type="button"
               onClick={() => setShowAiSummary(true)}
               disabled={alerts.length === 0}
-              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded border border-zinc-700 bg-[#18181b] px-2.5 py-1 text-xs font-bold text-zinc-200 shadow-sm transition-all hover:border-amber-400 hover:bg-amber-400/20 hover:text-amber-300 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
               title={alerts.length === 0 ? 'No alerts to summarize' : `AI summarize alerts for ${symbol}`}
             >
-              <span>🤖</span>
+              <span aria-hidden>🤖</span>
               <span>AI Summarize</span>
             </button>
 
@@ -537,20 +549,11 @@ function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: Wa
               <button
                 type="button"
                 onClick={handleDismissAll}
-                className="px-2.5 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold transition-all cursor-pointer"
+                className="shrink-0 cursor-pointer whitespace-nowrap rounded border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs font-bold text-rose-400 transition-all hover:bg-rose-500/20"
               >
                 Dismiss All
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 transition-colors ml-1 cursor-pointer"
-              aria-label="Close"
-            >
-              ✕
-            </button>
           </div>
         </div>
 
@@ -619,7 +622,7 @@ export function WatchWidget() {
   const [activeSymbol, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [activeExchange, setActiveExchange] = useAtom(activeExchangeAtom);
   const [, setTickData] = useAtom(tickDataAtom);
-  const [watchlistColumns] = useAtom(watchlistColumnsAtom);
+  const [watchlistColumns, setWatchlistColumns] = useAtom(watchlistColumnsAtom);
   const [watchlists, setWatchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
   const activePanels = useAtomValue(activePanelsAtom);
@@ -632,6 +635,9 @@ export function WatchWidget() {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [sortColumn, setSortColumn] = useState<SortColumn | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
+  const [columnDropTarget, setColumnDropTarget] = useState<{ key: string; placement: ColumnDropPlacement } | null>(null);
+  const suppressColumnClickRef = useRef(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useAtom(showTradingViewImportModalAtom);
   const [newWatchlistName, setNewWatchlistName] = useState('');
@@ -879,6 +885,7 @@ export function WatchWidget() {
   });
 
   const handleHeaderClick = (column: SortColumn) => {
+    if (suppressColumnClickRef.current) return;
     const colConfig = SORTABLE_COLUMNS[column];
     if (!colConfig) return;
 
@@ -982,6 +989,48 @@ export function WatchWidget() {
   const getSortIndicator = (column: SortColumn) => {
     if (sortColumn !== column) return '';
     return sortDirection === 'asc' ? ' ▲' : ' ▼';
+  };
+
+  const handleColumnDragStart = (event: React.DragEvent<HTMLTableCellElement>, key: string) => {
+    suppressColumnClickRef.current = true;
+    setDraggedColumn(key);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', key);
+  };
+
+  const handleColumnDragOver = (event: React.DragEvent<HTMLTableCellElement>, key: string) => {
+    if (!draggedColumn || draggedColumn === key) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const rect = event.currentTarget.getBoundingClientRect();
+    const placement: ColumnDropPlacement = event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+    setColumnDropTarget((current) => (
+      current?.key === key && current.placement === placement ? current : { key, placement }
+    ));
+  };
+
+  const clearColumnDrag = () => {
+    setDraggedColumn(null);
+    setColumnDropTarget(null);
+    window.setTimeout(() => {
+      suppressColumnClickRef.current = false;
+    }, 0);
+  };
+
+  const handleColumnDrop = (event: React.DragEvent<HTMLTableCellElement>, key: string) => {
+    event.preventDefault();
+    if (!draggedColumn || draggedColumn === key) {
+      clearColumnDrag();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const placement: ColumnDropPlacement = columnDropTarget?.key === key
+      ? columnDropTarget.placement
+      : event.clientX < rect.left + rect.width / 2
+        ? 'before'
+        : 'after';
+    setWatchlistColumns((current) => reorderColumns(current, draggedColumn, key, placement));
+    clearColumnDrag();
   };
 
   const addMutation = useMutation({
@@ -1238,6 +1287,8 @@ export function WatchWidget() {
                   <th className="p-1.5 border-r border-[#27272a]/60 w-7 text-center">✕</th>
                   <th
                     onClick={() => handleHeaderClick('symbol')}
+                    aria-sort={sortColumn === 'symbol' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    data-column-key="symbol"
                     className="p-1.5 border-r border-[#27272a]/60 cursor-pointer hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none"
                   >
                     SYMBOL{getSortIndicator('symbol')}
@@ -1248,12 +1299,31 @@ export function WatchWidget() {
                       <th
                         key={col}
                         onClick={() => handleHeaderClick(colConfig?.key || (col as SortColumn))}
-                        className={`p-1.5 border-r border-[#27272a]/60 cursor-pointer hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none ${
+                        draggable
+                        onDragStart={(event) => handleColumnDragStart(event, col)}
+                        onDragOver={(event) => handleColumnDragOver(event, col)}
+                        onDrop={(event) => handleColumnDrop(event, col)}
+                        onDragEnd={clearColumnDrag}
+                        aria-sort={sortColumn === (colConfig?.key || (col as SortColumn)) ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        data-column-key={col}
+                        title="Drag to reorder; click to sort"
+                        className={`relative p-1.5 border-r border-[#27272a]/60 cursor-grab active:cursor-grabbing hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none ${
+                          draggedColumn === col ? 'opacity-40' : ''
+                        } ${
                           colConfig?.textAlign === 'right' ? 'text-right' : 'text-center'
                         }`}
                       >
+                        <span aria-hidden="true" className="mr-1 inline-block text-zinc-600">⋮⋮</span>
                         {colConfig?.label || col}
                         {getSortIndicator(colConfig?.key || (col as SortColumn))}
+                        {columnDropTarget?.key === col && (
+                          <span
+                            aria-hidden="true"
+                            className={`pointer-events-none absolute inset-y-0 w-0.5 bg-terminal-amber ${
+                              columnDropTarget.placement === 'before' ? 'left-0' : 'right-0'
+                            }`}
+                          />
+                        )}
                       </th>
                     );
                   })}

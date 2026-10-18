@@ -946,7 +946,10 @@ async def _run_antigravity_loop(
                     parts = (candidates[0].get("content") or {}).get("parts", [])
                     
                     for part in parts:
-                        if "text" in part:
+                        # Gemini may interleave private thought chunks with answer
+                        # text. Only answer text belongs in the assistant content
+                        # consumed by the client and downstream parsers.
+                        if "text" in part and part.get("thought") is not True:
                             delta = part["text"]
                             content += delta
                             yield json.dumps({"type": "token", "text": delta})

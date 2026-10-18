@@ -1,21 +1,29 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtom } from 'jotai';
 import {
   activeSymbolAtom,
   activeExchangeAtom,
+  moversColumnOrderAtom,
   moversColumnsAtom,
   moversCategoryAtom,
 } from '@/store/terminalStore';
 import { marketDataService } from '@/lib/nseFetch';
 import type { ChangeRanges, SymbolDataExtract } from '@/lib/nseTypes';
-
-export interface MoverQuote {
-  yearHigh?: number;
-  yearLow?: number;
-}
+import { reorderColumns, type ColumnDropPlacement } from '@/lib/columnOrder';
+import {
+  MOVER_COLUMN_LABELS,
+  compareMoverRows,
+  computeMoverAlignment,
+  getMoverColumnDefaultDirection,
+  getVisibleMoverColumns,
+  type MoverColumnKey,
+  type MoverQuoteData,
+  type MoverView,
+  type SortDirection,
+} from '@/lib/moversColumns';
 
 export interface MoverRow {
   symbol: string;
@@ -50,8 +58,6 @@ interface MoverCategory {
   key: string;
   label: string;
 }
-
-type MoversView = 'matrix' | 'gainers' | 'losers';
 
 const MOVERS_PAGE_SIZE = 6;
 
@@ -116,63 +122,49 @@ function formatCaDt(val: string | undefined, purpose: string | undefined): React
   return <span title={purpose || ''}>{val}</span>;
 }
 
-/**
- * Per-symbol hook: returns change-ranges data via the market WebSocket service.
- * The service debounces concurrent calls from multiple rows into one WS message.
- */
-function useChangeRanges(symbol: string) {
-  const [data, setData] = useState<ChangeRanges | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+function useMoverMarketData(symbols: string[], needsRanges: boolean, needsQuotes: boolean) {
+  const symbolsKey = symbols.join('|');
+  const [rangesBySymbol, setRangesBySymbol] = useState<Record<string, ChangeRanges | null>>({});
+  const [quotesBySymbol, setQuotesBySymbol] = useState<Record<string, MoverQuoteData | null>>({});
 
   useEffect(() => {
-    if (!symbol) return;
+    const activeSymbols = symbolsKey ? symbolsKey.split('|') : [];
+    if (activeSymbols.length === 0) return;
+    const activeSet = new Set(activeSymbols);
+    let unsubscribeRanges: (() => void) | undefined;
+    let unsubscribeQuotes: (() => void) | undefined;
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsLoading(true);
-
-    const unsub = marketDataService.onChangeRanges((sym, rangesData) => {
-      if (sym !== symbol) return;
-      setData(rangesData);
-      setIsLoading(false);
-    });
-
-    marketDataService.requestChangeRanges([symbol]);
-
-    return unsub;
-  }, [symbol]);
-
-  return { data, isLoading };
-}
-
-/**
- * Per-symbol hook: returns symbol-data (52w high/low) via the market WebSocket service.
- * Only requests data when enabled (i.e. when 52w columns are visible).
- */
-function useMoverQuote(symbol: string, enabled: boolean) {
-  const [data, setData] = useState<MoverQuote | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (!symbol || !enabled) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setIsLoading(false);
-      return;
+    if (needsRanges) {
+      unsubscribeRanges = marketDataService.onChangeRanges((symbol, data) => {
+        if (!activeSet.has(symbol)) return;
+        setRangesBySymbol((current) => ({ ...current, [symbol]: data }));
+      });
+      marketDataService.requestChangeRanges(activeSymbols);
     }
 
-    setIsLoading(true);
+    if (needsQuotes) {
+      unsubscribeQuotes = marketDataService.onSymbolData((symbol, data: SymbolDataExtract | null) => {
+        if (!activeSet.has(symbol)) return;
+        setQuotesBySymbol((current) => ({
+          ...current,
+          [symbol]: data ? { yearHigh: data.yearHigh, yearLow: data.yearLow } : null,
+        }));
+      });
+      marketDataService.requestSymbolData(activeSymbols);
+    }
 
-    const unsub = marketDataService.onSymbolData((sym, symData: SymbolDataExtract | null) => {
-      if (sym !== symbol) return;
-      setData(symData ? { yearHigh: symData.yearHigh, yearLow: symData.yearLow } : null);
-      setIsLoading(false);
-    });
+    return () => {
+      unsubscribeRanges?.();
+      unsubscribeQuotes?.();
+    };
+  }, [symbolsKey, needsRanges, needsQuotes]);
 
-    marketDataService.requestSymbolData([symbol]);
-
-    return unsub;
-  }, [symbol, enabled]);
-
-  return { data, isLoading };
+  return {
+    rangesBySymbol,
+    quotesBySymbol,
+    isRangesLoading: (symbol: string) => needsRanges && !Object.prototype.hasOwnProperty.call(rangesBySymbol, symbol),
+    isQuoteLoading: (symbol: string) => needsQuotes && !Object.prototype.hasOwnProperty.call(quotesBySymbol, symbol),
+  };
 }
 
 function useMoverCategories() {
@@ -197,6 +189,24 @@ const DEFAULT_CATEGORIES: MoverCategory[] = [
   { key: 'SecLwr20', label: '<₹20' },
 ];
 
+const VIEW_ACTIVE_CLASSES: Record<MoverView, string> = {
+  matrix: 'border-terminal-amber bg-terminal-amber text-black shadow-[0_0_8px_rgba(245,158,11,0.3)]',
+  gainers: 'border-emerald-300 bg-emerald-400 text-black shadow-[0_0_8px_rgba(52,211,153,0.25)]',
+  losers: 'border-rose-300 bg-rose-400 text-black shadow-[0_0_8px_rgba(251,113,133,0.25)]',
+};
+
+const VIEW_INACTIVE_CLASSES: Record<MoverView, string> = {
+  matrix: 'border-transparent text-terminal-amber/70 hover:bg-terminal-amber/10 hover:text-terminal-amber',
+  gainers: 'border-transparent text-emerald-400/70 hover:bg-emerald-500/10 hover:text-emerald-400',
+  losers: 'border-transparent text-rose-400/70 hover:bg-rose-500/10 hover:text-rose-400',
+};
+
+const VIEW_DOT_CLASSES: Record<MoverView, string> = {
+  matrix: 'bg-terminal-amber',
+  gainers: 'bg-emerald-400',
+  losers: 'bg-rose-400',
+};
+
 const CATEGORY_SHORT_LABELS: Record<string, string> = {
   allSec: 'ALL MKT',
   NIFTY: 'NIFTY 50',
@@ -215,27 +225,6 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&gt;/gi, '>')
     .replace(/&#8377;/g, '₹');
 }
-
-const COLUMN_LABELS: Record<string, string> = {
-  close: 'CLOSE',
-  chg: 'CHG%',
-  open: 'OPEN',
-  high: 'HIGH',
-  low: 'LOW',
-  vol: 'VOL',
-  trnvr: 'TRNVR',
-  ca: 'CA',
-  '1w': '1W%',
-  '1m': '1M%',
-  '3m': '3M%',
-  '6m': '6M%',
-  '1y': '1Y%',
-  '2y': '2Y%',
-  '3y': '3Y%',
-  '5y': '5Y%',
-  '52wh': '52W HIGH',
-  '52wl': '52W LOW',
-};
 
 function mapItemToRow(item: TopMoverItem): MoverRow {
   return {
@@ -315,198 +304,75 @@ function MomentumHeatStrip({
   );
 }
 
-function computeAlignmentMeta(ranges: ChangeRanges | null, pChange: number) {
-  if (!ranges) {
-    return {
-      bullCount: 0,
-      velocity: 50,
-      label: 'AWAITING RANGES',
-      badgeClass: 'text-zinc-400 bg-zinc-800/40 border-zinc-700',
-    };
-  }
-
-  const validVals = [
-    ranges.oneWeekPercent,
-    ranges.oneMonthPercent,
-    ranges.threeMonthPercent,
-    ranges.sixMonthPercent,
-    ranges.oneYearPercent,
-  ].filter((v): v is number => v != null && !Number.isNaN(v));
-
-  if (validVals.length === 0) {
-    return {
-      bullCount: 0,
-      velocity: 50,
-      label: 'NO HISTORICAL DATA',
-      badgeClass: 'text-zinc-400 bg-zinc-800/40 border-zinc-700',
-    };
-  }
-
-  const bullCount = validVals.filter((v) => v >= 0).length;
-  const baseVelocity = Math.min(
-    99,
-    Math.max(12, Math.round(50 + pChange * 3 + (bullCount - validVals.length / 2) * 8))
-  );
-
-  if (bullCount >= Math.ceil(validVals.length * 0.8)) {
-    return {
-      bullCount,
-      velocity: Math.max(70, baseVelocity),
-      label: `▲ ACCELERATING (${bullCount}/${validVals.length})`,
-      badgeClass: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-    };
-  }
-  if (bullCount >= Math.ceil(validVals.length * 0.4)) {
-    return {
-      bullCount,
-      velocity: baseVelocity,
-      label: `◈ CONSOLIDATING (${bullCount}/${validVals.length})`,
-      badgeClass: 'text-terminal-amber bg-terminal-amber/10 border-terminal-amber/30',
-    };
-  }
-  return {
-    bullCount,
-    velocity: Math.min(35, baseVelocity),
-    label: `▼ BEARISH DRIFT (${bullCount}/${validVals.length})`,
-    badgeClass: 'text-rose-400 bg-rose-500/10 border-rose-500/30',
-  };
-}
-
-interface MomentumMatrixRowProps {
+interface MoverRowProps {
   row: MoverRow;
+  columns: MoverColumnKey[];
+  ranges: ChangeRanges | null;
+  rangesLoading: boolean;
+  quote: MoverQuoteData | null;
+  quoteLoading: boolean;
   onClick: () => void;
-  extraColumns: string[];
-  moversColumns: string[];
 }
 
-interface TopMoversRowProps {
-  row: MoverRow;
+interface TopMoversRowProps extends MoverRowProps {
   rank: number;
-  moversColumns: string[];
-  extraColumns: string[];
-  onClick: () => void;
 }
 
-function TopMoversRow({ row, rank, moversColumns, extraColumns, onClick }: TopMoversRowProps) {
-  const needs52w = moversColumns.includes('52wh') || moversColumns.includes('52wl');
-  const { data: ranges, isLoading: rangesLoading } = useChangeRanges(row.symbol);
-  const { data: quote, isLoading: quoteLoading } = useMoverQuote(row.symbol, needs52w);
-  const dash = <span className="text-zinc-400">&mdash;</span>;
-
-  const renderExtraCell = (column: string) => {
-    switch (column) {
-      case 'open': return formatPriceStr(row.open);
-      case 'high': return formatPriceStr(row.high);
-      case 'low': return formatPriceStr(row.low);
-      case 'vol': return formatVol(row.vol);
-      case 'trnvr': return formatTurnover(row.turnover);
-      case 'ca': return formatCaDt(row.caDate, row.caPurpose);
-      case '2y': return rangesLoading ? dash : formatRange(ranges?.twoYearPercent);
-      case '3y': return rangesLoading ? dash : formatRange(ranges?.threeYearPercent);
-      case '5y': return rangesLoading ? dash : formatRange(ranges?.fiveYearPercent);
-      case '52wh': return quoteLoading ? dash : formatPriceCell(quote?.yearHigh);
-      case '52wl': return quoteLoading ? dash : formatPriceCell(quote?.yearLow);
-      default: return null;
-    }
-  };
-
-  return (
-    <tr onClick={onClick} className="cursor-pointer border-b border-[#27272a]/60 hover:bg-[#14141a]">
-      <td className="py-2 pr-2"><span className="mr-2 text-zinc-400">#{rank}</span><span className="font-bold text-white">{row.symbol}</span></td>
-      <td className="px-2 py-2 text-right font-bold text-white">&#8377;{row.close}</td>
-      <td className="px-2 py-2 text-right">{formatChange(row.pChange)}</td>
-      {moversColumns.includes('vol') && <td className="px-2 py-2 text-right text-terminal-amber">{formatVol(row.vol)}</td>}
-      {moversColumns.includes('trnvr') && <td className="px-2 py-2 text-right text-terminal-amber">{formatTurnover(row.turnover)}</td>}
-      {extraColumns.map((column) => (
-        <td key={column} className="px-2 py-2 text-right text-zinc-300">{renderExtraCell(column)}</td>
-      ))}
-    </tr>
-  );
+function moverCellClass(column: MoverColumnKey): string {
+  const alignment = column === 'ticker'
+    ? 'text-left'
+    : column === 'momentum' || column === 'velocity' || column === 'radar'
+      ? 'text-center'
+      : 'text-right';
+  return `py-2 px-2 border-r border-[#27272a]/50 ${alignment}`;
 }
 
-function MomentumMatrixRow({
+function renderMoverCell({
   row,
-  onClick,
-  extraColumns,
-  moversColumns,
-}: MomentumMatrixRowProps) {
-  const { data: ranges, isLoading: rangesLoading } = useChangeRanges(row.symbol);
-  const needs52w = extraColumns.includes('52wh') || extraColumns.includes('52wl');
-  const { data: quote, isLoading: quoteLoading } = useMoverQuote(row.symbol, needs52w);
-
-  const isPositive = row.pChange >= 0;
-  const alignment = computeAlignmentMeta(ranges, row.pChange);
+  column,
+  ranges,
+  rangesLoading,
+  quote,
+  quoteLoading,
+  rank,
+  showBias,
+}: Omit<MoverRowProps, 'columns' | 'onClick'> & {
+  column: MoverColumnKey;
+  rank?: number;
+  showBias?: boolean;
+}) {
   const dash = <span className="text-zinc-400">&mdash;</span>;
+  const alignment = computeMoverAlignment(ranges, row.pChange);
+  const isPositive = row.pChange >= 0;
 
-  const renderExtraCell = (col: string) => {
-    switch (col) {
-      case 'open':
-        return formatPriceStr(row.open);
-      case 'high':
-        return formatPriceStr(row.high);
-      case 'low':
-        return formatPriceStr(row.low);
-      case 'vol':
-        return formatVol(row.vol);
-      case 'trnvr':
-        return formatTurnover(row.turnover);
-      case 'ca':
-        return formatCaDt(row.caDate, row.caPurpose);
-      case '2y':
-        return rangesLoading ? dash : formatRange(ranges?.twoYearPercent);
-      case '3y':
-        return rangesLoading ? dash : formatRange(ranges?.threeYearPercent);
-      case '5y':
-        return rangesLoading ? dash : formatRange(ranges?.fiveYearPercent);
-      case '52wh':
-        return quoteLoading ? dash : formatPriceCell(quote?.yearHigh);
-      case '52wl':
-        return quoteLoading ? dash : formatPriceCell(quote?.yearLow);
-      default:
-        return null;
-    }
-  };
-
-  return (
-    <tr
-      onClick={onClick}
-      className="hover:bg-[#14141a] transition-colors cursor-pointer group border-b border-[#27272a]/50"
-    >
-      <td className="py-2 pr-2">
+  switch (column) {
+    case 'ticker':
+      return (
         <div className="flex items-center gap-2">
-          <span
-            className={`font-bold text-xs sm:text-sm transition-colors ${
-              isPositive
-                ? 'text-white group-hover:text-terminal-amber'
-                : 'text-white group-hover:text-rose-400'
-            }`}
-          >
+          {rank != null && <span className="text-zinc-400">#{rank}</span>}
+          <span className="font-bold text-white transition-colors">
             {row.symbol}
           </span>
-          <span
-            className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
-              isPositive
-                ? 'text-emerald-400 bg-emerald-500/10'
-                : 'text-rose-400 bg-rose-500/10'
-            }`}
-          >
-            {isPositive ? 'BULL' : 'BEAR'}
-          </span>
+          {showBias && (
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                isPositive ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'
+              }`}
+            >
+              {isPositive ? 'BULL' : 'BEAR'}
+            </span>
+          )}
         </div>
-      </td>
-      <td className="py-2 px-2 text-right font-bold text-white tabular-nums text-xs sm:text-sm">
-        &#8377;{row.close}
-      </td>
-      <td className="py-2 px-2 text-right tabular-nums text-xs">
-        {formatChange(row.pChange)}
-      </td>
-      <td className="py-2 px-2">
-        <MomentumHeatStrip
-          ranges={ranges}
-          pChange={row.pChange}
-        />
-      </td>
-      <td className="py-2 px-2 text-center">
+      );
+    case 'ltp':
+      return <span className="font-bold text-white tabular-nums">&#8377;{row.close}</span>;
+    case 'chg':
+      return formatChange(row.pChange);
+    case 'momentum':
+      return rangesLoading ? dash : <MomentumHeatStrip ranges={ranges} pChange={row.pChange} />;
+    case 'velocity':
+      if (rangesLoading) return dash;
+      return (
         <div
           className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border ${
             alignment.velocity >= 70
@@ -516,23 +382,64 @@ function MomentumMatrixRow({
               : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
           }`}
         >
-          <span className="font-extrabold text-xs tabular-nums">
-            {alignment.velocity} / 100
-          </span>
+          <span className="font-extrabold text-xs tabular-nums">{alignment.velocity} / 100</span>
         </div>
-      </td>
-      {moversColumns.includes('vol') && <td className="py-2 px-2 text-right font-bold text-terminal-amber tabular-nums text-xs">{formatVol(row.vol)}</td>}
-      {moversColumns.includes('trnvr') && <td className="py-2 px-2 text-right font-bold text-terminal-amber tabular-nums text-xs">{formatTurnover(row.turnover)}</td>}
-      <td className="py-2 pl-2 text-center">
-        <span
-          className={`text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${alignment.badgeClass}`}
-        >
+      );
+    case 'vol':
+      return <span className="font-bold text-terminal-amber tabular-nums">{formatVol(row.vol)}</span>;
+    case 'trnvr':
+      return <span className="font-bold text-terminal-amber tabular-nums">{formatTurnover(row.turnover)}</span>;
+    case 'radar':
+      if (rangesLoading) return dash;
+      return (
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${alignment.badgeClass}`}>
           {alignment.label}
         </span>
-      </td>
-      {extraColumns.filter((col) => moversColumns.includes(col)).map((col) => (
-        <td key={col} className="py-2 px-2 text-right text-xs text-zinc-300 tabular-nums">
-          {renderExtraCell(col)}
+      );
+    case 'open':
+      return formatPriceStr(row.open);
+    case 'high':
+      return formatPriceStr(row.high);
+    case 'low':
+      return formatPriceStr(row.low);
+    case 'ca':
+      return formatCaDt(row.caDate, row.caPurpose);
+    case '2y':
+      return rangesLoading ? dash : formatRange(ranges?.twoYearPercent);
+    case '3y':
+      return rangesLoading ? dash : formatRange(ranges?.threeYearPercent);
+    case '5y':
+      return rangesLoading ? dash : formatRange(ranges?.fiveYearPercent);
+    case '52wh':
+      return quoteLoading ? dash : formatPriceCell(quote?.yearHigh);
+    case '52wl':
+      return quoteLoading ? dash : formatPriceCell(quote?.yearLow);
+    default:
+      return null;
+  }
+}
+
+function TopMoversRow({ row, rank, columns, ranges, rangesLoading, quote, quoteLoading, onClick }: TopMoversRowProps) {
+  return (
+    <tr onClick={onClick} className="cursor-pointer border-b border-[#27272a]/60 hover:bg-[#14141a] transition-colors">
+      {columns.map((column) => (
+        <td key={column} className={moverCellClass(column)}>
+          {renderMoverCell({ row, column, ranges, rangesLoading, quote, quoteLoading, rank })}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function MomentumMatrixRow({ row, columns, ranges, rangesLoading, quote, quoteLoading, onClick }: MoverRowProps) {
+  return (
+    <tr
+      onClick={onClick}
+      className="hover:bg-[#14141a] transition-colors cursor-pointer group border-b border-[#27272a]/50"
+    >
+      {columns.map((column) => (
+        <td key={column} className={moverCellClass(column)}>
+          {renderMoverCell({ row, column, ranges, rangesLoading, quote, quoteLoading, showBias: true })}
         </td>
       ))}
     </tr>
@@ -543,12 +450,19 @@ export function MoversWidget() {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const [moversColumns] = useAtom(moversColumnsAtom);
+  const [moversColumnOrder, setMoversColumnOrder] = useAtom(moversColumnOrderAtom);
   const [moversCategory, setMoversCategory] = useAtom(moversCategoryAtom);
 
-  const [activeView, setActiveView] = useState<MoversView>('matrix');
+  const [activeView, setActiveView] = useState<MoverView>('matrix');
   const [page, setPage] = useState(0);
-  const [allSortOrder, setAllSortOrder] = useState<'gains' | 'drops'>('gains');
+  const [sortState, setSortState] = useState<{ key: MoverColumnKey; direction: SortDirection }>({
+    key: 'chg',
+    direction: 'desc',
+  });
   const [searchQuery, setSearchQuery] = useState('');
+  const [draggedColumn, setDraggedColumn] = useState<MoverColumnKey | null>(null);
+  const [columnDropTarget, setColumnDropTarget] = useState<{ key: MoverColumnKey; placement: ColumnDropPlacement } | null>(null);
+  const suppressColumnClickRef = useRef(false);
 
   const { data: categories = [] } = useMoverCategories();
 
@@ -570,11 +484,9 @@ export function MoversWidget() {
   const loserRows: MoverRow[] = useMemo(() => losers.map(mapItemToRow), [losers]);
 
   const displayCategories = categories.length > 0 ? categories : DEFAULT_CATEGORIES;
-
-  const extraColumns = useMemo(
-    () =>
-      moversColumns.filter((column) => ['open', 'high', 'low', 'ca', '2y', '3y', '5y', '52wh', '52wl'].includes(column)),
-    [moversColumns]
+  const visibleColumns = useMemo(
+    () => getVisibleMoverColumns(moversColumnOrder, activeView, moversColumns),
+    [moversColumnOrder, activeView, moversColumns],
   );
 
   const filteredGainers = useMemo(() => {
@@ -593,28 +505,99 @@ export function MoversWidget() {
     const map = new Map<string, MoverRow>();
     for (const r of filteredGainers) map.set(r.symbol, r);
     for (const r of filteredLosers) map.set(r.symbol, r);
-    const combined = Array.from(map.values());
-    if (allSortOrder === 'drops') {
-      return combined.sort((a, b) => a.pChange - b.pChange);
-    }
-    return combined.sort((a, b) => b.pChange - a.pChange);
-  }, [filteredGainers, filteredLosers, allSortOrder]);
+    return Array.from(map.values());
+  }, [filteredGainers, filteredLosers]);
 
   const activeRows = activeView === 'gainers'
     ? filteredGainers
     : activeView === 'losers'
       ? filteredLosers
       : matrixRows;
-  const pageCount = Math.max(1, Math.ceil(activeRows.length / MOVERS_PAGE_SIZE));
+  const activeSymbols = useMemo(() => activeRows.map((row) => row.symbol), [activeRows]);
+  const needsRanges = visibleColumns.some((column) => ['momentum', 'velocity', 'radar', '2y', '3y', '5y'].includes(column))
+    || ['momentum', 'velocity', 'radar', '2y', '3y', '5y'].includes(sortState.key);
+  const needsQuotes = visibleColumns.some((column) => column === '52wh' || column === '52wl')
+    || sortState.key === '52wh'
+    || sortState.key === '52wl';
+  const {
+    rangesBySymbol,
+    quotesBySymbol,
+    isRangesLoading,
+    isQuoteLoading,
+  } = useMoverMarketData(activeSymbols, needsRanges, needsQuotes);
+
+  const orderedRows = useMemo(() => (
+    [...activeRows].sort((a, b) => compareMoverRows(
+      a,
+      b,
+      sortState.key,
+      sortState.direction,
+      rangesBySymbol,
+      quotesBySymbol,
+    ))
+  ), [activeRows, sortState, rangesBySymbol, quotesBySymbol]);
+
+  const pageCount = Math.max(1, Math.ceil(orderedRows.length / MOVERS_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
-  const pagedRows = activeRows.slice(
+  const pagedRows = orderedRows.slice(
     currentPage * MOVERS_PAGE_SIZE,
     (currentPage + 1) * MOVERS_PAGE_SIZE,
   );
 
-  const handleViewChange = (view: MoversView) => {
+  const handleViewChange = (view: MoverView) => {
     setActiveView(view);
     setPage(0);
+    setSortState({ key: 'chg', direction: view === 'losers' ? 'asc' : 'desc' });
+  };
+
+  const handleHeaderClick = (column: MoverColumnKey) => {
+    if (suppressColumnClickRef.current) return;
+    setSortState((current) => current.key === column
+      ? { key: column, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+      : { key: column, direction: getMoverColumnDefaultDirection(column) });
+    setPage(0);
+  };
+
+  const handleColumnDragStart = (event: React.DragEvent<HTMLTableCellElement>, key: MoverColumnKey) => {
+    suppressColumnClickRef.current = true;
+    setDraggedColumn(key);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', key);
+  };
+
+  const handleColumnDragOver = (event: React.DragEvent<HTMLTableCellElement>, key: MoverColumnKey) => {
+    if (!draggedColumn || draggedColumn === key) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    const rect = event.currentTarget.getBoundingClientRect();
+    const placement: ColumnDropPlacement = event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+    setColumnDropTarget((current) => (
+      current?.key === key && current.placement === placement ? current : { key, placement }
+    ));
+  };
+
+  const clearColumnDrag = () => {
+    setDraggedColumn(null);
+    setColumnDropTarget(null);
+    window.setTimeout(() => {
+      suppressColumnClickRef.current = false;
+    }, 0);
+  };
+
+  const handleColumnDrop = (event: React.DragEvent<HTMLTableCellElement>, key: MoverColumnKey) => {
+    event.preventDefault();
+    if (!draggedColumn || draggedColumn === key) {
+      clearColumnDrag();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const placement: ColumnDropPlacement = columnDropTarget?.key === key
+      ? columnDropTarget.placement
+      : event.clientX < rect.left + rect.width / 2
+        ? 'before'
+        : 'after';
+    setMoversColumnOrder((current) => reorderColumns(current, draggedColumn, key, placement));
+    clearColumnDrag();
   };
 
   const handleRowClick = (row: MoverRow) => {
@@ -694,8 +677,8 @@ export function MoversWidget() {
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#27272a] bg-[#0c0c0f] p-2.5 shadow-md transition-colors hover:border-zinc-600 sm:p-3">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2.5 border-b border-[#27272a]/70">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
-                <span className="w-2 h-2 rounded-full bg-terminal-amber" />
+              <span data-testid="movers-active-view" className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
+                <span className={`w-2 h-2 rounded-full ${VIEW_DOT_CLASSES[activeView]}`} />
                 {activeView === 'matrix' ? 'Multi-Period Momentum Matrix' : activeView === 'gainers' ? 'Top Gainers' : 'Top Losers'}
               </span>
               <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-2 py-0.5 rounded border border-[#27272a]">
@@ -704,18 +687,20 @@ export function MoversWidget() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">VIEW:</span>
               <div role="tablist" aria-label="Movers views" className="flex items-center gap-1 rounded-md border border-[#27272a] bg-[#121216] p-1">
-                {(['matrix', 'gainers', 'losers'] as MoversView[]).map((view) => (
+                {(['matrix', 'gainers', 'losers'] as MoverView[]).map((view) => (
                   <button
                     key={view}
                     type="button"
                     role="tab"
                     aria-selected={activeView === view}
+                    data-active={activeView === view}
                     onClick={() => handleViewChange(view)}
-                    className={`rounded px-2.5 py-1.5 text-[11px] font-bold uppercase transition-colors ${
+                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold uppercase transition-colors ${
                       activeView === view
-                        ? 'bg-terminal-amber text-black'
-                        : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
+                        ? VIEW_ACTIVE_CLASSES[view]
+                        : VIEW_INACTIVE_CLASSES[view]
                     }`}
                   >
                     {view}
@@ -724,19 +709,20 @@ export function MoversWidget() {
               </div>
               {activeView === 'matrix' && (
                 <>
+                  <span className="ml-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500">SORT:</span>
                   <button
                     type="button"
-                    aria-pressed={allSortOrder === 'gains'}
-                    onClick={() => { setAllSortOrder('gains'); setPage(0); }}
-                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold ${allSortOrder === 'gains' ? 'border-emerald-300 bg-emerald-400 text-black' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'}`}
+                    aria-pressed={sortState.key === 'chg' && sortState.direction === 'desc'}
+                    onClick={() => { setSortState({ key: 'chg', direction: 'desc' }); setPage(0); }}
+                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap ${sortState.key === 'chg' && sortState.direction === 'desc' ? 'border-emerald-300 bg-emerald-400 text-black' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'}`}
                   >
                     ▲ Gains
                   </button>
                   <button
                     type="button"
-                    aria-pressed={allSortOrder === 'drops'}
-                    onClick={() => { setAllSortOrder('drops'); setPage(0); }}
-                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold ${allSortOrder === 'drops' ? 'border-rose-300 bg-rose-400 text-black' : 'border-rose-500/30 bg-rose-500/10 text-rose-400'}`}
+                    aria-pressed={sortState.key === 'chg' && sortState.direction === 'asc'}
+                    onClick={() => { setSortState({ key: 'chg', direction: 'asc' }); setPage(0); }}
+                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap ${sortState.key === 'chg' && sortState.direction === 'asc' ? 'border-rose-300 bg-rose-400 text-black' : 'border-rose-500/30 bg-rose-500/10 text-rose-400'}`}
                   >
                     ▼ Drops
                   </button>
@@ -745,25 +731,59 @@ export function MoversWidget() {
             </div>
           </div>
 
-        <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
-            <table data-testid="movers-matrix-table" className="w-full text-left font-mono tabular-nums border-collapse min-w-[780px]">
-              <thead>
-                <tr className="text-[10px] uppercase text-zinc-400 border-b border-[#27272a]">
-                  <th className="pb-2 font-bold">{activeView === 'matrix' ? 'Ticker & Bias' : 'Rank & Ticker'}</th>
-                  <th className="pb-2 font-bold text-right">LTP (&#8377;)</th>
-                  <th className="pb-2 font-bold text-right">Day %</th>
-                  {activeView === 'matrix' && <th className="pb-2 font-bold text-center">
-                    5-Period Momentum Alignment (1W / 1M / 3M / 6M / 1Y)
-                  </th>}
-                  {activeView === 'matrix' && <th className="pb-2 font-bold text-center">Velocity Score</th>}
-                  {moversColumns.includes('vol') && <th className="pb-2 font-bold text-right">Volume</th>}
-                  {moversColumns.includes('trnvr') && <th className="pb-2 font-bold text-right">Turnover</th>}
-                  {activeView === 'matrix' && <th className="pb-2 font-bold text-center">Radar Status</th>}
-                  {extraColumns.filter((col) => moversColumns.includes(col)).map((col) => (
-                    <th key={col} className="pb-2 font-bold text-right">
-                      {COLUMN_LABELS[col] || col}
-                    </th>
-                  ))}
+          <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+            <table data-testid="movers-matrix-table" className="w-full min-w-[780px] border-collapse text-left font-mono tabular-nums">
+              <thead className="sticky top-0 z-10 border-b border-[#27272a] bg-[#121216] text-[10px] uppercase tracking-wider text-zinc-400">
+                <tr>
+                  {visibleColumns.map((column) => {
+                    const isSorted = sortState.key === column;
+                    const label = column === 'ticker' && activeView !== 'matrix'
+                      ? 'Rank & Ticker'
+                      : MOVER_COLUMN_LABELS[column];
+                    const alignment = column === 'ticker'
+                      ? 'text-left'
+                      : ['momentum', 'velocity', 'radar'].includes(column)
+                        ? 'text-center'
+                        : 'text-right';
+                    const dropPlacement = columnDropTarget?.key === column ? columnDropTarget.placement : null;
+
+                    return (
+                      <th
+                        key={column}
+                        scope="col"
+                        data-column-key={column}
+                        draggable
+                        aria-label={label}
+                        aria-sort={isSorted ? (sortState.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        onClick={() => handleHeaderClick(column)}
+                        onDragStart={(event) => handleColumnDragStart(event, column)}
+                        onDragOver={(event) => handleColumnDragOver(event, column)}
+                        onDrop={(event) => handleColumnDrop(event, column)}
+                        onDragEnd={clearColumnDrag}
+                        title={`${label} — click to sort, drag to reorder`}
+                        className={`relative cursor-grab select-none whitespace-nowrap border-b border-r border-[#27272a] px-2 py-2 font-bold transition-colors active:cursor-grabbing ${alignment} ${
+                          isSorted ? 'text-terminal-amber' : 'text-zinc-400 hover:text-zinc-200'
+                        } ${draggedColumn === column ? 'opacity-40' : ''}`}
+                      >
+                        <span aria-hidden className="mr-1 text-[9px] text-zinc-600">⠿</span>
+                        <span>{label}</span>
+                        {isSorted && (
+                          <span className="ml-1 text-terminal-amber" aria-hidden>
+                            {sortState.direction === 'asc' ? '▲' : '▼'}
+                          </span>
+                        )}
+                        {dropPlacement && (
+                          <span
+                            aria-hidden
+                            data-drop-indicator={dropPlacement}
+                            className={`pointer-events-none absolute inset-y-0 w-0.5 bg-terminal-amber ${
+                              dropPlacement === 'before' ? '-left-px' : '-right-px'
+                            }`}
+                          />
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="text-xs">
@@ -771,17 +791,23 @@ export function MoversWidget() {
                   <MomentumMatrixRow
                     key={`matrix-${row.symbol}`}
                     row={row}
+                    columns={visibleColumns}
+                    ranges={rangesBySymbol[row.symbol] ?? null}
+                    rangesLoading={isRangesLoading(row.symbol)}
+                    quote={quotesBySymbol[row.symbol] ?? null}
+                    quoteLoading={isQuoteLoading(row.symbol)}
                     onClick={() => handleRowClick(row)}
-                    extraColumns={extraColumns}
-                    moversColumns={moversColumns}
                   />
                 ) : (
                   <TopMoversRow
                     key={`${activeView}-${row.symbol}`}
                     row={row}
                     rank={currentPage * MOVERS_PAGE_SIZE + index + 1}
-                    moversColumns={moversColumns}
-                    extraColumns={extraColumns.filter((column) => moversColumns.includes(column))}
+                    columns={visibleColumns}
+                    ranges={rangesBySymbol[row.symbol] ?? null}
+                    rangesLoading={isRangesLoading(row.symbol)}
+                    quote={quotesBySymbol[row.symbol] ?? null}
+                    quoteLoading={isQuoteLoading(row.symbol)}
                     onClick={() => handleRowClick(row)}
                   />
                 ))}
@@ -790,7 +816,7 @@ export function MoversWidget() {
           </div>
           <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[#27272a] px-2.5 py-2 text-zinc-300 sm:px-3">
             <span className="font-mono text-[11px] tabular-nums" aria-live="polite">
-              PAGE {currentPage + 1} OF {pageCount} · {activeRows.length} ROWS
+              PAGE {currentPage + 1} OF {pageCount} · {orderedRows.length} ROWS
             </span>
             <div className="flex gap-1.5">
               <button type="button" aria-label="Previous page" onClick={() => setPage((previous) => Math.max(0, previous - 1))} disabled={currentPage === 0} className="rounded border border-[#3f3f46] bg-[#121216] px-2.5 py-1.5 text-[11px] font-bold text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40">← PREV</button>

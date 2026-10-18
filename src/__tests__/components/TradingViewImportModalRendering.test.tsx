@@ -51,6 +51,11 @@ describe('TradingViewImportModal rendering via TerminalContainer', () => {
     expect(screen.getByText(/PASTE SYMBOLS/i)).toBeInTheDocument();
     expect(screen.getByText(/SHARED URL/i)).toBeInTheDocument();
 
+    fireEvent.click(screen.getByText(/SHARED URL/i));
+    expect(
+      screen.getByRole('textbox', { name: /TradingView shared watchlist URL/i }),
+    ).toHaveValue('');
+
     const cancelBtn = screen.getByRole('button', { name: /cancel/i });
     expect(cancelBtn).toBeInTheDocument();
     fireEvent.click(cancelBtn);

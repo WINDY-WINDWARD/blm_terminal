@@ -135,7 +135,9 @@ def ticker_intraday_hourly_update_worker() -> None:
         _set_first_run_complete,
         _shutdown_event,
         _sleep_interruptible,
+        _startup_stock_universe_done,
         _startup_ticker_hourly_done,
+        _wait_for_startup_event,
     )
     from app.jobs.runner import update_job_status_sync
     from app.services.data_sync.intraday import _ticker_intraday_update_sync
@@ -152,8 +154,12 @@ def ticker_intraday_hourly_update_worker() -> None:
         return
 
     if _is_first_run("ticker_intraday_hourly_update"):
-        from app.backgroundtasks._runtime import _wait_for_startup_event
-        _wait_for_startup_event()
+        if _wait_for_startup_event(
+            _startup_stock_universe_done,
+            "stock_universe",
+            "job.ticker_intraday_hourly_update",
+        ):
+            return
         update_job_status_sync("job.ticker_intraday_hourly_update", "running", progress=0, message="Starting hourly backfill...")
         try:
             _ticker_intraday_update_sync(["1h"])
