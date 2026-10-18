@@ -404,13 +404,12 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
           <div className="text-center text-white/50 py-8 font-bold">NO {activeTab} PICKS</div>
         ) : (
           filteredPicks.map((pick) => {
-            // Calculate PnL (Live vs Closed)
             const currentLivePrice = tickData[`${pick.symbol}.NSE`]?.ltp;
             const isClosed = pick.status === 'CLOSED';
             const referencePrice = isClosed ? pick.exit_price : currentLivePrice;
 
             let pnlDisplay = '-';
-            let pnlColor = 'text-white/50';
+            let pnlColor = 'text-zinc-300';
             if (referencePrice && pick.entry_price) {
               const pnlPct = ((referencePrice - pick.entry_price) / pick.entry_price) * 100;
               pnlDisplay = `${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
@@ -428,22 +427,24 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
               : '';
             
             return (
-              <div 
+              <article
                 key={pick.id} 
+                data-testid={`pick-ticket-${pick.id}`}
                 onClick={() => setSelectedPickId(pick.id)}
                 className={cn(
-                  "group flex items-center justify-between border px-3 py-2 cursor-pointer transition-all duration-150 rounded-sm active:scale-[0.99]",
+                  'group grid min-w-0 grid-cols-1 gap-3 rounded-md border p-3 transition-colors duration-150 hover:border-zinc-600 hover:bg-[#121216] sm:grid-cols-[minmax(0,1fr)_auto] sm:p-4 cursor-pointer',
                   pick.status === 'ABANDONED' 
-                    ? "border-zinc-800 bg-zinc-950/40 hover:bg-zinc-900/40 hover:border-zinc-700" 
-                    : "border-terminal-gray/70 bg-black/60 hover:bg-zinc-900/60 hover:border-terminal-amber/60 hover:shadow-[0_0_8px_rgba(255,182,0,0.08)]"
+                    ? 'border-zinc-800 bg-zinc-950/40 opacity-70'
+                    : 'border-[#27272a] bg-[#0c0c0f]'
                 )}
               >
-                {/* Left side info */}
-                <div className="flex items-center gap-2.5 flex-wrap min-w-0">
-                  <span 
+                <div className="flex min-w-0 flex-col justify-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <button
+                    type="button"
                     className={cn(
-                      "text-[13px] font-bold tracking-wide transition-colors group-hover:text-white",
-                      pick.status === 'ABANDONED' ? "text-white/40" : "text-terminal-amber"
+                      'text-sm font-bold tracking-wide transition-colors hover:text-white sm:text-base',
+                      pick.status === 'ABANDONED' ? 'text-zinc-400' : 'text-terminal-amber'
                     )}
                     onClick={(e) => { 
                       e.stopPropagation(); 
@@ -452,40 +453,62 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
                     title="Set as active symbol"
                   >
                     {pick.symbol}
-                  </span>
+                  </button>
 
                   <span className={cn(
-                    'px-1.5 py-0.5 text-[10px] rounded-sm font-bold border',
-                    pick.direction === 'LONG' ? 'bg-green-900/30 text-green-400 border-green-800/60' : 'bg-red-900/30 text-red-400 border-red-800/60'
+                    'rounded border px-2 py-1 text-[11px] font-bold',
+                    pick.direction === 'LONG'
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                      : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
                   )}>
                     {pick.direction}
                   </span>
 
                   {getActionPill(pick)}
 
-                  <span className="text-[10px] uppercase text-white/50 border border-terminal-gray/50 px-1 py-0.2 rounded-sm">
+                  <span className="rounded border border-[#3f3f46] bg-[#121216] px-2 py-1 text-[10px] font-bold uppercase text-zinc-300">
                     {pick.status}
                   </span>
+                  </div>
+                  {formattedDate && <span className="font-mono text-xs text-zinc-400">{formattedDate}</span>}
+                </div>
 
-                  {formattedDate && (
-                    <span className="text-[10px] text-white/40 font-mono hidden sm:inline">
-                      {formattedDate}
-                    </span>
-                  )}
-                </div>
-                
-                {/* Right side stats & view action */}
-                <div className="flex items-center gap-3 text-[10px] font-mono shrink-0 ml-2">
-                  <span className={`font-bold ${pnlColor}`}>{pnlDisplay}</span>
-                  <span className="text-white/40 hidden md:inline">E:<span className="text-white ml-0.5">{pick.entry_price}</span></span>
-                  <span className="text-white/40 hidden md:inline">TP:<span className="text-terminal-green ml-0.5">{pick.take_profit}</span></span>
-                  <span className="text-white/40 hidden md:inline">SL:<span className="text-terminal-red ml-0.5">{pick.stop_loss}</span></span>
-                  
-                  <span className="text-terminal-amber/70 group-hover:text-terminal-amber group-hover:translate-x-0.5 transition-all text-xs font-bold pl-1">
+                <div className="flex min-w-0 items-center justify-between gap-3 sm:flex-col sm:items-end sm:justify-center">
+                  <div className="text-left sm:text-right">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400">Open P&amp;L</span>
+                    <span className={cn('font-mono text-sm font-bold tabular-nums', pnlColor)}>{pnlDisplay}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedPickId(pick.id);
+                    }}
+                    className="shrink-0 rounded border border-terminal-amber/40 bg-terminal-amber/10 px-3 py-1.5 text-xs font-bold text-terminal-amber transition-colors hover:bg-terminal-amber hover:text-black"
+                    aria-label={`View details for ${pick.symbol}`}
+                  >
                     DETAILS ↗
-                  </span>
+                  </button>
                 </div>
-              </div>
+
+                <div
+                  data-testid={`pick-ticket-levels-${pick.id}`}
+                  className="col-span-full grid grid-cols-3 gap-2"
+                >
+                  <div className="rounded border border-[#27272a] bg-[#121216] p-2.5 sm:p-3">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 sm:text-[11px]">Entry</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-zinc-100 sm:text-base">{pick.entry_price}</span>
+                  </div>
+                  <div className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2.5 sm:p-3">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-emerald-400 sm:text-[11px]">Target</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-emerald-300 sm:text-base">{pick.take_profit}</span>
+                  </div>
+                  <div className="rounded border border-rose-500/20 bg-rose-500/5 p-2.5 sm:p-3">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">Stop</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-rose-300 sm:text-base">{pick.stop_loss}</span>
+                  </div>
+                </div>
+              </article>
             );
           })
         )}

@@ -51,8 +51,9 @@ interface MoverCategory {
   label: string;
 }
 
-type TimeframeFocus = 'INTRADAY' | '1-WEEK' | '1-MONTH' | '3-MONTH' | '52-WEEK';
-type MatrixFilter = 'ALL' | 'GAINERS' | 'LOSERS';
+type MoversView = 'matrix' | 'gainers' | 'losers';
+
+const MOVERS_PAGE_SIZE = 6;
 
 async function fetchTopMovers(
   category: string,
@@ -207,14 +208,6 @@ const CATEGORY_SHORT_LABELS: Record<string, string> = {
   FOSec: 'F&O',
 };
 
-const TIMEFRAME_PILLS: TimeframeFocus[] = [
-  'INTRADAY',
-  '1-WEEK',
-  '1-MONTH',
-  '3-MONTH',
-  '52-WEEK',
-];
-
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&amp;/gi, '&')
@@ -270,7 +263,6 @@ function MomentumHeatStrip({
 }: {
   ranges: ChangeRanges | null;
   pChange?: number;
-  timeframeFocus?: TimeframeFocus;
 }) {
   const segments: HeatSegment[] = [
     { label: '1W', value: ranges?.oneWeekPercent },
@@ -383,15 +375,60 @@ function computeAlignmentMeta(ranges: ChangeRanges | null, pChange: number) {
 interface MomentumMatrixRowProps {
   row: MoverRow;
   onClick: () => void;
-  timeframeFocus: TimeframeFocus;
   extraColumns: string[];
+  moversColumns: string[];
+}
+
+interface TopMoversRowProps {
+  row: MoverRow;
+  rank: number;
+  moversColumns: string[];
+  extraColumns: string[];
+  onClick: () => void;
+}
+
+function TopMoversRow({ row, rank, moversColumns, extraColumns, onClick }: TopMoversRowProps) {
+  const needs52w = moversColumns.includes('52wh') || moversColumns.includes('52wl');
+  const { data: ranges, isLoading: rangesLoading } = useChangeRanges(row.symbol);
+  const { data: quote, isLoading: quoteLoading } = useMoverQuote(row.symbol, needs52w);
+  const dash = <span className="text-zinc-400">&mdash;</span>;
+
+  const renderExtraCell = (column: string) => {
+    switch (column) {
+      case 'open': return formatPriceStr(row.open);
+      case 'high': return formatPriceStr(row.high);
+      case 'low': return formatPriceStr(row.low);
+      case 'vol': return formatVol(row.vol);
+      case 'trnvr': return formatTurnover(row.turnover);
+      case 'ca': return formatCaDt(row.caDate, row.caPurpose);
+      case '2y': return rangesLoading ? dash : formatRange(ranges?.twoYearPercent);
+      case '3y': return rangesLoading ? dash : formatRange(ranges?.threeYearPercent);
+      case '5y': return rangesLoading ? dash : formatRange(ranges?.fiveYearPercent);
+      case '52wh': return quoteLoading ? dash : formatPriceCell(quote?.yearHigh);
+      case '52wl': return quoteLoading ? dash : formatPriceCell(quote?.yearLow);
+      default: return null;
+    }
+  };
+
+  return (
+    <tr onClick={onClick} className="cursor-pointer border-b border-[#27272a]/60 hover:bg-[#14141a]">
+      <td className="py-2 pr-2"><span className="mr-2 text-zinc-400">#{rank}</span><span className="font-bold text-white">{row.symbol}</span></td>
+      <td className="px-2 py-2 text-right font-bold text-white">&#8377;{row.close}</td>
+      <td className="px-2 py-2 text-right">{formatChange(row.pChange)}</td>
+      {moversColumns.includes('vol') && <td className="px-2 py-2 text-right text-terminal-amber">{formatVol(row.vol)}</td>}
+      {moversColumns.includes('trnvr') && <td className="px-2 py-2 text-right text-terminal-amber">{formatTurnover(row.turnover)}</td>}
+      {extraColumns.map((column) => (
+        <td key={column} className="px-2 py-2 text-right text-zinc-300">{renderExtraCell(column)}</td>
+      ))}
+    </tr>
+  );
 }
 
 function MomentumMatrixRow({
   row,
   onClick,
-  timeframeFocus,
   extraColumns,
+  moversColumns,
 }: MomentumMatrixRowProps) {
   const { data: ranges, isLoading: rangesLoading } = useChangeRanges(row.symbol);
   const needs52w = extraColumns.includes('52wh') || extraColumns.includes('52wl');
@@ -467,7 +504,6 @@ function MomentumMatrixRow({
         <MomentumHeatStrip
           ranges={ranges}
           pChange={row.pChange}
-          timeframeFocus={timeframeFocus}
         />
       </td>
       <td className="py-2 px-2 text-center">
@@ -485,9 +521,8 @@ function MomentumMatrixRow({
           </span>
         </div>
       </td>
-      <td className="py-2 px-2 text-right font-bold text-terminal-amber tabular-nums text-xs">
-        {row.vol ? formatVol(row.vol) : formatTurnover(row.turnover)}
-      </td>
+      {moversColumns.includes('vol') && <td className="py-2 px-2 text-right font-bold text-terminal-amber tabular-nums text-xs">{formatVol(row.vol)}</td>}
+      {moversColumns.includes('trnvr') && <td className="py-2 px-2 text-right font-bold text-terminal-amber tabular-nums text-xs">{formatTurnover(row.turnover)}</td>}
       <td className="py-2 pl-2 text-center">
         <span
           className={`text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${alignment.badgeClass}`}
@@ -495,156 +530,11 @@ function MomentumMatrixRow({
           {alignment.label}
         </span>
       </td>
-      {extraColumns.map((col) => (
+      {extraColumns.filter((col) => moversColumns.includes(col)).map((col) => (
         <td key={col} className="py-2 px-2 text-right text-xs text-zinc-300 tabular-nums">
           {renderExtraCell(col)}
         </td>
       ))}
-    </tr>
-  );
-}
-
-interface GainerBentoRowProps {
-  row: MoverRow;
-  rank: number;
-  maxGain: number;
-  onClick: () => void;
-}
-
-function GainerBentoRow({ row, rank, maxGain, onClick }: GainerBentoRowProps) {
-  const { data: quote } = useMoverQuote(row.symbol, true);
-  const rankBadge = `#${String(rank).padStart(2, '0')}`;
-  const barWidth = Math.min(100, Math.max(15, maxGain > 0 ? (Math.abs(row.pChange) / maxGain) * 100 : 50));
-
-  const closeNum = parseFloat(row.close);
-  const highNum = row.high ? parseFloat(row.high) : null;
-  const targetHigh = quote?.yearHigh ?? highNum;
-
-  let proximityNode: React.ReactNode = (
-    <span className="text-emerald-400 font-bold text-[11px] tabular-nums">ATH (0.0%)</span>
-  );
-
-  if (targetHigh && targetHigh > 0 && !Number.isNaN(closeNum)) {
-    const diffPct = ((closeNum - targetHigh) / targetHigh) * 100;
-    if (diffPct >= -0.35) {
-      proximityNode = (
-        <span className="text-emerald-400 font-bold text-[11px] tabular-nums">
-          ATH (0.0%)
-        </span>
-      );
-    } else {
-      proximityNode = (
-        <span className="text-zinc-200 font-bold text-[11px] tabular-nums">
-          {diffPct.toFixed(1)}% from 52WH
-        </span>
-      );
-    }
-  }
-
-  return (
-    <tr
-      onClick={onClick}
-      className="hover:bg-[#14141a] transition-colors cursor-pointer group border-b border-[#27272a]/50"
-    >
-      <td className="py-2 pr-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-terminal-amber bg-terminal-amber/10 border border-terminal-amber/30 px-1.5 py-0.5 rounded font-bold tabular-nums">
-            {rankBadge}
-          </span>
-          <span className="font-bold text-white group-hover:text-terminal-amber text-xs transition-colors">
-            {row.symbol}
-          </span>
-        </div>
-      </td>
-      <td className="py-2 px-2 text-right font-bold text-white tabular-nums text-xs">
-        &#8377;{row.close}
-      </td>
-      <td className="py-2 px-2 text-right">
-        <div className="flex items-center justify-end gap-1.5">
-          <div className="w-12 h-1.5 bg-zinc-800 rounded-full overflow-hidden hidden sm:block">
-            <div
-              className="h-full bg-emerald-400 rounded-full"
-              style={{ width: `${barWidth}%` }}
-            />
-          </div>
-          <span className="text-emerald-400 font-bold tabular-nums text-xs">
-            +{ Math.abs(row.pChange).toFixed(2) }%
-          </span>
-        </div>
-      </td>
-      <td className="py-2 px-2 text-right">
-        <span className="text-[11px] text-zinc-200 bg-[#14141a] border border-[#27272a] px-1.5 py-0.5 rounded font-mono tabular-nums">
-          {row.turnover ? `₹${row.turnover.toFixed(0)} Cr` : row.vol ? formatVol(row.vol) : '—'}
-        </span>
-      </td>
-      <td className="py-2 pl-2 text-right">{proximityNode}</td>
-    </tr>
-  );
-}
-
-interface LoserBentoRowProps {
-  row: MoverRow;
-  rank: number;
-  maxLoss: number;
-  onClick: () => void;
-}
-
-function LoserBentoRow({ row, rank, maxLoss, onClick }: LoserBentoRowProps) {
-  const rankBadge = `#${String(rank).padStart(2, '0')}`;
-  const absDrop = Math.abs(row.pChange);
-  const barWidth = Math.min(100, Math.max(15, maxLoss > 0 ? (absDrop / maxLoss) * 100 : 50));
-
-  const circuitLimit = absDrop > 10 ? 20 : 10;
-  const distToCircuit = Math.max(0.2, circuitLimit - absDrop);
-  const isNearCircuit = distToCircuit <= 5.5 || rank <= 3;
-
-  return (
-    <tr
-      onClick={onClick}
-      className="hover:bg-[#14141a] transition-colors cursor-pointer group border-b border-[#27272a]/50"
-    >
-      <td className="py-2 pr-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/30 px-1.5 py-0.5 rounded font-bold tabular-nums">
-            {rankBadge}
-          </span>
-          <span className="font-bold text-white group-hover:text-rose-400 text-xs transition-colors">
-            {row.symbol}
-          </span>
-        </div>
-      </td>
-      <td className="py-2 px-2 text-right font-bold text-white tabular-nums text-xs">
-        &#8377;{row.close}
-      </td>
-      <td className="py-2 px-2 text-right">
-        <div className="flex items-center justify-end gap-1.5">
-          <div className="w-12 h-1.5 bg-zinc-800 rounded-full overflow-hidden hidden sm:block">
-            <div
-              className="h-full bg-rose-400 rounded-full"
-              style={{ width: `${barWidth}%` }}
-            />
-          </div>
-          <span className="text-rose-400 font-bold tabular-nums text-xs">
-            -{absDrop.toFixed(2)}%
-          </span>
-        </div>
-      </td>
-      <td className="py-2 px-2 text-right">
-        <span className="text-[11px] text-zinc-200 bg-[#14141a] border border-[#27272a] px-1.5 py-0.5 rounded font-mono tabular-nums">
-          {row.turnover ? `₹${row.turnover.toFixed(0)} Cr` : row.vol ? formatVol(row.vol) : '—'}
-        </span>
-      </td>
-      <td className="py-2 pl-2 text-right">
-        {isNearCircuit ? (
-          <span className="text-[10px] font-bold text-terminal-amber bg-terminal-amber/10 border border-terminal-amber/40 px-1.5 py-0.5 rounded whitespace-nowrap tabular-nums">
-            ⚠️ {distToCircuit.toFixed(1)}% to Lower Circuit
-          </span>
-        ) : (
-          <span className="text-[10px] font-medium text-zinc-300 bg-zinc-800/80 border border-[#27272a] px-1.5 py-0.5 rounded whitespace-nowrap tabular-nums">
-            Safe ({distToCircuit.toFixed(1)}% to LC)
-          </span>
-        )}
-      </td>
     </tr>
   );
 }
@@ -655,8 +545,8 @@ export function MoversWidget() {
   const [moversColumns] = useAtom(moversColumnsAtom);
   const [moversCategory, setMoversCategory] = useAtom(moversCategoryAtom);
 
-  const [timeframeFocus, setTimeframeFocus] = useState<TimeframeFocus>('1-MONTH');
-  const [matrixFilter, setMatrixFilter] = useState<MatrixFilter>('ALL');
+  const [activeView, setActiveView] = useState<MoversView>('matrix');
+  const [page, setPage] = useState(0);
   const [allSortOrder, setAllSortOrder] = useState<'gains' | 'drops'>('gains');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -683,9 +573,7 @@ export function MoversWidget() {
 
   const extraColumns = useMemo(
     () =>
-      moversColumns.filter(
-        (c) => !['close', 'chg', '1w', '1m', '3m', '6m', '1y'].includes(c)
-      ),
+      moversColumns.filter((column) => ['open', 'high', 'low', 'ca', '2y', '3y', '5y', '52wh', '52wl'].includes(column)),
     [moversColumns]
   );
 
@@ -702,8 +590,6 @@ export function MoversWidget() {
   }, [loserRows, searchQuery]);
 
   const matrixRows = useMemo(() => {
-    if (matrixFilter === 'GAINERS') return filteredGainers;
-    if (matrixFilter === 'LOSERS') return filteredLosers;
     const map = new Map<string, MoverRow>();
     for (const r of filteredGainers) map.set(r.symbol, r);
     for (const r of filteredLosers) map.set(r.symbol, r);
@@ -712,11 +598,33 @@ export function MoversWidget() {
       return combined.sort((a, b) => a.pChange - b.pChange);
     }
     return combined.sort((a, b) => b.pChange - a.pChange);
-  }, [filteredGainers, filteredLosers, matrixFilter, allSortOrder]);
+  }, [filteredGainers, filteredLosers, allSortOrder]);
+
+  const activeRows = activeView === 'gainers'
+    ? filteredGainers
+    : activeView === 'losers'
+      ? filteredLosers
+      : matrixRows;
+  const pageCount = Math.max(1, Math.ceil(activeRows.length / MOVERS_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pagedRows = activeRows.slice(
+    currentPage * MOVERS_PAGE_SIZE,
+    (currentPage + 1) * MOVERS_PAGE_SIZE,
+  );
+
+  const handleViewChange = (view: MoversView) => {
+    setActiveView(view);
+    setPage(0);
+  };
 
   const handleRowClick = (row: MoverRow) => {
     setActiveSymbol(row.symbol);
     setActiveExchange('NSE');
+  };
+
+  const handleCategoryChange = (category: string) => {
+    setMoversCategory(category);
+    setPage(0);
   };
 
   if (gainersLoading || losersLoading) {
@@ -737,12 +645,8 @@ export function MoversWidget() {
     );
   }
 
-  const maxGain = filteredGainers.reduce((acc, r) => Math.max(acc, Math.abs(r.pChange)), 1);
-  const maxLoss = filteredLosers.reduce((acc, r) => Math.max(acc, Math.abs(r.pChange)), 1);
-  const severeLoserCount = filteredLosers.filter((r) => Math.abs(r.pChange) >= 4).length;
-
   return (
-    <div className="h-full w-full flex flex-col font-mono text-xs bg-[#09090b] text-zinc-100 overflow-auto">
+    <div data-testid="movers-widget" className="h-full w-full flex flex-col font-mono text-xs bg-[#09090b] text-zinc-100 overflow-hidden">
       {/* Timeframe & Category Selector Toolbar */}
       <div className="bg-[#0c0c0f] border-b border-[#27272a] px-3 py-2.5 flex flex-wrap items-center justify-between gap-2.5 flex-shrink-0">
         {/* Category Selector Pills bound to moversCategoryAtom */}
@@ -756,7 +660,7 @@ export function MoversWidget() {
               return (
                 <button
                   key={cat.key}
-                  onClick={() => setMoversCategory(cat.key)}
+                  onClick={() => handleCategoryChange(cat.key)}
                   className={`px-2.5 py-1 rounded text-[11px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
                     isSelected
                       ? 'bg-terminal-amber text-black border border-terminal-amber shadow-[0_0_8px_rgba(245,158,11,0.3)]'
@@ -783,85 +687,79 @@ export function MoversWidget() {
       </div>
 
       {/* 4-Column Bento Matrix */}
-      <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-4 gap-3 p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
         {/* =================================================================== */}
         {/* CARD 1: MULTI-PERIOD MOMENTUM MATRIX (col-span-1 md:col-span-4 lg:col-span-4) */}
         {/* =================================================================== */}
-        <div className="col-span-1 md:col-span-4 lg:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[#27272a] bg-[#0c0c0f] p-2.5 shadow-md transition-colors hover:border-zinc-600 sm:p-3">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-2 mb-2.5 border-b border-[#27272a]/70">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber">
                 <span className="w-2 h-2 rounded-full bg-terminal-amber" />
-                Multi-Period Momentum Matrix
+                {activeView === 'matrix' ? 'Multi-Period Momentum Matrix' : activeView === 'gainers' ? 'Top Gainers' : 'Top Losers'}
               </span>
               <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-2 py-0.5 rounded border border-[#27272a]">
-                1W • 1M • 3M • 6M • 1Y RETURN ALIGNMENT
+                {activeView === 'matrix' ? '1W • 1M • 3M • 6M • 1Y RETURN ALIGNMENT' : `${activeRows.length} SYMBOLS`}
               </span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 bg-[#121216] p-1 rounded-md border border-[#27272a]">
-                {(['ALL', 'GAINERS', 'LOSERS'] as MatrixFilter[]).map((mode) => (
+              <div role="tablist" aria-label="Movers views" className="flex items-center gap-1 rounded-md border border-[#27272a] bg-[#121216] p-1">
+                {(['matrix', 'gainers', 'losers'] as MoversView[]).map((view) => (
                   <button
-                    key={mode}
-                    onClick={() => setMatrixFilter(mode)}
-                    className={`px-3 py-1 rounded text-[11px] font-mono font-extrabold uppercase cursor-pointer transition-all ${
-                      matrixFilter === mode
-                        ? 'bg-amber-400 text-black border border-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.5)]'
-                        : 'text-zinc-400 hover:text-white hover:bg-zinc-800 border border-transparent'
+                    key={view}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeView === view}
+                    onClick={() => handleViewChange(view)}
+                    className={`rounded px-2.5 py-1.5 text-[11px] font-bold uppercase transition-colors ${
+                      activeView === view
+                        ? 'bg-terminal-amber text-black'
+                        : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'
                     }`}
-                  > 
-                    {mode}
+                  >
+                    {view}
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setAllSortOrder('gains');
-                  if (matrixFilter === 'LOSERS') setMatrixFilter('ALL');
-                }}
-                className={`text-[11px] font-mono px-3 py-1 rounded border font-extrabold transition-all cursor-pointer ${
-                  allSortOrder === 'gains' && (matrixFilter === 'ALL' || matrixFilter === 'GAINERS')
-                    ? 'text-black bg-emerald-400 border-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
-                    : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20'
-                }`}
-                title="Sort by highest % gains first"
-              >
-                ▲ Gains
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAllSortOrder('drops');
-                  if (matrixFilter === 'GAINERS') setMatrixFilter('ALL');
-                }}
-                className={`text-[11px] font-mono px-3 py-1 rounded border font-extrabold transition-all cursor-pointer ${
-                  allSortOrder === 'drops' && (matrixFilter === 'ALL' || matrixFilter === 'LOSERS')
-                    ? 'text-black bg-rose-400 border-rose-300 shadow-[0_0_12px_rgba(244,63,94,0.5)]'
-                    : 'text-rose-400 bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/20'
-                }`}
-                title="Sort by steepest % drops first"
-              >
-                ▼ Drops
-              </button>
+              {activeView === 'matrix' && (
+                <>
+                  <button
+                    type="button"
+                    aria-pressed={allSortOrder === 'gains'}
+                    onClick={() => { setAllSortOrder('gains'); setPage(0); }}
+                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold ${allSortOrder === 'gains' ? 'border-emerald-300 bg-emerald-400 text-black' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'}`}
+                  >
+                    ▲ Gains
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={allSortOrder === 'drops'}
+                    onClick={() => { setAllSortOrder('drops'); setPage(0); }}
+                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold ${allSortOrder === 'drops' ? 'border-rose-300 bg-rose-400 text-black' : 'border-rose-500/30 bg-rose-500/10 text-rose-400'}`}
+                  >
+                    ▼ Drops
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
-          <div className="overflow-x-auto max-h-[500px] overflow-y-auto pr-1">
-            <table className="w-full text-left font-mono tabular-nums border-collapse min-w-[780px]">
+        <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+            <table data-testid="movers-matrix-table" className="w-full text-left font-mono tabular-nums border-collapse min-w-[780px]">
               <thead>
                 <tr className="text-[10px] uppercase text-zinc-400 border-b border-[#27272a]">
-                  <th className="pb-2 font-bold">Ticker &amp; Bias</th>
+                  <th className="pb-2 font-bold">{activeView === 'matrix' ? 'Ticker & Bias' : 'Rank & Ticker'}</th>
                   <th className="pb-2 font-bold text-right">LTP (&#8377;)</th>
                   <th className="pb-2 font-bold text-right">Day %</th>
-                  <th className="pb-2 font-bold text-center">
+                  {activeView === 'matrix' && <th className="pb-2 font-bold text-center">
                     5-Period Momentum Alignment (1W / 1M / 3M / 6M / 1Y)
-                  </th>
-                  <th className="pb-2 font-bold text-center">Velocity Score</th>
-                  <th className="pb-2 font-bold text-right">Vol / Trnvr</th>
-                  <th className="pb-2 font-bold text-center">Radar Status</th>
-                  {extraColumns.map((col) => (
+                  </th>}
+                  {activeView === 'matrix' && <th className="pb-2 font-bold text-center">Velocity Score</th>}
+                  {moversColumns.includes('vol') && <th className="pb-2 font-bold text-right">Volume</th>}
+                  {moversColumns.includes('trnvr') && <th className="pb-2 font-bold text-right">Turnover</th>}
+                  {activeView === 'matrix' && <th className="pb-2 font-bold text-center">Radar Status</th>}
+                  {extraColumns.filter((col) => moversColumns.includes(col)).map((col) => (
                     <th key={col} className="pb-2 font-bold text-right">
                       {COLUMN_LABELS[col] || col}
                     </th>
@@ -869,139 +767,38 @@ export function MoversWidget() {
                 </tr>
               </thead>
               <tbody className="text-xs">
-                {matrixRows.map((row) => (
+                {pagedRows.map((row, index) => activeView === 'matrix' ? (
                   <MomentumMatrixRow
                     key={`matrix-${row.symbol}`}
                     row={row}
                     onClick={() => handleRowClick(row)}
-                    timeframeFocus={timeframeFocus}
                     extraColumns={extraColumns}
+                    moversColumns={moversColumns}
+                  />
+                ) : (
+                  <TopMoversRow
+                    key={`${activeView}-${row.symbol}`}
+                    row={row}
+                    rank={currentPage * MOVERS_PAGE_SIZE + index + 1}
+                    moversColumns={moversColumns}
+                    extraColumns={extraColumns.filter((column) => moversColumns.includes(column))}
+                    onClick={() => handleRowClick(row)}
                   />
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-
-        {/* =================================================================== */}
-        {/* CARD 2: TOP GAINERS BENTO (col-span-1 md:col-span-2 lg:col-span-2)  */}
-        {/* =================================================================== */}
-        <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  Top Gainers
-                </span>
-                <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-1.5 py-0.5 rounded border border-[#27272a]">
-                  HIGH VELOCITY
-                </span>
-              </div>
-              <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 tabular-nums">
-                ▲ {filteredGainers.length} ADVANCING
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono tabular-nums border-collapse">
-                <thead>
-                  <tr className="text-[10px] uppercase text-zinc-400 border-b border-[#27272a]">
-                    <th className="pb-1.5 font-bold"># Rank &amp; Ticker</th>
-                    <th className="pb-1.5 font-bold text-right">LTP (&#8377;)</th>
-                    <th className="pb-1.5 font-bold text-right">% Change</th>
-                    <th className="pb-1.5 font-bold text-right">Turnover</th>
-                    <th className="pb-1.5 font-bold text-right">52W High Proximity</th>
-                  </tr>
-                </thead>
-                <tbody className="text-xs">
-                  {filteredGainers.slice(0, 8).map((row, idx) => (
-                    <GainerBentoRow
-                      key={row.symbol}
-                      row={row}
-                      rank={idx + 1}
-                      maxGain={maxGain}
-                      onClick={() => handleRowClick(row)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="mt-2.5 pt-2 border-t border-[#27272a]/70 flex items-center justify-between text-[11px] font-mono text-zinc-400">
-            <span>
-              Peak Gain:{' '}
-              <b className="text-emerald-400 tabular-nums">
-                +{maxGain.toFixed(2)}%
-              </b>
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[#27272a] px-2.5 py-2 text-zinc-300 sm:px-3">
+            <span className="font-mono text-[11px] tabular-nums" aria-live="polite">
+              PAGE {currentPage + 1} OF {pageCount} · {activeRows.length} ROWS
             </span>
-            <span className="text-zinc-300">
-              Category:{' '}
-              <b className="text-terminal-amber">
-                {CATEGORY_SHORT_LABELS[moversCategory] || moversCategory}
-              </b>
-            </span>
+            <div className="flex gap-1.5">
+              <button type="button" aria-label="Previous page" onClick={() => setPage((previous) => Math.max(0, previous - 1))} disabled={currentPage === 0} className="rounded border border-[#3f3f46] bg-[#121216] px-2.5 py-1.5 text-[11px] font-bold text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40">← PREV</button>
+              <button type="button" aria-label="Next page" onClick={() => setPage((previous) => Math.min(pageCount - 1, previous + 1))} disabled={currentPage >= pageCount - 1} className="rounded border border-[#3f3f46] bg-[#121216] px-2.5 py-1.5 text-[11px] font-bold text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40">NEXT →</button>
+            </div>
           </div>
         </div>
 
-        {/* =================================================================== */}
-        {/* CARD 3: TOP LOSERS & CIRCUIT PROXIMITY BENTO (col-span-1 md:col-span-2 lg:col-span-2) */}
-        {/* =================================================================== */}
-        <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-terminal-amber flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-rose-400" />
-                  Top Losers &amp; Circuit Proximity
-                </span>
-                <span className="text-[10px] text-zinc-300 font-mono bg-[#14141a] px-1.5 py-0.5 rounded border border-[#27272a]">
-                  CIRCUIT WATCH
-                </span>
-              </div>
-              <span className="text-[10px] text-rose-400 font-mono font-bold bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/30 tabular-nums">
-                ▼ {filteredLosers.length} DECLINING
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono tabular-nums border-collapse">
-                <thead>
-                  <tr className="text-[10px] uppercase text-zinc-400 border-b border-[#27272a]">
-                    <th className="pb-1.5 font-bold"># Rank &amp; Ticker</th>
-                    <th className="pb-1.5 font-bold text-right">LTP (&#8377;)</th>
-                    <th className="pb-1.5 font-bold text-right">% Change</th>
-                    <th className="pb-1.5 font-bold text-right">Turnover</th>
-                    <th className="pb-1.5 font-bold text-right">Circuit Proximity</th>
-                  </tr>
-                </thead>
-                <tbody className="text-xs">
-                  {filteredLosers.slice(0, 8).map((row, idx) => (
-                    <LoserBentoRow
-                      key={row.symbol}
-                      row={row}
-                      rank={idx + 1}
-                      maxLoss={maxLoss}
-                      onClick={() => handleRowClick(row)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="mt-2.5 pt-2 border-t border-[#27272a]/70 flex items-center justify-between text-[11px] font-mono text-zinc-400">
-            <span>
-              Severe Drops (&gt; 4%):{' '}
-              <b className="text-rose-400 tabular-nums">{severeLoserCount} Stocks</b>
-            </span>
-            <span className="text-zinc-300">
-              Steepest Drop:{' '}
-              <b className="text-rose-400 tabular-nums">-{maxLoss.toFixed(2)}%</b>
-            </span>
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -102,19 +102,12 @@ const WATCHLIST_COLUMNS = [
 ];
 
 const MOVERS_COLUMNS = [
-  { key: 'close', label: 'CLOSE' },
-  { key: 'chg', label: 'CHG%' },
   { key: 'open', label: 'OPEN' },
   { key: 'high', label: 'HIGH' },
   { key: 'low', label: 'LOW' },
   { key: 'vol', label: 'VOL' },
   { key: 'trnvr', label: 'TRNVR' },
   { key: 'ca', label: 'CA' },
-  { key: '1w', label: '1W%' },
-  { key: '1m', label: '1M%' },
-  { key: '3m', label: '3M%' },
-  { key: '6m', label: '6M%' },
-  { key: '1y', label: '1Y%' },
   { key: '2y', label: '2Y%' },
   { key: '3y', label: '3Y%' },
   { key: '5y', label: '5Y%' },
@@ -1073,7 +1066,8 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                     />
                   </div>
                   <div className="flex flex-col gap-1.5 bg-black/30 border border-zinc-800/80 p-2.5 rounded">
-                    <span className="text-terminal-amber text-[10px] uppercase tracking-wider font-semibold">Movers table</span>
+                    <span className="text-terminal-amber text-[10px] uppercase tracking-wider font-semibold">Movers optional columns</span>
+                    <span className="text-[10px] text-zinc-400">Ticker, change, and 1W–1Y momentum stay visible.</span>
                     <ColumnCheckboxes
                       columns={MOVERS_COLUMNS}
                       selected={moversCols}

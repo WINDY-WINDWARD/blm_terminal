@@ -373,7 +373,7 @@ export const fundsAtom = atom<FundsData | null>(null);
 // ─── Column Configuration ───────────────────────────────────────────────────
 
 export const DEFAULT_WATCHLIST_COLUMNS = ['ltp', 'chg', 'msfv', 'momentum', '1w', '1m', '3m', '6m', '1y', 'results', 'alerts'];
-export const DEFAULT_MOVERS_COLUMNS = ['close', 'chg', '1w', '1m', '3m', '6m', '1y'];
+export const DEFAULT_MOVERS_COLUMNS = ['vol'];
 
 export const watchlistColumnsAtom = atomWithStorage<string[]>('terminal.watchlistColumns', DEFAULT_WATCHLIST_COLUMNS);
 export const moversColumnsAtom = atomWithStorage<string[]>('terminal.moversColumns', DEFAULT_MOVERS_COLUMNS);
