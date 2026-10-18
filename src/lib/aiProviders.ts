@@ -1,7 +1,7 @@
 /**
  * Shared AI provider metadata — single source of truth for provider setup UX.
  *
- * Used by SettingsWidget and FirstLaunchModal so both surfaces show identical
+ * Used by SettingsModal and FirstLaunchModal so both surfaces show identical
  * provider lists, credential fields, and step-by-step setup instructions.
  */
 

@@ -401,6 +401,10 @@ export const activeWatchlistIdAtom = atomWithStorage<number>('terminal.activeWat
 
 export const showTradingViewImportModalAtom = atom<boolean>(false);
 
+export type SettingsTabId = 'workspace' | 'connections' | 'intelligence' | 'automation' | 'system';
+export const showSettingsModalAtom = atom<boolean>(false);
+export const settingsModalTabAtom = atom<SettingsTabId>('workspace');
+
 // ─── Notif / Scan Sub-Filters ─────────────────────────────────────────────────
 
 /**

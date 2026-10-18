@@ -13,6 +13,8 @@ import {
   aiPrefillAtom,
   focusedPanelAtom,
   scriptChartHandoffAtom,
+  showSettingsModalAtom,
+  settingsModalTabAtom,
   AI_REFINE_REQUEST_KEY,
 } from '@/store/terminalStore';
 import { resolveChartPanel } from '@/lib/scripts/handoff';
@@ -865,6 +867,8 @@ function AiModelDropdown({
 }
 
 export function AiWidget() {
+  const setShowSettingsModal = useSetAtom(showSettingsModalAtom);
+  const setSettingsModalTab = useSetAtom(settingsModalTabAtom);
   const symbol = useAtomValue(activeSymbolAtom);
   const exchange = useAtomValue(activeExchangeAtom);
   const queryClient = useQueryClient();
@@ -1632,7 +1636,7 @@ export function AiWidget() {
             <div className="font-bold uppercase text-lg">⚠️ Configuration Required</div>
             <div className="text-xs text-zinc-300 leading-relaxed font-mono">
               The AI Provider ({aiAuthStatus.provider}) is not fully configured.
-              Please complete the setup in the <span className="text-terminal-amber font-bold">Settings widget</span>.
+              Please complete the setup in <button type="button" onClick={() => { setSettingsModalTab('intelligence'); setShowSettingsModal(true); }} className="text-terminal-amber font-bold underline hover:text-white cursor-pointer">Settings</button>.
             </div>
             <div className="text-[10px] text-zinc-500 mt-2 font-mono">
               (This widget is locked until a valid provider is set)

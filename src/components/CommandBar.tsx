@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useQuery } from '@tanstack/react-query';
 import {
   activeCommandAtom,
@@ -10,6 +10,7 @@ import {
   activeSymbolAtom,
   activeExchangeAtom,
   savedLayoutsAtom,
+  showSettingsModalAtom,
 } from '@/store/terminalStore';
 import { OpenAlgoClient } from '@/lib/openalgo';
 
@@ -59,6 +60,7 @@ export function CommandBar() {
   const [activeSymbol] = useAtom(activeSymbolAtom);
   const [, setActiveExchange] = useAtom(activeExchangeAtom);
   const savedLayouts = useAtomValue(savedLayoutsAtom);
+  const setShowSettingsModal = useSetAtom(showSettingsModalAtom);
 
   const [inputVal, setInputVal] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(-1);
@@ -438,6 +440,17 @@ export function CommandBar() {
       <div className="flex-shrink-0 text-[10px] font-mono hidden md:block">
         CMD: <span className="text-terminal-amber">{activeCommand || '—'}</span>
       </div>
+
+      {/* Settings quick-access button */}
+      <button
+        type="button"
+        onClick={() => setShowSettingsModal(true)}
+        title="Settings (or type SETTINGS)"
+        aria-label="Open settings"
+        className="flex-shrink-0 text-blue-300 hover:text-terminal-amber px-1 py-0.5 rounded hover:bg-blue-800/40 transition-colors cursor-pointer text-xs"
+      >
+        ⚙️
+      </button>
     </div>
   );
 }

@@ -20,6 +20,8 @@ import {
   layoutConfirmAtom,
   authAtom,
   showTradingViewImportModalAtom,
+  showSettingsModalAtom,
+  settingsModalTabAtom,
   watchlistsAtom,
   activeWatchlistIdAtom,
 } from '@/store/terminalStore';
@@ -31,6 +33,7 @@ import {
 } from '@/lib/layouts';
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
+import { SettingsModal } from '@/components/modals/SettingsModal';
 
 function isTextInputFocused(): boolean {
   const el = document.activeElement;
@@ -48,9 +51,6 @@ const VALID_WIDGETS = [
   'ORDER',
   'CHART',
   'WATCH',
-  'SETTINGS',
-  
-  
   'LARGEDEALS',
   'BREAKOUTS',
   'NEWS',
@@ -71,6 +71,8 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const setActivePanels = useSetAtom(activePanelsAtom);
   const queryClient = useQueryClient();
   const [showTradingViewImportModal, setShowTradingViewImportModal] = useAtom(showTradingViewImportModalAtom);
+  const [showSettingsModal, setShowSettingsModal] = useAtom(showSettingsModalAtom);
+  const setSettingsModalTab = useSetAtom(settingsModalTabAtom);
   const [watchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
   const setChartOverrides = useSetAtom(chartSymbolOverridesAtom);
@@ -284,11 +286,18 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
         return;
       }
       if (activeCommand.trim().toUpperCase() === 'LAYOUT') {
-        setActivePanels((prev) => ({ ...prev, [focusedPanel]: 'SETTINGS' }));
+        setSettingsModalTab('workspace');
+        setShowSettingsModal(true);
         setLayoutToast({ visible: true, message: 'Type LAYOUT 2, 4, 6, or 8 to switch layout directly', type: 'success' });
         setActiveCommand('');
         return;
       }
+    }
+
+    if (activeCommand.toUpperCase() === 'SETTINGS') {
+      setShowSettingsModal(true);
+      setActiveCommand('');
+      return;
     }
 
     let targetCommand = activeCommand;
@@ -311,7 +320,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       }
     }
     setActiveCommand('');
-  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue]);
+  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue, setChartOverrides, setSettingsModalTab, setShowSettingsModal, setShowTradingViewImportModal]);
 
   // Handle popup widget restore requests from detached windows
   useEffect(() => {
@@ -369,7 +378,21 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
 
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
-  }, [activePanels, panelCount, setActivePanels]);
+  }, [activePanels, panelCount, setActivePanels, setChartOverrides]);
+
+  // Clean up legacy SETTINGS widget from active panels if present
+  useEffect(() => {
+    const hasLegacySettings = Object.values(activePanels).some((v) => v === 'SETTINGS');
+    if (hasLegacySettings) {
+      setActivePanels((prev) => {
+        const next = { ...prev };
+        for (const [k, v] of Object.entries(next)) {
+          if (v === 'SETTINGS') next[k] = 'EMPTY';
+        }
+        return next;
+      });
+    }
+  }, [activePanels, setActivePanels]);
 
   return (
     <main className="flex flex-col h-screen w-screen bg-terminal-bg text-terminal-amber overflow-hidden">
@@ -384,6 +407,10 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
         }}
         watchlists={watchlists}
         activeWatchlistId={activeWatchlistId}
+      />
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
       />
     </main>
   );

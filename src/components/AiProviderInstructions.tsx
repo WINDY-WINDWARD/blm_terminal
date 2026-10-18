@@ -8,7 +8,7 @@ interface Props {
 
 /**
  * Step-by-step setup instructions for the selected AI provider.
- * Shared by SettingsWidget and FirstLaunchModal (both use terminal-* classes).
+ * Shared by SettingsModal and FirstLaunchModal (both use terminal-* classes).
  */
 export function AiProviderInstructions({ providerId }: Props) {
   const meta = AI_PROVIDER_MAP[providerId];

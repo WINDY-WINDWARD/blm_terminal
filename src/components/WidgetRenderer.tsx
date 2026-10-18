@@ -7,7 +7,6 @@ import { OrderWidget } from './widgets/OrderWidget';
 import { CompanyWidget } from './widgets/CompanyWidget';
 import { ChartWidget } from './widgets/ChartWidget';
 import { WatchWidget } from './widgets/WatchWidget';
-import { SettingsWidget } from './widgets/SettingsWidget';
 import { LargedealsWidget } from './widgets/LargedealsWidget';
 import { BreakoutsWidget } from './widgets/BreakoutsWidget';
 import { NewsWidget } from './widgets/NewsWidget';
@@ -36,7 +35,6 @@ export function WidgetRenderer({ title, panelId, symbolOverride }: WidgetRendere
     case 'COMPANY':  return <CompanyWidget panelId={panelId} symbolOverride={symbolOverride} />;
     case 'CHART':    return <ChartWidget panelId={panelId} symbolOverride={symbolOverride} />;
     case 'WATCH':    return <WatchWidget />;
-    case 'SETTINGS': return <SettingsWidget />;
             case 'LARGEDEALS': return <LargedealsWidget />;
     case 'BREAKOUTS': return <BreakoutsWidget />;
     case 'NEWS':     return <NewsWidget />;

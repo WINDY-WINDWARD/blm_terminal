@@ -20,7 +20,6 @@ import { OrderWidget } from './widgets/OrderWidget';
 import { CompanyWidget } from './widgets/CompanyWidget';
 import { ChartWidget } from './widgets/ChartWidget';
 import { WatchWidget } from './widgets/WatchWidget';
-import { SettingsWidget } from './widgets/SettingsWidget';
 import { LargedealsWidget } from './widgets/LargedealsWidget';
 import { BreakoutsWidget } from './widgets/BreakoutsWidget';
 import { NewsWidget } from './widgets/NewsWidget';
@@ -154,7 +153,6 @@ export function Panel({ id, title }: PanelProps) {
           case 'COMPANY':    return <CompanyWidget />;
       case 'CHART':    return <ChartWidget panelId={id} />;
       case 'WATCH':    return <WatchWidget />;
-      case 'SETTINGS': return <SettingsWidget />;
       case 'LARGEDEALS': return <LargedealsWidget />;
       case 'BREAKOUTS': return <BreakoutsWidget />;
       case 'NEWS':     return <NewsWidget />;

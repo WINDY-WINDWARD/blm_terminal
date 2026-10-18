@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import Link from 'next/link';
+import { X, Settings as SettingsIcon } from 'lucide-react';
 import {
   wsConnectedAtom,
   fundsAtom,
@@ -25,6 +26,9 @@ import {
   type Watchlist,
   type PanelCount,
   type SavedLayout,
+  showSettingsModalAtom,
+  settingsModalTabAtom,
+  type SettingsTabId,
 } from '@/store/terminalStore';
 import {
   enqueueQueueOperation,
@@ -238,8 +242,6 @@ function BentoCard({
   );
 }
 
-type SettingsTabId = 'workspace' | 'connections' | 'intelligence' | 'automation' | 'system';
-
 const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
   { id: 'workspace', label: 'WORKSPACE' },
   { id: 'connections', label: 'CONNECTIONS' },
@@ -248,9 +250,47 @@ const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
   { id: 'system', label: 'SYSTEM' },
 ];
 
-export function SettingsWidget() {
+export interface SettingsModalProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+  initialTab?: SettingsTabId;
+}
+
+export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnClose, initialTab }: SettingsModalProps = {}) {
+  const [globalIsOpen, setGlobalIsOpen] = useAtom(showSettingsModalAtom);
+  const [globalTab, setGlobalTab] = useAtom(settingsModalTabAtom);
+
+  const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : globalIsOpen;
+  const handleClose = useCallback(() => {
+    if (controlledOnClose) {
+      controlledOnClose();
+    } else {
+      setGlobalIsOpen(false);
+    }
+  }, [controlledOnClose, setGlobalIsOpen]);
+
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab ?? globalTab ?? 'workspace');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    } else if (globalTab) {
+      setActiveTab(globalTab);
+    }
+  }, [initialTab, globalTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, handleClose]);
+
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<SettingsTabId>('workspace');
   const [wsConnected] = useAtom(wsConnectedAtom);
   const [funds] = useAtom(fundsAtom);
   const openAlgoAvailable = useAtomValue(openAlgoAvailableAtom);
@@ -802,37 +842,74 @@ export function SettingsWidget() {
   };
 
 
-  return (
-    <div className="h-full w-full flex flex-col bg-[#0a0a0a] font-mono text-xs overflow-hidden">
-      {/* Tab Bar (CompanyWidget pattern) */}
-      <div className="flex items-center border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111] flex-wrap">
-        {SETTINGS_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1 text-xs font-mono transition-all duration-300 ease-out border ${
-              activeTab === tab.id
-                ? 'border-terminal-amber text-terminal-amber bg-terminal-amber/10'
-                : 'border-transparent text-white/60 hover:text-white hover:bg-terminal-gray/20'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-        <div className="ml-auto flex items-center gap-2 px-2">
-          {apiKeySaveStatus ? (
-            <span className="text-[10px] text-terminal-green animate-pulse">{apiKeySaveStatus}</span>
-          ) : (
-            <span className="text-white/30 text-[10px]">Changes save automatically</span>
-          )}
-          <span className="text-terminal-amber font-mono text-sm font-bold tracking-wider">SETTINGS</span>
-        </div>
-      </div>
+  if (!isOpen) return null;
 
-      {/* Tab Content / Bento Grid Body */}
-      <div className="flex-1 overflow-y-auto p-2.5 bg-[#0a0a0a]">
-        <div key={activeTab} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5 max-w-full animate-in fade-in duration-200">
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 select-none"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleClose();
+      }}
+    >
+      <div className="relative w-full max-w-5xl bg-[#09090b] border border-[#27272a] rounded-lg shadow-2xl flex flex-col max-h-[90vh] h-[85vh] overflow-hidden">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-[#27272a] bg-[#121216] shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded bg-terminal-amber/10 border border-terminal-amber/30 text-terminal-amber">
+              <SettingsIcon className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold tracking-wider text-white uppercase font-mono">
+                  TERMINAL SETTINGS
+                </h2>
+              </div>
+              <p className="text-[11px] text-zinc-400 font-sans">
+                Configure workspace layouts, broker connections, AI models, and market alerts.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {apiKeySaveStatus ? (
+              <span className="text-[10px] text-terminal-green animate-pulse">{apiKeySaveStatus}</span>
+            ) : (
+              <span className="text-white/30 text-[10px] hidden sm:inline">Changes save automatically</span>
+            )}
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Close settings"
+              className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Tab Navigation */}
+        <div className="flex items-center border-b border-[#27272a] px-5 py-1 gap-1 shrink-0 bg-[#0c0c0f] flex-wrap">
+          {SETTINGS_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => {
+                setActiveTab(tab.id);
+                setGlobalTab(tab.id);
+              }}
+              className={`px-3 py-1.5 text-xs font-mono transition-all duration-200 border rounded cursor-pointer ${
+                activeTab === tab.id
+                  ? 'border-terminal-amber text-terminal-amber bg-terminal-amber/10 font-bold'
+                  : 'border-transparent text-white/60 hover:text-white hover:bg-zinc-800/60'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Scrollable Tab Content / Bento Grid Body */}
+        <div className="flex-1 overflow-y-auto p-4 bg-[#09090b] select-text">
+          <div key={activeTab} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5 max-w-full animate-in fade-in duration-200">
           {/* TAB 1: WORKSPACE */}
           {activeTab === 'workspace' && (
             <>
@@ -1395,7 +1472,7 @@ export function SettingsWidget() {
                               <option key={m.id} value={m.id}>{m.label}</option>
                             ))}
                           </select>
-                          <span className="text-white/50 text-[10px]">Double-checks the hunter's picks — a faster, less capable model is fine.</span>
+                          <span className="text-white/50 text-[10px]">Double-checks the hunter&apos;s picks — a faster, less capable model is fine.</span>
                         </label>
                       </div>
                     </div>
@@ -1559,6 +1636,23 @@ export function SettingsWidget() {
               )}
             </>
           )}
+        </div>
+        </div>
+
+        {/* Modal Footer */}
+        <div className="flex items-center justify-between px-5 py-2.5 border-t border-[#27272a] bg-[#0c0c0f] shrink-0 text-[11px] font-mono text-zinc-400">
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500">Press <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">ESC</kbd> to close</span>
+            <span className="text-zinc-600">·</span>
+            <span className="text-zinc-500">Changes apply immediately</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-xs border border-zinc-700 transition-colors cursor-pointer"
+          >
+            [CLOSE]
+          </button>
         </div>
       </div>
     </div>

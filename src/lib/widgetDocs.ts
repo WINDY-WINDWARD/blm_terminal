@@ -372,6 +372,8 @@ const DOCS_MAP: WidgetDoc[] = [
       {
         heading: 'How to use',
         items: [
+          'Type SETTINGS or click the ⚙️ button in the CommandBar to open the Settings modal.',
+          'Press Escape or click [CLOSE] to dismiss the modal.',
           'Changes to columns apply instantly — no page reload required.',
           'Layout changes resize all panels; drag dividers to adjust individual panel sizes.',
         ],
