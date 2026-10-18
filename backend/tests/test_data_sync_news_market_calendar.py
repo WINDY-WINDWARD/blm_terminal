@@ -31,7 +31,7 @@ Moves 3 sections (12 functions + 5 constants) from
 - ``calendar.py`` (1 function + 1 constant):
   - ``_results_calendar_sync`` — Fetch the NSE event calendar
     and create 'results_upcoming' notifications
-  - ``_RESULTS_CALENDAR_CRON`` — "0 8,14 * * 1-5" cron
+  - ``_RESULTS_CALENDAR_CRON`` — "15 9,14 * * 1-5" cron
 
 Each module uses the lazy-import pattern via
 ``app.backgroundtasks._runtime`` to avoid circular imports.
@@ -326,9 +326,9 @@ class TestCalendarCoreExtraction:
         from app.services.data_sync.calendar import _RESULTS_CALENDAR_CRON
 
         # Pin the cron string — workers depend on this exact value.
-        assert _RESULTS_CALENDAR_CRON == "0 8,14 * * 1-5", (
+        assert _RESULTS_CALENDAR_CRON == "15 9,14 * * 1-5", (
             f"_RESULTS_CALENDAR_CRON is {_RESULTS_CALENDAR_CRON!r}, "
-            f"expected '0 8,14 * * 1-5'"
+            f"expected '15 9,14 * * 1-5'"
         )
 
     def test_results_calendar_cron_importable_from_shim(self):

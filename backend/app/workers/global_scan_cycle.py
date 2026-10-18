@@ -1,9 +1,10 @@
 """Global NSE scan cycle (audit C.1, A.12 part 1, A.13).
 
 Single cycle callable: ``_global_scan_cycle`` — scans all NSE
-stocks (not just watchlist) for technical and market alerts.  Runs
-on a ``*/30 * * * *`` cron via the ``global_scan_worker`` daemon
-in ``app.workers.notifications``.
+stocks (not just watchlist) for technical and market alerts.  Automatic
+runs use a weekday market-hours schedule via the ``global_scan_worker``
+daemon in ``app.workers.notifications``; direct Jobs-page runs are
+available at any time.
 
 Unlike the watchlist cycles (in
 ``app.workers.notification_cycles``), this cycle fires alerts into

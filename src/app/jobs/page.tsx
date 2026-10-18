@@ -1521,6 +1521,7 @@ export default function JobsPage() {
         <div className="mt-6 pt-4 border-t border-terminal-gray text-[10px] text-white/50">
           <p>Jobs are automatically synced from the background task registry on server startup.</p>
           <p className="mt-1">Use the RUN button to manually trigger a job. Use ENABLE/DISABLE to control scheduled runs.</p>
+          <p className="mt-1">Scheduled alert jobs run Monday-Friday during market hours; RUN remains available anytime.</p>
         </div>
       </div>
     </div>

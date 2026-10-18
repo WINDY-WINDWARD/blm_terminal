@@ -9,6 +9,8 @@ cron scheduler during market hours with one freeze sync after close (see
 ``Orchestrator._run_market_data_scheduler``).
 
 Public functions (4):
+- ``_is_market_session_at()`` — bool: does an IST datetime fall in
+  the regular weekday session?
 - ``_is_market_open()`` — bool: is the NSE market currently open
   (Mon-Fri, 09:15-15:30 IST)?
 - ``_seconds_until_market_open()`` — float: how long until the
@@ -31,12 +33,9 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 
-def _is_market_open() -> bool:
-    """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST)."""
+def _is_market_session_at(now_ist: datetime) -> bool:
+    """Return whether an IST datetime falls in the regular weekday session."""
     from app.config import settings
-
-    now_utc = datetime.now(timezone.utc)
-    now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
 
     if now_ist.weekday() >= 5:
         return False
@@ -55,6 +54,12 @@ def _is_market_open() -> bool:
     )
 
     return market_start <= now_ist <= market_end
+
+
+def _is_market_open() -> bool:
+    """Check if the market is currently open (Mon-Fri, 09:15-15:30 IST)."""
+    now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+    return _is_market_session_at(now_ist)
 
 
 def _seconds_until_market_open() -> float:
