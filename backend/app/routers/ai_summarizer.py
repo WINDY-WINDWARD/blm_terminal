@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.config import settings
 from app.schemas.ai_summarizer import AlertSummarizeRequest, SummarizeRequest, SummaryResult
 from app.services.ai_summarizer import ai_summarizer
+from app.services.ai_config import get_configured_verifier_model
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -73,11 +74,12 @@ async def summarize_alerts(request: AlertSummarizeRequest) -> SummaryResult:
 @router.get("/health")
 async def ai_health() -> dict[str, str | None]:
     """Ping the configured LLM provider and report connectivity status."""
-    if not ai_summarizer.is_configured:
+    if not await ai_summarizer.is_configured():
         return {"status": "unconfigured", "model": None}
 
     reachable = await ai_summarizer.ping_provider()
+    model = await get_configured_verifier_model() if reachable else None
     return {
         "status": "ready" if reachable else "unreachable",
-        "model": settings.ai_model if reachable else None,
+        "model": model,
     }

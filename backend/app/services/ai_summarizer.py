@@ -1,11 +1,12 @@
-"""AI Summarizer service using an OpenAI-compatible Chat Completions API."""
+"""AI Summarizer service backed by the multi-provider LLM pipeline."""
 
+import json
 import logging
+from typing import Any
 
-from openai import AsyncOpenAI, APIConnectionError, AuthenticationError, OpenAIError
-
-from app.config import settings
 from app.schemas.ai_summarizer import SummaryResult
+from app.services.ai_config import is_ai_provider_configured, get_configured_verifier_model
+from app.services.llm_provider import stream_chat_completion
 from app.services.prompts import (
     ALERT_SUMMARIZER_SYSTEM_PROMPT,
     FINANCIAL_SUMMARIZER_SYSTEM_PROMPT,
@@ -17,117 +18,86 @@ logger.setLevel(logging.DEBUG)
 _MAX_INPUT_CHARS = 24000
 
 
-async def _get_api_key() -> str:
-    """Fetch AI API key from settings or fallback to dynamic system_config."""
-    api_key = settings.ai_api_key
-    if not api_key or api_key == "none":
-        try:
-            from app.database import async_session_factory
-            from app.models.system_config import SystemConfig
-            from sqlalchemy import select
-            async with async_session_factory() as session:
-                res = await session.execute(
-                    select(SystemConfig.value).where(SystemConfig.key == "ai.api_key")
-                )
-                db_val = res.scalar_one_or_none()
-                if db_val and db_val.strip():
-                    api_key = db_val.strip()
-        except Exception as e:
-            logger.warning("Failed to read ai.api_key from db: %s", e)
-    return api_key
-
-
 class AISummarizer:
-    """Financial statement and alerts summarizer backed by any OpenAI-compatible API."""
+    """Financial statement and alerts summarizer backed by the configured multi-provider LLM."""
 
     def __init__(self) -> None:
-        # Last-known health status — updated by ping_provider().
         self._provider_reachable: bool | None = None
 
-    async def _get_client(self) -> AsyncOpenAI:
-        """Construct an AsyncOpenAI client from current settings dynamically."""
-        return AsyncOpenAI(
-            base_url=settings.ai_api_base_url,
-            api_key=await _get_api_key(),
-        )
-
-    # ------------------------------------------------------------------
-    # Health / connectivity
-    # ------------------------------------------------------------------
-
     async def is_configured(self) -> bool:
-        """Return True if API base URL and key are set to non-default values."""
-        api_key = await _get_api_key()
-        return bool(api_key and api_key != "none")
+        """Return True if the active AI provider is properly configured."""
+        return await is_ai_provider_configured()
 
     async def ping_provider(self) -> bool:
-        """Send a minimal completion request to verify connectivity and auth.
+        """Verify connectivity to the configured provider."""
+        configured = await self.is_configured()
+        self._provider_reachable = configured
+        return configured
 
-        Returns True if the provider responded successfully, False otherwise.
-        Updates the internal ``_provider_reachable`` flag.
-        """
+    async def _generate_summary(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str,
+        max_tokens: int = 512,
+    ) -> tuple[str, str]:
+        """Execute text generation through stream_chat_completion using the configured verifier model."""
+        model = await get_configured_verifier_model()
+
+        async def _noop_executor(tool_calls: list[dict]) -> tuple[list[str], list[dict]]:
+            return [], []
+
+        full_content = ""
+        error_msg = None
+
         try:
-            client = await self._get_client()
-            await client.chat.completions.create(
-                model=settings.ai_model,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-            )
-            self._provider_reachable = True
-            logger.info("AI provider ping succeeded (model=%s)", settings.ai_model)
-        except AuthenticationError as exc:
-            self._provider_reachable = False
-            logger.warning("AI provider auth failed: %s", exc)
-        except APIConnectionError as exc:
-            self._provider_reachable = False
-            logger.warning("AI provider unreachable: %s", exc)
-        except OpenAIError as exc:
-            # Some providers (e.g. Ollama) return a non-200 on a 1-token ping
-            # but are still operational.  Treat anything other than auth/conn
-            # errors as "reachable" so we don't block the summarise endpoint.
-            self._provider_reachable = True
-            logger.info(
-                "AI provider ping returned error (treated as reachable): %s", exc
-            )
-        return bool(self._provider_reachable)
+            async for chunk in stream_chat_completion(
+                messages=messages,
+                model=model,
+                tools=[],
+                tool_executor=_noop_executor,
+                system_prompt=system_prompt,
+                max_iter=5,
+            ):
+                try:
+                    evt = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
 
-    # ------------------------------------------------------------------
-    # Inference
-    # ------------------------------------------------------------------
+                evt_type = evt.get("type")
+                if evt_type == "token":
+                    full_content += evt.get("text", "")
+                elif evt_type == "error":
+                    error_msg = evt.get("message", "LLM inference error")
+        except Exception as exc:
+            logger.error("LLM completion call failed: %s", exc)
+            raise RuntimeError(f"LLM API call failed: {exc}") from exc
+
+        if error_msg and not full_content.strip():
+            logger.error("LLM completion returned error: %s", error_msg)
+            raise RuntimeError(f"LLM API call failed: {error_msg}")
+
+        return full_content.strip(), model
 
     async def summarize(self, text: str, max_tokens: int = 512) -> SummaryResult:
-        """Send text to the LLM and return a structured financial summary."""
+        """Send text to the configured verifier model and return a structured financial summary."""
         if not text or not text.strip():
             raise ValueError("Text cannot be empty")
 
         if len(text) > _MAX_INPUT_CHARS:
             raise ValueError(f"Input text too long (max {_MAX_INPUT_CHARS} characters)")
 
-        try:
-            client = await self._get_client()
-            response = await client.chat.completions.create(
-                model=settings.ai_model,
-                messages=[
-                    {"role": "system", "content": FINANCIAL_SUMMARIZER_SYSTEM_PROMPT},
-                    {"role": "user", "content": text},
-                ],
-                max_tokens=max_tokens,
-                temperature=settings.ai_temperature,
-                top_p=0.9,
-            )
-        except OpenAIError as exc:
-            logger.error("LLM API call failed: %s", exc)
-            raise RuntimeError(f"LLM API call failed: {exc}") from exc
-
-        choice = response.choices[0]
-        summary = (choice.message.content or "").strip()
-        usage = response.usage
+        messages = [{"role": "user", "content": text}]
+        summary, model = await self._generate_summary(
+            messages=messages,
+            system_prompt=FINANCIAL_SUMMARIZER_SYSTEM_PROMPT,
+            max_tokens=max_tokens,
+        )
 
         return SummaryResult(
             summary=summary,
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
-            model=response.model,
+            input_tokens=0,
+            output_tokens=0,
+            model=model,
         )
 
     async def summarize_alerts(
@@ -136,7 +106,7 @@ class AISummarizer:
         alerts: list[dict],
         max_tokens: int = 350,
     ) -> SummaryResult:
-        """Send formatted alerts to the LLM and return a single cohesive paragraph summary."""
+        """Send formatted alerts to the configured verifier model and return a single cohesive paragraph summary."""
         if not symbol or not symbol.strip():
             raise ValueError("Symbol cannot be empty")
         if not alerts:
@@ -153,40 +123,24 @@ class AISummarizer:
         if len(user_content) > _MAX_INPUT_CHARS:
             raise ValueError(f"Input text too long (max {_MAX_INPUT_CHARS} characters)")
 
-        try:
-            client = await self._get_client()
-            response = await client.chat.completions.create(
-                model=settings.ai_model,
-                messages=[
-                    {"role": "system", "content": ALERT_SUMMARIZER_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content},
-                ],
-                max_tokens=max_tokens,
-                temperature=settings.ai_temperature,
-                top_p=0.9,
-            )
-        except OpenAIError as exc:
-            logger.error("LLM API call failed: %s", exc)
-            raise RuntimeError(f"LLM API call failed: {exc}") from exc
+        messages = [{"role": "user", "content": user_content}]
+        summary, model = await self._generate_summary(
+            messages=messages,
+            system_prompt=ALERT_SUMMARIZER_SYSTEM_PROMPT,
+            max_tokens=max_tokens,
+        )
 
-        choice = response.choices[0]
-        raw_summary = (choice.message.content or "").strip()
-        cleaned_summary = " ".join(raw_summary.split())
-        usage = response.usage
+        cleaned_summary = " ".join(summary.split())
 
         return SummaryResult(
             summary=cleaned_summary,
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
-            model=response.model,
+            input_tokens=0,
+            output_tokens=0,
+            model=model,
         )
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
+        """Close any persistent connections."""
         pass
 
 

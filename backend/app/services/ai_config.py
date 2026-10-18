@@ -156,3 +156,73 @@ async def get_dynamic_ai_api_key(provider: str) -> str:
         logger.warning("Failed to read %s from db: %s", db_key, e)
         
     return api_key
+
+
+async def is_ai_provider_configured(provider: Optional[str] = None) -> bool:
+    """Check if the specified (or active) AI provider is properly configured."""
+    if not provider:
+        provider = await get_dynamic_ai_provider()
+
+    if provider == "gemini":
+        from app.services.antigravity_auth import get_antigravity_token
+        token = await get_antigravity_token()
+        return token is not None
+    elif provider == "zen-free":
+        # Free tier needs no key — always usable.
+        return True
+    elif provider == "codex":
+        from app.services.codex_auth import get_codex_status
+        status = await get_codex_status()
+        return bool(status.get("logged_in"))
+    elif provider == "copilot":
+        from app.services.llm_provider import get_copilot_inference_token
+        gh_token = await get_dynamic_ai_api_key("copilot")
+        token, _, _ = await get_copilot_inference_token(gh_token or "none")
+        return token is not None
+    else:
+        api_key = await get_dynamic_ai_api_key(provider)
+        return bool(api_key and api_key != "none")
+
+
+async def get_configured_verifier_model() -> str:
+    """Return the user-configured verifier model, normalized for the active provider."""
+    provider = await get_dynamic_ai_provider()
+    verifier_model = None
+
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.system_config import SystemConfig
+        async with AsyncSessionLocal() as session:
+            res = await session.execute(
+                select(SystemConfig.value).where(SystemConfig.key == "ai.verifier_model")
+            )
+            db_val = res.scalar_one_or_none()
+            if db_val and db_val.strip():
+                verifier_model = db_val.strip()
+    except Exception as e:
+        logger.warning("Failed to read ai.verifier_model from db: %s", e)
+
+    if provider == "gemini":
+        from app.routers.system_config import normalize_gemini_worker_model
+        return normalize_gemini_worker_model(verifier_model or "gemini-3.8-flash-low", default_tier="low")
+
+    if verifier_model:
+        return verifier_model
+
+    # Sensible lightweight defaults per provider when unconfigured
+    if provider == "zen-free":
+        return "deepseek-v4-flash-free"
+    elif provider in (ZEN_PAID, "zen"):
+        return "minimax-m2.5"
+    elif provider == AISTUDIO:
+        return "gemini-2.5-flash"
+    elif provider in (ANTHROPIC, CLAUDE_CODE):
+        return "claude-3-5-haiku-latest"
+    elif provider == CODEX:
+        return "gpt-4o"
+    elif provider == GROQ:
+        return "llama-3.3-70b-versatile"
+    elif provider == DEEPSEEK:
+        return "deepseek-chat"
+    else:
+        return settings.ai_model or "gpt-4o-mini"

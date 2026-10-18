@@ -1,6 +1,7 @@
 """Tests for the AI summarizer service and router."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -47,7 +48,7 @@ async def api_client(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_summarize_alerts_unconfigured(api_client, mock_alerts_payload):
-    with patch.object(ai_summarizer, "is_configured", AsyncMock(return_value=False)):
+    with patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=False)):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
         assert response.status_code == 503
         assert "AI API key is not configured" in response.json()["detail"]
@@ -55,39 +56,27 @@ async def test_summarize_alerts_unconfigured(api_client, mock_alerts_payload):
 
 @pytest.mark.asyncio
 async def test_summarize_alerts_success(api_client, mock_alerts_payload):
-    mock_choice = MagicMock()
-    mock_choice.message.content = (
-        "Reliance is showing sustained upside momentum led by volume expansion above VWAP, "
-        "though an overbought RSI reading near resistance indicates near-term consolidation risk."
-    )
-    mock_usage = MagicMock()
-    mock_usage.prompt_tokens = 95
-    mock_usage.completion_tokens = 32
-
-    mock_response = MagicMock()
-    mock_response.choices = [mock_choice]
-    mock_response.usage = mock_usage
-    mock_response.model = "test-model"
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": "Reliance is showing sustained upside momentum "})
+        yield json.dumps({"type": "token", "text": "led by volume expansion above VWAP, "})
+        yield json.dumps({"type": "token", "text": "though an overbought RSI reading near resistance indicates near-term consolidation risk."})
+        yield json.dumps({"type": "done"})
 
     with (
-        patch.object(ai_summarizer, "is_configured", AsyncMock(return_value=True)),
-        patch.object(ai_summarizer, "_get_client", AsyncMock(return_value=mock_client)),
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-low")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
         assert response.status_code == 200
         data = response.json()
         assert "Reliance is showing sustained upside momentum" in data["summary"]
-        assert data["input_tokens"] == 95
-        assert data["output_tokens"] == 32
-        assert data["model"] == "test-model"
+        assert data["model"] == "gemini-3.8-flash-low"
 
 
 @pytest.mark.asyncio
 async def test_summarize_alerts_empty_alerts(api_client):
-    with patch.object(ai_summarizer, "is_configured", AsyncMock(return_value=True)):
+    with patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)):
         response = await api_client.post(
             "/api/ai/alerts/summarize",
             json={"symbol": "RELIANCE", "alerts": []},
@@ -97,24 +86,40 @@ async def test_summarize_alerts_empty_alerts(api_client):
 
 @pytest.mark.asyncio
 async def test_summarize_alerts_whitespace_collapse(api_client, mock_alerts_payload):
-    mock_choice = MagicMock()
-    mock_choice.message.content = (
-        "Line 1 sentence.\n\nLine 2 sentence.\n   Line 3 sentence."
-    )
-    mock_response = MagicMock()
-    mock_response.choices = [mock_choice]
-    mock_response.usage = MagicMock(prompt_tokens=40, completion_tokens=20)
-    mock_response.model = "test-model"
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": "Line 1 sentence.\n\nLine 2 sentence.\n   Line 3 sentence."})
+        yield json.dumps({"type": "done"})
 
     with (
-        patch.object(ai_summarizer, "is_configured", AsyncMock(return_value=True)),
-        patch.object(ai_summarizer, "_get_client", AsyncMock(return_value=mock_client)),
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="test-verifier-model")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
     ):
         response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
         assert response.status_code == 200
         data = response.json()
         assert "\n" not in data["summary"]
         assert data["summary"] == "Line 1 sentence. Line 2 sentence. Line 3 sentence."
+        assert data["model"] == "test-verifier-model"
+
+
+@pytest.mark.asyncio
+async def test_summarize_alerts_gemini_verifier_model(api_client, mock_alerts_payload):
+    captured_kwargs = {}
+
+    async def mock_stream(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        yield json.dumps({"type": "token", "text": "Gemini alert digest summary."})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-medium")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["summary"] == "Gemini alert digest summary."
+        assert data["model"] == "gemini-3.8-flash-medium"
+        assert captured_kwargs.get("model") == "gemini-3.8-flash-medium"

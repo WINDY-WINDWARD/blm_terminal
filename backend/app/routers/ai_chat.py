@@ -24,7 +24,7 @@ from app.database import AsyncSessionLocal, get_db
 from app.models.ai_chat import ChatMessageRecord, ChatSession
 from app.models.user import User
 from app.services.ai_chat_service import AVAILABLE_MODELS, run_chat_agent
-from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
+from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key, is_ai_provider_configured
 from app.services.antigravity_auth import get_antigravity_token
 from app.services.document_service import (
     DocumentError,
@@ -49,28 +49,8 @@ router = APIRouter(prefix="/ai", tags=["ai-chat"])
 async def get_ai_status():
     """Return the current provider configuration status."""
     provider = await get_dynamic_ai_provider()
-    is_configured = False
-    free_tier = False
-
-    if provider == "gemini":
-        token = await get_antigravity_token()
-        is_configured = token is not None
-    elif provider == "zen-free":
-        # Free tier needs no key — always usable.
-        is_configured = True
-        free_tier = True
-    elif provider == "codex":
-        from app.services.codex_auth import get_codex_status
-        status = await get_codex_status()
-        is_configured = bool(status.get("logged_in"))
-    elif provider == "copilot":
-        from app.services.llm_provider import get_copilot_inference_token
-        gh_token = await get_dynamic_ai_api_key("copilot")
-        token, _, _ = await get_copilot_inference_token(gh_token or "none")
-        is_configured = token is not None
-    else:
-        api_key = await get_dynamic_ai_api_key(provider)
-        is_configured = bool(api_key and api_key != "none")
+    is_configured = await is_ai_provider_configured(provider)
+    free_tier = (provider == "zen-free")
 
     return {
         "provider": provider,
