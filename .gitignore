@@ -88,3 +88,8 @@ dist-*/
 
 # Precomputed dependency tree for desktop builds
 npm-deps.json
+
+# git worktrees
+.worktrees/
+worktrees/
+
