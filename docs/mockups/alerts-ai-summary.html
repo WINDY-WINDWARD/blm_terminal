@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alerts AI Summary Modal — Concept B (Digest)</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap');
+:root{--bg:#050505;--panel:#0c0c0f;--panel2:#121216;--line:#27272a;--amber:#ffb900;--muted:rgba(255,255,255,.62);--dim:rgba(255,255,255,.38)}
+*{box-sizing:border-box;margin:0}
+body{background:radial-gradient(circle at 12% 0%,rgba(255,185,0,.07),transparent 30%),#050505;color:#fff;font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,monospace;padding:26px;min-height:100vh}
+.page-head{max-width:1180px;margin:0 auto 20px;display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+.eyebrow{color:var(--amber);font-size:10px;font-weight:800;letter-spacing:.24em;margin-bottom:7px}
+h1{font-size:26px;line-height:1.15;letter-spacing:-.4px}
+.sub{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5}
+.stage{max-width:1180px;margin:0 auto}
+.grid{display:grid;grid-template-columns:1fr;gap:18px}
+@media(min-width:980px){.grid{grid-template-columns:1.16fr .84fr;align-items:start}}
+.frame-label{color:#9a9a9a;font-size:10px;letter-spacing:.18em;text-transform:uppercase;margin-bottom:7px}
+.modal,.tabframe{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.5);position:relative}
+.modal-head,.tab-head{background:var(--panel2);border-bottom:1px solid var(--line);padding:11px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:58px}
+.title-row{display:flex;align-items:center;gap:8px;min-width:0}
+.title{color:var(--amber);font-size:13px;font-weight:800;letter-spacing:.07em;white-space:nowrap}
+.pill{border:1px solid rgba(255,185,0,.3);background:rgba(245,158,11,.2);color:#ffd666;font-size:9px;font-weight:700;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+button{font-family:inherit;cursor:pointer}
+.btn{background:#18181b;border:1px solid #3f3f46;color:#e2e2e2;font-size:10px;font-weight:800;padding:6px 9px;border-radius:4px;display:inline-flex;align-items:center;gap:5px;transition:.15s}
+.btn:hover{border-color:var(--amber);color:var(--amber);background:rgba(255,185,0,.14)}
+.btn.ai{background:rgba(255,185,0,.1);border-color:rgba(255,185,0,.55);color:var(--amber)}
+.btn.ai:hover{background:var(--amber);color:#000}
+.btn.danger{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.3);color:#fb7185}
+.btn.icon{padding:6px 7px}
+.content{position:relative;min-height:340px}
+.list{padding:11px;display:flex;flex-direction:column;gap:10px}
+.alert{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:10px}
+.alert-top{display:flex;justify-content:space-between;gap:9px;margin-bottom:5px}
+.tag{border:1px solid rgba(255,185,0,.3);background:rgba(255,185,0,.1);color:var(--amber);font-size:9px;font-weight:700;text-transform:uppercase;padding:2px 6px;border-radius:3px}
+.date{color:#a1a1aa;font-size:9.5px;white-space:nowrap}
+.msg{color:#e4e4e7;font-size:11.5px;line-height:1.45}
+.sum-layer{position:absolute;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:16px;z-index:9}
+.hidden{display:none!important}
+.sum-modal{background:#08080b;border:1px solid var(--line);border-radius:9px;box-shadow:0 25px 80px rgba(0,0,0,.72);width:100%;max-width:560px;overflow:hidden}
+.sum-head{background:var(--panel2);border-bottom:1px solid var(--line);padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sum-title{display:flex;align-items:center;gap:8px;color:var(--amber);font-size:11px;font-weight:800;letter-spacing:.1em}
+.badge{background:var(--amber);color:#000;font-size:9px;font-weight:900;padding:3px 6px;letter-spacing:.07em;border-radius:3px}
+.sum-body{padding:13px 12px}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px}
+.chip{border:1px solid #3f3f46;background:#18181b;color:#cfcfcf;font-size:8.5px;font-weight:700;padding:3px 6px;border-radius:3px;white-space:nowrap}
+.chip.valid{border-color:rgba(0,255,0,.3);color:#7ee787;background:rgba(0,255,0,.08)}
+.chip.cached{border-color:rgba(255,185,0,.3);color:var(--amber);background:rgba(255,185,0,.1)}
+.digest{background:radial-gradient(circle at top right,rgba(255,185,0,.08),transparent 42%),#0a0a0d;padding:13px;border-radius:6px;border:1px solid rgba(255,185,0,.2)}
+.para{color:#f4f4f5;font-size:12px;line-height:1.6}
+.sum-foot{display:flex;align-items:center;justify-content:space-between;gap:7px;border-top:1px solid var(--line);padding:9px 12px}
+.mini{background:transparent;border:1px solid #3f3f46;color:#cfcfcf;font-size:9px;font-weight:700;padding:4px 6px;border-radius:3px}
+.mini:hover{color:var(--amber);border-color:var(--amber);background:rgba(255,185,0,.1)}
+.mini.primary{background:var(--amber);color:#000;border-color:var(--amber)}
+.validity{color:#8b8b8b;font-size:8.5px;line-height:1.3}
+.tabbar{display:flex;gap:4px;padding:9px 11px;border-bottom:1px solid var(--line);font-size:9px;font-weight:800}
+.tabbar div{padding:5px 8px;color:#8b8b8b;border-radius:4px}
+.tabbar div.active{color:var(--amber);background:rgba(255,185,0,.1);border:1px solid rgba(255,185,0,.25)}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <div>
+    <div class="eyebrow">BLM TERMINAL · SELECTED UI SPEC</div>
+    <h1>AI Alert Digest Modal</h1>
+    <div class="sub">Concept B (Digest): Dedicated paragraph-first modal with same-day caching and auto-expiration on new alerts.</div>
+  </div>
+</div>
+<div class="stage">
+  <div class="grid">
+    <div>
+      <div class="frame-label">Alerts Modal</div>
+      <div class="modal">
+        <div class="modal-head">
+          <div class="title-row"><div class="title">🔔 ALERTS: RELIANCE</div><div class="pill">5 UNREAD</div></div>
+          <div class="actions">
+            <button class="btn">⚡ LOAD CHART</button>
+            <button class="btn">🏢 COMPANY</button>
+            <button class="btn ai ai-btn">🤖 AI SUMMARIZE</button>
+            <button class="btn danger">DISMISS ALL</button>
+            <button class="btn icon">✕</button>
+          </div>
+        </div>
+        <div class="content"><div class="list" data-alerts></div></div>
+        <div class="sum-layer" data-layer><div class="sum-modal" data-modal></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="frame-label">Company Widget · Alerts Subtab</div>
+      <div class="tabframe">
+        <div class="tab-head"><div class="title">🏢 RELIANCE</div><div class="pill">LIVE · NSE</div></div>
+        <div class="tabbar"><div>FUNDAMENTALS</div><div>DEALS</div><div>NEWS</div><div class="active">ALERTS</div><div>DISCLOSURES</div></div>
+        <div class="content"><div class="list" data-alerts></div></div>
+        <div class="sum-layer hidden" data-layer><div class="sum-modal" data-modal></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const alerts=[
+ {t:'VOLUME SURGE',d:'18 OCT · 09:47',m:'Reliance Industries traded 2.3x average volume after 09:15 with price holding above VWAP.'},
+ {t:'RSI OVERBOUGHT',d:'18 OCT · 09:32',m:'RSI crossed 71.4 while the stock approached the intraday resistance band near ₹2,948.'},
+ {t:'BLOCK DEAL',d:'18 OCT · 08:58',m:'A 1.42M share block was reported at ₹2,912, roughly ₹414 crore in notional value.'},
+ {t:'52W HIGH BREAK',d:'17 OCT · 15:19',m:'Reliance closed above the prior 52-week high after four consecutive positive sessions.'},
+ {t:'DELIVERY RISE',d:'17 OCT · 14:58',m:'Delivery percentage rose to 68%, versus a 10-day average of 54%.'}
+];
+const summary='Reliance shows a coordinated strength signal: a large pre-market block deal was followed by a delivery-weighted volume surge and a move above the prior 52-week high. Momentum is now extended, with RSI at 71.4 and price testing the ₹2,948 intraday band. The immediate risk is a short-term pullback toward VWAP, but the broader breakout structure remains intact.';
+const alertsHtml=alerts.map(a=>'<div class="alert"><div class="alert-top"><span class="tag">'+a.t+'</span><span class="date">'+a.d+'</span></div><div class="msg">'+a.m+'</div></div>').join('');
+document.querySelectorAll('[data-alerts]').forEach(el=>el.innerHTML=alertsHtml);
+const modalHtml='<div class="sum-head"><div class="sum-title"><div class="badge">AI</div>ALERT DIGEST: RELIANCE</div><button class="mini close-btn">CLOSE</button></div><div class="sum-body"><div class="chips"><div class="chip cached">CACHED · 18 OCT 09:52</div><div class="chip">5 ALERTS</div><div class="chip">RELIANCE</div><div class="chip valid">VALID: TODAY OR UNTIL NEW ALERT</div></div><div class="digest"><div class="para">'+summary+'</div></div></div><div class="sum-foot"><div class="validity">Stored locally for RELIANCE. Expires on new alert or next day.</div><div style="display:flex;gap:5px"><button class="mini">COPY</button><button class="mini primary">REGENERATE</button></div></div>';
+document.querySelectorAll('[data-modal]').forEach(el=>el.innerHTML=modalHtml);
+document.addEventListener('click',e=>{
+  if(e.target.closest('.ai-btn'))e.target.closest('.modal,.tabframe').querySelector('[data-layer]').classList.remove('hidden');
+  if(e.target.closest('.close-btn'))e.target.closest('[data-layer]').classList.add('hidden');
+});
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 """pydantic schemas for NSE India data."""
 
-from .ai_summarizer import SummarizeRequest, SummaryResult
+from .ai_summarizer import AlertSummarizeRequest, AlertSummaryItem, SummarizeRequest, SummaryResult
 from .corporatefilings import CorporateFilingRecord
 from .job import (
     JobBase,
@@ -12,6 +12,8 @@ from .job import (
 )
 
 __all__ = [
+    "AlertSummarizeRequest",
+    "AlertSummaryItem",
     "CorporateFilingRecord",
     "SummarizeRequest",
     "SummaryResult",

@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { AlertSummaryModal } from '../AlertSummaryModal';
 
 interface Notification {
   id: number;
@@ -16,6 +17,8 @@ interface Notification {
 }
 
 export function AlertsTab({ symbol }: { symbol: string }) {
+  const [showAiSummary, setShowAiSummary] = useState(false);
+
   const { data: personalNotifs, isLoading: pLoading } = useQuery<Notification[]>({
     queryKey: ['notifications'],
     queryFn: async () => {
@@ -51,6 +54,24 @@ export function AlertsTab({ symbol }: { symbol: string }) {
 
   return (
     <div className="h-full w-full flex flex-col font-mono bg-terminal-bg">
+      <div className="p-2 border-b border-terminal-gray/40 flex items-center justify-between bg-terminal-bg shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-terminal-amber/90 font-bold uppercase tracking-wider">
+            Alerts ({relevantNotifs.length})
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowAiSummary(true)}
+          disabled={relevantNotifs.length === 0}
+          className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          title={relevantNotifs.length === 0 ? "No alerts to summarize" : `AI summarize alerts for ${symbol}`}
+        >
+          <span>🤖</span>
+          <span>AI Summarize</span>
+        </button>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
         {relevantNotifs.length === 0 ? (
           <div className="text-white/60 text-center py-4 text-sm">No alerts found for {symbol}</div>
@@ -71,6 +92,14 @@ export function AlertsTab({ symbol }: { symbol: string }) {
           ))
         )}
       </div>
+
+      {showAiSummary && (
+        <AlertSummaryModal
+          symbol={symbol}
+          alerts={relevantNotifs}
+          onClose={() => setShowAiSummary(false)}
+        />
+      )}
     </div>
   );
 }
