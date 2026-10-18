@@ -22,6 +22,7 @@ import {
 import { marketDataService } from '@/lib/nseFetch';
 import type { ChangeRanges, SymbolDataExtract } from '@/lib/nseTypes';
 import type { EventCalendarItem } from '@/app/api/event-calendar/route';
+import { AlertSummaryModal } from './AlertSummaryModal';
 
 interface WatchlistItem {
   id: number;
@@ -398,6 +399,7 @@ interface WatchAlertsModalProps {
 }
 
 function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: WatchAlertsModalProps) {
+  const [showAiSummary, setShowAiSummary] = useState(false);
   const queryClient = useQueryClient();
   const [, setChartOverrides] = useAtom(chartSymbolOverridesAtom);
   const [, setCompanyOverrides] = useAtom(companySymbolOverridesAtom);
@@ -520,6 +522,17 @@ function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: Wa
               <span>Company</span>
             </button>
 
+            <button
+              type="button"
+              onClick={() => setShowAiSummary(true)}
+              disabled={alerts.length === 0}
+              className="px-2.5 py-1 rounded bg-[#18181b] hover:bg-amber-400/20 hover:text-amber-300 border border-zinc-700 hover:border-amber-400 text-zinc-200 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              title={alerts.length === 0 ? 'No alerts to summarize' : `AI summarize alerts for ${symbol}`}
+            >
+              <span>🤖</span>
+              <span>AI Summarize</span>
+            </button>
+
             {alerts.length > 0 && (
               <button
                 type="button"
@@ -586,6 +599,14 @@ function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: Wa
             ))
           )}
         </div>
+
+        {showAiSummary && (
+          <AlertSummaryModal
+            symbol={symbol}
+            alerts={alerts}
+            onClose={() => setShowAiSummary(false)}
+          />
+        )}
       </div>
     </div>
   );

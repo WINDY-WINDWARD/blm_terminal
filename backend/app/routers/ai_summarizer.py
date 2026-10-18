@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.config import settings
-from app.schemas.ai_summarizer import SummarizeRequest, SummaryResult
+from app.schemas.ai_summarizer import AlertSummarizeRequest, SummarizeRequest, SummaryResult
 from app.services.ai_summarizer import ai_summarizer
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -21,6 +21,39 @@ async def summarize(request: SummarizeRequest) -> SummaryResult:
 
     try:
         return await ai_summarizer.summarize(request.text, request.max_tokens)
+
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {exc}",
+        )
+
+
+@router.post("/alerts/summarize", response_model=SummaryResult)
+async def summarize_alerts(request: AlertSummarizeRequest) -> SummaryResult:
+    """Summarize stock alerts into a single cohesive paragraph."""
+    is_configured = await ai_summarizer.is_configured()
+    if not is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI API key is not configured.",
+        )
+
+    try:
+        alerts_data = [a.model_dump() for a in request.alerts]
+        return await ai_summarizer.summarize_alerts(
+            symbol=request.symbol,
+            alerts=alerts_data,
+            max_tokens=request.max_tokens,
+        )
 
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

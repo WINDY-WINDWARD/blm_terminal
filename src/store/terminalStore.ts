@@ -560,3 +560,71 @@ export const aiPrefillAtom = atom<AiPrefill | null>(null);
  * storage event does not fire in the writing window).
  */
 export const AI_REFINE_REQUEST_KEY = '__AI_REFINE_REQUEST';
+
+// ─── AI Alert Summaries Cache ────────────────────────────────────────────────
+
+export interface AlertSummarySourceItem {
+  id?: number;
+  trigger_type: string;
+  message: string;
+  triggered_at?: string;
+  triggered_date?: string;
+}
+
+export interface CachedAlertSummary {
+  symbol: string;
+  summary: string;
+  cachedAt: number;
+  localDate: string;
+  alertCount: number;
+  latestAlertFingerprint: string;
+  model?: string;
+}
+
+/**
+ * Generates a stable fingerprint representing the alert set.
+ * If new alerts are added (newer timestamps or new IDs), this fingerprint changes.
+ */
+export function getAlertsSnapshotFingerprint(alerts: AlertSummarySourceItem[]): string {
+  if (!alerts || alerts.length === 0) return '';
+  let maxId = 0;
+  let latestTime = '';
+  for (const a of alerts) {
+    if (a.id && a.id > maxId) maxId = a.id;
+    const t = a.triggered_at || a.triggered_date || '';
+    if (t > latestTime) latestTime = t;
+  }
+  return `${alerts.length}_${maxId}_${latestTime}`;
+}
+
+export function getTodayLocalDateString(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Checks if a cached alert summary is still valid.
+ * Valid only if:
+ * 1. It belongs to today (same calendar date).
+ * 2. No new alert has arrived (alerts snapshot fingerprint matches).
+ */
+export function isAlertSummaryValid(
+  cached: CachedAlertSummary | undefined | null,
+  alerts: AlertSummarySourceItem[],
+  currentDate: string = getTodayLocalDateString(),
+): boolean {
+  if (!cached || !cached.summary) return false;
+  if (cached.localDate !== currentDate) return false;
+  if (!alerts || alerts.length === 0) return false;
+  const currentFingerprint = getAlertsSnapshotFingerprint(alerts);
+  return cached.latestAlertFingerprint === currentFingerprint;
+}
+
+/** Cached AI alert summaries per symbol, persisted across sessions */
+export const alertSummariesCacheAtom = atomWithStorage<Record<string, CachedAlertSummary>>(
+  'terminal.alertSummaries',
+  {},
+);

@@ -6,7 +6,10 @@ from openai import AsyncOpenAI, APIConnectionError, AuthenticationError, OpenAIE
 
 from app.config import settings
 from app.schemas.ai_summarizer import SummaryResult
-from app.services.prompts import FINANCIAL_SUMMARIZER_SYSTEM_PROMPT
+from app.services.prompts import (
+    ALERT_SUMMARIZER_SYSTEM_PROMPT,
+    FINANCIAL_SUMMARIZER_SYSTEM_PROMPT,
+)
 
 logger = logging.getLogger("app.services.ai_summarizer")
 logger.setLevel(logging.DEBUG)
@@ -35,7 +38,7 @@ async def _get_api_key() -> str:
 
 
 class AISummarizer:
-    """Financial statement summarizer backed by any OpenAI-compatible API."""
+    """Financial statement and alerts summarizer backed by any OpenAI-compatible API."""
 
     def __init__(self) -> None:
         # Last-known health status — updated by ping_provider().
@@ -122,6 +125,57 @@ class AISummarizer:
 
         return SummaryResult(
             summary=summary,
+            input_tokens=usage.prompt_tokens if usage else 0,
+            output_tokens=usage.completion_tokens if usage else 0,
+            model=response.model,
+        )
+
+    async def summarize_alerts(
+        self,
+        symbol: str,
+        alerts: list[dict],
+        max_tokens: int = 350,
+    ) -> SummaryResult:
+        """Send formatted alerts to the LLM and return a single cohesive paragraph summary."""
+        if not symbol or not symbol.strip():
+            raise ValueError("Symbol cannot be empty")
+        if not alerts:
+            raise ValueError("Alerts list cannot be empty")
+
+        formatted_lines = [f"Stock Symbol: {symbol.strip().upper()}"]
+        for idx, a in enumerate(alerts, 1):
+            t_type = str(a.get("trigger_type") or "ALERT").replace("_", " ").upper()
+            time_str = str(a.get("triggered_at") or a.get("triggered_date") or "").strip()
+            msg = str(a.get("message") or "").strip()
+            formatted_lines.append(f"{idx}. [{t_type}] ({time_str}): {msg}")
+
+        user_content = "\n".join(formatted_lines)
+        if len(user_content) > _MAX_INPUT_CHARS:
+            raise ValueError(f"Input text too long (max {_MAX_INPUT_CHARS} characters)")
+
+        try:
+            client = await self._get_client()
+            response = await client.chat.completions.create(
+                model=settings.ai_model,
+                messages=[
+                    {"role": "system", "content": ALERT_SUMMARIZER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=max_tokens,
+                temperature=settings.ai_temperature,
+                top_p=0.9,
+            )
+        except OpenAIError as exc:
+            logger.error("LLM API call failed: %s", exc)
+            raise RuntimeError(f"LLM API call failed: {exc}") from exc
+
+        choice = response.choices[0]
+        raw_summary = (choice.message.content or "").strip()
+        cleaned_summary = " ".join(raw_summary.split())
+        usage = response.usage
+
+        return SummaryResult(
+            summary=cleaned_summary,
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
             model=response.model,
