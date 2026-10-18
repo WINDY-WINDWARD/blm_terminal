@@ -19,7 +19,7 @@ import logging
 
 from app.jobs.registry import JobDefinition, JobRegistry
 from app.services.data_sync.backfill import _ticker_backfill_sync
-from app.services.data_sync.calendar import _results_calendar_sync
+from app.services.data_sync.calendar import _RESULTS_CALENDAR_CRON, _results_calendar_sync
 from app.services.data_sync.daily import _ticker_daily_update_sync
 from app.services.data_sync.indicators import (
     _ticker_indicators_sync,
@@ -169,9 +169,9 @@ def register_all_jobs() -> None:
         JobDefinition(
             job_key="job.global_scan",
             name="global_scan",
-            description="Scan all NSE stocks for technical & market alerts",
+            description="Scan all NSE stocks for technical & market alerts during weekday market hours (manual runs allowed anytime)",
             category="notifications",
-            cron_expression="*/30 * * * *",
+            cron_expression="*/30 9-15 * * 1-5",
             callable=_global_scan_cycle,
             is_async=False,
         ),
@@ -179,9 +179,9 @@ def register_all_jobs() -> None:
         JobDefinition(
             job_key="job.notifications",
             name="notifications",
-            description="Generate watchlist stock alerts",
+            description="Generate watchlist stock alerts during weekday market hours (manual runs allowed anytime)",
             category="notifications",
-            cron_expression="*/5 * * * *",
+            cron_expression="*/5 9-15 * * 1-5",
             callable=_notification_cycle_full,
             is_async=False,
         ),
@@ -255,9 +255,9 @@ def register_all_jobs() -> None:
         JobDefinition(
             job_key="job.results_calendar",
             name="results_calendar",
-            description="Sync upcoming board meeting results alerts from NSE event calendar",
+            description="Sync upcoming results alerts at 09:15 and 14:00 IST on weekdays (manual runs allowed anytime)",
             category="notifications",
-            cron_expression="0 8,14 * * 1-5",
+            cron_expression=_RESULTS_CALENDAR_CRON,
             callable=_results_calendar_sync,
             is_async=False,
         ),

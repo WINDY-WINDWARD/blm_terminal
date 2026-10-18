@@ -10,7 +10,7 @@ order for startup and nightly sync runs:
   Stage 4  → ticker_scores
   Stage 5a → ticker_weekly_monthly_update  (nightly only; W/M candle backfill)
   Stage 5b → ticker_weekly_monthly_indicators  (nightly only; W/M indicator recompute)
-  Stage 6  → global_scan + watchlist_notif  (concurrent, one immediate cycle)
+  Stage 6  → global_scan + watchlist_notif  (market hours only)
   Stage 6b → market_caps                    (nightly only; NSE tradeInfo cap fill)
   Stage 7  → market_data                    (always; last stage — sets startup gate)
 
@@ -336,6 +336,33 @@ class Orchestrator:
         count = await loop.run_in_executor(None, _count)
         return count > 500
 
+    async def _run_alert_stage(self, pipeline_job_key: str) -> None:
+        """Run one scan/notification cycle only during live market hours."""
+        from app.backgroundtasks._runtime import _is_job_enabled
+        from app.jobs.runner import update_job_status
+        from app.services.data_sync.market import _is_market_open
+        from app.workers.global_scan_cycle import _global_scan_cycle
+        from app.workers.notification_cycles import _notification_cycle_full
+
+        if not _is_market_open():
+            logger.info("Orchestrator: Stage 6 skipped — market closed")
+            await update_job_status(
+                pipeline_job_key,
+                "running",
+                progress=88,
+                message="Stage 6/8: Market closed — alerts skipped",
+            )
+            return
+
+        stage6_tasks = []
+        loop = asyncio.get_running_loop()
+        if _is_job_enabled("job.global_scan"):
+            stage6_tasks.append(loop.run_in_executor(None, _global_scan_cycle))
+        if _is_job_enabled("job.notifications"):
+            stage6_tasks.append(loop.run_in_executor(None, _notification_cycle_full))
+        if stage6_tasks:
+            await asyncio.gather(*stage6_tasks)
+
     async def _execute_pipeline(self, mode: PipelineMode) -> None:
         """Execute the full ordered pipeline (audit B.11: uses ``_run_stage``).
 
@@ -365,8 +392,6 @@ class Orchestrator:
         from app.services.data_sync.market_caps import _market_caps_sync
         from app.services.data_sync.scores import _ticker_scores_sync
         from app.services.data_sync.universe import _stock_universe_sync
-        from app.workers.global_scan_cycle import _global_scan_cycle
-        from app.workers.notification_cycles import _notification_cycle_full
 
         pipeline_job_key = (
             "job.pipeline.startup" if mode == PipelineMode.STARTUP else "job.pipeline.nightly"
@@ -498,16 +523,7 @@ class Orchestrator:
             logger.info("Orchestrator [%s] Stage 6: scan + notif", mode.value)
             await update_job_status(pipeline_job_key, "running", progress=88,
                                     message="Stage 6/8: Running scan and notifications...")
-            from app.backgroundtasks._runtime import _is_job_enabled
-            stage6_tasks = []
-            if _is_job_enabled("job.global_scan"):
-                loop = asyncio.get_running_loop()
-                stage6_tasks.append(loop.run_in_executor(None, _global_scan_cycle))
-            if _is_job_enabled("job.notifications"):
-                loop = asyncio.get_running_loop()
-                stage6_tasks.append(loop.run_in_executor(None, _notification_cycle_full))
-            if stage6_tasks:
-                await asyncio.gather(*stage6_tasks)
+            await self._run_alert_stage(pipeline_job_key)
             logger.info("Orchestrator [%s] Stage 6 complete", mode.value)
 
             # ── Stage 6b: market caps (nightly only) ─────────────────────

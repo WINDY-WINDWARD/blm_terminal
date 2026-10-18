@@ -21,7 +21,7 @@ class AlertSummaryItem(BaseModel):
 class AlertSummarizeRequest(BaseModel):
     symbol: str = Field(..., min_length=1, description="Stock ticker symbol")
     alerts: list[AlertSummaryItem] = Field(..., min_length=1, description="List of alerts to summarize")
-    max_tokens: int = Field(default=500, ge=64, le=1024, description="Max tokens in response")
+    max_tokens: int = Field(default=2048, ge=64, le=4096, description="Max tokens in response")
 
 
 class SummaryResult(BaseModel):

@@ -1053,7 +1053,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
               <BentoCard
                 icon="☰"
                 title="Table Columns"
-                blurb="Choose which columns appear in the Watch and Movers tables. Changes apply instantly."
+                blurb="Choose which columns appear in the Watch and Movers tables. Drag table headers inside either widget to change their order."
                 className="col-span-1 md:col-span-2 lg:col-span-4"
               >
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1067,7 +1067,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                   </div>
                   <div className="flex flex-col gap-1.5 bg-black/30 border border-zinc-800/80 p-2.5 rounded">
                     <span className="text-terminal-amber text-[10px] uppercase tracking-wider font-semibold">Movers optional columns</span>
-                    <span className="text-[10px] text-zinc-400">Ticker, change, and 1W–1Y momentum stay visible.</span>
+                    <span className="text-[10px] text-zinc-400">Ticker, change, and 1W–1Y momentum stay visible. Use header drag to reorder.</span>
                     <ColumnCheckboxes
                       columns={MOVERS_COLUMNS}
                       selected={moversCols}

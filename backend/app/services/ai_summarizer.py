@@ -21,26 +21,74 @@ logger.setLevel(logging.DEBUG)
 
 _MAX_INPUT_CHARS = 24000
 _PING_TIMEOUT_SECONDS = 20.0
+_DIGEST_FIELD_HINTS = frozenset({"bias", "summary", "trigger", "invalidation", "risk"})
+
+
+def _parse_digest_object(candidate: str) -> dict[str, Any] | None:
+    """Parse a plain, tagged, or fenced JSON object candidate."""
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+
+    fence = re.fullmatch(r"```(?:json|text)?\s*(.*?)\s*```", candidate, re.DOTALL | re.IGNORECASE)
+    if fence:
+        candidate = fence.group(1).strip()
+
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _iter_json_objects(content: str):
+    """Yield top-level JSON objects embedded in prose, from left to right."""
+    decoder = json.JSONDecoder()
+    position = 0
+    while True:
+        start = content.find("{", position)
+        if start == -1:
+            return
+        try:
+            payload, end = decoder.raw_decode(content[start:])
+        except json.JSONDecodeError:
+            position = start + 1
+            continue
+        if isinstance(payload, dict):
+            yield payload
+        position = start + end
 
 
 def _extract_digest_payload(content: str) -> dict[str, Any]:
-    """Extract the final tagged or fenced JSON object from model output."""
-    start_idx = content.rfind("<digest>")
-    end_idx = content.rfind("</digest>")
-    if start_idx != -1 and end_idx > start_idx:
-        content = content[start_idx + len("<digest>"):end_idx].strip()
+    """Extract the final valid digest object from tagged, fenced, or prose output."""
+    candidates = list(re.finditer(
+        r"<digest>\s*(.*?)\s*</digest>",
+        content,
+        re.DOTALL | re.IGNORECASE,
+    ))
+    for match in reversed(candidates):
+        payload = _parse_digest_object(match.group(1))
+        if payload is not None and _DIGEST_FIELD_HINTS.intersection(payload):
+            return payload
 
-    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL | re.IGNORECASE)
-    if fence:
-        content = fence.group(1).strip()
+    fences = list(re.finditer(
+        r"```(?:json|text)?\s*(.*?)\s*```",
+        content,
+        re.DOTALL | re.IGNORECASE,
+    ))
+    for match in reversed(fences):
+        payload = _parse_digest_object(match.group(1))
+        if payload is not None and _DIGEST_FIELD_HINTS.intersection(payload):
+            return payload
 
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("LLM returned an invalid alert digest") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("LLM returned an invalid alert digest")
-    return payload
+    fallback: dict[str, Any] | None = None
+    for payload in _iter_json_objects(content):
+        if _DIGEST_FIELD_HINTS.intersection(payload):
+            fallback = payload
+    if fallback is not None:
+        return fallback
+
+    raise RuntimeError("LLM returned an invalid alert digest")
 
 
 class AISummarizer:
@@ -176,7 +224,7 @@ class AISummarizer:
         self,
         symbol: str,
         alerts: list[dict],
-        max_tokens: int = 500,
+        max_tokens: int = 2048,
     ) -> AlertDigestResult:
         """Send formatted alerts to the configured verifier model and return a structured digest."""
         if not symbol or not symbol.strip():

@@ -9,7 +9,8 @@ of the orchestrator pipeline (both startup and nightly) and on a
 after close) managed by ``Orchestrator._run_market_data_scheduler``.
 
 Public workers:
-- ``results_calendar_worker()`` — cron ``0 8,14 * * 1-5``.
+- ``results_calendar_worker()`` — cron ``15 9,14 * * 1-5``, gated to
+  the regular weekday market session.
 
 A.13: migrated ``_bg_impl`` references to canonical imports.
 """
@@ -22,11 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 def results_calendar_worker() -> None:
-    """Daemon thread: syncs upcoming results notifications twice daily (8am + 2pm IST)."""
+    """Daemon thread: syncs upcoming results alerts at 09:15 and 14:00 IST."""
     from app.backgroundtasks._runtime import (
         _is_first_run,
         _is_job_enabled,
-        _report_job_waiting,
         _set_first_run_complete,
         _shutdown_event,
         _sleep_interruptible,
@@ -37,6 +37,10 @@ def results_calendar_worker() -> None:
     from app.services.data_sync.calendar import (
         _RESULTS_CALENDAR_CRON,
         _results_calendar_sync,
+    )
+    from app.workers.market_session import (
+        _report_market_hours_waiting,
+        _wait_for_market_session,
     )
 
     logger.info("results_calendar_worker: started")
@@ -58,6 +62,10 @@ def results_calendar_worker() -> None:
 
     # Check first_run for startup execution
     if _is_first_run("results_calendar"):
+        if _wait_for_market_session("job.results_calendar"):
+            update_job_status_sync("job.results_calendar", "idle", progress=0, message="Stopped")
+            logger.info("results_calendar_worker: stopped")
+            return
         update_job_status_sync("job.results_calendar", "running", progress=0, message="Starting initial sync...")
         _results_calendar_sync()
         from app.jobs.runner import mark_job_success_sync
@@ -68,7 +76,7 @@ def results_calendar_worker() -> None:
         update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Waiting for cron schedule")
 
     while not _shutdown_event.is_set():
-        wait_secs = _report_job_waiting("job.results_calendar", _RESULTS_CALENDAR_CRON)
+        wait_secs = _report_market_hours_waiting("job.results_calendar", _RESULTS_CALENDAR_CRON)
         logger.info(
             "results_calendar_worker: sleeping %.0f s until next cron (%s)",
             wait_secs, _RESULTS_CALENDAR_CRON,
@@ -80,6 +88,8 @@ def results_calendar_worker() -> None:
                 update_job_status_sync("job.results_calendar", "waiting", progress=0, message="Disabled")
                 _sleep_interruptible(60)
                 continue
+            if _wait_for_market_session("job.results_calendar"):
+                break
             _results_calendar_sync()
             from app.jobs.runner import mark_job_success_sync
             mark_job_success_sync("job.results_calendar")

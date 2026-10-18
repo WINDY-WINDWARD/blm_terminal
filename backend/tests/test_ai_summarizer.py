@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 import main as main_mod
 from main import app
+from app.services import llm_provider
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ def mock_alerts_payload():
                 "triggered_date": "2026-10-18",
             },
         ],
-        "max_tokens": 500,
+        "max_tokens": 2048,
     }
 
 
@@ -153,6 +154,35 @@ async def test_summarize_alerts_accepts_json_code_fence(api_client, mock_alerts_
 
 
 @pytest.mark.asyncio
+async def test_summarize_alerts_ignores_reasoning_and_stale_digest_tags(api_client, mock_alerts_payload):
+    noisy_output = "\n".join([
+        "```text",
+        "<digest>",
+        "```text",
+        "Reasoning: the model considered a partial {\"summary\": \"unfinished\"",
+        "```text",
+        "</digest>",
+        "```",
+        _digest_json(),
+    ])
+
+    async def mock_stream(*args, **kwargs):
+        yield json.dumps({"type": "token", "text": noisy_output})
+        yield json.dumps({"type": "done"})
+
+    with (
+        patch("app.services.ai_summarizer.is_ai_provider_configured", AsyncMock(return_value=True)),
+        patch("app.services.ai_summarizer.get_configured_verifier_model", AsyncMock(return_value="gemini-3.8-flash-high")),
+        patch("app.services.ai_summarizer.stream_chat_completion", side_effect=mock_stream),
+    ):
+        response = await api_client.post("/api/ai/alerts/summarize", json=mock_alerts_payload)
+
+    assert response.status_code == 200
+    assert response.json()["bias"] == "bullish"
+    assert response.json()["trigger"] == "Sustained follow-through above the alert-session high."
+
+
+@pytest.mark.asyncio
 async def test_summarize_alerts_uses_configured_verifier_model(api_client, mock_alerts_payload):
     captured_kwargs = {}
 
@@ -171,7 +201,7 @@ async def test_summarize_alerts_uses_configured_verifier_model(api_client, mock_
     assert response.status_code == 200
     assert response.json()["model"] == "gemini-3.8-flash-medium"
     assert captured_kwargs["model"] == "gemini-3.8-flash-medium"
-    assert captured_kwargs["max_tokens"] == 500
+    assert captured_kwargs["max_tokens"] == 2048
 
 
 @pytest.mark.asyncio
@@ -279,6 +309,66 @@ async def test_summarize_alerts_propagates_stream_error_after_partial_tokens(api
 
     assert response.status_code == 500
     assert "Inference quota exceeded on worker" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_antigravity_stream_excludes_thought_text():
+    digest = _digest_json()
+
+    class FakeResponse:
+        status_code = 200
+
+        async def aread(self):
+            return b""
+
+        async def aiter_lines(self):
+            yield "data: " + json.dumps({
+                "response": {
+                    "candidates": [{
+                        "content": {
+                            "parts": [
+                                {"text": "private reasoning with <digest>fake</digest>", "thought": True},
+                                {"text": digest},
+                            ]
+                        }
+                    }]
+                }
+            })
+
+    class FakeStream:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def stream(self, *args, **kwargs):
+            return FakeStream()
+
+    async def noop_executor(tool_calls):
+        return [], []
+
+    with (
+        patch("app.services.llm_provider.get_antigravity_token", AsyncMock(return_value="test-token")),
+        patch("app.services.llm_provider._get_antigravity_headers", lambda token: {}),
+        patch("app.services.llm_provider._get_shared_client", lambda: FakeClient()),
+    ):
+        events = [
+            json.loads(event)
+            async for event in llm_provider._run_antigravity_loop(
+                messages=[{"role": "user", "content": "Summarize alerts"}],
+                model="gemini-3.8-flash-high",
+                tools=[],
+                tool_executor=noop_executor,
+                max_iter=1,
+            )
+        ]
+
+    streamed_text = "".join(event.get("text", "") for event in events if event.get("type") == "token")
+    assert streamed_text == digest
+    assert "private reasoning" not in streamed_text
+    assert events[-1] == {"type": "done"}
 
 
 @pytest.mark.asyncio

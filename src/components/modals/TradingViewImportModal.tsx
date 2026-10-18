@@ -48,7 +48,7 @@ export function TradingViewImportModal({
   const [activeTab, setActiveTab] = useState<ImportTab>('upload');
 
   const [pastedText, setPastedText] = useState('');
-  const [urlInput, setUrlInput] = useState('https://in.tradingview.com/watchlists/115430006/');
+  const [urlInput, setUrlInput] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileRawText, setFileRawText] = useState<string>('');
 
@@ -389,14 +389,15 @@ export function TradingViewImportModal({
                   TradingView Shared Watchlist Link
                 </label>
                 <div className="text-[11px] text-zinc-400 mb-2">
-                  Enter a public TradingView watchlist URL (e.g. https://in.tradingview.com/watchlists/115430006/)
+                  Enter a public TradingView watchlist URL.
                 </div>
                 <div className="flex gap-2">
                   <input
                     type="url"
+                    aria-label="TradingView shared watchlist URL"
                     value={urlInput}
                     onChange={(e) => setUrlInput(e.target.value)}
-                    placeholder="https://in.tradingview.com/watchlists/..."
+                    placeholder="Paste a TradingView shared watchlist link"
                     className="flex-1 bg-[#1a1a22] border border-[#27272a] focus:border-terminal-amber text-white text-xs px-3 py-2 rounded outline-none font-mono"
                   />
                   <button

@@ -12,8 +12,8 @@ Public function:
   whose symbol is in any watchlist.
 
 Public constant:
-- ``_RESULTS_CALENDAR_CRON`` — "0 8,14 * * 1-5" (8am + 2pm IST
-  on trading days)
+- ``_RESULTS_CALENDAR_CRON`` — "15 9,14 * * 1-5" (09:15 and 14:00 IST
+  on weekdays, inside the regular market session)
 
 Each notification row is upserted with:
   - trigger_type   = 'results_upcoming'
@@ -36,7 +36,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
-_RESULTS_CALENDAR_CRON = "0 8,14 * * 1-5"  # 8am + 2pm IST on trading days
+_RESULTS_CALENDAR_CRON = "15 9,14 * * 1-5"  # 09:15 + 14:00 IST on weekdays
 
 
 def _results_calendar_sync() -> None:

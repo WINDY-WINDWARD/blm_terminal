@@ -88,7 +88,7 @@ export function AlertSummaryModal({ symbol, alerts, onClose }: AlertSummaryModal
           triggered_at: a.triggered_at,
           triggered_date: a.triggered_date,
         })),
-        max_tokens: 500,
+        max_tokens: 2048,
       };
 
       const res = await fetch('/api/py/ai/alerts/summarize', {
