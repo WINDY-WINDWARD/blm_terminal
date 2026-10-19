@@ -124,3 +124,5 @@ git push origin refs/tags/v$ver
 | `spawn EPERM` during electron-builder | Node cannot spawn outside tools | Point `ELECTRON_BUILDER_CACHE`, `ELECTRON_BUILDER_7ZIP_PATH`, and `ELECTRON_BUILDER_NSIS_DIR` to workspace locations or run with escalation. |
 | Tag push rejected: `already exists` | Pushing `--tags` attempts to push stale tags | Push specifically with `git push origin refs/tags/v<version>`. |
 | Update modal shows green and red banners | IPC event race | Fixed in `main.js` and `UpdateModal.tsx` — ensure `downloaded` event only fires after manifest verification completes. |
+- **Binary Publishing**: Publish release assets to the main repository (`WINDY-WINDWARD/blm_terminal`) using GitHub CLI (`gh release create/upload`).
+gh release create $TagName ($Artifacts | ForEach-Object { $_.FullName }) --repo WINDY-WINDWARD/blm_terminal --title "BLM Terminal $ver" --notes "Release version $ver"

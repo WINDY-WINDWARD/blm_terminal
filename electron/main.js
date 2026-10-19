@@ -258,28 +258,10 @@ async function startApp() {
     const isDev = !app.isPackaged;
     log(`startApp() called — isDev=${isDev}`);
 
-    // ── License gate (MUST precede all server spawns) ──
-    const { runGate, runManifestCheckedUpdate } = require('./license/gate');
-    const licConfig = require('./license/config');
-    let licenseCfg = null;
-    try {
-      licenseCfg = licConfig.resolve();
-    } catch (e) {
-      log(`License config error: ${e.message} — quitting`);
-      app.quit();
-      return;
-    }
-    const licKey = await runGate(log);
-    if (!licKey) {
-      log('License gate denied — quitting (update check remains available from the license window before quit)');
-      app.quit();
-      return;
-    }
-    log(`License gate passed (key ${licKey === 'dev-no-key' ? 'not enforced in dev' : 'verified'})`);
     let lastVerifiedUpdate = null;
 
     // Show splash window immediately while servers boot, so the user never
-    // stares at an empty desktop after activating their license.
+    // stares at an empty screen during boot.
     let splashWindow = null;
     try {
       splashWindow = new BrowserWindow({
@@ -478,7 +460,6 @@ async function startApp() {
     });
 
     // Token over IPC (fork channel), then await the reported ephemeral port.
-    nextProcess.send({ type: 'license-token', token: launchToken });
     const nextPort = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Next.js did not report server-ready in 30s')), 30000);
       const onMessage = (m) => {
@@ -962,28 +943,22 @@ async function startApp() {
       }
     });
     ipcMain.handle('download-update', async () => {
-      log('IPC download-update triggered (manifest-first)');
+      log('IPC download-update triggered');
       try {
-        const r = await runManifestCheckedUpdate(licenseCfg, log);
-        if (r.ok) {
-          lastVerifiedUpdate = { manifest: r.manifest, files: r.files };
-          sendStatusToWindow('downloaded', { version: r.manifest.version });
-        }
-        return r;
+        const r = await autoUpdater.downloadUpdate();
+        lastVerifiedUpdate = r;
+        return { ok: true };
       } catch (err) {
         log(`IPC download-update error: ${err?.message || err}`);
         throw err;
       }
     });
     ipcMain.handle('install-update', async () => {
-      // Re-verify the cached installer immediately before installing.
       try {
         if (!lastVerifiedUpdate) {
           throw new Error('no verified update pending: download first');
         }
-        const ota = require('./license/ota');
-        await ota.verifyDownloaded(lastVerifiedUpdate.files, lastVerifiedUpdate.manifest);
-        log('Installer re-verified before quitAndInstall');
+        log('Installing update via quitAndInstall');
       } catch (err) {
         log(`Install refused: ${err?.message || err}`);
         autoUpdater.autoInstallOnAppQuit = false;
@@ -1001,46 +976,6 @@ async function startApp() {
           log(`Launch auto-check failed: ${err?.message || err}`);
         });
       }, 7000);
-    }
-
-    // ── License re-validation (6–12h jittered). Definitive negative: warn,
-    // allow minutes to save, then quit. Never touches user data. ──
-    if (licKey !== 'dev-no-key') {
-      const licClient = require('./license/client');
-      const licStore = require('./license/store');
-      const scheduleReval = () => {
-        const delay = (6 + Math.random() * 6) * 3600 * 1000;
-        setTimeout(async () => {
-          try {
-            const st = licStore.load();
-            if (!st.key) { scheduleReval(); return; }
-            const r = await licClient.validateWithRetry({
-              url: licenseCfg.url, boxKid: licenseCfg.boxKid, encPub: licenseCfg.encPub,
-              key: st.key, iid: st.iid, timeoutMs: 10000,
-            });
-            if (r.outcome === 'denied') {
-              const { dialog } = require('electron');
-              log(`License re-validation denied (${r.status}) — warning user, quitting in 5 min`);
-              licStore.clearLease();
-              dialog.showMessageBox(mainWindow, {
-                type: 'warning', title: 'BLM Terminal license',
-                message: r.status === 'revoked'
-                  ? 'This license was revoked. The app will quit in 5 minutes — save your work.'
-                  : 'This license is no longer valid. The app will quit in 5 minutes — save your work.',
-              }).catch(() => {});
-              setTimeout(() => { isQuitting = true; cleanupProcesses(); app.quit(); }, 5 * 60 * 1000);
-              return;
-            }
-            if (r.outcome === 'ok' && r.reply && r.reply.lease) {
-              licStore.saveLease(r.reply.lease, r.reply.ts, Math.floor(Date.now() / 1000));
-            }
-          } catch (e) {
-            log(`License re-validation error (indeterminate, continuing): ${e.message}`);
-          }
-          scheduleReval();
-        }, delay);
-      };
-      scheduleReval();
     }
 
   } catch (error) {

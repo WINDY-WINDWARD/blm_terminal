@@ -9,7 +9,6 @@
   "buildDependenciesFromSource": false,
   "files": [
     "electron/**/*",
-    "licenseConfig.js",
     "server.js",
     "server/**/*",
     ".next/**/*",

@@ -20,9 +20,7 @@ From the repository root:
 npm install
 ```
 
-Ensure `electron/licenseConfig.js` exists (if not, copy from root `licenseConfig.js` or run `npm run gen:license-config`):
 ```bash
-[ -f electron/licenseConfig.js ] || cp licenseConfig.js electron/licenseConfig.js
 ```
 
 ---

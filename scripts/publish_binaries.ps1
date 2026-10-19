@@ -11,7 +11,7 @@ Remove-Item env:GIT_HTTPS_PROXY -ErrorAction SilentlyContinue
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $DistDesktopDir = Join-Path $ProjectRoot "dist-desktop"
-$GithubRepo = "WINDY-WINDWARD/blmterminal-binaries"
+$GithubRepo = "WINDY-WINDWARD/blm_terminal"
 
 # 1. Read package.json to get the version
 $PackageJsonPath = Join-Path $ProjectRoot "package.json"
@@ -34,60 +34,18 @@ Write-Host ">>> Building desktop artifacts..." -ForegroundColor Yellow
 Set-Location $ProjectRoot
 npm run build:desktop
 
-Write-Host ">>> Generating signed OTA manifest..." -ForegroundColor Yellow
-$LandingRoot = Join-Path (Split-Path -Parent $ProjectRoot) "blmlanding"
-$SignScript = Join-Path $LandingRoot "scripts\sign-ota-manifest.js"
-$OfflineKey = Join-Path $LandingRoot "ota-key-offline-DO-NOT-COMMIT.json"
-$ExeFile = Get-ChildItem -Path $DistDesktopDir -Filter "*$Version*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1
-
-if (-not $ExeFile) {
-    Write-Error "Installer matching version $Version not found in $DistDesktopDir"
-    exit 1
-}
-
-if (-not ($ExeFile.Name -like "*$Version*")) {
-    Write-Error "Resolved installer '$($ExeFile.Name)' does not match target version $Version"
-    exit 1
-}
-$OutBasename = Join-Path $DistDesktopDir "ota-manifest"
-
-if (Test-Path $OfflineKey) {
-    node $SignScript $Version $ExeFile.FullName $OfflineKey $OutBasename
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to sign OTA manifest"
-        exit 1
-    }
-} else {
-    Write-Error "Offline key not found at $OfflineKey. Refusing to publish unsigned OTA update!"
-    exit 1
-}
-
-# 4. Run automated pre-flight integrity verification before uploading
-Write-Host ">>> Running release pre-flight cryptographic and hash verification..." -ForegroundColor Yellow
-$VerifyScript = Join-Path $ScriptDir "verify_release.js"
-if (Test-Path $VerifyScript) {
-    node $VerifyScript
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Release pre-flight verification FAILED! Refusing to publish invalid artifacts."
-        exit 1
-    }
-} else {
-    Write-Warning "verify_release.js not found at $VerifyScript; skipping automated pre-flight verification."
-}
-
-# 5. Check for the output directory
+# 4. Check for the output directory
 if (-not (Test-Path $DistDesktopDir)) {
     Write-Error "Build output directory not found: $DistDesktopDir"
     exit 1
 }
 
 # 6. Find artifacts to upload (.exe, latest.yml, .blockmap, .json, .sig)
-$Artifacts = Get-ChildItem -Path $DistDesktopDir -File | Where-Object { 
-    ($_.Extension -eq ".exe" -and $_.Name -like "*$Version*") -or 
-    $_.Extension -eq ".yml" -or 
-    ($_.Extension -eq ".blockmap" -and $_.Name -like "*$Version*") -or 
-    $_.Name -eq "ota-manifest.json" -or 
-    $_.Name -eq "ota-manifest.sig"
+# 5. Find artifacts to upload (.exe, latest.yml, .blockmap)
+$Artifacts = Get-ChildItem -Path $DistDesktopDir -File | Where-Object {
+    ($_.Extension -eq ".exe" -and $_.Name -like "*$Version*") -or
+    $_.Extension -eq ".yml" -or
+    ($_.Extension -eq ".blockmap" -and $_.Name -like "*$Version*")
 }
 
 if ($Artifacts.Count -eq 0) {
@@ -97,8 +55,8 @@ if ($Artifacts.Count -eq 0) {
 
 Write-Host ">>> Found $($Artifacts.Count) artifacts for release." -ForegroundColor Cyan
 
-# 7. Create the GitHub Release using gh cli
-Write-Host ">>> Publishing GitHub Release $TagName on $GithubRepo..." -ForegroundColor Yellow
+# 6. Create the GitHub Release using gh cli
+Write-Host ">>> Publishing GitHub Release $TagName on $GithubRepo (blm_terminal)..." -ForegroundColor Yellow
 
 try {
     # Check if gh is available

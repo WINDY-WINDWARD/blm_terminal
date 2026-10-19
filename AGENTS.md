@@ -43,10 +43,8 @@ The **Release Agent** (`.github/agents/release-agent.md`) is responsible for cre
 ### Release Agent Responsibilities
 1. **Version Bumping (`npm run release`)**: Bumps version (`YYYY.M.B`), updates `package.json`, and creates git release commit and tag.
 2. **Sequential Clean Compilation (`npm run build:desktop`)**: Full from-source build combining Next.js Turbopack compilation, PyInstaller backend freeze, and Electron NSIS packaging. Fast builds (`build:desktop:fast`) are strictly prohibited for production releases.
-3. **Detached Ed25519 Signing**: Uses `blmlanding/scripts/sign-ota-manifest.js` with `blmlanding/ota-key-offline-DO-NOT-COMMIT.json` to generate URL-safe Base64 signatures (`ota-manifest.sig`) over `ota-manifest.json`.
-4. **Pre-Flight Cryptographic Verification (`npm run verify:release`)**: Uses `electron/license/ota.js` (`verifyDownloaded`) and libsodium against baked public keys in `licenseConfig.js` (`otaPubs`) to verify filename, file size, SHA-256 hash, and cryptographic signature BEFORE remote publishing.
-5. **Binary Publishing (`npm run publish:binaries`)**: Validates GitHub CLI authentication and uploads matching `.exe`, `.blockmap`, `latest.yml`, `ota-manifest.json`, and `ota-manifest.sig` assets to `WINDY-WINDWARD/blmterminal-binaries`.
-6. **Remote Synchronization**: Pushes branch changes (`git push origin <branch>`) and release tags (`git push origin refs/tags/v<version>`).
+3. **Binary Publishing (`npm run publish:binaries`)**: Validates GitHub CLI authentication and uploads matching `.exe`, `.blockmap`, and `latest.yml` assets to `WINDY-WINDWARD/blm_terminal` GitHub Releases.
+4. **Remote Synchronization**: Pushes branch changes (`git push origin <branch>`) and release tags (`git push origin refs/tags/v<version>`).
 
 ## Commands
 
@@ -219,3 +217,5 @@ The `/api/py/jobs` endpoint exposes background job status. For `parallel_sync`-b
 ## No Cursor or Copilot Rules
 
 No `.cursorrules`, `.cursor/rules/`, or `.github/copilot-instructions.md` files exist in this repo.
+- Use the `desktop-release` skill (`.opencode/skills/desktop-release/SKILL.md`) and the **Release Agent** (`.github/agents/release-agent.md`) for automated version bumps, clean sequential builds, and publishing official binary releases to GitHub Releases (`WINDY-WINDWARD/blm_terminal`).
+5. **Binary Publishing (`npm run publish:binaries`)**: Validates GitHub CLI authentication and uploads matching `.exe`, `.blockmap`, and `latest.yml` assets to `WINDY-WINDWARD/blm_terminal` GitHub Releases.

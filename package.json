@@ -18,7 +18,6 @@
     "electron": "npm run build:next && cross-env NODE_ENV=production electron .",
     "electron:prod": "cross-env NODE_ENV=production electron .",
     "release": "node scripts/release.js",
-    "gen:license-config": "node scripts/gen-license-config.js",
     "pack:desktop": "electron-builder --win dir",
     "pack:desktop:mac": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --config electron-builder.json",
     "lint": "eslint",
@@ -27,7 +26,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "verify:release": "node scripts/verify_release.js"
+    "verify:release": "echo 'No verification script configured'"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",

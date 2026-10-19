@@ -6,9 +6,6 @@ const httpProxy = require('http-proxy');
 const { WebSocketServer } = require('ws');
 
 const { handleMarketWsConnection } = require('./server/marketWsHandler');
-const tokenHolder = require('./server/tokenHolder');
-
-tokenHolder.noteIpc();
 
 const dev = process.env.NODE_ENV !== 'production';
 // Ephemeral by default (A6): a port squatter must never receive the launch
@@ -62,24 +59,8 @@ app.prepare().then(() => {
     if (actualPort && host !== expectedHost()) {
       return deny(res, 403, 'forbidden_host');
     }
-    // Launch-token gate. Dev without a token runs open with a loud warning
-    // (packaged runs always receive the token over IPC before serving).
-    if (!tokenHolder.tokenOk(req)) {
-      return deny(res, 401, 'missing_or_invalid_launch_token');
-    }
-    
-    // Pass the token inward to Next.js API routes (which run in worker threads
-    // and don't share memory/env changes) so they can forward it to Python.
-    const t = tokenHolder.getToken();
-    if (t) req.headers['x-blm-internal-token'] = t;
 
     const { pathname, query } = parse(req.url || '', true);
-    // Single-use WS ticket minting (renderer fetches same-origin, gets the
-    // token header injected by Electron, then connects WS with ?ticket=).
-    if (pathname === '/api/ws-ticket') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ticket: tokenHolder.mintTicket() }));
-    }
     void query;
     handle(req, res, parse(req.url, true));
   });
@@ -98,11 +79,6 @@ app.prepare().then(() => {
     }
     
     if (pathname !== '/ws/market' && pathname !== '/ws/news') {
-      socket.destroy();
-      return;
-    }
-    // WS upgrades carry no custom headers from browsers: single-use ticket.
-    if (!tokenHolder.consumeTicket(query && query.ticket)) {
       socket.destroy();
       return;
     }
@@ -125,9 +101,6 @@ app.prepare().then(() => {
     console.log(`[server] Ready on http://127.0.0.1:${actualPort} (${dev ? 'dev' : 'prod'})`);
     console.log(`[server] /ws/market → in-process Next.js handler`);
     console.log(`[server] /ws/news → ${backendUrl}`);
-    if (!tokenHolder.getToken()) {
-      console.warn('[server] WARNING: no launch token — local API running OPEN (dev only)');
-    }
     // Report the ephemeral port to the Electron parent over IPC.
     if (typeof process.send === 'function') {
       process.send({ type: 'server-ready', port: actualPort });

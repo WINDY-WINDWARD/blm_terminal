@@ -64,7 +64,7 @@ git push origin HEAD --follow-tags
 ### Step 3: Local Compilation & Direct GitHub Publishing
 To avoid expensive GitHub Actions cloud minutes, the build and release process runs locally on your machine.
 
-We use the GitHub CLI (`gh`) to authenticate and prepare the release to the dedicated **`blmterminal-binaries`** repository, while a PowerShell script performs the upload. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
+We use the GitHub CLI (`gh`) to authenticate and publish releases directly to **`WINDY-WINDWARD/blm_terminal`**. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
 
 Run the automated build and publish script:
 
@@ -76,7 +76,7 @@ npm run publish:binaries
 This command will:
 1.  Compile the Python backend via PyInstaller and build the Next.js bundle.
 2.  Package the Windows NSIS installer using `electron-builder`.
-3.  Automatically create a Release on the `WINDY-WINDWARD/blmterminal-binaries` repository using the `gh` CLI.
+3.  Automatically create a Release on the `WINDY-WINDWARD/blm_terminal` repository using the `gh` CLI.
 4.  Upload the `.exe`, `latest.yml`, and `.blockmap` to the Release.
 
 > **Release rigor:** releases always use the full sequential `build:desktop`
@@ -84,14 +84,9 @@ This command will:
 > for local iteration and must never produce a shipped installer. As a final
 > proof, byte-compare a fast build against a full build once per release
 > cycle: same `blm-backend.exe` hash, same asar content, installer boots and
-> passes the license gate.
+> passes startup validation.
 >
-> **Release assets (5, not 6):** exe, blockmap, `latest.yml`, plus the
-> `ota-manifest.json`/`.sig` pair. No `.nsis.7z`: neither update client
-> consumes differential packages (electron-updater reads the host
-> `latest.yml` which references the full exe; the custom OTA in
-> `electron/license/ota.js` downloads the full exe from the signed
-> manifest), so shipping one would add an untested path for zero benefit.
+> **Release assets (3):** `.exe`, `latest.yml`, and `.blockmap`. No OTA manifest or signature files.
 >
 > **Install discipline (2026-09-22 lesson):** stopping "BLM Terminal"
 > processes does NOT stop `blm-backend.exe` children — an orphaned backend
@@ -138,3 +133,6 @@ npm run build:backend
 # 3. Launch Electron in production mode
 npm run electron:prod
 ```
+We use the GitHub CLI (`gh`) to authenticate and publish releases directly to **`WINDY-WINDWARD/blm_terminal`**. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
+> passes startup.
+We use the GitHub CLI (`gh`) to authenticate and publish releases to **`WINDY-WINDWARD/blm_terminal`**. Ensure you have the [GitHub CLI](https://cli.github.com/) installed and are logged in (`gh auth login`).
