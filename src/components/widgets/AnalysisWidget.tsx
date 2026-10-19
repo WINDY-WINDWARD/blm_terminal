@@ -121,18 +121,18 @@ interface SortHeaderProps {
 function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
   const columns: { key: SortKey; label: string; width: string }[] = [
     { key: 'name', label: 'Name', width: 'flex-1 min-w-0' },
-    { key: 'market_cap', label: 'MCap', width: 'w-20' },
-    { key: 'pe', label: 'PE', width: 'w-10' },
-    { key: 'advance', label: 'Advance', width: 'w-10' },
-    { key: 'decline', label: 'Decline', width: 'w-10' },
-    { key: 'breadth', label: 'Net A/D', width: 'w-12' },
-    { key: 'earnings_yoy', label: 'Earn %', width: 'w-14' },
-    { key: 'sentiment', label: 'Sentiment', width: 'w-16' },
+    { key: 'market_cap', label: 'MCap', width: 'w-16 @3xl:w-20' },
+    { key: 'pe', label: 'PE', width: 'hidden @2xl:flex w-10' },
+    { key: 'advance', label: 'Advance', width: 'w-9 @3xl:w-10' },
+    { key: 'decline', label: 'Decline', width: 'w-9 @3xl:w-10' },
+    { key: 'breadth', label: 'Net A/D', width: 'w-10 @3xl:w-12' },
+    { key: 'earnings_yoy', label: 'Earn %', width: 'hidden @4xl:flex w-14' },
+    { key: 'sentiment', label: 'Sentiment', width: 'hidden @4xl:flex w-16' },
   ];
 
   return (
-    <div className="sticky top-0 z-10 flex gap-3 px-2 py-1 bg-zinc-900 text-[9px] border-b border-terminal-gray/30 font-mono min-w-[760px]">
-      <span className="flex-1 min-w-[160px]" />
+    <div className="sticky top-0 z-10 flex gap-1.5 @3xl:gap-3 px-2 py-1 bg-zinc-900 text-[9px] border-b border-terminal-gray/30 font-mono">
+      <span className="flex-1 min-w-0" />
       {columns.slice(1).map((col) => (
         <button
           key={col.key}
@@ -147,8 +147,8 @@ function SortHeader({ sortKey, sortDir, onSort }: SortHeaderProps) {
           )}
         </button>
       ))}
-      <span className="w-10 text-right text-white/40">Stks</span>
-      <span className="w-12 text-right text-white/40">Updated</span>
+      <span className="w-8 text-right text-white/40">Stks</span>
+      <span className="hidden @3xl:inline w-12 text-right text-white/40">Updated</span>
       <span className="w-10" />
     </div>
   );
@@ -163,49 +163,49 @@ interface CategoryAccordionProps {
 
 function CategoryAccordion({ category, expanded, onToggle, stockCount }: CategoryAccordionProps) {
   return (
-    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden min-w-[760px]">
+    <div className="border border-terminal-gray/50 rounded mb-1 overflow-hidden">
       <button
         type="button"
         onClick={onToggle}
         className="w-full flex items-center justify-between px-2 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-left"
       >
-        <div className="flex items-center gap-2 min-w-[160px] flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="text-terminal-amber font-bold text-[11px] truncate">
             {category.name}
           </span>
         </div>
-        <div className="flex items-center gap-3 shrink-0 text-[9px] font-mono">
-          <span className="text-white/50 w-20 text-right">
+        <div className="flex shrink-0 items-center gap-1.5 text-[9px] font-mono @3xl:gap-3">
+          <span className="w-16 text-right text-white/50 @3xl:w-20">
             ₹{fmtCrore(category.market_cap)}
           </span>
-          <span className="text-white/60 w-10 text-right">
+          <span className="hidden @2xl:inline w-10 text-right text-white/60">
             {category.pe ? `${category.pe.toFixed(1)}x` : '—'}
           </span>
-          <span className="text-terminal-green w-10 text-right">
+          <span className="w-9 text-right text-terminal-green @3xl:w-10">
             {category.advance || 0}▲
           </span>
-          <span className="text-terminal-red w-10 text-right">
+          <span className="w-9 text-right text-terminal-red @3xl:w-10">
             {category.decline || 0}▼
           </span>
-          <span className={`w-12 text-right font-mono ${
+          <span className={`w-10 text-right font-mono @3xl:w-12 ${
             breadthOf(category) > 0 ? 'text-terminal-green' :
             breadthOf(category) < 0 ? 'text-terminal-red' : 'text-white/50'
           }`}>
             {breadthOf(category) > 0 ? `+${breadthOf(category)}` : `${breadthOf(category)}`}
           </span>
-          <span className={`w-14 text-right ${
+          <span className={`hidden @4xl:inline w-14 text-right ${
             category.earnings_yoy && category.earnings_yoy > 0 ? 'text-terminal-green' :
             category.earnings_yoy && category.earnings_yoy < 0 ? 'text-terminal-red' : 'text-white/50'
           }`}>
             {fmtPercent(category.earnings_yoy)}
           </span>
-          <span className={`w-16 ${getSentimentColor(category.sentiment)}`}>
+          <span className={`hidden @4xl:inline w-16 ${getSentimentColor(category.sentiment)}`}>
             {category.sentiment}
           </span>
-          <span className="w-10 text-right text-white/50">
+          <span className="w-8 text-right text-white/50">
             {stockCount}
           </span>
-          <span className="text-white/40 w-12 text-right">
+          <span className="hidden @3xl:inline text-white/40 w-12 text-right">
             {formatRelativeTime(category.last_updated)}
           </span>
           <span className="text-white/50 text-[10px] w-4 text-right">

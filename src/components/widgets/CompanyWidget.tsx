@@ -34,12 +34,12 @@ export function CompanyWidget({ panelId, symbolOverride }: { panelId?: string; s
   return (
     <div className="h-full w-full flex flex-col bg-[#0a0a0a] overflow-hidden">
       {/* Tab Bar */}
-      <div className="flex border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111]">
+      <div className="flex overflow-x-auto border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111]">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1 text-xs font-mono transition-all duration-300 ease-out border ${
+            className={`shrink-0 px-2.5 py-1 text-[11px] font-mono transition-all duration-300 ease-out border @3xl:px-3 @3xl:text-xs ${
               activeTab === tab.id
                 ? 'border-terminal-amber text-terminal-amber bg-terminal-amber/10'
                 : 'border-transparent text-white/60 hover:text-white hover:bg-terminal-gray/20'

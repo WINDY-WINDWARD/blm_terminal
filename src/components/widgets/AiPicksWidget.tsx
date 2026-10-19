@@ -378,7 +378,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
               <span className="font-bold text-terminal-amber tracking-wider uppercase text-[10px] shrink-0">
                 {activeJobTitle}
               </span>
-              <span className="text-white/30 text-[10px] hidden sm:inline">|</span>
+              <span className="text-white/30 text-[10px] hidden @md:inline">|</span>
               <span className="text-white/80 text-[10px] truncate">
                 {activeRunningJob.progress_message || 'Executing agent loop...'}
               </span>
@@ -432,7 +432,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
                 data-testid={`pick-ticket-${pick.id}`}
                 onClick={() => setSelectedPickId(pick.id)}
                 className={cn(
-                  'group grid min-w-0 grid-cols-1 gap-3 rounded-md border p-3 transition-colors duration-150 hover:border-zinc-600 hover:bg-[#121216] sm:grid-cols-[minmax(0,1fr)_auto] sm:p-4 cursor-pointer',
+                  'group grid min-w-0 grid-cols-1 gap-3 rounded-md border p-3 transition-colors duration-150 hover:border-zinc-600 hover:bg-[#121216] @md:grid-cols-[minmax(0,1fr)_auto] @md:p-4 cursor-pointer',
                   pick.status === 'ABANDONED' 
                     ? 'border-zinc-800 bg-zinc-950/40 opacity-70'
                     : 'border-[#27272a] bg-[#0c0c0f]'
@@ -443,7 +443,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
                   <button
                     type="button"
                     className={cn(
-                      'text-sm font-bold tracking-wide transition-colors hover:text-white sm:text-base',
+                      'text-sm font-bold tracking-wide transition-colors hover:text-white @md:text-base',
                       pick.status === 'ABANDONED' ? 'text-zinc-400' : 'text-terminal-amber'
                     )}
                     onClick={(e) => { 
@@ -473,8 +473,8 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
                   {formattedDate && <span className="font-mono text-xs text-zinc-400">{formattedDate}</span>}
                 </div>
 
-                <div className="flex min-w-0 items-center justify-between gap-3 sm:flex-col sm:items-end sm:justify-center">
-                  <div className="text-left sm:text-right">
+                <div className="flex min-w-0 items-center justify-between gap-3 @md:flex-col @md:items-end @md:justify-center">
+                  <div className="text-left @md:text-right">
                     <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400">Open P&amp;L</span>
                     <span className={cn('font-mono text-sm font-bold tabular-nums', pnlColor)}>{pnlDisplay}</span>
                   </div>
@@ -495,17 +495,17 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
                   data-testid={`pick-ticket-levels-${pick.id}`}
                   className="col-span-full grid grid-cols-3 gap-2"
                 >
-                  <div className="rounded border border-[#27272a] bg-[#121216] p-2.5 sm:p-3">
-                    <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 sm:text-[11px]">Entry</span>
-                    <span className="font-mono text-sm font-semibold tabular-nums text-zinc-100 sm:text-base">{pick.entry_price}</span>
+                    <div className="rounded border border-[#27272a] bg-[#121216] p-2.5 @md:p-3">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-zinc-400 @md:text-[11px]">Entry</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-zinc-100 @md:text-base">{pick.entry_price}</span>
                   </div>
-                  <div className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2.5 sm:p-3">
-                    <span className="block text-[10px] font-bold uppercase tracking-wider text-emerald-400 sm:text-[11px]">Target</span>
-                    <span className="font-mono text-sm font-semibold tabular-nums text-emerald-300 sm:text-base">{pick.take_profit}</span>
+                  <div className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2.5 @md:p-3">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-emerald-400 @md:text-[11px]">Target</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-emerald-300 @md:text-base">{pick.take_profit}</span>
                   </div>
-                  <div className="rounded border border-rose-500/20 bg-rose-500/5 p-2.5 sm:p-3">
-                    <span className="block text-[10px] font-bold uppercase tracking-wider text-rose-400 sm:text-[11px]">Stop</span>
-                    <span className="font-mono text-sm font-semibold tabular-nums text-rose-300 sm:text-base">{pick.stop_loss}</span>
+                  <div className="rounded border border-rose-500/20 bg-rose-500/5 p-2.5 @md:p-3">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-rose-400 @md:text-[11px]">Stop</span>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-rose-300 @md:text-base">{pick.stop_loss}</span>
                   </div>
                 </div>
               </article>

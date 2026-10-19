@@ -1158,9 +1158,9 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
 
       <div className="flex-1 overflow-y-auto p-3 min-h-0">
         {activeView === 'stream' ? (
-          <div id="alerts-concept-2" className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-4 gap-3 max-w-full">
+          <div id="alerts-concept-2" className="grid grid-cols-1 @4xl:grid-cols-[minmax(220px,0.85fr)_minmax(0,3fr)] gap-3 max-w-full">
             {/* LEFT FILTER COLUMN (col-span-1) */}
-            <div className="col-span-1 md:col-span-1 lg:col-span-1 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col gap-3.5 shadow-xl transition-colors">
+            <div className="order-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-2.5 @3xl:p-3.5 flex flex-col gap-2.5 @3xl:gap-3.5 shadow-xl transition-colors @4xl:order-1">
               <div className="pb-2.5 border-b border-[#27272a]">
                 <div className="flex items-center justify-between">
                   <span className="text-amber-400 font-bold text-xs uppercase tracking-wider font-mono">
@@ -1170,7 +1170,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                     V2 ENGINE
                   </span>
                 </div>
-                <div className="text-[11px] text-zinc-300 mt-1 font-mono">
+                <div className="hidden text-[11px] text-zinc-300 mt-1 font-mono @3xl:block">
                   Dynamic multi-facet query filtering
                 </div>
               </div>
@@ -1217,7 +1217,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                 <div className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider">
                   SIGNAL CATEGORIES
                 </div>
-                <div className="flex flex-col gap-1">
+                <div className="grid max-h-28 grid-cols-2 gap-1 overflow-y-auto @2xl:grid-cols-3 @4xl:max-h-none @4xl:grid-cols-1">
                   {(
                     [
                       { id: 'all', label: 'ALL TRIGGERS', icon: '⚡' },
@@ -1294,7 +1294,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
             </div>
 
             {/* RIGHT LIVE STREAM MATRIX (col-span-3) */}
-            <div className="col-span-1 md:col-span-3 lg:col-span-3 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-3.5 flex flex-col shadow-xl transition-colors min-h-[500px]">
+            <div className="order-1 col-span-full @4xl:order-2 @4xl:col-span-1 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-2.5 @3xl:p-3.5 flex flex-col shadow-xl transition-colors min-h-[260px] @4xl:min-h-[500px]">
               {/* Stream Header & Controls */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-[#27272a]">
                 <div className="flex items-center gap-2">
@@ -1313,7 +1313,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search symbol, trigger…"
-                    className="bg-[#121216] border border-[#27272a] hover:border-zinc-500 focus:border-amber-400 rounded px-2.5 py-1 text-xs text-white placeholder-zinc-500 outline-none w-44 font-mono transition-colors"
+                    className="bg-[#121216] border border-[#27272a] hover:border-zinc-500 focus:border-amber-400 rounded px-2.5 py-1 text-xs text-white placeholder-zinc-500 outline-none w-full @2xl:w-44 font-mono transition-colors"
                   />
 
                   <div className="flex items-center bg-[#121216] border border-[#27272a] rounded overflow-hidden">
@@ -1426,7 +1426,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                         </div>
 
                         {!compactStream && (
-                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 bg-[#09090b] p-2 rounded border border-[#27272a]/80 text-xs font-mono mb-2.5">
+                          <div className="grid grid-cols-2 @2xl:grid-cols-4 gap-2 bg-[#09090b] p-2 rounded border border-[#27272a]/80 text-xs font-mono mb-2.5">
                             <div>
                               <span className="text-zinc-400 text-[10px] block uppercase">
                                 {indicator.paramLabel}
@@ -1443,7 +1443,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                                 {indicator.timeframe}
                               </span>
                             </div>
-                            <div className="sm:col-span-2">
+                            <div className="col-span-2">
                               <span className="text-zinc-400 text-[10px] block uppercase">
                                 SIGNAL PAYLOAD
                               </span>
@@ -1561,7 +1561,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                 </span>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 @md:grid-cols-2 @3xl:grid-cols-3 @4xl:grid-cols-4 gap-3">
                 {industryHeatmapGroups.map((group) => {
                   const alertCount = group.notifications.length;
                   const intensityStyle =

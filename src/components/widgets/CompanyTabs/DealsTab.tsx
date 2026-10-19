@@ -330,7 +330,7 @@ export function DealsTab({ symbol }: { symbol: string }) {
       </div>
 
       {/* ─── 4 Bento KPI Cards ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 shrink-0">
+      <div className="grid grid-cols-2 @4xl:grid-cols-4 gap-2.5 shrink-0">
         {/* Card 1: Recorded Turnover */}
         <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
           <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">

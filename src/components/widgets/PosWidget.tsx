@@ -413,7 +413,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
 
         {/* ─── TOP KPI CARDS (Total P&L, Realized P&L, Unrealized P&L) ─────────── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 @md:grid-cols-3 gap-3">
           {/* Card 1: Total P&L */}
           <div className="bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 shadow-md">
             <div className="flex items-center justify-between mb-1">
@@ -429,7 +429,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
               </span>
             </div>
             <div
-              className={`text-lg sm:text-xl font-mono font-bold tabular-nums ${
+              className={`text-lg @md:text-xl font-mono font-bold tabular-nums ${
                 (effectiveMode === 'live' ? liveTotalCombined : paperTotalCombined) >= 0
                   ? 'text-emerald-400'
                   : 'text-rose-400'
@@ -455,7 +455,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
               <span className="text-blue-400 text-xs">●</span>
             </div>
             <div
-              className={`text-lg sm:text-xl font-mono font-bold tabular-nums ${
+              className={`text-lg @md:text-xl font-mono font-bold tabular-nums ${
                 (effectiveMode === 'live' ? liveRealizedPnl : paperTotalRealized) >= 0
                   ? 'text-emerald-400'
                   : 'text-rose-400'
@@ -481,7 +481,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
             </div>
             <div
-              className={`text-lg sm:text-xl font-mono font-bold tabular-nums ${
+              className={`text-lg @md:text-xl font-mono font-bold tabular-nums ${
                 (effectiveMode === 'live' ? liveTotalPnl : paperTotalUnrealized) >= 0
                   ? 'text-emerald-400'
                   : 'text-rose-400'
@@ -553,13 +553,13 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                     <thead>
                       <tr className="text-[10px] uppercase text-zinc-300 border-b border-[#27272a] bg-[#121216] sticky top-0 z-10">
                         <th className="py-2 px-2.5 font-bold">INSTRUMENT</th>
-                        <th className="py-2 px-2 font-bold">PRODUCT</th>
+                        <th className="hidden @3xl:table-cell py-2 px-2 font-bold">PRODUCT</th>
                         <th className="py-2 px-2 text-right font-bold">NET QTY</th>
                         <th className="py-2 px-2 text-right font-bold">AVG BUY (₹)</th>
                         <th className="py-2 px-2 text-right font-bold">LTP (₹)</th>
-                        <th className="py-2 px-2 text-right font-bold">CURRENT VALUE (₹)</th>
+                        <th className="hidden @3xl:table-cell py-2 px-2 text-right font-bold">CURRENT VALUE (₹)</th>
                         <th className="py-2 px-3 text-right font-bold">P&L</th>
-                        <th className="py-2 px-2.5 text-center font-bold">ACTIONS</th>
+                        <th className="hidden @4xl:table-cell py-2 px-2.5 text-center font-bold">ACTIONS</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#27272a]/60">
@@ -581,7 +581,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                               <span>{row.symbol}</span>
                               <span className="text-[10px] text-zinc-400 font-normal">{row.exchange}</span>
                             </td>
-                            <td className="py-2.5 px-2">
+                            <td className="hidden @3xl:table-cell py-2.5 px-2">
                               <span className="text-[10px] bg-[#14141a] text-zinc-200 px-1.5 py-0.5 rounded border border-[#27272a] font-bold">
                                 {row.product}
                               </span>
@@ -599,7 +599,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                             <td className="py-2.5 px-2 text-right font-bold text-white tabular-nums">
                               ₹{liveLtp.toFixed(2)}
                             </td>
-                            <td className="py-2.5 px-2 text-right text-zinc-100 font-bold tabular-nums">
+                            <td className="hidden @3xl:table-cell py-2.5 px-2 text-right text-zinc-100 font-bold tabular-nums">
                               ₹{currentValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td className="py-2.5 px-3 text-right">
@@ -613,7 +613,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                                 {isPos ? '+' : ''}₹{pnl.toFixed(2)}
                               </span>
                             </td>
-                            <td className="py-2.5 px-2.5 text-center">
+                            <td className="hidden @4xl:table-cell py-2.5 px-2.5 text-center">
                               <button
                                 type="button"
                                 onClick={() => setConfirmSquareOffPosition(row)}
@@ -680,9 +680,9 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                         <th className="py-2 px-2 text-right font-bold">NET QTY</th>
                         <th className="py-2 px-2 text-right font-bold">AVG BUY (₹)</th>
                         <th className="py-2 px-2 text-right font-bold">LTP (₹)</th>
-                        <th className="py-2 px-2 text-right font-bold">CURRENT VALUE (₹)</th>
+                        <th className="hidden @3xl:table-cell py-2 px-2 text-right font-bold">CURRENT VALUE (₹)</th>
                         <th className="py-2 px-3 text-right font-bold">P&L (% / ₹)</th>
-                        <th className="py-2 px-2.5 text-center font-bold">ACTIONS</th>
+                        <th className="hidden @4xl:table-cell py-2 px-2.5 text-center font-bold">ACTIONS</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#27272a]/60">
@@ -755,7 +755,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                             </td>
 
                             {/* Current Value */}
-                            <td className="py-2.5 px-2 text-right text-zinc-100 font-bold tabular-nums">
+                            <td className="hidden @3xl:table-cell py-2.5 px-2 text-right text-zinc-100 font-bold tabular-nums">
                               ₹{holdingValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
 
@@ -778,7 +778,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                             </td>
 
                             {/* Actions */}
-                            <td className="py-2.5 px-2.5 text-center">
+                            <td className="hidden @4xl:table-cell py-2.5 px-2.5 text-center">
                               <div className="inline-flex items-center gap-1.5">
                                 <button
                                   type="button"

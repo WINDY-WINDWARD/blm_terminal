@@ -335,7 +335,7 @@ export function LargedealsWidget() {
 
       {/* ─── 4 Bento KPI Cards (Hidden on FII/DII tab) ─── */}
       {activeTab !== 'fii' && (
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 shrink-0">
+      <div className="grid grid-cols-2 @4xl:grid-cols-4 gap-2.5 shrink-0">
         {/* Card 1: Total Turnover */}
         <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
           <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">
@@ -406,7 +406,7 @@ export function LargedealsWidget() {
             </div>
           ) : (
             <div className="p-4 flex flex-col gap-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 @2xl:grid-cols-2 gap-3">
                 {fiiRows.map((r, idx) => {
                   const pieData = [
                     { name: 'Buy', value: Number(r.buyValue) || 0, color: '#10b981' },

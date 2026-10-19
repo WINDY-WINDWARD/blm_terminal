@@ -305,7 +305,7 @@ function BreakoutBentoCardItem({
   return (
     <div
       onClick={() => onSelect(row)}
-      className={`bg-[#121216] border border-[#27272a] rounded p-2.5 transition-all cursor-pointer group flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+      className={`bg-[#121216] border border-[#27272a] rounded p-2.5 transition-all cursor-pointer group flex flex-col @3xl:flex-row @3xl:items-center justify-between gap-2 ${
         isHigh ? 'hover:border-terminal-amber/60' : 'hover:border-rose-500/60'
       }`}
     >
@@ -345,7 +345,7 @@ function BreakoutBentoCardItem({
         </div>
       </div>
 
-      <div className="flex items-center justify-between sm:justify-end gap-3 flex-shrink-0">
+      <div className="flex items-center justify-between @3xl:justify-end gap-3 flex-shrink-0">
         {(volMeta.multiplierText || volMeta.subText) && (
           <div
             className={`px-2 py-1 rounded text-right ${
@@ -985,7 +985,7 @@ export function BreakoutsWidget() {
             className="w-44 bg-[#121216] border border-[#27272a] focus:border-terminal-amber rounded px-2.5 py-1 text-xs text-white placeholder:text-zinc-400 outline-none transition-colors"
           />
           {timestamp && (
-            <span className="text-zinc-400 text-[10px] hidden sm:inline tabular-nums">
+            <span className="text-zinc-400 text-[10px] hidden @3xl:inline tabular-nums">
               {timestamp}
             </span>
           )}
@@ -995,11 +995,11 @@ export function BreakoutsWidget() {
       {/* Main Content Area */}
       <div className="flex-1 overflow-auto p-3 min-h-0">
         {activeTab === 'matrix' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-3">
             {/* =============================================================== */}
             {/* 1. 52-WEEK HIGH BREAKOUT RADAR (col-span-2)                     */}
             {/* =============================================================== */}
-            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+            <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
                   <div className="flex items-center gap-2">
@@ -1051,7 +1051,7 @@ export function BreakoutsWidget() {
             {/* =============================================================== */}
             {/* 2. 52-WEEK LOW BREAKDOWN RADAR (col-span-2)                     */}
             {/* =============================================================== */}
-            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+            <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
                   <div className="flex items-center gap-2">
@@ -1103,7 +1103,7 @@ export function BreakoutsWidget() {
             {/* =============================================================== */}
             {/* 3. VOLUME SHOCKERS & DELIVERY SPIKES (col-span-2)               */}
             {/* =============================================================== */}
-            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+            <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
                   <div className="flex items-center gap-2">
@@ -1200,7 +1200,7 @@ export function BreakoutsWidget() {
             {/* =============================================================== */}
             {/* 4. REPEATED BREAKOUT PERSISTENCE (col-span-2)                   */}
             {/* =============================================================== */}
-            <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+            <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
                   <div className="flex items-center gap-2">

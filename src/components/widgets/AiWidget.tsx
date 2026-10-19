@@ -1666,8 +1666,8 @@ export function AiWidget() {
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-[#09090b]">
         {/* Unified Bento Command Toolbar */}
-        <div className="bg-[#09090b] border-b border-[#27272a] p-2 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-2">
+        <div className="bg-[#09090b] border-b border-[#27272a] p-2 flex flex-col items-stretch justify-between gap-2 shrink-0 @3xl:flex-row @3xl:items-center">
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @3xl:w-auto">
             {/* History Drawer Button */}
             <button
               onClick={() => setSidebarOpen((o) => !o)}
@@ -1697,7 +1697,7 @@ export function AiWidget() {
             />
 
             {/* Active Context Stock Pill */}
-            <div className="flex items-center gap-1.5 bg-terminal-amber/10 border border-terminal-amber/30 px-2.5 py-1 rounded text-xs font-mono">
+            <div className="ml-auto flex items-center gap-1.5 bg-terminal-amber/10 border border-terminal-amber/30 px-2.5 py-1 rounded text-xs font-mono @3xl:ml-0">
               <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold">CTX</span>
               <span className="text-terminal-amber font-bold">
                 {symbol ? `${symbol}.${exchange}` : 'NIFTY.NSE'}
@@ -1705,7 +1705,7 @@ export function AiWidget() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-2">
             {/* Thinking indicator */}
             {isStreaming && (
               <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 border border-blue-400/30 text-blue-300 text-[11px] font-mono animate-pulse">
@@ -1761,11 +1761,11 @@ export function AiWidget() {
         {/* Scrollable Message List / Empty State */}
         <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3 min-h-0 custom-scroll">
           {messages.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-3xl mx-auto w-full my-auto">
+            <div className="flex-1 flex flex-col items-center justify-center p-2 max-w-3xl mx-auto w-full my-auto @3xl:p-4">
               {/* Hero Bento Card */}
-              <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-4 mb-3 shadow-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
+              <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-3 mb-3 shadow-xl @3xl:p-4">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span
                       className={cn(
                         'text-base font-bold',
@@ -1793,7 +1793,7 @@ export function AiWidget() {
               </div>
 
               {/* 2x2 Bento Starter Prompts Grid */}
-              <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <div className="w-full grid grid-cols-1 @md:grid-cols-2 gap-2.5">
                 {starterPrompts.map((p, idx) => (
                   <button
                     key={idx}

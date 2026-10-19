@@ -272,7 +272,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
           <span className="text-terminal-amber font-mono font-bold text-xs tracking-wider">◈ BLM TERMINAL</span>
           <span className="text-zinc-600 font-mono text-xs">|</span>
           <span className="text-white font-mono font-bold text-xs tracking-wide">ORDER & EXECUTION DECK</span>
-          <span className="hidden sm:inline-block text-[10px] uppercase font-mono tracking-wider font-bold text-zinc-300 bg-[#121216] border border-[#27272a] px-2 py-0.5 rounded">
+          <span className="hidden @md:inline-block text-[10px] uppercase font-mono tracking-wider font-bold text-zinc-300 bg-[#121216] border border-[#27272a] px-2 py-0.5 rounded">
             BENTO MATRIX
           </span>
         </div>
@@ -281,7 +281,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
             {openAlgoAvailable ? 'OPENALGO LIVE' : 'GATEWAY STANDBY'}
           </span>
-          <span className="hidden md:inline-block text-[10px] text-zinc-400 font-mono">
+          <span className="hidden @3xl:inline-block text-[10px] text-zinc-400 font-mono">
             [F1] BUY • [F2] SELL
           </span>
         </div>
@@ -289,10 +289,10 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
 
       {/* Main Bento Matrix Body */}
       <div className="flex-1 overflow-y-auto p-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-3">
 
           {/* 1. HERO ORDER TICKET CARD (Col 1-2) */}
-          <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 flex flex-col justify-between shadow-md">
+          <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 flex flex-col justify-between shadow-md">
             <div>
               {/* Bento Card Header */}
               <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-[#27272a]">
@@ -316,7 +316,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                   <span>SELECT INSTRUMENT</span>
                   <span className="text-[10px] text-zinc-400 font-mono">BROKER: OPENALGO ACTIVE</span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 @md:grid-cols-4 gap-1.5">
                   {QUICK_INSTRUMENTS.map((inst) => {
                     const isSelected = symbol === inst.symbol;
                     const instTick = tickData[`${inst.symbol}.${exchange}`] ?? tickData[`${inst.symbol}.NSE`];
@@ -360,8 +360,8 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
               </div>
 
               {/* Custom Symbol Input & Exchange Selector */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2.5">
-                <div className="sm:col-span-2 bg-[#121216] border border-[#27272a] rounded p-1.5">
+              <div className="grid grid-cols-1 @md:grid-cols-3 gap-2 mb-2.5">
+                <div className="@md:col-span-2 bg-[#121216] border border-[#27272a] rounded p-1.5">
                   <span className="text-[10px] font-mono text-zinc-300 uppercase tracking-wider block mb-1 font-bold">
                     ACTIVE SYMBOL
                   </span>
@@ -406,7 +406,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
               </div>
 
               {/* Parameters Grid (Order Type & Product Pills) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2.5">
+              <div className="grid grid-cols-1 @md:grid-cols-2 gap-2 mb-2.5">
                 {/* Order Type Pills (MKT, LMT, SL, SL-M) */}
                 <div className="bg-[#121216] border border-[#27272a] rounded p-1.5">
                   <span className="text-[10px] font-mono text-zinc-300 uppercase tracking-wider block mb-1 font-bold">
@@ -523,7 +523,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
               </div>
 
               {/* Input Fields: Qty, Limit Price, Trigger Price */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2.5">
+              <div className="grid grid-cols-1 @md:grid-cols-3 gap-2 mb-2.5">
                 {/* Quantity Input */}
                 <div className="bg-[#121216] border border-[#27272a] rounded p-2">
                   <label className="text-[10px] font-mono text-zinc-300 uppercase tracking-wider block mb-1 font-bold">
@@ -596,7 +596,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
               </div>
 
               {/* Best Bid / Ask Depth Preview & Margin Estimate */}
-              <div className="bg-[#121216] border border-[#27272a] rounded p-2 mb-3 flex flex-col sm:flex-row items-center justify-between text-[11px] font-mono gap-2">
+              <div className="bg-[#121216] border border-[#27272a] rounded p-2 mb-3 flex flex-col @md:flex-row items-center justify-between text-[11px] font-mono gap-2">
                 <div className="flex items-center gap-3">
                   <span className="text-zinc-300 font-bold">SPREAD:</span>
                   <span className="text-emerald-400 font-bold">BID ₹{bidDisp}</span>
@@ -660,7 +660,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
           </div>
 
           {/* 2. ACCOUNT MARGINS & FUNDS KPI CARD (Col 3-4) */}
-          <div className="col-span-1 md:col-span-2 lg:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 flex flex-col justify-between shadow-md">
+          <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 flex flex-col justify-between shadow-md">
             <div>
               {/* Bento Card Header */}
               <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-[#27272a]">
@@ -693,7 +693,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                     <span>AVAILABLE CASH</span>
                     <span className="text-emerald-400 text-xs">●</span>
                   </div>
-                  <div className="text-base sm:text-lg font-mono font-bold text-white tabular-nums">
+                  <div className="text-base @md:text-lg font-mono font-bold text-white tabular-nums">
                     ₹{availableCash.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                   <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
@@ -707,7 +707,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                     <span>COLLATERAL MARGIN</span>
                     <span className="text-blue-400 text-xs">●</span>
                   </div>
-                  <div className="text-base sm:text-lg font-mono font-bold text-zinc-100 tabular-nums">
+                  <div className="text-base @md:text-lg font-mono font-bold text-zinc-100 tabular-nums">
                     ₹{collateral.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                   <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
@@ -723,7 +723,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                       {realizedM2M >= 0 ? '▲' : '▼'}
                     </span>
                   </div>
-                  <div className={`text-base sm:text-lg font-mono font-bold tabular-nums ${
+                  <div className={`text-base @md:text-lg font-mono font-bold tabular-nums ${
                     realizedM2M >= 0 ? 'text-emerald-400' : 'text-rose-400'
                   }`}>
                     {realizedM2M >= 0 ? '+' : ''}₹{realizedM2M.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -739,7 +739,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                     <span>UNREALIZED M2M</span>
                     <span className="text-terminal-amber text-xs">⚡</span>
                   </div>
-                  <div className={`text-base sm:text-lg font-mono font-bold tabular-nums ${
+                  <div className={`text-base @md:text-lg font-mono font-bold tabular-nums ${
                     unrealizedM2M >= 0 ? 'text-emerald-400' : 'text-rose-400'
                   }`}>
                     {unrealizedM2M >= 0 ? '+' : ''}₹{unrealizedM2M.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -814,7 +814,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
           </div>
 
           {/* 3. RECENT EXECUTIONS & ORDER BOOK (Col 1-4) */}
-          <div className="col-span-1 md:col-span-4 lg:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 shadow-md">
+          <div className="col-span-1 @md:col-span-2 @4xl:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 shadow-md">
             {/* Card Header & Filter Chips */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-[#27272a]">
               <div className="flex items-center gap-2">

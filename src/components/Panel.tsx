@@ -179,7 +179,7 @@ export function Panel({ id, title }: PanelProps) {
     <div
       data-tour-panel={title}
       data-tour-panel-id={id}
-      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-150 h-full w-full ${
+      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-150 h-full w-full min-h-0 min-w-0 ${
         isSelected
           ? 'border-yellow-500'
           : isFocused
@@ -225,9 +225,9 @@ export function Panel({ id, title }: PanelProps) {
           </span>
         )}
       </div>
-      <div className="flex-1 relative overflow-hidden">
+      <div className="flex-1 relative overflow-hidden min-h-0 min-w-0">
         <ErrorBoundary>
-          <div className="h-full w-full flex flex-col overflow-hidden">
+          <div className="@container h-full w-full min-h-0 min-w-0 flex flex-col overflow-hidden">
             {renderWidget()}
           </div>
         </ErrorBoundary>

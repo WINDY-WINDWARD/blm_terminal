@@ -853,11 +853,11 @@ export function NewsWidget() {
     Object.keys(SOURCE_LABELS).length - (filters.excludedSources?.length || 0);
 
   return (
-    <div className="h-full w-full flex flex-col bg-[#09090b] text-zinc-100 font-mono text-xs overflow-hidden p-3 gap-3">
+    <div className="h-full w-full flex flex-col bg-[#09090b] text-zinc-100 font-mono text-xs overflow-hidden p-2.5 @3xl:p-3 gap-2 @3xl:gap-3">
       {/* TOP TOOLBAR BENTO */}
-      <div className="bg-[#0c0c0f] border border-[#27272a] rounded p-2.5 shrink-0 flex flex-col gap-2 shadow-md">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
+      <div className="bg-[#0c0c0f] border border-[#27272a] rounded p-2 shrink-0 flex flex-col gap-2 shadow-md @3xl:p-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 @3xl:gap-3">
+          <div className="flex min-w-0 items-center gap-2 @3xl:gap-2.5">
             <span
               className={`w-2.5 h-2.5 rounded-full transition-all ${
                 wsConnected
@@ -866,16 +866,16 @@ export function NewsWidget() {
               }`}
               title={wsConnected ? 'Live WebSocket Connected' : 'REST Polling Mode'}
             />
-            <span className="text-xs font-mono font-bold tracking-wider uppercase text-terminal-amber">
+            <span className="truncate text-xs font-mono font-bold tracking-wider uppercase text-terminal-amber">
               NEWS & FILINGS RADAR HUB
             </span>
-            <span className="text-zinc-600">|</span>
-            <span className="text-xs text-zinc-300 font-mono tabular-nums">
+            <span className="hidden text-zinc-600 @3xl:inline">|</span>
+            <span className="hidden text-xs text-zinc-300 font-mono tabular-nums @3xl:inline">
               {activeSourceCount} FEEDS SYNCED • {wsConnected ? 'NSE/BSE LIVE' : 'SYNC READY'}
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 flex-1 justify-end min-w-[260px]">
+          <div className="flex w-full min-w-0 flex-wrap items-center justify-start gap-2 @3xl:w-auto @3xl:flex-1 @3xl:justify-end">
             <div className="flex items-center gap-1">
               {(['BULLISH', 'BEARISH', 'NEUTRAL'] as const).map((sent) => {
                 const isActive = filters.sentiment === sent;
@@ -902,7 +902,7 @@ export function NewsWidget() {
               })}
             </div>
 
-            <div className="relative flex items-center min-w-[220px] sm:w-64">
+            <div className="relative flex w-full min-w-0 items-center @2xl:w-64">
               <input
                 type="text"
                 placeholder="Filter ticker or keyword (e.g. RELIANCE)..."
@@ -939,7 +939,7 @@ export function NewsWidget() {
 
       {/* FULL PANEL LIVE WIRE FEED */}
       <div className="flex-1 overflow-y-auto pr-0.5">
-        <div className="h-full bg-[#0c0c0f] border border-[#27272a] rounded p-3 flex flex-col justify-between transition-colors shadow-md">
+        <div className="min-h-full bg-[#0c0c0f] border border-[#27272a] rounded p-2.5 @3xl:p-3 flex flex-col justify-between transition-colors shadow-md">
             <div>
               <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a] flex-wrap gap-2">
                 <div className="flex items-center gap-2">
@@ -979,7 +979,7 @@ export function NewsWidget() {
                   </span>
                 </div>
               ) : (
-                <div className="space-y-2.5 overflow-y-auto max-h-[calc(100vh-250px)] pr-1 font-sans">
+                <div className="space-y-2.5 pr-1 font-sans">
                   {wireArticles.map((article, idx) => (
                     <ArticleRow
                       key={`${article.url}_${idx}`}

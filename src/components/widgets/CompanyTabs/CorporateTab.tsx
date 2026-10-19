@@ -250,7 +250,7 @@ export function CorporateTab({ symbol }: { symbol: string }) {
           defaultOpen={true}
         >
           {nseRatios ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 py-1">
+            <div className="grid grid-cols-2 @4xl:grid-cols-4 gap-2 py-1">
               <div className="bg-black/50 border border-[#27272a]/60 rounded p-2">
                 <div className="text-[10px] uppercase text-zinc-500">P/E Ratio</div>
                 <div className="text-sm font-bold text-terminal-amber mt-0.5">

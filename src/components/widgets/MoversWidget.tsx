@@ -207,6 +207,22 @@ const VIEW_DOT_CLASSES: Record<MoverView, string> = {
   losers: 'bg-rose-400',
 };
 
+const COLUMN_VISIBILITY: Partial<Record<MoverColumnKey, string>> = {
+  velocity: 'hidden @3xl:table-cell',
+  radar: 'hidden @3xl:table-cell',
+  vol: 'hidden @3xl:table-cell',
+  trnvr: 'hidden @4xl:table-cell',
+  open: 'hidden @4xl:table-cell',
+  high: 'hidden @4xl:table-cell',
+  low: 'hidden @4xl:table-cell',
+  ca: 'hidden @4xl:table-cell',
+  '2y': 'hidden @4xl:table-cell',
+  '3y': 'hidden @4xl:table-cell',
+  '5y': 'hidden @4xl:table-cell',
+  '52wh': 'hidden @4xl:table-cell',
+  '52wl': 'hidden @4xl:table-cell',
+};
+
 const CATEGORY_SHORT_LABELS: Record<string, string> = {
   allSec: 'ALL MKT',
   NIFTY: 'NIFTY 50',
@@ -324,7 +340,7 @@ function moverCellClass(column: MoverColumnKey): string {
     : column === 'momentum' || column === 'velocity' || column === 'radar'
       ? 'text-center'
       : 'text-right';
-  return `py-2 px-2 border-r border-[#27272a]/50 ${alignment}`;
+  return `py-1.5 px-1.5 @3xl:py-2 @3xl:px-2 border-r border-[#27272a]/50 ${alignment} ${COLUMN_VISIBILITY[column] ?? ''}`;
 }
 
 function renderMoverCell({
@@ -732,7 +748,7 @@ export function MoversWidget() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
-            <table data-testid="movers-matrix-table" className="w-full min-w-[780px] border-collapse text-left font-mono tabular-nums">
+            <table data-testid="movers-matrix-table" className="w-full border-collapse text-left font-mono tabular-nums">
               <thead className="sticky top-0 z-10 border-b border-[#27272a] bg-[#121216] text-[10px] uppercase tracking-wider text-zinc-400">
                 <tr>
                   {visibleColumns.map((column) => {
@@ -761,7 +777,7 @@ export function MoversWidget() {
                         onDrop={(event) => handleColumnDrop(event, column)}
                         onDragEnd={clearColumnDrag}
                         title={`${label} — click to sort, drag to reorder`}
-                        className={`relative cursor-grab select-none whitespace-nowrap border-b border-r border-[#27272a] px-2 py-2 font-bold transition-colors active:cursor-grabbing ${alignment} ${
+                        className={`relative cursor-grab select-none whitespace-nowrap border-b border-r border-[#27272a] px-1.5 py-1.5 @3xl:px-2 @3xl:py-2 font-bold transition-colors active:cursor-grabbing ${alignment} ${COLUMN_VISIBILITY[column] ?? ''} ${
                           isSorted ? 'text-terminal-amber' : 'text-zinc-400 hover:text-zinc-200'
                         } ${draggedColumn === column ? 'opacity-40' : ''}`}
                       >

@@ -452,14 +452,14 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
 
       {/* Bento Grid Body */}
       <div className="flex-1 overflow-y-auto p-2.5">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2.5 max-w-full">
+        <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-2.5 max-w-full">
 
           {/* ── Row 2-4: Core Financial Metrics (Bento Cards) ──────────────── */}
 
           {/* Market Cap (Double Width) */}
           <BentoCard
             title="Market Capitalization"
-            className="col-span-1 md:col-span-2 lg:col-span-2"
+            className="col-span-1 @md:col-span-2 @4xl:col-span-2"
           >
             <div>
               <div className="text-lg font-bold text-terminal-amber tracking-tight">
@@ -578,7 +578,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {extraRatios.length > 0 && (
             <BentoCard
               title="Extended Screener Metrics"
-              className="col-span-1 md:col-span-2 lg:col-span-4"
+              className="col-span-1 @md:col-span-2 @4xl:col-span-4"
               badge={
                 <button
                   onClick={() => setShowMoreRatios(!showMoreRatios)}
@@ -589,7 +589,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
               }
             >
               {showMoreRatios ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 pt-2 border-t border-[#27272a] mt-1">
+                <div className="grid grid-cols-2 @lg:grid-cols-3 @4xl:grid-cols-4 gap-2 pt-2 border-t border-[#27272a] mt-1">
                   {extraRatios.map(([key, val]) => (
                     <div key={key} className="bg-black/40 border border-[#27272a]/40 rounded p-2">
                       <div className="text-[9px] text-zinc-400 uppercase truncate" title={formatRatioLabel(key)}>
@@ -614,7 +614,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {/* Peter Lynch Fair Value (col-span-2) */}
           <BentoCard
             title="Peter Lynch Valuation"
-            className="col-span-1 md:col-span-2 lg:col-span-2"
+            className="col-span-1 @md:col-span-2 @4xl:col-span-2"
             badge={
               lynch.fairValueRatio !== null ? (
                 <span
@@ -769,7 +769,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           <BentoCard
             title="Intrinsic Valuation Matrix"
             justify="start"
-            className="col-span-1 md:col-span-2 lg:col-span-2"
+            className="col-span-1 @md:col-span-2 @4xl:col-span-2"
             badge={
               valuationData?.cmp != null && (
                 <span className="text-[10px] text-zinc-300 font-semibold">
@@ -883,7 +883,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
 
           {/* ── TradingView Panel (Full Width if available) ───────────────── */}
           {tradingViewData && (
-            <BentoCard title="TradingView Quantitative Fundamentals" className="col-span-1 md:col-span-2 lg:col-span-4 overflow-x-auto">
+            <BentoCard title="TradingView Quantitative Fundamentals" className="col-span-1 @md:col-span-2 @4xl:col-span-4 overflow-x-auto">
               <TradingViewPanel data={tradingViewData} />
             </BentoCard>
           )}
@@ -892,7 +892,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {companySector && (
             <BentoCard
               title="Industry Context"
-              className="col-span-1 md:col-span-2 lg:col-span-4"
+              className="col-span-1 @md:col-span-2 @4xl:col-span-4"
               badge={
                 sectorMatch && (
                   <span className="text-[10px] text-zinc-300">
@@ -929,7 +929,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {/* ── Row 7: Quarterly Financial Performance (Full Width) ──────── */}
           <BentoCard
             title="Quarterly Performance Trend"
-            className="col-span-1 md:col-span-2 lg:col-span-4"
+            className="col-span-1 @md:col-span-2 @4xl:col-span-4"
           >
             {quarters.length === 0 ? (
               <div className="text-zinc-400 text-xs py-2">No quarterly records available.</div>
@@ -995,7 +995,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {/* ── Shareholding Pattern (Full Width) ──────────────────────────── */}
           <BentoCard
             title="Shareholding Pattern"
-            className="col-span-1 md:col-span-2 lg:col-span-4"
+            className="col-span-1 @md:col-span-2 @4xl:col-span-4"
             badge={
               <span className="text-[10px] text-zinc-300 uppercase">
                 Promoter · FII · DII · Public
@@ -1020,7 +1020,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {/* ── Pledged Shares (Full Width) ────────────────────────────────── */}
           <BentoCard
             title="Pledged Shares"
-            className="col-span-1 md:col-span-2 lg:col-span-4"
+            className="col-span-1 @md:col-span-2 @4xl:col-span-4"
             badge={
               <span className="text-[10px] text-zinc-300 uppercase">
                 {pledgedCount} {pledgedCount === 1 ? 'Record' : 'Records'}
