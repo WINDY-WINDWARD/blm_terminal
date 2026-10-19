@@ -7,6 +7,13 @@ const { WebSocketServer } = require('ws');
 
 const { handleMarketWsConnection } = require('./server/marketWsHandler');
 
+let launchToken = null;
+process.on('message', (message) => {
+  if (message && message.type === 'launch-token' && typeof message.token === 'string') {
+    launchToken = message.token;
+  }
+});
+
 const dev = process.env.NODE_ENV !== 'production';
 // Ephemeral by default (A6): a port squatter must never receive the launch
 // token. Set PORT explicitly only for dev convenience.
@@ -58,6 +65,14 @@ app.prepare().then(() => {
     const host = req.headers.host || '';
     if (actualPort && host !== expectedHost()) {
       return deny(res, 403, 'forbidden_host');
+    }
+
+    // Forward the launch token to the Next.js API routes, which run outside
+    // this process and use it when proxying server-side requests to Python.
+    if (launchToken) {
+      req.headers['x-blm-internal-token'] = launchToken;
+    } else {
+      delete req.headers['x-blm-internal-token'];
     }
 
     const { pathname, query } = parse(req.url || '', true);

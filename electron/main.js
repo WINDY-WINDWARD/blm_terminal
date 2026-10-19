@@ -460,6 +460,7 @@ async function startApp() {
     });
 
     // Token over IPC (fork channel), then await the reported ephemeral port.
+    nextProcess.send({ type: 'launch-token', token: launchToken });
     const nextPort = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Next.js did not report server-ready in 30s')), 30000);
       const onMessage = (m) => {
