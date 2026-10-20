@@ -1010,6 +1010,7 @@ def _read_stdin_token(timeout_s: float = 3.0) -> str:
 
 
 LAUNCH_TOKEN = _read_stdin_token() or _os.environ.get("BLM_LAUNCH_TOKEN") or None
+INTERNAL_TOKEN = _os.environ.get("BLM_INTERNAL_TOKEN") or None
 
 logger = logging.getLogger("blm")
 if LAUNCH_TOKEN:
@@ -1019,15 +1020,27 @@ else:
         "BLM launch token absent (no stdin token, no BLM_LAUNCH_TOKEN): "
         "local API running OPEN — dev only, packaged runs always receive a token"
     )
+if INTERNAL_TOKEN:
+    logger.info("Internal server token armed (%d chars)", len(INTERNAL_TOKEN))
 
 
 @app.middleware("http")
 async def launch_token_guard(request: Request, call_next) -> Response:  # type: ignore[type-arg]
     """Reject token-less local API calls (401). /health stays open."""
     if request.url.path != "/health":
-        if not LAUNCH_TOKEN or not _secrets.compare_digest(
-            request.headers.get("x-blm-token", ""), LAUNCH_TOKEN
-        ):
+        has_launch_token = bool(
+            LAUNCH_TOKEN
+            and _secrets.compare_digest(
+                request.headers.get("x-blm-token", ""), LAUNCH_TOKEN
+            )
+        )
+        internal_header = request.headers.get("x-blm-server-token") or request.headers.get("x-blm-internal-token")
+        has_internal_token = bool(
+            INTERNAL_TOKEN
+            and internal_header
+            and _secrets.compare_digest(internal_header, INTERNAL_TOKEN)
+        )
+        if not (has_launch_token or has_internal_token):
             return JSONResponse(status_code=401, content={"error": "missing or invalid launch token"})
     return await call_next(request)
 
@@ -1083,9 +1096,11 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-from app.routers.system_config import admin_shutdown_router
+from app.routers.system_config import admin_shutdown_router, internal_router
 app.include_router(admin_shutdown_router, prefix="/api")
 app.include_router(admin_shutdown_router)
+app.include_router(internal_router, prefix="/api")
+app.include_router(internal_router)
 
 
 if __name__ == "__main__":

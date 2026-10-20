@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { logger } from '@/lib/logger';
-import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
+import { getPythonBackendUrl, getServerInternalHeaders } from '@/lib/backendUrl';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,16 +10,20 @@ export async function GET(req: NextRequest) {
 
   if (!url || !key) {
     try {
-      const cfgRes = await fetch(`${getPythonBackendUrl()}/api/system-config`, {
-        headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
+      const cfgRes = await fetch(`${getPythonBackendUrl()}/api/system-config/openalgo-credentials`, {
+        headers: getServerInternalHeaders({ accept: 'application/json' }),
         signal: AbortSignal.timeout(2000),
       });
       if (cfgRes.ok) {
         const data = await cfgRes.json() as Record<string, unknown>;
-        if (!url && typeof data['openalgo.url'] === 'string') {
+        if (!url && typeof data.url === 'string') {
+          url = data.url;
+        } else if (!url && typeof data['openalgo.url'] === 'string') {
           url = data['openalgo.url'];
         }
-        if (!key && typeof data['openalgo.api_key'] === 'string') {
+        if (!key && typeof data.api_key === 'string') {
+          key = data.api_key;
+        } else if (!key && typeof data['openalgo.api_key'] === 'string') {
           key = data['openalgo.api_key'];
         }
       }

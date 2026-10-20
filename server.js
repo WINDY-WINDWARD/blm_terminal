@@ -8,9 +8,15 @@ const { WebSocketServer } = require('ws');
 const { handleMarketWsConnection } = require('./server/marketWsHandler');
 
 let launchToken = null;
+let serverInternalToken = process.env.BLM_INTERNAL_TOKEN || null;
 process.on('message', (message) => {
   if (message && message.type === 'launch-token' && typeof message.token === 'string') {
     launchToken = message.token;
+    process.env.BLM_LOCAL_TOKEN = message.token;
+  }
+  if (message && message.type === 'internal-token' && typeof message.token === 'string') {
+    serverInternalToken = message.token;
+    process.env.BLM_INTERNAL_TOKEN = message.token;
   }
 });
 
@@ -67,12 +73,13 @@ app.prepare().then(() => {
       return deny(res, 403, 'forbidden_host');
     }
 
-    // Forward the launch token to the Next.js API routes, which run outside
-    // this process and use it when proxying server-side requests to Python.
-    if (launchToken) {
-      req.headers['x-blm-internal-token'] = launchToken;
-    } else {
-      delete req.headers['x-blm-internal-token'];
+    // Never trust client-supplied internal tokens on incoming requests.
+    // The server internal token is kept strictly in Node process.env.
+    delete req.headers['x-blm-internal-token'];
+    delete req.headers['x-blm-server-token'];
+
+    if (launchToken && !req.headers['x-blm-token']) {
+      req.headers['x-blm-token'] = launchToken;
     }
 
     const { pathname, query } = parse(req.url || '', true);

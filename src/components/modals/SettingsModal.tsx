@@ -310,6 +310,8 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
   // Runtime API Keys state
   const [openAlgoUrlInput, setOpenAlgoUrlInput] = useState('');
   const [openAlgoApiKeyInput, setOpenAlgoApiKeyInput] = useState('');
+  const [openAlgoKeyConfigured, setOpenAlgoKeyConfigured] = useState(false);
+  const [aiKeysConfigured, setAiKeysConfigured] = useState<Record<string, boolean>>({});
   
   // AI Settings
   const [aiProvider, setAiProvider] = useState('aistudio');
@@ -601,9 +603,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
         if (typeof data['openalgo.url'] === 'string') {
           setOpenAlgoUrlInput(data['openalgo.url']);
         }
-        if (typeof data['openalgo.api_key'] === 'string') {
-          setOpenAlgoApiKeyInput(data['openalgo.api_key']);
-        }
+        setOpenAlgoKeyConfigured(Boolean(data['openalgo.api_key_configured']));
         if (typeof data['ai.provider'] === 'string') {
           const stored = data['ai.provider'] as string;
           // Migrate retired values to zen-paid (same key slot): legacy "zen"
@@ -614,19 +614,21 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
             setAiProvider(stored);
           }
         }
-        if (typeof data['ai.zen_api_key'] === 'string') setAiZenApiKeyInput(data['ai.zen_api_key']);
-        if (typeof data['ai.go_api_key'] === 'string') setAiGoApiKeyInput(data['ai.go_api_key']);
-        if (typeof data['ai.aistudio_api_key'] === 'string') setAiAistudioApiKeyInput(data['ai.aistudio_api_key']);
-        if (typeof data['ai.groq_api_key'] === 'string') setAiGroqApiKeyInput(data['ai.groq_api_key']);
-        if (typeof data['ai.nvidia_api_key'] === 'string') setAiNvidiaApiKeyInput(data['ai.nvidia_api_key']);
-        if (typeof data['ai.anthropic_api_key'] === 'string') setAiAnthropicApiKeyInput(data['ai.anthropic_api_key']);
-        if (typeof data['ai.claude_code_token'] === 'string') setAiClaudeCodeTokenInput(data['ai.claude_code_token']);
-        if (typeof data['ai.openai_api_key'] === 'string') setAiOpenaiApiKeyInput(data['ai.openai_api_key']);
-        if (typeof data['ai.openrouter_api_key'] === 'string') setAiOpenrouterApiKeyInput(data['ai.openrouter_api_key']);
-        if (typeof data['ai.deepseek_api_key'] === 'string') setAiDeepseekApiKeyInput(data['ai.deepseek_api_key']);
-        if (typeof data['ai.xai_api_key'] === 'string') setAiXaiApiKeyInput(data['ai.xai_api_key']);
-        if (typeof data['ai.together_api_key'] === 'string') setAiTogetherApiKeyInput(data['ai.together_api_key']);
-        if (typeof data['ai.copilot_gh_token'] === 'string') setAiCopilotGhTokenInput(data['ai.copilot_gh_token']);
+        setAiKeysConfigured({
+          'zen-paid': Boolean(data['ai.zen_api_key_configured']),
+          'go': Boolean(data['ai.go_api_key_configured']),
+          'aistudio': Boolean(data['ai.aistudio_api_key_configured']),
+          'groq': Boolean(data['ai.groq_api_key_configured']),
+          'nvidia': Boolean(data['ai.nvidia_api_key_configured']),
+          'anthropic': Boolean(data['ai.anthropic_api_key_configured']),
+          'claude-code': Boolean(data['ai.claude_code_token_configured']),
+          'openai': Boolean(data['ai.openai_api_key_configured']),
+          'openrouter': Boolean(data['ai.openrouter_api_key_configured']),
+          'deepseek': Boolean(data['ai.deepseek_api_key_configured']),
+          'xai': Boolean(data['ai.xai_api_key_configured']),
+          'together': Boolean(data['ai.together_api_key_configured']),
+          'copilot': Boolean(data['ai.copilot_gh_token_configured']),
+        });
         if (typeof data['ai.hunter_model'] === 'string') setAiHunterModel(data['ai.hunter_model']);
         if (typeof data['ai.verifier_model'] === 'string') setAiVerifierModel(data['ai.verifier_model']);
       })
@@ -682,24 +684,30 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
     }),
   );
   const activeKeyBinding = aiKeyBindings[aiProvider];
+  const isKeyConfigured = Boolean(aiKeysConfigured[aiProvider]);
 
   useEffect(() => {
     const key = activeKeyBinding?.value ?? '';
+    const configured = Boolean(aiKeysConfigured[aiProvider]);
 
-    if (aiProvider !== 'gemini' && aiProvider !== 'codex' && !key) {
+    if (aiProvider !== 'gemini' && aiProvider !== 'codex' && !key && !configured) {
       setAiAvailableModels([{ id: '', label: `Enter ${aiProvider} API key to fetch models` }]);
       return;
     }
 
     setFetchingModels(true);
-    fetch(`/api/py/ai/provider-models?provider=${aiProvider}&api_key=${encodeURIComponent(key)}`)
-      .then(res => res.json())
-      .then(data => {
+    fetch('/api/py/ai/provider-models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: aiProvider, api_key: key || '' }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
         if (Array.isArray(data)) setAiAvailableModels(data);
       })
       .catch(console.error)
       .finally(() => setFetchingModels(false));
-  }, [aiProvider, aiZenApiKeyInput, aiGoApiKeyInput, aiAistudioApiKeyInput, aiGroqApiKeyInput, aiNvidiaApiKeyInput, aiAnthropicApiKeyInput, aiClaudeCodeTokenInput, aiOpenaiApiKeyInput, aiOpenrouterApiKeyInput, aiDeepseekApiKeyInput, aiXaiApiKeyInput, aiTogetherApiKeyInput, aiCopilotGhTokenInput]);
+  }, [aiProvider, aiKeysConfigured, aiZenApiKeyInput, aiGoApiKeyInput, aiAistudioApiKeyInput, aiGroqApiKeyInput, aiNvidiaApiKeyInput, aiAnthropicApiKeyInput, aiClaudeCodeTokenInput, aiOpenaiApiKeyInput, aiOpenrouterApiKeyInput, aiDeepseekApiKeyInput, aiXaiApiKeyInput, aiTogetherApiKeyInput, aiCopilotGhTokenInput]);
 
   const handleWatchlistChange = (key: string, checked: boolean) => {
     const newCols = checked
@@ -1276,15 +1284,29 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                           <span className="text-white/50 text-[10px]">Address of your local OpenAlgo server (order-execution bridge).</span>
                         </label>
                         <label className="flex flex-col gap-0.5">
-                          <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
+                          <div className="flex items-center justify-between">
+                            <span className="text-white/70 text-[10px]">OpenAlgo API Key:</span>
+                            {openAlgoKeyConfigured && (
+                              <span className="text-[10px] text-terminal-green font-mono">
+                                ● Configured (Enter new key to replace)
+                              </span>
+                            )}
+                          </div>
                           <input
                             type="password"
                             value={openAlgoApiKeyInput}
                             onChange={(e) => {
                               setOpenAlgoApiKeyInput(e.target.value);
                               scheduleSystemConfigSave('openalgo.api_key', e.target.value);
+                              if (e.target.value.trim()) {
+                                setOpenAlgoKeyConfigured(true);
+                              }
                             }}
-                            placeholder="Enter OpenAlgo API key"
+                            placeholder={
+                              openAlgoKeyConfigured
+                                ? '•••••••• (Configured — enter new key to replace)'
+                                : 'Enter OpenAlgo API key'
+                            }
                             className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
                           />
                           <span className="text-white/50 text-[10px]">From your OpenAlgo server config — authenticates order placement.</span>
@@ -1402,15 +1424,29 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                           </div>
                         ) : activeKeyBinding ? (
                           <label className="flex flex-col gap-0.5">
-                            <span className="text-white/70 text-[10px]">{activeKeyBinding.label}:</span>
+                            <div className="flex items-center justify-between">
+                              <span className="text-white/70 text-[10px]">{activeKeyBinding.label}:</span>
+                              {isKeyConfigured && (
+                                <span className="text-[10px] text-terminal-green font-mono">
+                                  ● Configured (Enter new key to replace)
+                                </span>
+                              )}
+                            </div>
                             <input
                               type="password"
                               value={activeKeyBinding.value}
                               onChange={(e) => {
                                 activeKeyBinding.set(e.target.value);
                                 scheduleSystemConfigSave(activeKeyBinding.dbKey, e.target.value);
+                                if (e.target.value.trim()) {
+                                  setAiKeysConfigured((prev) => ({ ...prev, [aiProvider]: true }));
+                                }
                               }}
-                              placeholder={activeKeyBinding.placeholder}
+                              placeholder={
+                                isKeyConfigured
+                                  ? '•••••••• (Configured — enter new key to replace)'
+                                  : activeKeyBinding.placeholder
+                              }
                               className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
                             />
                             {activeKeyBinding.hint && (

@@ -157,6 +157,31 @@ ALLOWED_STRING_KEYS: set[str] = {
     "ai.verifier_model",
 }
 
+SYSTEM_CONFIG_SECRET_KEYS: set[str] = {
+    # Direct AI API keys
+    "ai.zen_api_key",
+    "ai.go_api_key",
+    "ai.aistudio_api_key",
+    "ai.groq_api_key",
+    "ai.nvidia_api_key",
+    "ai.anthropic_api_key",
+    "ai.openai_api_key",
+    "ai.openrouter_api_key",
+    "ai.deepseek_api_key",
+    "ai.xai_api_key",
+    "ai.together_api_key",
+    # OpenAlgo API key
+    "openalgo.api_key",
+    # GitHub Copilot token
+    "ai.copilot_gh_token",
+    # Claude Code token
+    "ai.claude_code_token",
+    # Legacy Codex tokens
+    "ai.codex_access_token",
+    "ai.codex_refresh_token",
+}
+
+
 
 class SystemConfigUpdate(BaseModel):
     value: Any = Field(..., description="Configuration value (numeric or string)")
@@ -287,6 +312,11 @@ async def get_system_config(
     for key in ALLOWED_STRING_KEYS:
         str_row = next((row[1] for row in rows if row[0] == key), None)
         val = str_row if str_row is not None else ""
+        if key in SYSTEM_CONFIG_SECRET_KEYS:
+            is_configured = bool(val and val.strip())
+            values[f"{key}_configured"] = is_configured
+            values[f"{key}.configured"] = is_configured
+            continue
         if key == "ai.hunter_model" and val.startswith("gemini"):
             val = normalize_gemini_worker_model(val, default_tier="high")
         elif key == "ai.verifier_model" and val.startswith("gemini"):
@@ -321,6 +351,9 @@ async def update_system_config(
     )
     await db.execute(stmt)
     await db.commit()
+
+    if key in SYSTEM_CONFIG_SECRET_KEYS:
+        return {"key": key, "configured": bool(val_str)}
 
     return {"key": key, "value": val_str}
 
@@ -391,3 +424,43 @@ async def shutdown_endpoint(
 
     asyncio.create_task(_perform_shutdown())
     return {"status": "shutting_down"}
+
+
+def require_server_internal_token(request: Request) -> None:
+    """Verify caller presents the separate server-only internal token."""
+    try:
+        import main as _main
+        internal_token = getattr(_main, "INTERNAL_TOKEN", None) or os.environ.get("BLM_INTERNAL_TOKEN")
+    except ImportError:
+        internal_token = os.environ.get("BLM_INTERNAL_TOKEN")
+
+    header_token = request.headers.get("x-blm-server-token") or request.headers.get("x-blm-internal-token")
+    if not internal_token or not header_token or not secrets.compare_digest(header_token, internal_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized server internal call: valid server token required",
+        )
+
+
+internal_router = APIRouter(tags=["internal"], dependencies=[Depends(require_server_internal_token)])
+
+
+@internal_router.get("/system-config/openalgo-credentials")
+@internal_router.get("/internal/openalgo-credentials")
+async def get_openalgo_credentials(
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return raw OpenAlgo credentials to authorized server-only callers."""
+    stmt = select(SystemConfig.key, SystemConfig.value).where(
+        (SystemConfig.key == "openalgo.url") | (SystemConfig.key == "openalgo.api_key")
+    )
+    rows = (await db.execute(stmt)).fetchall()
+    url = next((row[1] for row in rows if row[0] == "openalgo.url"), "") or ""
+    api_key = next((row[1] for row in rows if row[0] == "openalgo.api_key"), "") or ""
+    return {
+        "url": url,
+        "api_key": api_key,
+        "openalgo.url": url,
+        "openalgo.api_key": api_key,
+        "configured": bool(api_key and api_key.strip()),
+    }

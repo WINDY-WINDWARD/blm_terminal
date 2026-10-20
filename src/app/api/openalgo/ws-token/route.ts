@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPythonBackendUrl, getBackendForwardHeaders } from '@/lib/backendUrl';
+import { getPythonBackendUrl, getServerInternalHeaders } from '@/lib/backendUrl';
 
 /**
  * GET /api/openalgo/ws-token
@@ -15,13 +15,15 @@ export async function GET(req: NextRequest) {
 
     if (!apiKey) {
       try {
-        const cfgRes = await fetch(`${getPythonBackendUrl()}/api/system-config`, {
-          headers: getBackendForwardHeaders(req, { accept: 'application/json' }),
+        const cfgRes = await fetch(`${getPythonBackendUrl()}/api/system-config/openalgo-credentials`, {
+          headers: getServerInternalHeaders({ accept: 'application/json' }),
           signal: AbortSignal.timeout(2000),
         });
         if (cfgRes.ok) {
           const data = await cfgRes.json() as Record<string, unknown>;
-          if (typeof data['openalgo.api_key'] === 'string') {
+          if (typeof data.api_key === 'string' && data.api_key) {
+            apiKey = data.api_key;
+          } else if (typeof data['openalgo.api_key'] === 'string' && data['openalgo.api_key']) {
             apiKey = data['openalgo.api_key'];
           }
         }

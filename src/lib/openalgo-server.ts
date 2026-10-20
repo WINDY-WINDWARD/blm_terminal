@@ -4,7 +4,7 @@
 
 import { logger } from './logger';
 import { API_CONFIG } from './api-config';
-import { getPythonBackendUrl, getBackendForwardHeaders } from './backendUrl';
+import { getPythonBackendUrl, getServerInternalHeaders } from './backendUrl';
 
 // ─── Response Types (shared with client) ───────────────────────────────────
 
@@ -120,19 +120,16 @@ async function resolveOpenAlgoCredentials(): Promise<{ url: string; apiKey: stri
   const now = Date.now();
   if (!cachedOpenAlgoUrl || !cachedOpenAlgoApiKey || now - lastConfigFetchTime > 5000) {
     try {
-      const res = await fetch(`${getPythonBackendUrl()}/api/system-config`, {
-        headers: getBackendForwardHeaders(null, { accept: 'application/json' }),
-        // Internal server call - bypass auth or use internal timeout
+      const res = await fetch(`${getPythonBackendUrl()}/api/system-config/openalgo-credentials`, {
+        headers: getServerInternalHeaders({ accept: 'application/json' }),
         signal: AbortSignal.timeout(2000),
       });
       if (res.ok) {
         const data = await res.json() as Record<string, unknown>;
-        if (typeof data['openalgo.url'] === 'string' && data['openalgo.url']) {
-          cachedOpenAlgoUrl = data['openalgo.url'];
-        }
-        if (typeof data['openalgo.api_key'] === 'string' && data['openalgo.api_key']) {
-          cachedOpenAlgoApiKey = data['openalgo.api_key'];
-        }
+        const fetchedUrl = typeof data.url === 'string' ? data.url : (typeof data['openalgo.url'] === 'string' ? data['openalgo.url'] : null);
+        const fetchedKey = typeof data.api_key === 'string' ? data.api_key : (typeof data['openalgo.api_key'] === 'string' ? data['openalgo.api_key'] : null);
+        if (fetchedUrl) cachedOpenAlgoUrl = fetchedUrl;
+        if (fetchedKey) cachedOpenAlgoApiKey = fetchedKey;
         lastConfigFetchTime = now;
       }
     } catch {

@@ -374,7 +374,8 @@ async function startApp() {
     // gone so a local squatter can never receive the token or user data. ──
     const crypto = require('crypto');
     launchToken = crypto.randomBytes(32).toString('base64url');
-    log('Per-launch token generated (stdin/IPC only)');
+    const serverInternalToken = crypto.randomBytes(32).toString('base64url');
+    log('Per-launch token and server-only internal token generated (stdin/IPC/env only)');
     
     // Determine paths
     const userDataPath = app.getPath('userData');
@@ -445,7 +446,8 @@ async function startApp() {
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
         SECRET_KEY: 'desktop_terminal_local_secret_key_123456789',
         CLIPROXY_BIN: cliproxyBin,
-        CLIPROXY_RUNTIME_ROOT: cliproxyRuntimeRoot
+        CLIPROXY_RUNTIME_ROOT: cliproxyRuntimeRoot,
+        BLM_INTERNAL_TOKEN: serverInternalToken
       },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
@@ -535,7 +537,9 @@ async function startApp() {
         // NOTE: no PORT — the Next server binds ephemeral and reports back.
         PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
         NODE_ENV: 'production',
-        NEXT_DIR: nextDir
+        NEXT_DIR: nextDir,
+        BLM_INTERNAL_TOKEN: serverInternalToken,
+        BLM_LOCAL_TOKEN: launchToken
       },
       stdio: 'pipe',
       windowsHide: true
@@ -543,6 +547,7 @@ async function startApp() {
 
     // Token over IPC (fork channel), then await the reported ephemeral port.
     nextProcess.send({ type: 'launch-token', token: launchToken });
+    nextProcess.send({ type: 'internal-token', token: serverInternalToken });
     const nextPort = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Next.js did not report server-ready in 30s')), 30000);
       const onMessage = (m) => {

@@ -46,11 +46,15 @@ async function proxyRequest(
       forwardHeaders.set(key, value)
     }
   })
-  // Per-launch token (Step 5): server.js injects x-blm-internal-token at the
-  // edge before passing the request to Next.js. Never trust a client-supplied
-  // value here — delete it first, then set the server-side one (if any).
+  // Security redaction: never forward or trust browser-supplied internal tokens.
   forwardHeaders.delete('x-blm-token')
-  const localToken = request.headers.get('x-blm-internal-token') || process.env.BLM_LOCAL_TOKEN
+  forwardHeaders.delete('x-blm-internal-token')
+  forwardHeaders.delete('x-blm-server-token')
+
+  // In Electron desktop mode, the request to Next.js carries x-blm-token injected
+  // by webRequest.onBeforeSendHeaders. Forward it if present, or fallback to server env.
+  const clientLaunchToken = request.headers.get('x-blm-token')
+  const localToken = clientLaunchToken || process.env.BLM_LOCAL_TOKEN
   if (localToken) {
     forwardHeaders.set('x-blm-token', localToken)
   }
