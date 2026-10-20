@@ -90,4 +90,5 @@ npm-deps.json
 # git worktrees
 .worktrees/
 worktrees/
+.superpowers/
 
