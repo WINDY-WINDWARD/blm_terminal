@@ -1,3 +1,4 @@
+import pytest
 """Offline tests for the multi-provider layer (no network calls)."""
 
 import base64
@@ -16,139 +17,131 @@ def _jwt(exp, acct):
     )
 
 
-def test_codex_parser_tool_call_turn():
-    from app.services.codex_responses import CodexStreamParser
+@pytest.mark.asyncio
+async def test_proxy_loop_tool_call_turn():
+    from app.services.llm_provider import _run_openai_loop
+    from unittest.mock import MagicMock
 
-    p = CodexStreamParser()
-    frames = [
-        json.dumps({"type": "response.output_text.delta", "delta": "Let me check "}),
-        json.dumps({"type": "response.output_text.delta", "delta": "that quote."}),
-        json.dumps(
-            {
-                "type": "response.output_item.added",
-                "output_index": 1,
-                "item": {
-                    "type": "function_call",
-                    "id": "fc_abc",
-                    "call_id": "call_abc",
-                    "name": "get_symbol_data",
-                    "arguments": "",
-                },
-            }
-        ),
-        json.dumps(
-            {
-                "type": "response.function_call_arguments.delta",
-                "output_index": 1,
-                "delta": '{"sym',
-            }
-        ),
-        json.dumps(
-            {
-                "type": "response.function_call_arguments.delta",
-                "output_index": 1,
-                "item_id": "fc_abc",
-                "delta": 'bol": "RELIANCE"}',
-            }
-        ),
-        json.dumps(
-            {
-                "type": "response.function_call_arguments.done",
-                "output_index": 1,
-                "item_id": "fc_abc",
-                "arguments": '{"symbol": "RELIANCE"}',
-            }
-        ),
-        json.dumps(
-            {
-                "type": "response.output_item.done",
-                "output_index": 1,
-                "item": {
-                    "type": "function_call",
-                    "id": "fc_abc",
-                    "call_id": "call_abc",
-                    "name": "get_symbol_data",
-                    "arguments": '{"symbol": "RELIANCE"}',
-                },
-            }
-        ),
-        json.dumps({"type": "response.completed", "response": {"status": "completed"}}),
-    ]
-    events = []
-    for f in frames:
-        events += p.feed(f)
-    assert p.text == "Let me check that quote."
-    assert p.saw_terminal and p.status == "completed"
-    assert any(e["type"] == "token" for e in events)
-    tcs = p.tool_calls()
-    assert len(tcs) == 1
-    assert tcs[0]["function"]["name"] == "get_symbol_data"
-    assert json.loads(tcs[0]["function"]["arguments"]) == {"symbol": "RELIANCE"}
+    class MockStreamResponse:
+        def __init__(self):
+            self.status_code = 200
+            self.headers = {"X-CPA-TRACE-ID": "test-trace-id-123"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        async def aread(self):
+            return b""
+
+        async def aiter_lines(self):
+            # 1. Output text delta
+            yield "data: " + json.dumps({"choices": [{"delta": {"content": "Let me check "}}]})
+            yield "data: " + json.dumps({"choices": [{"delta": {"content": "that quote."}}]})
+            # 2. Tool call delta
+            yield "data: " + json.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_abc", "function": {"name": "get_symbol_data", "arguments": '{"sym'}}]}}]})
+            yield "data: " + json.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'bol": "RELIANCE"}'}}]}}]})
+            yield "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+            yield "data: [DONE]" 
+
+    mock_client = MagicMock()
+    mock_client.stream = lambda method, url, json=None, headers=None, **kwargs: MockStreamResponse()
+
+    from unittest.mock import patch
+    executed_tools = []
+    async def fake_executor(tool_calls):
+        executed_tools.extend(tool_calls)
+        return ['{"type": "tool_result", "name": "get_symbol_data", "preview": "ok"}'], [{"role": "tool", "tool_call_id": "call_abc", "content": "{}"}]
+
+    with patch("app.services.llm_provider._get_shared_client", return_value=mock_client):
+        events = []
+        async for chunk in _run_openai_loop(
+            messages=[{"role": "user", "content": "quote"}],
+            model="blm-prefix/gpt-4o",
+            api_key="client-key",
+            tools=[{"type": "function", "function": {"name": "get_symbol_data"}}],
+            tool_executor=fake_executor,
+            max_iter=1,  # Stop after tool execution in test
+            base_url="http://127.0.0.1:8317/v1",
+            retry_429=False,
+        ):
+            events.append(json.loads(chunk))
+
+    assert any(e.get("type") == "token" and "Let me check" in e.get("text", "") for e in events)
+    assert len(executed_tools) == 1
+    assert executed_tools[0]["name"] == "get_symbol_data"
+    assert executed_tools[0]["args"] == {"symbol": "RELIANCE"}
 
 
-def test_codex_parser_refusal_and_terminal():
-    from app.services.codex_responses import CodexStreamParser
+@pytest.mark.asyncio
+async def test_proxy_loop_terminal_and_error():
+    from app.services.llm_provider import _run_openai_loop
+    from unittest.mock import MagicMock, patch
 
-    p2 = CodexStreamParser()
-    p2.feed(json.dumps({"type": "response.refusal.delta", "delta": "I cannot help"}))
-    p2.feed(json.dumps({"type": "response.completed", "response": {"status": "completed"}}))
-    assert p2.text == "I cannot help" and p2.saw_terminal
+    class Mock429Stream:
+        def __init__(self):
+            self.status_code = 429
+            self.headers = {"retry-after": "5"}
 
-    p3 = CodexStreamParser()
-    p3.feed(json.dumps({"type": "response.output_text.delta", "delta": "partial..."}))
-    assert not p3.saw_terminal and p3.text == "partial..."
+        async def __aenter__(self):
+            return self
 
-    p4 = CodexStreamParser()
-    assert not p4.saw_terminal and p4.tool_calls() == []
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        async def aread(self):
+            return b'{"error": "rate limited"}'
+
+    mock_client = MagicMock()
+    mock_client.stream = lambda *args, **kwargs: Mock429Stream()
+
+    async def fake_executor(tool_calls):
+        return [], []
+
+    with patch("app.services.llm_provider._get_shared_client", return_value=mock_client):
+        events = []
+        async for chunk in _run_openai_loop(
+            messages=[{"role": "user", "content": "hi"}],
+            model="blm-prefix/gpt-4o",
+            api_key="client-key",
+            tools=[],
+            tool_executor=fake_executor,
+            max_iter=1,
+            retry_429=False,
+        ):
+            events.append(json.loads(chunk))
+
+        # Must immediately yield error without retrying 429 in BLM
+        assert any(e.get("type") == "error" for e in events)
 
 
-def test_codex_request_conversion():
-    from app.services.codex_responses import build_responses_payload
-
-    msgs = [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "hi"},
-        {
-            "role": "assistant",
-            "content": "calling",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "get_top_gainers", "arguments": "{}"},
-                }
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call_1", "content": "[...]"},
-    ]
-    payload = build_responses_payload(
-        model="gpt-5.5",
-        instructions="sys-prompt",
-        messages=msgs,
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_top_gainers",
-                    "description": "d",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ],
+def test_proxy_request_conversion():
+    from app.services.route_registry import (
+        compute_oauth_proxy_prefix,
+        format_route_model_id,
+        parse_route_model_id,
     )
-    assert payload["store"] is False and payload["stream"] is True
-    # max_output_tokens must NOT be sent: the ChatGPT-account Codex route
-    # rejects it (400 Unsupported parameter) on current models.
-    assert "max_output_tokens" not in payload
-    types = [i.get("type", i.get("role")) for i in payload["input"]]
-    assert types == ["user", "assistant", "function_call", "function_call_output"]
-    assert payload["tools"][0] == {
-        "type": "function",
-        "name": "get_top_gainers",
-        "description": "d",
-        "strict": False,
-        "parameters": {"type": "object", "properties": {}},
-    }
+
+    prefix = compute_oauth_proxy_prefix("oauth:codex")
+    assert prefix.startswith("blm-")
+
+    pub_id = format_route_model_id("oauth:codex", "gpt-4o")
+    assert pub_id == "blm:oauth:codex/gpt-4o"
+
+    r_id, upstream = parse_route_model_id(pub_id)
+    assert r_id == "oauth:codex"
+    assert upstream == "gpt-4o"
+
+    # Upstream with slashes
+    slash_id = format_route_model_id("endpoint:xyz", "meta-llama/Llama-3-70b")
+    r_id2, upstream2 = parse_route_model_id(slash_id)
+    assert r_id2 == "endpoint:xyz"
+    assert upstream2 == "meta-llama/Llama-3-70b"
+
+    proxy_model = f"{prefix}/{upstream}"
+    assert proxy_model == f"{prefix}/gpt-4o"
 
 
 def test_copilot_token_validation():

@@ -25,6 +25,14 @@ from app.models.ai_chat import ChatMessageRecord, ChatSession
 from app.models.user import User
 from app.services.ai_chat_service import AVAILABLE_MODELS, run_chat_agent
 from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key, is_ai_provider_configured
+from app.services.proxy_supervisor import get_proxy_supervisor
+from app.services.route_registry import (
+    DEFAULT_ROUTE_MODELS,
+    format_route_model_id,
+    map_legacy_model_to_route,
+    resolve_active_route_id,
+    provider_to_route_id,
+)
 from app.services.antigravity_auth import get_antigravity_token
 from app.services.document_service import (
     DocumentError,
@@ -47,15 +55,32 @@ router = APIRouter(prefix="/ai", tags=["ai-chat"])
 
 @router.get("/status")
 async def get_ai_status():
-    """Return the current provider configuration status."""
-    provider = await get_dynamic_ai_provider()
-    is_configured = await is_ai_provider_configured(provider)
-    free_tier = (provider == "zen-free")
+    """Return the current provider configuration status and route health."""
+    route_id = await resolve_active_route_id()
+    is_configured = await is_ai_provider_configured(route_id)
+    free_tier = (route_id == "direct:zen-free" or route_id == "zen-free")
+
+    route_health: dict[str, Any] = {"healthy": is_configured}
+    if route_id.startswith("oauth:") or route_id.startswith("endpoint:"):
+        supervisor = get_proxy_supervisor()
+        status_dict = supervisor.get_status()
+        route_health.update({
+            "proxy_status": status_dict.get("state", "stopped"),
+            "is_running": status_dict.get("is_running", False),
+            "healthy": is_configured and status_dict.get("state") != "crashed",
+        })
+    else:
+        route_health.update({
+            "status": "ok" if is_configured else "unconfigured",
+            "healthy": is_configured,
+        })
 
     return {
-        "provider": provider,
+        "provider": route_id,
+        "route_id": route_id,
         "is_configured": is_configured,
         "free_tier": free_tier,
+        "route_health": route_health,
     }
 
 # ---------------------------------------------------------------------------
@@ -570,11 +595,14 @@ async def fetch_copilot_models(gh_token: str = "") -> list[dict[str, Any]]:
     return []
 
 
-@router.get("/provider-models")
-async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
-    """Fetch models dynamically from the provider API."""
-    prov = provider.lower().strip()
-    if prov == "gemini":
+class ProviderModelsRequest(BaseModel):
+    provider: str
+    api_key: str = ""
+
+
+async def _fetch_direct_models(prov: str, api_key: str = "") -> list[dict]:
+    prov = prov.lower().strip()
+    if prov in ("gemini", "antigravity"):
         return [
             {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
             {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
@@ -609,8 +637,6 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
         return await fetch_nvidia_models(key)
 
     if prov in ("anthropic", "claude-code"):
-        # Static curated list (native /v1/models is cursor-paginated and
-        # OAuth tokens can't query it reliably).
         prefix = "Claude Code" if prov == "claude-code" else "Anthropic"
         return [
             {"id": m["id"], "label": m["label"].replace("[Anthropic]", f"[{prefix}]")}
@@ -630,7 +656,10 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
         return await fetch_openrouter_models(key)
 
     if prov == "deepseek":
-        return DEEPSEEK_MODELS_STATIC
+        key = api_key.strip()
+        if not key or key == "none":
+            key = await get_dynamic_ai_api_key("deepseek")
+        return await fetch_deepseek_models(key)
 
     if prov == "xai":
         key = api_key.strip()
@@ -645,28 +674,25 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
         return await fetch_together_models(key)
 
     if prov == "copilot":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("copilot")
-        return await fetch_copilot_models(key)
+        token = api_key.strip()
+        if not token or token == "none":
+            token = await get_dynamic_ai_api_key("copilot")
+        return await fetch_copilot_models(token)
 
     if prov == "codex":
         from app.services.codex_auth import CODEX_MODELS
         return CODEX_MODELS
 
     if prov == "go":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("go")
-        if not key or key == "none":
-            return AVAILABLE_MODELS
-
         base_url = "https://opencode.ai/zen/go/v1"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
+                headers = {}
+                if api_key and api_key != "none":
+                    headers["Authorization"] = f"Bearer {api_key}"
                 resp = await client.get(
                     f"{base_url}/models",
-                    headers={"Authorization": f"Bearer {key}", "User-Agent": "Mozilla/5.0"}
+                    headers=headers,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -679,6 +705,163 @@ async def get_provider_models(provider: str, api_key: str = "") -> list[dict]:
             return AVAILABLE_MODELS
 
     return []
+
+
+@router.post("/provider-models")
+async def get_provider_models(payload: ProviderModelsRequest | str, api_key: str = "") -> list[dict]:
+    """Fetch models dynamically from the provider API without secrets in URL."""
+    if isinstance(payload, str):
+        prov = payload.strip()
+        key = api_key.strip()
+    else:
+        prov = payload.provider.strip()
+        key = payload.api_key.strip()
+
+    # If route ID supplied
+    if prov.startswith("oauth:"):
+        provider_name = prov.split(":", 1)[1]
+        raw_list = await _fetch_direct_models(provider_name, key)
+        return [
+            {"id": format_route_model_id(prov, m["id"]), "label": m.get("label", m["id"])}
+            for m in raw_list
+        ]
+    elif prov.startswith("direct:"):
+        direct_name = prov.split(":", 1)[1]
+        raw_list = await _fetch_direct_models(direct_name, key)
+        return [
+            {"id": format_route_model_id(prov, m["id"]), "label": m.get("label", m["id"])}
+            for m in raw_list
+        ]
+    elif prov.startswith("endpoint:"):
+        stored_models: list[str] = []
+        try:
+            from app.database import AsyncSessionLocal
+            from app.models.ai_provider import AIProviderRoute
+
+            async with AsyncSessionLocal() as session:
+                r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == prov))).scalar_one_or_none()
+                if r and r.config_json:
+                    cfg = json.loads(r.config_json)
+                    stored_models = cfg.get("models") or cfg.get("cached_models") or []
+        except Exception:
+            pass
+        return [{"id": format_route_model_id(prov, m), "label": m} for m in stored_models]
+
+    return await _fetch_direct_models(prov, key)
+
+
+@router.get("/chat/models")
+async def get_chat_models() -> list[dict]:
+    """Return available model options dynamically based on the active provider route."""
+    raw_provider = await get_dynamic_ai_provider()
+
+    # Legacy bare string compatibility for tests/older callers
+    if raw_provider == "gemini":
+        return [
+            {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
+            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
+            {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
+        ]
+    if raw_provider == "zen-free":
+        return await fetch_zen_models("", free_only=True)
+    if raw_provider in ("zen", "zen-paid"):
+        api_key = await get_dynamic_ai_api_key("zen-paid")
+        return await fetch_zen_models(api_key)
+
+    active_route_id = provider_to_route_id(raw_provider)
+
+    if active_route_id.startswith("oauth:"):
+        cached_models: list[str] = []
+        supervisor = get_proxy_supervisor()
+        if supervisor.is_running:
+            try:
+                mgmt = supervisor.get_management_client()
+                models = await mgmt.get_credential_models()
+                if models:
+                    cached_models = models
+                    try:
+                        from app.database import AsyncSessionLocal
+                        from app.models.ai_provider import AIProviderRoute
+
+                        async with AsyncSessionLocal() as session:
+                            r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
+                            if r:
+                                cfg = json.loads(r.config_json or "{}")
+                                cfg["cached_models"] = models
+                                r.config_json = json.dumps(cfg)
+                                await session.commit()
+                    except Exception as db_exc:
+                        logger.debug("Failed to cache oauth models: %s", db_exc)
+            except Exception as exc:
+                logger.debug("Failed to fetch credential models from supervisor: %s", exc)
+
+        if not cached_models:
+            try:
+                from app.database import AsyncSessionLocal
+                from app.models.ai_provider import AIProviderRoute
+
+                async with AsyncSessionLocal() as session:
+                    r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
+                    if r and r.config_json:
+                        cfg = json.loads(r.config_json)
+                        cached_models = cfg.get("cached_models") or []
+            except Exception:
+                pass
+
+        if not cached_models:
+            provider = active_route_id.split(":", 1)[1]
+            if provider == "codex":
+                from app.services.codex_auth import CODEX_MODELS
+                cached_models = [m["id"] for m in CODEX_MODELS]
+            elif provider == "antigravity":
+                cached_models = ["gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.8-flash-high"]
+            elif provider in ("claude", "claude-code"):
+                cached_models = [m["id"] for m in ANTHROPIC_MODELS_STATIC]
+            else:
+                cached_models = [DEFAULT_ROUTE_MODELS.get(active_route_id, "default")]
+
+        return [
+            {
+                "id": format_route_model_id(active_route_id, m),
+                "label": f"[{active_route_id.split(':', 1)[1].capitalize()}] {m}" if not m.startswith("[") else m,
+            }
+            for m in cached_models
+        ]
+
+    elif active_route_id.startswith("endpoint:"):
+        stored_models: list[str] = []
+        try:
+            from app.database import AsyncSessionLocal
+            from app.models.ai_provider import AIProviderRoute
+
+            async with AsyncSessionLocal() as session:
+                r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
+                if r and r.config_json:
+                    cfg = json.loads(r.config_json)
+                    stored_models = cfg.get("models") or cfg.get("cached_models") or []
+        except Exception:
+            pass
+        if not stored_models:
+            stored_models = ["default"]
+
+        return [
+            {
+                "id": format_route_model_id(active_route_id, m),
+                "label": f"[Endpoint] {m}",
+            }
+            for m in stored_models
+        ]
+
+    direct_prov = active_route_id.split(":", 1)[1] if active_route_id.startswith("direct:") else active_route_id
+    raw_models = await _fetch_direct_models(direct_prov)
+    return [
+        {
+            "id": format_route_model_id(active_route_id, m["id"]),
+            "label": m.get("label", m["id"]),
+        }
+        for m in raw_models
+    ]
+
 
 
 @router.get("/chat/models")
@@ -971,7 +1154,8 @@ async def chat(
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     symbol = request.symbol.upper()
     exchange = request.exchange.upper()
-    active_model = normalize_gemini_model_id(request.model) if (request.model and request.model.startswith("gemini")) else request.model
+    active_route_id = await resolve_active_route_id()
+    active_model = map_legacy_model_to_route(request.model, active_route_id)
     
     current_user_id.set(current_user.id)
 

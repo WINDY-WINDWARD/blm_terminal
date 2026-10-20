@@ -1,4 +1,13 @@
-"""Helper functions for dynamic AI configuration."""
+"""Helper functions for route-aware dynamic AI configuration.
+
+Centralizes:
+- Active route resolution from `ai.provider` and defaults
+- Route configuration validation for OAuth, custom endpoints, and direct providers
+- Route-qualified model resolution for hunter/verifier models
+- Preserving existing direct provider API keys and GitHub Copilot token discovery
+"""
+
+from __future__ import annotations
 
 import logging
 import os
@@ -7,34 +16,32 @@ from typing import Optional
 from sqlalchemy import select
 
 from app.config import settings
+from app.services.route_registry import (
+    DEFAULT_ROUTE_ID,
+    map_legacy_model_to_route,
+    provider_to_route_id,
+    resolve_active_route_id,
+)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("blm.ai_config")
 
-# Provider identifiers. "zen" is a legacy alias kept for backward
-# compatibility with installs that stored ai.provider="zen" before the
-# free/paid split — it now always resolves to "zen-paid". "zen-free" is
-# likewise a retired alias (OpenCode gated the external free tier); stored
-# values resolve to "zen-paid" so old installs land on an honest
-# not-configured state instead of a dead option.
+# Provider identifiers for legacy compatibility
 ZEN_FREE = "zen-free"
 ZEN_PAID = "zen-paid"
 ZEN_PROVIDERS = (ZEN_FREE, ZEN_PAID)
 AISTUDIO = "aistudio"
 GROQ = "groq"
 NVIDIA = "nvidia"
-# --- Multi-provider additions (Hermes-style provider registry) ---
-ANTHROPIC = "anthropic"      # api.anthropic.com with ANTHROPIC_API_KEY
-CLAUDE_CODE = "claude-code"  # api.anthropic.com with CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`)
-OPENAI = "openai"            # api.openai.com with OPENAI_API_KEY
-OPENROUTER = "openrouter"    # openrouter.ai with OPENROUTER_API_KEY
-DEEPSEEK = "deepseek"        # api.deepseek.com with DEEPSEEK_API_KEY
-XAI = "xai"                  # api.x.ai with XAI_API_KEY
-TOGETHER = "together"        # api.together.xyz with TOGETHER_API_KEY
-COPILOT = "copilot"          # api.githubcopilot.com via GH token exchange
-CODEX = "codex"              # chatgpt.com/backend-api/codex via ChatGPT OAuth (device-code flow)
+ANTHROPIC = "anthropic"
+CLAUDE_CODE = "claude-code"
+OPENAI = "openai"
+OPENROUTER = "openrouter"
+DEEPSEEK = "deepseek"
+XAI = "xai"
+TOGETHER = "together"
+COPILOT = "copilot"
+CODEX = "codex"
 
-# Provider -> DB key slot for the credential (env var is read from settings first,
-# DB value overrides when present).
 PROVIDER_DB_KEYS: dict[str, str] = {
     ZEN_PAID: "ai.zen_api_key",
     "zen": "ai.zen_api_key",
@@ -52,7 +59,6 @@ PROVIDER_DB_KEYS: dict[str, str] = {
     COPILOT: "ai.copilot_gh_token",
 }
 
-# All provider ids valid for ai.provider (used by routers/UI for validation).
 ALL_PROVIDERS: tuple[str, ...] = (
     ZEN_FREE, ZEN_PAID, "go", "gemini", "antigravity", "zen",
     AISTUDIO, GROQ, NVIDIA,
@@ -60,74 +66,55 @@ ALL_PROVIDERS: tuple[str, ...] = (
     COPILOT, CODEX,
 )
 
+
 async def get_dynamic_ai_provider() -> str:
-    """Fetch AI Provider from settings or fallback to dynamic system_config.
+    """Fetch active AI provider route ID from settings or dynamic system_config.
 
-    Returns 'zen-paid', 'go', 'gemini' (or 'antigravity'), 'aistudio',
-    'groq', 'nvidia', etc. Retired aliases ('zen', 'zen-free') resolve to
-    'zen-paid'.
+    Returns route-qualified identifier: e.g. 'oauth:codex', 'oauth:antigravity',
+    'direct:openai', 'direct:zen-paid', or 'endpoint:<uuid>'.
     """
-    provider = settings.ai_provider
-    try:
-        from app.database import AsyncSessionLocal
-        from app.models.system_config import SystemConfig
-        async with AsyncSessionLocal() as session:
-            res = await session.execute(
-                select(SystemConfig.value).where(SystemConfig.key == "ai.provider")
-            )
-            db_val = res.scalar_one_or_none()
-            if db_val and db_val.strip():
-                provider = db_val.strip().lower()
-    except Exception as e:
-        logger.warning("Failed to read ai.provider from db: %s", e)
+    return await resolve_active_route_id()
 
-    # Normalize legacy antigravity to gemini
-    if provider == "antigravity":
-        provider = "gemini"
-
-    # Normalize retired aliases to "zen-paid" (same key slot): legacy "zen"
-    # and the retired "zen-free" (external free tier is gated by OpenCode).
-    if provider in ("zen", ZEN_FREE):
-        provider = ZEN_PAID
-
-    return provider
 
 async def get_dynamic_ai_api_key(provider: str) -> str:
-    """Fetch the correct API key based on the dynamically selected provider."""
-    # Free tier needs no key — the Zen gateway accepts "public" as the credential.
-    if provider == ZEN_FREE:
+    """Fetch the correct API key for direct providers or Copilot.
+
+    Accepts both bare provider strings ('openai') and route IDs ('direct:openai').
+    """
+    prov = provider.strip()
+    if prov.startswith("direct:"):
+        prov = prov.split(":", 1)[1]
+
+    # Free tier needs no key — Zen gateway accepts "public"
+    if prov == ZEN_FREE:
         return "public"
 
-    # Start with default environment variables based on provider
     api_key = settings.ai_api_key
-    if provider in (ZEN_PAID, "zen"):
+    if prov in (ZEN_PAID, "zen"):
         api_key = settings.opencode_zen_api_key
-    elif provider == AISTUDIO:
+    elif prov == AISTUDIO:
         api_key = settings.aistudio_api_key
-    elif provider == GROQ:
+    elif prov == GROQ:
         api_key = settings.groq_api_key
-    elif provider == NVIDIA:
+    elif prov == NVIDIA:
         api_key = settings.nvidia_api_key
-    elif provider == ANTHROPIC:
-        # ANTHROPIC_TOKEN is a valid alias (Hermes lists both).
+    elif prov == ANTHROPIC:
         api_key = settings.anthropic_api_key
         if (not api_key or api_key == "none") and os.environ.get("ANTHROPIC_TOKEN"):
             api_key = os.environ["ANTHROPIC_TOKEN"]
-    elif provider == CLAUDE_CODE:
+    elif prov == CLAUDE_CODE:
         api_key = settings.claude_code_oauth_token
-    elif provider == OPENAI:
+    elif prov == OPENAI:
         api_key = settings.openai_api_key
-    elif provider == OPENROUTER:
+    elif prov == OPENROUTER:
         api_key = settings.openrouter_api_key
-    elif provider == DEEPSEEK:
+    elif prov == DEEPSEEK:
         api_key = settings.deepseek_api_key
-    elif provider == XAI:
+    elif prov == XAI:
         api_key = settings.xai_api_key
-    elif provider == TOGETHER:
+    elif prov == TOGETHER:
         api_key = settings.together_api_key
-    elif provider == COPILOT:
-        # GitHub token aliases in priority order (mirrors Hermes' copilot profile):
-        # COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN > settings field.
+    elif prov == COPILOT:
         api_key = (
             os.environ.get("COPILOT_GITHUB_TOKEN")
             or os.environ.get("GH_TOKEN")
@@ -137,14 +124,12 @@ async def get_dynamic_ai_api_key(provider: str) -> str:
             or "none"
         )
 
-    # Override with database values if present.
-    # "zen-paid" (and legacy "zen") share the ai.zen_api_key slot so existing
-    # installs keep working with zero migration.
-    db_key = PROVIDER_DB_KEYS.get(provider, "ai.api_key")
-    
+    db_key = PROVIDER_DB_KEYS.get(prov, "ai.api_key")
+
     try:
         from app.database import AsyncSessionLocal
         from app.models.system_config import SystemConfig
+
         async with AsyncSessionLocal() as session:
             res = await session.execute(
                 select(SystemConfig.value).where(SystemConfig.key == db_key)
@@ -154,44 +139,71 @@ async def get_dynamic_ai_api_key(provider: str) -> str:
                 api_key = db_val.strip()
     except Exception as e:
         logger.warning("Failed to read %s from db: %s", db_key, e)
-        
+
     return api_key
 
 
 async def is_ai_provider_configured(provider: Optional[str] = None) -> bool:
-    """Check if the specified (or active) AI provider is properly configured."""
+    """Check if the specified (or active) AI provider route is properly configured."""
     if not provider:
-        provider = await get_dynamic_ai_provider()
+        route_id = await get_dynamic_ai_provider()
+    else:
+        route_id = provider_to_route_id(provider)
 
-    if provider == "gemini":
-        from app.services.antigravity_auth import get_antigravity_token
-        token = await get_antigravity_token()
-        return token is not None
-    elif provider == "zen-free":
-        # Free tier needs no key — always usable.
-        return True
-    elif provider == "codex":
-        from app.services.codex_auth import get_codex_status
-        status = await get_codex_status()
-        return bool(status.get("logged_in"))
-    elif provider == "copilot":
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.ai_provider import AIProviderCredential, AIProviderRoute
+
+        if route_id.startswith("oauth:"):
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(
+                    select(AIProviderCredential).where(
+                        AIProviderCredential.route_id == route_id,
+                        AIProviderCredential.enabled == True,
+                    )
+                )
+                creds = res.scalars().all()
+                return len(creds) > 0
+
+        elif route_id.startswith("endpoint:"):
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(
+                    select(AIProviderRoute).where(
+                        AIProviderRoute.id == route_id,
+                        AIProviderRoute.enabled == True,
+                    )
+                )
+                route = res.scalar_one_or_none()
+                return route is not None
+
+    except Exception as exc:
+        logger.warning("is_ai_provider_configured: DB check failed for %s: %s", route_id, exc)
+
+    # Direct providers and Copilot
+    direct_prov = route_id.split(":", 1)[1] if route_id.startswith("direct:") else route_id
+
+    if direct_prov == "copilot":
         from app.services.llm_provider import get_copilot_inference_token
+
         gh_token = await get_dynamic_ai_api_key("copilot")
         token, _, _ = await get_copilot_inference_token(gh_token or "none")
         return token is not None
+    elif direct_prov == ZEN_FREE:
+        return True
     else:
-        api_key = await get_dynamic_ai_api_key(provider)
+        api_key = await get_dynamic_ai_api_key(direct_prov)
         return bool(api_key and api_key != "none")
 
 
 async def get_configured_verifier_model() -> str:
-    """Return the user-configured verifier model, normalized for the active provider."""
-    provider = await get_dynamic_ai_provider()
-    verifier_model = None
+    """Return the user-configured verifier model, route-qualified for the active route."""
+    active_route = await resolve_active_route_id()
+    verifier_model: str | None = None
 
     try:
         from app.database import AsyncSessionLocal
         from app.models.system_config import SystemConfig
+
         async with AsyncSessionLocal() as session:
             res = await session.execute(
                 select(SystemConfig.value).where(SystemConfig.key == "ai.verifier_model")
@@ -202,27 +214,26 @@ async def get_configured_verifier_model() -> str:
     except Exception as e:
         logger.warning("Failed to read ai.verifier_model from db: %s", e)
 
-    if provider == "gemini":
-        from app.routers.system_config import normalize_gemini_worker_model
-        return normalize_gemini_worker_model(verifier_model or "gemini-3.8-flash-low", default_tier="low")
+    return map_legacy_model_to_route(verifier_model, active_route)
 
-    if verifier_model:
-        return verifier_model
 
-    # Sensible lightweight defaults per provider when unconfigured
-    if provider == "zen-free":
-        return "deepseek-v4-flash-free"
-    elif provider in (ZEN_PAID, "zen"):
-        return "minimax-m2.5"
-    elif provider == AISTUDIO:
-        return "gemini-2.5-flash"
-    elif provider in (ANTHROPIC, CLAUDE_CODE):
-        return "claude-3-5-haiku-latest"
-    elif provider == CODEX:
-        return "gpt-4o"
-    elif provider == GROQ:
-        return "llama-3.3-70b-versatile"
-    elif provider == DEEPSEEK:
-        return "deepseek-chat"
-    else:
-        return settings.ai_model or "gpt-4o-mini"
+async def get_configured_hunter_model() -> str:
+    """Return the user-configured hunter model, route-qualified for the active route."""
+    active_route = await resolve_active_route_id()
+    hunter_model: str | None = None
+
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.system_config import SystemConfig
+
+        async with AsyncSessionLocal() as session:
+            res = await session.execute(
+                select(SystemConfig.value).where(SystemConfig.key == "ai.hunter_model")
+            )
+            db_val = res.scalar_one_or_none()
+            if db_val and db_val.strip():
+                hunter_model = db_val.strip()
+    except Exception as e:
+        logger.warning("Failed to read ai.hunter_model from db: %s", e)
+
+    return map_legacy_model_to_route(hunter_model, active_route)

@@ -52,8 +52,6 @@ from app.routers import (
     scripts_router,
     jobs_router,
     auth_router,
-    gemini_auth_router,
-    codex_auth_router,
     users_router,
 )
 from app.workers.lifecycle import start_cache_cleanup
@@ -791,17 +789,19 @@ def _backfill_entities_double_encoding() -> None:
 
 
 
-from app.services.antigravity_auth import get_antigravity_token
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Antigravity Auth check
-    from app.services.ai_config import get_dynamic_ai_provider
-    provider = await get_dynamic_ai_provider()
-    if provider == "gemini":
-        token = await get_antigravity_token()
-        if not token:
-            logger.warning("Antigravity (Gemini) Auth Failed. Please authenticate via the Settings UI.")
+    # Run legacy provider, model, and token migrations
+    try:
+        from app.database import AsyncSessionLocal
+        from app.services.legacy_migration import run_all_legacy_migrations
+        from app.services.provider_vault import get_provider_vault
+        async with AsyncSessionLocal() as session:
+            vault = get_provider_vault()
+            await run_all_legacy_migrations(vault, session)
+    except Exception as mig_exc:
+        logger.warning("Startup legacy migration warning: %s", mig_exc)
 
     # Re-configure logging: restores our handlers after uvicorn's own startup
     # logging setup (which runs after module import in reload mode).
@@ -1067,8 +1067,6 @@ app.include_router(jobs_router, prefix="/api")
 from app.routers.ticker import router as ticker_router
 app.include_router(ticker_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
-app.include_router(gemini_auth_router, prefix="/api")
-app.include_router(codex_auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 
 if settings.is_development:

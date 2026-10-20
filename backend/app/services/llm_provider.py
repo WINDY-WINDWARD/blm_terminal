@@ -1,3 +1,4 @@
+from app.services.antigravity_auth import get_antigravity_token
 """LLM Provider module for abstracting AI API interactions."""
 
 import json
@@ -12,7 +13,52 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 from app.config import settings
-from app.services.antigravity_auth import get_antigravity_token
+from collections import deque
+from datetime import datetime, timezone
+from sqlalchemy import select
+from app.services.proxy_supervisor import get_proxy_supervisor
+from app.services.route_registry import (
+    compute_oauth_proxy_prefix,
+    is_route_model_id,
+    map_legacy_model_to_route,
+    parse_route_model_id,
+    resolve_active_route_id,
+)
+
+MAX_TRACE_ENTRIES = 100
+_proxy_trace_ring: deque[dict[str, Any]] = deque(maxlen=MAX_TRACE_ENTRIES)
+
+
+def record_proxy_trace(
+    *,
+    trace_id: str,
+    route_id: str,
+    session_id: str | None = None,
+    status_code: int = 200,
+    upstream_model: str | None = None,
+    duration_ms: float | None = None,
+) -> None:
+    if not trace_id:
+        return
+    entry = {
+        "trace_id": str(trace_id).strip(),
+        "route_id": str(route_id).strip(),
+        "session_id": str(session_id).strip() if session_id else "",
+        "status_code": status_code,
+        "upstream_model": str(upstream_model).strip() if upstream_model else "",
+        "duration_ms": duration_ms,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    _proxy_trace_ring.append(entry)
+
+
+def get_proxy_traces(limit: int = 50) -> list[dict[str, Any]]:
+    return list(_proxy_trace_ring)[-limit:]
+
+
+def clear_proxy_traces() -> None:
+    _proxy_trace_ring.clear()
+
 from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
 
 # ---------------------------------------------------------------------------
@@ -454,6 +500,8 @@ async def _run_openai_loop(
     request_timeout: float | None = None,
     extra_headers: dict[str, str] | None = None,
     max_tokens: int | None = None,
+    retry_429: bool = True,
+    on_response_headers: Callable[[httpx.Headers, int], None] | None = None,
 ) -> AsyncGenerator[str, None]:
     endpoint = base_url or settings.zen_base_url
     url = f"{endpoint}/chat/completions"
@@ -490,11 +538,23 @@ async def _run_openai_loop(
         stream_kwargs: dict[str, Any] = {}
         if request_timeout is not None:
             stream_kwargs["timeout"] = request_timeout
-        for _attempt in range(4):
+        max_attempts = 4 if retry_429 else 1
+        for _attempt in range(max_attempts):
             try:
                 async with client.stream("POST", url, json=payload, headers=headers, **stream_kwargs) as response:
+                    if on_response_headers:
+                        try:
+                            on_response_headers(response.headers, response.status_code)
+                        except Exception as trace_exc:
+                            logger.debug("Trace callback exception: %s", trace_exc)
+
                     if response.status_code == 429:
                         body = await response.aread()
+                        if not retry_429:
+                            msg = _friendly_gateway_error(api_label, response.status_code, body.decode(errors="replace"))
+                            yield json.dumps({"type": "error", "message": msg})
+                            yield json.dumps({"type": "done"})
+                            return
                         wait_s = _rate_limit_wait(
                             response.headers.get("retry-after"), body.decode(errors="replace")
                         )
@@ -609,7 +669,7 @@ async def _run_openai_loop(
                 yield ev
 
             for tm in tool_msgs:
-                messages.append({"role": "tool", "tool_call_id": tm["id"], "content": tm["content"]})
+                messages.append({"role": "tool", "tool_call_id": tm.get("tool_call_id") or tm.get("id", ""), "content": tm.get("content", "")})
             continue
 
         yield json.dumps({"type": "done"})
@@ -786,6 +846,7 @@ async def _run_anthropic_loop(
     yield json.dumps({"type": "done"})
 
 
+# Standalone helper kept for legacy tests/migration
 async def _run_antigravity_loop(
     messages: list[dict[str, Any]],
     model: str,
@@ -1019,175 +1080,6 @@ async def _run_antigravity_loop(
     yield json.dumps({"type": "done"})
 
 
-async def _run_codex_loop(
-    messages: list[dict[str, Any]],
-    instructions: str,
-    model: str,
-    tools: list[dict[str, Any]],
-    tool_executor: ToolExecutor,
-    max_iter: int = 10,
-    base_url: str | None = None,
-    session_id: str | int | None = None,
-    max_tokens: int | None = None,
-) -> AsyncGenerator[str, None]:
-    """Agentic loop over the OpenAI Responses API (ChatGPT Codex backend).
-
-    Message history is kept in OpenAI chat shape and converted to Responses
-    ``input`` items on every turn via codex_responses helpers.
-    """
-    from app.services.codex_auth import (
-        CODEX_BASE_URL,
-        CODEX_ORIGINATOR,
-        CODEX_USER_AGENT,
-        chatgpt_account_id,
-        get_codex_access_token,
-    )
-    from app.services.codex_responses import CodexStreamParser, build_responses_payload
-
-    access_token = await get_codex_access_token()
-    if not access_token:
-        yield json.dumps({"type": "error", "message": "Codex is not signed in. Sign in via Settings → AI → Codex."})
-        yield json.dumps({"type": "done"})
-        return
-
-    endpoint = (base_url or CODEX_BASE_URL).rstrip("/")
-    url = f"{endpoint}/responses"
-
-    def _headers(token: str) -> dict[str, str]:
-        # Identity headers mirror Hermes' codex_cloudflare_headers: third-party
-        # harnesses must identify themselves; ChatGPT-Account-Id comes from the
-        # OAuth JWT (required for some account shapes).
-        h = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": CODEX_USER_AGENT,
-            "originator": CODEX_ORIGINATOR,
-        }
-        acct = chatgpt_account_id(token)
-        if acct:
-            h["ChatGPT-Account-Id"] = acct
-        if session_id is not None:
-            # Transcript identity + cache-routing hint (mirrors Hermes'
-            # session_id / x-client-request-id extra headers).
-            h["session_id"] = str(session_id)
-            h["x-client-request-id"] = f"pck_{uuid.uuid4().hex[:24]}"
-        return h
-
-    headers = _headers(access_token)
-    client = _get_shared_client()
-
-    for _iteration in range(max_iter):
-        payload = build_responses_payload(
-            model=model,
-            instructions=instructions,
-            messages=messages,
-            tools=tools,
-            max_tokens=max_tokens or 4096,
-        )
-        parser = CodexStreamParser()
-        refreshed_once = False
-
-        while True:  # single retry on 401 with a forced token refresh
-            try:
-                async with client.stream("POST", url, json=payload, headers=headers) as response:
-                    if response.status_code == 401 and not refreshed_once:
-                        new_token = await get_codex_access_token(force_refresh=True)
-                        if new_token:
-                            headers = _headers(new_token)
-                            refreshed_once = True
-                            continue
-                        yield json.dumps({"type": "error", "message": "Codex session expired. Sign in again via Settings → AI → Codex."})
-                        yield json.dumps({"type": "done"})
-                        return
-                    if response.status_code == 429:
-                        yield json.dumps({"type": "error", "message": "Codex quota exhausted (429). Credentials are still valid — retry after the usage limit resets."})
-                        yield json.dumps({"type": "done"})
-                        return
-                    if response.status_code != 200:
-                        body = await response.aread()
-                        raw = body.decode(errors="replace")[:300]
-                        lowered = raw.lower()
-                        if response.status_code == 400 and "not supported" in lowered:
-                            # Model retired or gated by ChatGPT plan (the Codex
-                            # backend exposes no /models catalog, so availability
-                            # varies by account/rollout).
-                            msg = (
-                                f"Codex: model '{model}' isn't available on your ChatGPT plan "
-                                f"(or is retired). Pick another model in Settings → AI "
-                                f"(gpt-5.6-terra works on all plans). Details: {raw}"
-                            )
-                        elif response.status_code == 400 and "unsupported parameter" in lowered:
-                            msg = (
-                                f"Codex rejected a request parameter for model '{model}'. "
-                                f"Please report this (include the model name). Details: {raw}"
-                            )
-                        else:
-                            msg = f"Codex API {response.status_code}: {raw}"
-                        yield json.dumps({"type": "error", "message": msg})
-                        yield json.dumps({"type": "done"})
-                        return
-
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if not raw or raw == "[DONE]":
-                            continue
-                        for ev in parser.feed(raw):
-                            if ev.get("type") == "token":
-                                yield json.dumps(ev)
-                    break
-            except httpx.RequestError as exc:
-                yield json.dumps({"type": "error", "message": f"Network error: {exc}"})
-                yield json.dumps({"type": "done"})
-                return
-
-        if parser.status == "failed":
-            yield json.dumps({"type": "error", "message": f"Codex error: {(parser.error_message or 'unknown')[:300]}"})
-            yield json.dumps({"type": "done"})
-            return
-        if parser.status == "incomplete":
-            yield json.dumps({"type": "error", "message": f"Codex incomplete response: {(parser.error_message or '')[:200]}"})
-            yield json.dumps({"type": "done"})
-            return
-
-        tool_calls_list = parser.tool_calls()
-        if not parser.saw_terminal and not parser.text.strip() and not tool_calls_list:
-            # Mirrors Hermes: no terminal frame AND no usable content means the
-            # stream was truncated or rejected — never silently end the turn.
-            yield json.dumps({"type": "error", "message": "Codex stream did not emit a terminal response."})
-            yield json.dumps({"type": "done"})
-            return
-
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": parser.text or None}
-        if tool_calls_list:
-            assistant_msg["tool_calls"] = [
-                {"id": tc["id"], "type": "function", "function": tc["function"]}
-                for tc in tool_calls_list
-            ]
-        messages.append(assistant_msg)
-
-        if not tool_calls_list:
-            yield json.dumps({"type": "done"})
-            return
-
-        normalised = []
-        for tc in tool_calls_list:
-            try:
-                args_preview = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-            except json.JSONDecodeError:
-                args_preview = {}
-            yield json.dumps({"type": "tool_call", "name": tc["function"]["name"], "args": args_preview})
-            normalised.append({"id": tc["id"], "name": tc["function"]["name"], "args": args_preview})
-
-        sse_events, tool_msgs = await tool_executor(normalised)
-        for ev in sse_events:
-            yield ev
-        for tm in tool_msgs:
-            messages.append({"role": "tool", "tool_call_id": tm["id"], "content": tm["content"]})
-
-    yield json.dumps({"type": "error", "message": f"Agent exceeded {max_iter} iterations."})
-    yield json.dumps({"type": "done"})
 
 
 async def stream_chat_completion(
@@ -1200,31 +1092,82 @@ async def stream_chat_completion(
     session_id: str | int | None = None,
     max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
-    provider = await get_dynamic_ai_provider()
-    if provider == "gemini":
+    if is_route_model_id(model):
+        route_id, upstream_model = parse_route_model_id(model)
+    else:
+        active_route_id = await resolve_active_route_id()
+        qualified = map_legacy_model_to_route(model, active_route_id)
+        route_id, upstream_model = parse_route_model_id(qualified)
+
+    session_id_str = str(session_id).strip() if (session_id is not None and str(session_id).strip()) else f"blm-{uuid.uuid4().hex[:12]}"
+
+    if route_id.startswith("oauth:") or route_id.startswith("endpoint:"):
+        supervisor = get_proxy_supervisor()
+        host, port, client_key = await supervisor.ensure_started()
+        base_url = f"http://{host}:{port}/v1"
+
+        proxy_prefix = None
+        try:
+            from app.database import AsyncSessionLocal
+            from app.models.ai_provider import AIProviderRoute
+
+            async with AsyncSessionLocal() as db_session:
+                r_stmt = select(AIProviderRoute.proxy_prefix).where(AIProviderRoute.id == route_id)
+                res = await db_session.execute(r_stmt)
+                proxy_prefix = res.scalar_one_or_none()
+        except Exception as exc:
+            logger.debug("Failed to query route proxy_prefix from DB: %s", exc)
+
+        if not proxy_prefix:
+            if route_id.startswith("oauth:"):
+                proxy_prefix = compute_oauth_proxy_prefix(route_id)
+            else:
+                proxy_prefix = route_id.replace(":", "-")
+
+        proxy_model = f"{proxy_prefix}/{upstream_model}"
+
+        def _capture_proxy_headers(hdrs: httpx.Headers, status_code: int) -> None:
+            trace_id = hdrs.get("x-cpa-trace-id") or hdrs.get("X-CPA-TRACE-ID")
+            if trace_id:
+                record_proxy_trace(
+                    trace_id=trace_id,
+                    route_id=route_id,
+                    session_id=session_id_str,
+                    status_code=status_code,
+                    upstream_model=upstream_model,
+                )
+
         full_messages = []
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
-        async for chunk in _run_antigravity_loop(full_messages, model, tools, tool_executor, max_iter, max_tokens=max_tokens):
-            yield chunk
-        return
 
-    if provider == "codex":
-        # ChatGPT subscription via the Responses API (OAuth, no API key).
-        full_messages = [m for m in messages if m.get("role") != "system"]
-        async for chunk in _run_codex_loop(
-            full_messages, system_prompt or "", model, tools, tool_executor, max_iter,
-            session_id=session_id,
+        extra_headers = {"X-Session-Id": session_id_str}
+
+        async for chunk in _run_openai_loop(
+            full_messages,
+            proxy_model,
+            client_key,
+            tools,
+            tool_executor,
+            max_iter=max_iter,
+            base_url=base_url,
+            session_id=session_id_str,
+            api_label=f"Proxy ({route_id})",
+            opencode_headers=False,
+            extra_headers=extra_headers,
+            retry_429=False,
+            on_response_headers=_capture_proxy_headers,
             max_tokens=max_tokens,
         ):
             yield chunk
         return
 
+    provider = route_id.split(":", 1)[1] if route_id.startswith("direct:") else route_id
+    model = upstream_model
+
     api_key = await get_dynamic_ai_api_key(provider)
 
-    # zen-free needs no key ("public" is accepted by the gateway); every other
-    # Zen-family provider requires one.
     if provider == "zen-free":
         api_key = "public"
     elif not api_key or api_key == "none":
@@ -1232,15 +1175,10 @@ async def stream_chat_completion(
         yield json.dumps({"type": "done"})
         return
 
-    # Native Anthropic endpoints: direct API key or Claude Code OAuth token.
-    # An oat token pasted into the plain `anthropic` slot is auto-detected by
-    # prefix (mirrors Hermes' _is_oauth_token routing).
     if provider in ("anthropic", "claude-code"):
         oauth_mode = provider == "claude-code" or _is_oauth_token(api_key)
         sys_prompt = system_prompt or ""
         if oauth_mode and not sys_prompt.startswith(_CLAUDE_CODE_SYSTEM_PREFIX):
-            # OAuth clients are expected to identify as Claude Code (Hermes'
-            # _apply_claude_code_identity). Prepend only — never rewrite.
             sys_prompt = f"{_CLAUDE_CODE_SYSTEM_PREFIX} {sys_prompt}".strip()
         anthropic_messages = [m for m in messages if m.get("role") != "system"]
         async for chunk in _run_anthropic_loop(
@@ -1252,7 +1190,7 @@ async def stream_chat_completion(
             tool_executor,
             max_iter,
             base_url="https://api.anthropic.com/v1",
-            session_id=session_id,
+            session_id=session_id_str,
             auth_mode="oauth" if oauth_mode else "api_key",
             opencode_headers=False,
             max_tokens=max_tokens,
@@ -1260,7 +1198,6 @@ async def stream_chat_completion(
             yield chunk
         return
 
-    # GitHub Copilot: exchange the GH token for a short-lived inference token.
     if provider == "copilot":
         copilot_token, copilot_base_url, copilot_error = await get_copilot_inference_token(api_key)
         if not copilot_token:
@@ -1273,7 +1210,7 @@ async def stream_chat_completion(
         full_messages.extend(messages)
         async for chunk in _run_openai_loop(
             full_messages, model, copilot_token, tools, tool_executor, max_iter,
-            base_url=copilot_base_url, session_id=session_id,
+            base_url=copilot_base_url, session_id=session_id_str,
             api_label="Copilot", opencode_headers=False,
             extra_headers=_COPILOT_EDITOR_HEADERS,
             max_tokens=max_tokens,
@@ -1281,9 +1218,6 @@ async def stream_chat_completion(
             yield chunk
         return
 
-    # Third-party OpenAI-compatible endpoints (AI Studio, Groq) get plain
-    # Bearer auth with no OpenCode identity headers. AI Studio additionally
-    # needs Gemini thought_signatures echoed back in tool calls.
     api_label = "Zen API"
     use_opencode_headers = True
     passthrough_thought_signature = False
@@ -1306,7 +1240,6 @@ async def stream_chat_completion(
         base_url = "https://integrate.api.nvidia.com/v1"
         api_label = "NVIDIA"
         use_opencode_headers = False
-        # NIM serverless cold starts can exceed 2 minutes on large models.
         request_timeout = 300.0
     elif provider == "openai":
         base_url = "https://api.openai.com/v1"
@@ -1335,18 +1268,24 @@ async def stream_chat_completion(
     else:
         base_url = settings.zen_base_url
 
-    # The Anthropic wire protocol only applies to these models on the Zen
-    # gateway — on any other provider (e.g. minimax models via NVIDIA NIM)
-    # they use the standard OpenAI loop.
     if model in ANTHROPIC_MODELS and provider in ("zen-free", "zen-paid", "zen", "go"):
         anthropic_messages = [m for m in messages if m.get("role") != "system"]
         sys_prompt = system_prompt or ""
-        async for chunk in _run_anthropic_loop(anthropic_messages, sys_prompt, model, api_key, tools, tool_executor, max_iter, base_url=base_url, session_id=session_id, max_tokens=max_tokens):
+        async for chunk in _run_anthropic_loop(
+            anthropic_messages, sys_prompt, model, api_key, tools, tool_executor,
+            max_iter, base_url=base_url, session_id=session_id_str, max_tokens=max_tokens
+        ):
             yield chunk
     else:
         full_messages = []
         if system_prompt:
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
-        async for chunk in _run_openai_loop(full_messages, model, api_key, tools, tool_executor, max_iter, base_url=base_url, session_id=session_id, api_label=api_label, opencode_headers=use_opencode_headers, passthrough_thought_signature=passthrough_thought_signature, request_timeout=request_timeout, extra_headers=extra_headers, max_tokens=max_tokens):
+        async for chunk in _run_openai_loop(
+            full_messages, model, api_key, tools, tool_executor, max_iter,
+            base_url=base_url, session_id=session_id_str, api_label=api_label,
+            opencode_headers=use_opencode_headers,
+            passthrough_thought_signature=passthrough_thought_signature,
+            request_timeout=request_timeout, extra_headers=extra_headers, max_tokens=max_tokens
+        ):
             yield chunk

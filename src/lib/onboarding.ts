@@ -210,8 +210,12 @@ export interface ProviderModel {
 
 export async function fetchProviderModels(provider: string, apiKey = ''): Promise<ProviderModel[]> {
   const { res, data } = await fetchJson(
-    `/api/py/ai/provider-models?provider=${encodeURIComponent(provider)}&api_key=${encodeURIComponent(apiKey)}`,
-    undefined,
+    '/api/py/ai/provider-models',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    },
     15000,
   );
   if (!res.ok) throw new Error(`Model list fetch failed (HTTP ${res.status})`);
