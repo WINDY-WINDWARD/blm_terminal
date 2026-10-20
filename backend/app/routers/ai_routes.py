@@ -127,8 +127,16 @@ async def list_routes(
         "max_retry_credentials": 0,
         "max_retry_interval": 30,
     }
+    keys_to_fetch = [
+        "ai.routing_strategy",
+        "ai.session_affinity",
+        "ai.session_affinity_ttl",
+        "ai.request_retry",
+        "ai.max_retry_credentials",
+        "ai.max_retry_interval",
+    ]
     try:
-        stmt = select(SystemConfig).where(SystemConfig.key.like("ai.routing_%") | SystemConfig.key.like("ai.session_%"))
+        stmt = select(SystemConfig).where(SystemConfig.key.in_(keys_to_fetch))
         res = await db.execute(stmt)
         for row in res.scalars().all():
             if row.key == "ai.routing_strategy" and row.value:
@@ -137,6 +145,21 @@ async def list_routes(
                 settings_dict["session_affinity"] = row.value.strip().lower() in ("true", "1", "yes")
             elif row.key == "ai.session_affinity_ttl" and row.value:
                 settings_dict["session_affinity_ttl"] = row.value.strip()
+            elif row.key == "ai.request_retry" and row.value:
+                try:
+                    settings_dict["request_retry"] = int(row.value)
+                except ValueError:
+                    pass
+            elif row.key == "ai.max_retry_credentials" and row.value:
+                try:
+                    settings_dict["max_retry_credentials"] = int(row.value)
+                except ValueError:
+                    pass
+            elif row.key == "ai.max_retry_interval" and row.value:
+                try:
+                    settings_dict["max_retry_interval"] = int(row.value)
+                except ValueError:
+                    pass
     except Exception as exc:
         logger.debug("Failed querying routing settings: %s", exc)
 
@@ -519,18 +542,119 @@ async def test_account(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Test connectivity and authentication validity of an account."""
+    """Test connectivity and authentication validity of an account via live verification."""
     res = await db.execute(select(AIProviderCredential).where(AIProviderCredential.id == account_id))
     cred = res.scalar_one_or_none()
     if cred is None:
         raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found.")
 
-    return {
-        "status": "ok",
-        "account_id": account_id,
-        "masked_identity": cred.masked_identity,
-        "latency_ms": 35.0,
-    }
+    t0 = time.perf_counter()
+    if cred.kind == "oauth":
+        supervisor = get_proxy_supervisor()
+        if not supervisor.is_running():
+            try:
+                await supervisor.ensure_started()
+            except Exception as exc:
+                latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+                return {
+                    "status": "error",
+                    "account_id": account_id,
+                    "masked_identity": cred.masked_identity,
+                    "error": "Proxy supervisor is not running",
+                    "latency_ms": latency_ms,
+                }
+
+        mgmt = supervisor.get_management_client()
+        try:
+            is_healthy = await mgmt.health()
+        except Exception as exc:
+            latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return {
+                "status": "error",
+                "account_id": account_id,
+                "masked_identity": cred.masked_identity,
+                "error": "Proxy management API is unreachable",
+                "latency_ms": latency_ms,
+            }
+
+        if not is_healthy:
+            latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return {
+                "status": "error",
+                "account_id": account_id,
+                "masked_identity": cred.masked_identity,
+                "error": "Proxy management API reported unhealthy",
+                "latency_ms": latency_ms,
+            }
+
+        try:
+            proxy_creds = await mgmt.get_credentials()
+            matched_pcred = None
+            for pc in proxy_creds:
+                if pc.get("name") == cred.proxy_credential_name or pc.get("id") == cred.proxy_credential_name:
+                    matched_pcred = pc
+                    break
+
+            latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            if matched_pcred is not None:
+                p_status = str(matched_pcred.get("status", "active")).lower()
+                if p_status in ("active", "ready", "ok"):
+                    return {
+                        "status": "ok",
+                        "account_id": account_id,
+                        "masked_identity": cred.masked_identity,
+                        "proxy_status": p_status,
+                        "latency_ms": latency_ms,
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "account_id": account_id,
+                        "masked_identity": cred.masked_identity,
+                        "proxy_status": p_status,
+                        "error": f"Credential is in '{p_status}' state in proxy",
+                        "latency_ms": latency_ms,
+                    }
+            else:
+                if cred.status == "error":
+                    return {
+                        "status": "error",
+                        "account_id": account_id,
+                        "masked_identity": cred.masked_identity,
+                        "error": cred.last_redacted_error or "Credential has error status",
+                        "latency_ms": latency_ms,
+                    }
+                return {
+                    "status": "ok",
+                    "account_id": account_id,
+                    "masked_identity": cred.masked_identity,
+                    "proxy_status": "registered",
+                    "latency_ms": latency_ms,
+                }
+        except Exception as exc:
+            latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            return {
+                "status": "error",
+                "account_id": account_id,
+                "masked_identity": cred.masked_identity,
+                "error": f"Failed to verify credential in proxy: {type(exc).__name__}",
+                "latency_ms": latency_ms,
+            }
+    else:
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        if cred.status == "error":
+            return {
+                "status": "error",
+                "account_id": account_id,
+                "error": cred.last_redacted_error or "Credential has error status",
+                "latency_ms": latency_ms,
+            }
+        return {
+            "status": "ok",
+            "account_id": account_id,
+            "status": cred.status,
+            "latency_ms": latency_ms,
+        }
 
 
 @router.post("/accounts/{account_id}/reauth")
@@ -545,6 +669,12 @@ async def reauth_account(
     if cred is None:
         raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found.")
 
+    if cred.kind != "oauth":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Account '{account_id}' has kind '{cred.kind}', only OAuth accounts can be reauthenticated.",
+        )
+
     prov = cred.route_id.split(":", 1)[1] if cred.route_id.startswith("oauth:") else cred.route_id
     mgr = get_oauth_session_manager()
     try:
@@ -554,6 +684,10 @@ async def reauth_account(
             replace_account_id=account_id,
             db_session=db,
         )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
+    except RuntimeError as re:
+        raise HTTPException(status_code=503, detail=str(re)) from re
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Reauthentication failed: {exc}") from exc
 
@@ -828,8 +962,12 @@ async def update_endpoint(
             raise HTTPException(status_code=400, detail=str(ve)) from ve
 
     if body.headers is not None:
-        if vault.is_available:
-            await vault.set_endpoint_headers(route_id, body.headers)
+        if not vault.is_available:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Provider vault is unavailable ({vault.state.value}). Cannot store endpoint headers.",
+            )
+        await vault.set_endpoint_headers(route_id, body.headers)
         cfg["header_names"] = list(body.headers.keys())
 
     if body.display_label is not None:
@@ -1148,11 +1286,30 @@ async def refresh_endpoint_models(
         return {"models": ["default"]}
 
     vault = get_provider_vault()
-    headers = await vault.get_endpoint_headers(route_id) or {}
-    url = f"{base_url}/models"
+    raw_headers = {}
+    if vault.is_available:
+        raw_headers = await vault.get_endpoint_headers(route_id) or {}
+    headers = dict(raw_headers)
 
+    # Attach enabled key from vault if Authorization header not supplied
+    has_auth = any(k.lower() == "authorization" for k in headers)
+    if not has_auth and vault.is_available:
+        res_keys = await db.execute(
+            select(AIProviderCredential).where(
+                AIProviderCredential.route_id == route_id,
+                AIProviderCredential.enabled == True,
+            )
+        )
+        for cred in res_keys.scalars().all():
+            if cred.vault_reference:
+                key_val = await vault.get_secret(cred.vault_reference)
+                if key_val:
+                    headers["Authorization"] = f"Bearer {key_val}"
+                    break
+
+    url = f"{base_url}/models"
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -1162,6 +1319,12 @@ async def refresh_endpoint_models(
                 cfg["models"] = models_list
                 route.config_json = json.dumps(cfg)
                 await db.commit()
+                supervisor = get_proxy_supervisor()
+                if supervisor.is_running():
+                    try:
+                        await supervisor.reload_custom_endpoints()
+                    except Exception as exc:
+                        logger.warning("Failed to reload custom endpoints on supervisor: %s", exc)
                 return {"models": models_list}
     except Exception as exc:
         logger.debug("Refresh models failed for endpoint %s: %s", route_id, exc)
@@ -1175,18 +1338,82 @@ async def test_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Test connectivity to a saved custom endpoint."""
+    """Test connectivity to a saved custom endpoint via real timed request."""
     route_id = endpoint_id if endpoint_id.startswith("endpoint:") else f"endpoint:{endpoint_id}"
     res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == route_id))
     route = res.scalar_one_or_none()
     if route is None:
         raise HTTPException(status_code=404, detail=f"Endpoint '{route_id}' not found.")
 
-    return {
-        "status": "ok",
-        "route_id": route_id,
-        "latency_ms": 28.0,
-    }
+    cfg = {}
+    if route.config_json:
+        try:
+            cfg = json.loads(route.config_json)
+        except Exception:
+            pass
+
+    base_url = cfg.get("base_url") or ""
+    if not base_url:
+        return {
+            "status": "error",
+            "route_id": route_id,
+            "error": "No base_url configured for endpoint",
+            "latency_ms": 0.0,
+        }
+
+    vault = get_provider_vault()
+    headers: dict[str, str] = {}
+    if vault.is_available:
+        stored_headers = await vault.get_endpoint_headers(route_id)
+        if isinstance(stored_headers, dict):
+            headers.update(stored_headers)
+
+    # Attach enabled key if Authorization header is not present
+    has_auth = any(k.lower() == "authorization" for k in headers)
+    if not has_auth and vault.is_available:
+        res_keys = await db.execute(
+            select(AIProviderCredential).where(
+                AIProviderCredential.route_id == route_id,
+                AIProviderCredential.enabled == True,
+            )
+        )
+        for cred in res_keys.scalars().all():
+            if cred.vault_reference:
+                raw_key = await vault.get_secret(cred.vault_reference)
+                if raw_key:
+                    headers["Authorization"] = f"Bearer {raw_key}"
+                    break
+
+    test_url = f"{base_url}/models"
+    t0 = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(test_url, headers=headers)
+            latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+            if 200 <= resp.status_code < 300:
+                return {
+                    "status": "ok",
+                    "route_id": route_id,
+                    "status_code": resp.status_code,
+                    "latency_ms": latency_ms,
+                }
+            else:
+                return {
+                    "status": "error",
+                    "route_id": route_id,
+                    "status_code": resp.status_code,
+                    "error": f"Endpoint returned HTTP {resp.status_code}",
+                    "latency_ms": latency_ms,
+                }
+    except Exception as exc:
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        clean_err = f"Connection failed: {type(exc).__name__}"
+        return {
+            "status": "error",
+            "route_id": route_id,
+            "error": clean_err,
+            "latency_ms": latency_ms,
+        }
 
 
 # ---------------------------------------------------------------------------

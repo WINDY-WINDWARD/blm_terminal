@@ -111,6 +111,8 @@ async def test_env(tmp_path: Path):
     mock_mgmt.delete_credential = AsyncMock(return_value={"status": "ok"})
     mock_mgmt.patch_config = AsyncMock(return_value={"status": "ok"})
     mock_mgmt.submit_oauth_callback = AsyncMock(return_value={"status": "ok"})
+    mock_mgmt.health = AsyncMock(return_value=True)
+    mock_mgmt.get_credentials = AsyncMock(return_value=[])
     mock_supervisor.get_management_client.return_value = mock_mgmt
     mock_supervisor.reload_custom_endpoints = AsyncMock()
     mock_supervisor.request_sync = MagicMock()
@@ -791,6 +793,7 @@ async def test_account_patch_refresh_test_reset_remove(test_env):
         assert ref_resp.status_code == 200
 
         # 4. Test account
+        test_env["mgmt"].get_credentials = AsyncMock(return_value=[{"name": proxy_name, "status": "active"}])
         t_resp = await client.post(f"/api/ai/routes/accounts/{account_id}/test")
         assert t_resp.status_code == 200
         assert t_resp.json()["status"] == "ok"
@@ -995,3 +998,642 @@ async def test_oauth_callback_flow_and_zero_secret_logging(test_env, caplog):
     log_text = caplog.text
     assert secret_code not in log_text
     assert "SENSITIVE_OAUTH_ACCESS_TOKEN_ABC" not in log_text
+
+
+# ---------------------------------------------------------------------------
+# Task 4 Review Finding Regression Tests (Fix Round 1)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
+    """Critical 1: Verify that when two different accounts produce colliding masks (e.g. alice@example.com
+    and adam@example.com both mask to a***@example.com), the add-flow does not silently overwrite
+    the existing credential in the database or vault. Both credentials must be preserved with distinct IDs.
+    """
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    vault = test_env["vault"]
+
+    # Step 1: User 'alice@example.com' authenticates via add-flow (replace_account_id=None)
+    mgmt.start_oauth.return_value = {
+        "state": "state_alice_collision",
+        "url": "https://auth.example.com/oauth/authorize",
+        "expires_in": 900,
+    }
+    mgmt.get_oauth_status.return_value = {
+        "status": "completed",
+        "identity": "alice@example.com",
+        "auth": {
+            "identity": "alice@example.com",
+            "access_token": "token_alice_secret_111",
+        },
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        start_alice = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex", "flow": "browser"})
+        assert start_alice.status_code == 200
+        state_alice = start_alice.json()["state"]
+
+        poll_alice = await client.get(f"/api/ai/routes/oauth/poll?state={state_alice}")
+        assert poll_alice.status_code == 200
+        alice_data = poll_alice.json()
+        assert alice_data["status"] == "completed"
+        alice_id = alice_data["account_id"]
+        assert alice_data["masked_identity"] == "a***@example.com"
+
+        # Verify alice in vault
+        async with test_env["session_factory"]() as s:
+            res = await s.execute(select(AIProviderCredential).where(AIProviderCredential.id == alice_id))
+            alice_cred = res.scalar_one()
+            assert alice_cred.masked_identity == "a***@example.com"
+
+        alice_vault = await vault.get_oauth_auth(alice_cred.vault_reference)
+        assert alice_vault["access_token"] == "token_alice_secret_111"
+        assert alice_vault["identity"] == "alice@example.com"
+
+        # Step 2: User 'adam@example.com' authenticates via add-flow (replace_account_id=None)
+        # adam masks to EXACT SAME mask 'a***@example.com'
+        mgmt.start_oauth.return_value = {
+            "state": "state_adam_collision",
+            "url": "https://auth.example.com/oauth/authorize",
+            "expires_in": 900,
+        }
+        mgmt.get_oauth_status.return_value = {
+            "status": "completed",
+            "identity": "adam@example.com",
+            "auth": {
+                "identity": "adam@example.com",
+                "access_token": "token_adam_secret_222",
+            },
+        }
+
+        start_adam = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex", "flow": "browser"})
+        assert start_adam.status_code == 200
+        state_adam = start_adam.json()["state"]
+
+        poll_adam = await client.get(f"/api/ai/routes/oauth/poll?state={state_adam}")
+        assert poll_adam.status_code == 200
+        adam_data = poll_adam.json()
+        assert adam_data["status"] == "completed"
+        adam_id = adam_data["account_id"]
+        assert adam_data["masked_identity"] == "a***@example.com"
+
+        # MUST BE A DIFFERENT CREDENTIAL! Not overwritten!
+        assert adam_id != alice_id, "Collision caused silent overwrite of alice by adam!"
+
+        # Step 3: Verify BOTH accounts exist in the database with their distinct vault references
+        async with test_env["session_factory"]() as s:
+            all_creds_res = await s.execute(
+                select(AIProviderCredential).where(AIProviderCredential.route_id == "oauth:codex")
+            )
+            creds = all_creds_res.scalars().all()
+            assert len(creds) == 2, f"Expected 2 accounts, found {len(creds)}"
+            ids = {c.id for c in creds}
+            assert alice_id in ids
+            assert adam_id in ids
+
+            alice_c = next(c for c in creds if c.id == alice_id)
+            adam_c = next(c for c in creds if c.id == adam_id)
+
+        # Step 4: Verify NO CREDENTIAL LOSS in vault
+        alice_vault_check = await vault.get_oauth_auth(alice_c.vault_reference)
+        adam_vault_check = await vault.get_oauth_auth(adam_c.vault_reference)
+
+        assert alice_vault_check["access_token"] == "token_alice_secret_111"
+        assert alice_vault_check["identity"] == "alice@example.com"
+        assert adam_vault_check["access_token"] == "token_adam_secret_222"
+        assert adam_vault_check["identity"] == "adam@example.com"
+
+        # Step 5: If alice logs in again via add-flow, her raw identity matches alice_c, so it updates alice_c without creating a 3rd
+        mgmt.start_oauth.return_value = {
+            "state": "state_alice_repeat",
+            "url": "https://auth.example.com/oauth/authorize",
+            "expires_in": 900,
+        }
+        mgmt.get_oauth_status.return_value = {
+            "status": "completed",
+            "identity": "alice@example.com",
+            "auth": {
+                "identity": "alice@example.com",
+                "access_token": "token_alice_secret_v2",
+            },
+        }
+        start_alice2 = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex", "flow": "browser"})
+        state_alice2 = start_alice2.json()["state"]
+        poll_alice2 = await client.get(f"/api/ai/routes/oauth/poll?state={state_alice2}")
+        assert poll_alice2.status_code == 200
+        assert poll_alice2.json()["account_id"] == alice_id
+
+        async with test_env["session_factory"]() as s:
+            all_creds_res = await s.execute(
+                select(AIProviderCredential).where(AIProviderCredential.route_id == "oauth:codex")
+            )
+            creds_after = all_creds_res.scalars().all()
+            assert len(creds_after) == 2
+
+        alice_vault_updated = await vault.get_oauth_auth(alice_c.vault_reference)
+        assert alice_vault_updated["access_token"] == "token_alice_secret_v2"
+
+
+@pytest.mark.asyncio
+async def test_oauth_poll_immediate_failure_and_redaction(test_env):
+    """Important 2: Verify poll_session immediately surfaces upstream failed/error/denied states
+    with redacted error messages and does not hang until TTL.
+    """
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+
+    # 1. Upstream returns failed with sensitive URL query params and tokens
+    mgmt.start_oauth.return_value = {
+        "state": "fail_state_1",
+        "url": "https://auth.example.com",
+        "expires_in": 900,
+    }
+    mgmt.get_oauth_status.return_value = {
+        "status": "failed",
+        "error": "access_denied",
+        "error_description": "User denied consent at https://auth.com?code=SECRET123&client_secret=TOPSECRET Bearer sk-sensitive-key-999",
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        start_resp = await client.post("/api/ai/routes/oauth/start", json={"provider": "claude", "flow": "browser"})
+        state = start_resp.json()["state"]
+
+        poll_resp = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll_resp.status_code == 200
+        data = poll_resp.json()
+        assert data["status"] == "failed"
+        assert "error" in data
+        assert "SECRET123" not in data["error"]
+        assert "TOPSECRET" not in data["error"]
+        assert "sk-sensitive-key-999" not in data["error"]
+
+        # Polling again returns the same cached failed status immediately
+        poll_again = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll_again.json()["status"] == "failed"
+
+    # 2. Test replace account flow when upstream fails: credential error recorded
+    account_id = "fail_target_account"
+    async with test_env["session_factory"]() as s:
+        cred = AIProviderCredential(
+            id=account_id,
+            route_id="oauth:claude",
+            kind="oauth",
+            vault_reference="vault_ref_fail_target",
+            proxy_credential_name="claude_fail_test",
+            masked_identity=mask_identity("victim@example.com"),
+            priority=1,
+            weight=1,
+            enabled=True,
+            status="active",
+        )
+        s.add(cred)
+        await s.commit()
+
+    mgmt.start_oauth.return_value = {
+        "state": "fail_state_replace",
+        "url": "https://auth.example.com",
+        "expires_in": 900,
+    }
+    mgmt.get_oauth_status.return_value = {
+        "status": "error",
+        "error": "invalid_grant",
+        "error_description": "OAuth token grant was revoked by provider",
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        start_rep = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "claude", "flow": "browser", "replace_account_id": account_id},
+        )
+        assert start_rep.status_code == 200
+        state_rep = start_rep.json()["state"]
+
+        poll_rep = await client.get(f"/api/ai/routes/oauth/poll?state={state_rep}")
+        assert poll_rep.status_code == 200
+        assert poll_rep.json()["status"] == "failed"
+
+    # Verify credential was updated with error status and redacted error in DB
+    async with test_env["session_factory"]() as s:
+        res = await s.execute(select(AIProviderCredential).where(AIProviderCredential.id == account_id))
+        updated_cred = res.scalar_one()
+        assert updated_cred.status == "error"
+        assert "token grant was revoked" in updated_cred.last_redacted_error
+
+
+@pytest.mark.asyncio
+async def test_route_settings_round_trip_and_validation(test_env):
+    """Important 3 & Minor 8: Test complete PATCH -> GET round-trip for all persisted settings
+    (request_retry, max_retry_credentials, max_retry_interval, strategy, affinity), and verify
+    invalid strategies and out-of-bound values are rejected.
+    """
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # Initial GET: defaults
+        get_init = await client.get("/api/ai/routes")
+        assert get_init.status_code == 200
+        settings = get_init.json()["settings"]
+        assert settings["strategy"] == "fill-first"
+        assert settings["request_retry"] == 3
+        assert settings["max_retry_credentials"] == 0
+        assert settings["max_retry_interval"] == 30
+
+        # PATCH all settings
+        patch_resp = await client.patch(
+            "/api/ai/routes/settings",
+            json={
+                "strategy": "priority",
+                "session_affinity": False,
+                "session_affinity_ttl": "45m",
+                "request_retry": 5,
+                "max_retry_credentials": 4,
+                "max_retry_interval": 60,
+            },
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["status"] == "updated"
+
+        # GET to verify round-trip
+        get_updated = await client.get("/api/ai/routes")
+        assert get_updated.status_code == 200
+        s_up = get_updated.json()["settings"]
+        assert s_up["strategy"] == "priority"
+        assert s_up["session_affinity"] is False
+        assert s_up["session_affinity_ttl"] == "45m"
+        assert s_up["request_retry"] == 5
+        assert s_up["max_retry_credentials"] == 4
+        assert s_up["max_retry_interval"] == 60
+
+        # Test validation rejections
+        # Invalid strategy
+        bad_strat = await client.patch("/api/ai/routes/settings", json={"strategy": "random_picker"})
+        assert bad_strat.status_code == 422
+
+        # Negative request_retry
+        bad_retry = await client.patch("/api/ai/routes/settings", json={"request_retry": -1})
+        assert bad_retry.status_code == 422
+
+        # Out-of-bounds request_retry
+        bad_retry_high = await client.patch("/api/ai/routes/settings", json={"request_retry": 999})
+        assert bad_retry_high.status_code == 422
+
+        # Out-of-bounds max_retry_credentials
+        bad_cred_high = await client.patch("/api/ai/routes/settings", json={"max_retry_credentials": 100})
+        assert bad_cred_high.status_code == 422
+
+        # Negative max_retry_interval
+        bad_interval = await client.patch("/api/ai/routes/settings", json={"max_retry_interval": -5})
+        assert bad_interval.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_endpoint_test_real_timed_check_success_and_errors(test_env):
+    """Important 4: Functional endpoint test with real timed HTTP requests to a local server.
+    Verifies success, HTTP error (502), and connection failure without disclosing secrets.
+    """
+    transport = httpx.ASGITransport(app=app)
+    server_status = 200
+    last_req_headers = {}
+
+    async def handle_request(reader, writer):
+        nonlocal last_req_headers
+        req_line = await reader.readline()
+        headers = {}
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            dec = line.decode("latin1", errors="ignore")
+            if ":" in dec:
+                k, v = dec.split(":", 1)
+                headers[k.strip().lower()] = v.strip()
+        last_req_headers = headers
+
+        body = b'{"data": [{"id": "local-model"}]}' if server_status == 200 else b'{"error": "Upstream unavailable"}'
+        writer.write(f"HTTP/1.1 {server_status} {'OK' if server_status == 200 else 'Bad Gateway'}\r\n".encode("latin1"))
+        writer.write(b"Content-Type: application/json\r\n")
+        writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("latin1"))
+        writer.write(body)
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_request, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    base_url = f"http://127.0.0.1:{port}"
+
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+            # Create custom endpoint with an API key in vault
+            create_resp = await client.post(
+                "/api/ai/routes/endpoints",
+                json={
+                    "display_label": "Local Functional Test EP",
+                    "base_url": base_url,
+                    "keys": [{"api_key": "secret-test-key-456", "label": "Main Key"}],
+                },
+            )
+            assert create_resp.status_code == 200
+            ep_id = create_resp.json()["id"]
+
+            # 1. Success path
+            server_status = 200
+            t_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
+            assert t_resp.status_code == 200
+            t_data = t_resp.json()
+            assert t_data["status"] == "ok"
+            assert t_data["status_code"] == 200
+            assert t_data["latency_ms"] >= 0.0
+            assert last_req_headers.get("authorization") == "Bearer secret-test-key-456"
+
+            # 2. HTTP Error path (502 Bad Gateway)
+            server_status = 502
+            t_err = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
+            assert t_err.status_code == 200
+            err_data = t_err.json()
+            assert err_data["status"] == "error"
+            assert err_data["status_code"] == 502
+            assert "HTTP 502" in err_data["error"]
+            assert err_data["latency_ms"] >= 0.0
+
+            # 3. Unreachable path (close server)
+            server.close()
+            await server.wait_closed()
+            server = None
+
+            t_dead = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
+            assert t_dead.status_code == 200
+            dead_data = t_dead.json()
+            assert dead_data["status"] == "error"
+            assert "Connection failed" in dead_data["error"]
+            assert "secret-test-key-456" not in str(dead_data)
+    finally:
+        if server:
+            server.close()
+            await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_account_test_healthy_and_unavailable_paths(test_env):
+    """Important 4: Functional account test verifying supervisor health and proxy credential status."""
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    account_id = "test-health-acc"
+    proxy_name = "claude_health_pname"
+
+    async with test_env["session_factory"]() as s:
+        cred = AIProviderCredential(
+            id=account_id,
+            route_id="oauth:claude",
+            kind="oauth",
+            vault_reference="vault_ref_health",
+            proxy_credential_name=proxy_name,
+            masked_identity=mask_identity("tester@company.com"),
+            priority=1,
+            weight=1,
+            enabled=True,
+            status="active",
+        )
+        s.add(cred)
+        await s.commit()
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # 1. Healthy path
+        mgmt.health = AsyncMock(return_value=True)
+        mgmt.get_credentials = AsyncMock(return_value=[{"name": proxy_name, "status": "active"}])
+        resp_ok = await client.post(f"/api/ai/routes/accounts/{account_id}/test")
+        assert resp_ok.status_code == 200
+        assert resp_ok.json()["status"] == "ok"
+        assert resp_ok.json()["proxy_status"] == "active"
+        assert resp_ok.json()["latency_ms"] >= 0.0
+
+        # 2. Credential error in proxy (cooldown)
+        mgmt.get_credentials = AsyncMock(return_value=[{"name": proxy_name, "status": "cooldown"}])
+        resp_cool = await client.post(f"/api/ai/routes/accounts/{account_id}/test")
+        assert resp_cool.status_code == 200
+        assert resp_cool.json()["status"] == "error"
+        assert "cooldown" in resp_cool.json()["error"]
+
+        # 3. Proxy unhealthy / unreachable
+        mgmt.health = AsyncMock(return_value=False)
+        resp_unhealthy = await client.post(f"/api/ai/routes/accounts/{account_id}/test")
+        assert resp_unhealthy.status_code == 200
+        assert resp_unhealthy.json()["status"] == "error"
+        assert "unhealthy" in resp_unhealthy.json()["error"]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_model_refresh_authenticated_and_supervisor_reload(test_env, caplog):
+    """Important 5: Verify model refresh attaches the enabled endpoint key from vault as Bearer auth,
+    calls supervisor.reload_custom_endpoints() after persisting models, and leaks zero secrets in logs.
+    """
+    import logging
+    transport = httpx.ASGITransport(app=app)
+    received_auth = None
+
+    async def handle_refresh(reader, writer):
+        nonlocal received_auth
+        req_line = await reader.readline()
+        headers = {}
+        while True:
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            dec = line.decode("latin1", errors="ignore")
+            if ":" in dec:
+                k, v = dec.split(":", 1)
+                headers[k.strip().lower()] = v.strip()
+        received_auth = headers.get("authorization")
+
+        body = b'{"data": [{"id": "deepseek-ai/deepseek-r1"}, {"id": "qwen/qwen-2.5-72b"}]}'
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
+        writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("latin1"))
+        writer.write(body)
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_refresh, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    base_url = f"http://127.0.0.1:{port}"
+    secret_key = "secret-auth-key-super-confidential"
+
+    try:
+        with caplog.at_level(logging.DEBUG):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+                create_resp = await client.post(
+                    "/api/ai/routes/endpoints",
+                    json={
+                        "display_label": "Auth Refresh EP",
+                        "base_url": base_url,
+                        "keys": [{"api_key": secret_key, "label": "Auth Key"}],
+                    },
+                )
+                ep_id = create_resp.json()["id"]
+
+                # Refresh models
+                ref_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/models/refresh")
+                assert ref_resp.status_code == 200
+                models = ref_resp.json()["models"]
+                assert models == ["deepseek-ai/deepseek-r1", "qwen/qwen-2.5-72b"]
+
+                # Verify Bearer header was received
+                assert received_auth == f"Bearer {secret_key}"
+
+                # Verify supervisor reload was called
+                test_env["supervisor"].reload_custom_endpoints.assert_called()
+
+                # Verify zero secrets in logs or responses
+                assert secret_key not in caplog.text
+                assert secret_key not in str(ref_resp.json())
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_and_non_oauth_reauth_rejected(test_env):
+    """Important 6: Verify cross-provider replace_account_id in start_session and non-OAuth
+    reauth_account requests are rejected with clear 400 Bad Request responses.
+    """
+    transport = httpx.ASGITransport(app=app)
+    kimi_acc_id = "kimi_account_123"
+    async with test_env["session_factory"]() as s:
+        cred_kimi = AIProviderCredential(
+            id=kimi_acc_id,
+            route_id="oauth:kimi",
+            kind="oauth",
+            vault_reference="vault_ref_kimi",
+            proxy_credential_name="kimi_proxy_name",
+            masked_identity=mask_identity("kimi_user@example.com"),
+            priority=1,
+            weight=1,
+            enabled=True,
+            status="active",
+        )
+        s.add(cred_kimi)
+        await s.commit()
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # 1. Attempt to start OAuth for 'claude' replacing an 'oauth:kimi' account -> 400 Bad Request
+        resp_cross = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "claude", "flow": "browser", "replace_account_id": kimi_acc_id},
+        )
+        assert resp_cross.status_code == 400
+        assert "not the requested route" in resp_cross.json()["detail"]
+
+        # 2. Create custom endpoint key credential (kind == 'key')
+        ep_resp = await client.post(
+            "/api/ai/routes/endpoints",
+            json={
+                "display_label": "Key EP",
+                "base_url": "https://custom.ai.example/v1",
+                "keys": [{"api_key": "some-key", "label": "Key 1"}],
+            },
+        )
+        key_id = ep_resp.json()["keys"][0]["id"]
+
+        # Attempt to reauth the endpoint key -> 400 Bad Request
+        reauth_key = await client.post(f"/api/ai/routes/accounts/{key_id}/reauth")
+        assert reauth_key.status_code == 400
+        assert "only OAuth accounts" in reauth_key.json()["detail"]
+
+        # Attempt to start OAuth with the endpoint key as replace_account_id -> 400 Bad Request
+        start_key = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "claude", "flow": "browser", "replace_account_id": key_id},
+        )
+        assert start_key.status_code == 400
+        assert "only OAuth accounts" in start_key.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_oauth_reconciliation_single_execution(test_env):
+    """Minor 7: Verify that concurrent poll requests on a completed OAuth flow transition to
+    reconciling under lock so only one reconcile path executes, preventing duplicate accounts or races.
+    """
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    state = "concurrent_oauth_state"
+
+    mgr = test_env["oauth_mgr"]
+    session = PendingOAuthSession(
+        state=state,
+        provider="codex",
+        flow="browser",
+        replace_account_id=None,
+        created_at=time.time(),
+        expires_at=time.time() + 900.0,
+        status="pending",
+    )
+    mgr._sessions[state] = session
+
+    mgmt.get_oauth_status = AsyncMock(return_value={
+        "status": "completed",
+        "identity": "concurrent_user@example.com",
+        "auth": {"identity": "concurrent_user@example.com", "access_token": "tok_concurrent"},
+    })
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # Launch two poll requests concurrently
+        task1 = asyncio.create_task(client.get(f"/api/ai/routes/oauth/poll?state={state}"))
+        task2 = asyncio.create_task(client.get(f"/api/ai/routes/oauth/poll?state={state}"))
+
+        res1, res2 = await asyncio.gather(task1, task2)
+        assert res1.status_code == 200
+        assert res2.status_code == 200
+
+        data1 = res1.json()
+        data2 = res2.json()
+
+        assert data1["status"] == "completed"
+        assert data2["status"] == "completed"
+        assert data1["account_id"] == data2["account_id"]
+
+    # Verify only ONE credential was created in DB
+    async with test_env["session_factory"]() as s:
+        creds_res = await s.execute(
+            select(AIProviderCredential).where(AIProviderCredential.route_id == "oauth:codex")
+        )
+        creds = creds_res.scalars().all()
+        matching = [c for c in creds if c.id == data1["account_id"]]
+        assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_endpoint_503_when_vault_unavailable(test_env):
+    """Minor 9: Verify update_endpoint returns 503 when headers are supplied while vault is unavailable."""
+    transport = httpx.ASGITransport(app=app)
+    vault = test_env["vault"]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # Create endpoint while vault is healthy
+        create_resp = await client.post(
+            "/api/ai/routes/endpoints",
+            json={
+                "display_label": "Vault Fail Test EP",
+                "base_url": "https://api.test.example/v1",
+                "headers": {"X-Init-Header": "init"},
+            },
+        )
+        assert create_resp.status_code == 200
+        ep_id = create_resp.json()["id"]
+
+        # Degrade vault
+        vault._state = VaultState.KEYRING_UNAVAILABLE
+
+        # Attempt to update headers -> 503 Service Unavailable
+        update_resp = await client.patch(
+            f"/api/ai/routes/endpoints/{ep_id}",
+            json={"headers": {"X-New-Secret-Header": "new_val"}},
+        )
+        assert update_resp.status_code == 503
+        assert "Provider vault is unavailable" in update_resp.json()["detail"]
+
+        # Restore vault state and verify old headers preserved
+        vault._state = VaultState.AVAILABLE
+        get_ep = await client.get("/api/ai/routes")
+        routes = get_ep.json()["routes"]
+        ep_summary = next(r for r in routes if r["id"] == ep_id)
+        assert ep_summary["config"]["header_names"] == ["X-Init-Header"]

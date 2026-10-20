@@ -5,16 +5,30 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+VALID_ROUTING_STRATEGIES = {"fill-first", "round-robin", "priority"}
 
 
 class RouteSettingsUpdate(BaseModel):
     strategy: str | None = None
     session_affinity: bool | None = None
     session_affinity_ttl: str | None = None
-    request_retry: int | None = None
-    max_retry_credentials: int | None = None
-    max_retry_interval: int | None = None
+    request_retry: int | None = Field(default=None, ge=0, le=10)
+    max_retry_credentials: int | None = Field(default=None, ge=0, le=20)
+    max_retry_interval: int | None = Field(default=None, ge=0, le=300)
+
+    @field_validator("strategy")
+    @classmethod
+    def validate_strategy(cls, v: str | None) -> str | None:
+        if v is not None:
+            clean = v.strip().lower()
+            if clean not in VALID_ROUTING_STRATEGIES:
+                raise ValueError(
+                    f"Invalid routing strategy '{v}'. Must be one of: {sorted(VALID_ROUTING_STRATEGIES)}"
+                )
+            return clean
+        return None
 
 
 class EndpointKeyInput(BaseModel):
