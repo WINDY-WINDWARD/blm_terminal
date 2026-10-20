@@ -792,17 +792,6 @@ def _backfill_entities_double_encoding() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Run legacy provider, model, and token migrations
-    try:
-        from app.database import AsyncSessionLocal
-        from app.services.legacy_migration import run_all_legacy_migrations
-        from app.services.provider_vault import get_provider_vault
-        async with AsyncSessionLocal() as session:
-            vault = get_provider_vault()
-            await run_all_legacy_migrations(vault, session)
-    except Exception as mig_exc:
-        logger.warning("Startup legacy migration warning: %s", mig_exc)
-
     # Re-configure logging: restores our handlers after uvicorn's own startup
     # logging setup (which runs after module import in reload mode).
     _configure_logging()
@@ -817,6 +806,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await asyncio.to_thread(_ensure_ai_provider_routes)
     await asyncio.to_thread(_backfill_entities_double_encoding)
     await asyncio.to_thread(_migrate_deprecated_gemini_models)
+
+    # Run legacy provider, model, and token migrations (must run after DB migration and route seeding)
+    try:
+        from app.database import AsyncSessionLocal
+        from app.services.legacy_migration import run_all_legacy_migrations
+        from app.services.provider_vault import get_provider_vault
+        async with AsyncSessionLocal() as session:
+            vault = get_provider_vault()
+            await run_all_legacy_migrations(vault, session)
+    except Exception as mig_exc:
+        logger.warning("Startup legacy migration warning: %s", mig_exc)
 
     # Start the priority write queue writer thread (serialises non-critical writes)
     from app.services.write_queue import start_writer

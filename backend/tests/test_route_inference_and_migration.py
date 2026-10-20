@@ -469,3 +469,128 @@ async def test_chat_models_and_ai_status(monkeypatch, async_db):
         data = status_resp.json()
         assert data["provider"] == "oauth:codex"
         assert "route_health" in data
+
+
+@pytest.mark.asyncio
+async def test_startup_order_regression_table_creation_before_migration(tmp_path, monkeypatch):
+    """Prove that legacy migration fails if run before table creation on a fresh DB, and succeeds after."""
+    import sqlite3
+    import inspect
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from app.services.legacy_migration import run_all_legacy_migrations
+
+    db_path = tmp_path / "fresh_unmigrated.db"
+    # Create empty sqlite file without provider tables
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE system_config (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO system_config VALUES ('ai.codex_access_token', 'test.jwt.token')")
+    conn.commit()
+    conn.close()
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+    SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+
+    vault = MockVault()
+
+    # 1. Before table creation: legacy migration fails to insert into ai_provider_credentials
+    async with SessionLocal() as session:
+        results = await run_all_legacy_migrations(vault, session)
+        assert "codex_error" in results
+        assert "no such table" in results["codex_error"].lower()
+
+    # 2. Verify main.py lifespan ordering: _ensure_ai_provider_routes is called before run_all_legacy_migrations
+    import main
+    lifespan_source = inspect.getsource(main.lifespan)
+    pos_table_setup = lifespan_source.find("_ensure_ai_provider_routes")
+    pos_legacy_mig = lifespan_source.find("run_all_legacy_migrations")
+    assert pos_table_setup != -1
+    assert pos_legacy_mig != -1
+    assert pos_table_setup < pos_legacy_mig, "Table creation/route seeding must precede legacy migrations!"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_chat_models_registered_exactly_once():
+    """Prove that /api/ai/chat/models is registered exactly once in the router and OpenAPI."""
+    from app.routers.ai_chat import router
+    import main
+
+    matching = [
+        r for r in router.routes
+        if getattr(r, "path", "") == "/ai/chat/models" and "GET" in getattr(r, "methods", set())
+    ]
+    assert len(matching) == 1, f"Expected exactly 1 GET /ai/chat/models route in router, found {len(matching)}"
+
+    openapi = main.app.openapi()
+    assert "/api/ai/chat/models" in openapi.get("paths", {})
+    assert "get" in openapi["paths"]["/api/ai/chat/models"]
+
+
+def test_post_provider_models_signature_and_openapi_has_no_query_key():
+    """Prove get_provider_models has only body payload and no api_key query parameter."""
+    import inspect
+    from app.routers.ai_chat import get_provider_models
+    import main
+
+    sig = inspect.signature(get_provider_models)
+    params = list(sig.parameters.keys())
+    assert params == ["payload"], f"Expected only ['payload'], got {params}"
+
+    openapi = main.app.openapi()
+    post_op = openapi.get("paths", {}).get("/api/ai/provider-models", {}).get("post", {})
+    parameters = post_op.get("parameters", [])
+    query_param_names = [p.get("name") for p in parameters if p.get("in") == "query"]
+    assert "api_key" not in query_param_names, "api_key must not be exposed as a query parameter in OpenAPI"
+
+
+@pytest.mark.asyncio
+async def test_legacy_providers_migration_respects_settings_when_db_provider_absent(async_db, monkeypatch):
+    """Prove that when ai.provider is absent from SystemConfig, settings.ai_provider is respected without writing a spurious row."""
+    from sqlalchemy import delete
+    from app.services.legacy_migration import migrate_legacy_providers_and_models
+    from app.models.system_config import SystemConfig
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+
+    async with async_db() as session:
+        # Ensure no ai.provider row exists
+        await session.execute(delete(SystemConfig).where(SystemConfig.key == "ai.provider"))
+        # Set a hunter model that should be route-qualified to direct:openai
+        await session.merge(SystemConfig(key="ai.hunter_model", value="gpt-4o"))
+        await session.commit()
+
+        await migrate_legacy_providers_and_models(session)
+
+        # 1. ai.provider must NOT be written spuriously to SystemConfig
+        prov_res = await session.execute(select(SystemConfig).where(SystemConfig.key == "ai.provider"))
+        assert prov_res.scalar_one_or_none() is None
+
+        # 2. hunter model must be qualified using settings.ai_provider ("direct:openai")
+        hunter_res = await session.execute(select(SystemConfig.value).where(SystemConfig.key == "ai.hunter_model"))
+        hunter_val = hunter_res.scalar_one()
+        assert hunter_val == "blm:direct:openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_run_all_legacy_migrations_session_rollback_on_failure(async_db, monkeypatch):
+    """Prove that a first-stage failure rolls back the session and prevents PendingRollbackError in later stages."""
+    from sqlalchemy import text
+    from app.services.legacy_migration import run_all_legacy_migrations
+
+    vault = MockVault()
+
+    # Force migrate_legacy_codex_tokens to fail with DB error
+    async def failing_codex(v, session):
+        await session.execute(text("SELECT * FROM non_existent_table_for_error"))
+
+    monkeypatch.setattr("app.services.legacy_migration.migrate_legacy_codex_tokens", failing_codex)
+
+    async with async_db() as session:
+        results = await run_all_legacy_migrations(vault, session)
+        assert "codex_error" in results
+        assert "no such table" in results["codex_error"].lower()
+        # Later stages must NOT fail with PendingRollbackError!
+        assert results.get("models_migrated") is True
+        assert "models_error" not in results

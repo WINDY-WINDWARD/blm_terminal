@@ -200,20 +200,19 @@ async def migrate_legacy_antigravity_tokens(
 
 async def migrate_legacy_providers_and_models(session: AsyncSession) -> None:
     """Normalize stored ai.provider, hunter/verifier models, and chat sessions to route-qualified format."""
-    # 1. Resolve & normalize ai.provider
+    # 1. Resolve & normalize ai.provider if stored in DB (do NOT write a spurious row if absent)
     res_prov = await session.execute(
         select(SystemConfig).where(SystemConfig.key == "ai.provider")
     )
     prov_row = res_prov.scalar_one_or_none()
-    raw_provider = prov_row.value.strip() if (prov_row and prov_row.value) else None
-    active_route_id = provider_to_route_id(raw_provider)
+    if prov_row and prov_row.value and prov_row.value.strip():
+        norm_prov = provider_to_route_id(prov_row.value.strip())
+        if prov_row.value != norm_prov:
+            prov_row.value = norm_prov
+            logger.info("migrate_legacy_providers_and_models: updated ai.provider to %s", norm_prov)
 
-    if prov_row:
-        if prov_row.value != active_route_id:
-            prov_row.value = active_route_id
-            logger.info("migrate_legacy_providers_and_models: updated ai.provider to %s", active_route_id)
-    else:
-        session.add(SystemConfig(key="ai.provider", value=active_route_id))
+    # Use central resolution respecting DB value or falling back to settings.ai_provider
+    active_route_id = await resolve_active_route_id(session)
 
     # 2. Normalize ai.hunter_model
     res_hunter = await session.execute(
@@ -257,6 +256,7 @@ async def run_all_legacy_migrations(vault: ProviderVault, session: AsyncSession)
         codex_migrated = await migrate_legacy_codex_tokens(vault, session)
         results["codex_migrated"] = codex_migrated
     except Exception as exc:
+        await session.rollback()
         logger.error("run_all_legacy_migrations: codex migration error: %s", exc)
         results["codex_error"] = str(exc)
 
@@ -265,6 +265,7 @@ async def run_all_legacy_migrations(vault: ProviderVault, session: AsyncSession)
         results["antigravity_migrated"] = ag_migrated
         results["antigravity_reason"] = ag_reason
     except Exception as exc:
+        await session.rollback()
         logger.error("run_all_legacy_migrations: antigravity migration error: %s", exc)
         results["antigravity_error"] = str(exc)
 
@@ -272,6 +273,7 @@ async def run_all_legacy_migrations(vault: ProviderVault, session: AsyncSession)
         await migrate_legacy_providers_and_models(session)
         results["models_migrated"] = True
     except Exception as exc:
+        await session.rollback()
         logger.error("run_all_legacy_migrations: models migration error: %s", exc)
         results["models_error"] = str(exc)
 

@@ -33,7 +33,6 @@ from app.services.route_registry import (
     resolve_active_route_id,
     provider_to_route_id,
 )
-from app.services.antigravity_auth import get_antigravity_token
 from app.services.document_service import (
     DocumentError,
     attach_documents,
@@ -707,15 +706,10 @@ async def _fetch_direct_models(prov: str, api_key: str = "") -> list[dict]:
     return []
 
 
-@router.post("/provider-models")
-async def get_provider_models(payload: ProviderModelsRequest | str, api_key: str = "") -> list[dict]:
-    """Fetch models dynamically from the provider API without secrets in URL."""
-    if isinstance(payload, str):
-        prov = payload.strip()
-        key = api_key.strip()
-    else:
-        prov = payload.provider.strip()
-        key = payload.api_key.strip()
+async def _resolve_provider_models(provider: str, api_key: str = "") -> list[dict]:
+    """Internal helper for resolving models by provider/route ID and optional key."""
+    prov = provider.strip()
+    key = api_key.strip()
 
     # If route ID supplied
     if prov.startswith("oauth:"):
@@ -748,6 +742,14 @@ async def get_provider_models(payload: ProviderModelsRequest | str, api_key: str
         return [{"id": format_route_model_id(prov, m), "label": m} for m in stored_models]
 
     return await _fetch_direct_models(prov, key)
+
+
+@router.post("/provider-models")
+async def get_provider_models(payload: ProviderModelsRequest) -> list[dict]:
+    """Fetch models dynamically from the provider API without secrets in URL."""
+    if isinstance(payload, str):
+        return await _resolve_provider_models(payload)
+    return await _resolve_provider_models(payload.provider, payload.api_key)
 
 
 @router.get("/chat/models")
@@ -864,46 +866,7 @@ async def get_chat_models() -> list[dict]:
 
 
 
-@router.get("/chat/models")
-async def get_chat_models() -> list[dict]:
-    """Return available model options dynamically based on the active provider."""
-    provider = await get_dynamic_ai_provider()
-    if provider == "gemini":
-        return [
-            {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
-            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
-            {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
-        ]
 
-    if provider == "zen-free":
-        return await fetch_zen_models("", free_only=True)
-
-    if provider in ("zen-paid", "zen"):
-        api_key = await get_dynamic_ai_api_key("zen-paid")
-        return await fetch_zen_models(api_key)
-
-    if provider == "aistudio":
-        api_key = await get_dynamic_ai_api_key("aistudio")
-        return await fetch_aistudio_models(api_key)
-
-    if provider == "groq":
-        api_key = await get_dynamic_ai_api_key("groq")
-        return await fetch_groq_models(api_key)
-
-    if provider == "nvidia":
-        api_key = await get_dynamic_ai_api_key("nvidia")
-        return await fetch_nvidia_models(api_key)
-
-    if provider in ("anthropic", "claude-code", "openai", "openrouter", "deepseek",
-                    "xai", "together", "copilot", "codex"):
-        return await get_provider_models(provider)
-
-    if provider == "go":
-        api_key = await get_dynamic_ai_api_key("go")
-        models = await get_provider_models("go", api_key)
-        return models or AVAILABLE_MODELS
-
-    return AVAILABLE_MODELS
 
 
 @router.get("/chat/sessions", response_model=list[SessionSummary])
