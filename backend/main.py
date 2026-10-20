@@ -7,6 +7,10 @@ import logging.handlers
 import re
 import time
 from contextlib import asynccontextmanager
+from typing import Annotated
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
 from collections.abc import AsyncGenerator
 
 from pathlib import Path
@@ -875,6 +879,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Set AI_API_KEY (and optionally AI_API_BASE_URL, AI_MODEL) in .env."
         )
 
+    # Clean up stale proxy runtime dirs at startup
+    try:
+        from app.services.proxy_supervisor import get_proxy_supervisor
+        get_proxy_supervisor().cleanup_stale_runtimes()
+    except Exception as exc:
+        logger.warning("ProxySupervisor: startup stale cleanup error: %s", exc)
+
     yield
 
     logger.info("Shutting down — cancelling background tasks...")
@@ -896,6 +907,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.services.llm_provider import cleanup_shared_clients
     await cleanup_shared_clients()
+
+    try:
+        from app.services.proxy_supervisor import get_proxy_supervisor
+        supervisor = get_proxy_supervisor()
+        if supervisor.is_running:
+            await supervisor.stop()
+            logger.info("ProxySupervisor: stopped on shutdown")
+    except Exception as exc:
+        logger.debug("ProxySupervisor: shutdown error: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1062,6 +1082,11 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+from app.routers.system_config import admin_shutdown_router
+app.include_router(admin_shutdown_router, prefix="/api")
+app.include_router(admin_shutdown_router)
+
+
 if __name__ == "__main__":
     import socket as _socket
     import sys as _sys
@@ -1071,29 +1096,23 @@ if __name__ == "__main__":
     # port and reports BLM_BACKEND_PORT=<n> on stdout for the Electron parent.
     # Explicit PORT (launch scripts, uvicorn CLI) keeps working unchanged.
     requested = int(_os.environ.get("PORT", "0") or 0)
-    if requested:
-        print(f"BLM_BACKEND_PORT={requested}", flush=True)
-        uvicorn.run(
-            app,
-            host="127.0.0.1",
-            port=requested,
-            reload=False,
-            log_config=None,
-            forwarded_allow_ips='*',
-        )
-    else:
+    if not requested:
         _sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         _sock.bind(("127.0.0.1", 0))
-        ephemeral_port = _sock.getsockname()[1]
+        requested = _sock.getsockname()[1]
         _sock.close()
-        
-        print(f"BLM_BACKEND_PORT={ephemeral_port}", flush=True)
-        _sys.stdout.flush()
-        uvicorn.run(
-            app,
-            host="127.0.0.1",
-            port=ephemeral_port,
-            reload=False,
-            log_config=None,
-            forwarded_allow_ips='*',
-        )
+
+    print(f"BLM_BACKEND_PORT={requested}", flush=True)
+    _sys.stdout.flush()
+
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=requested,
+        reload=False,
+        log_config=None,
+        forwarded_allow_ips="*",
+    )
+    server = uvicorn.Server(config)
+    app.state.server = server
+    server.run()

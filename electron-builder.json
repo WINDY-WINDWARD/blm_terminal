@@ -28,13 +28,23 @@
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       }
     ],
     "extraResources": [
       {
         "from": "backend/dist/blm-backend.exe",
         "to": "blm-backend/blm-backend.exe"
+      },
+      {
+        "from": "vendor/cliproxyapi/runtime/cliproxyapi.exe",
+        "to": "resources/cliproxyapi/cliproxyapi.exe"
+      },
+      {
+        "from": "resources/cliproxyapi",
+        "to": "resources/cliproxyapi"
       }
     ]
   },
@@ -50,6 +60,14 @@
       {
         "from": "backend/dist/blm-backend",
         "to": "blm-backend"
+      },
+      {
+        "from": "vendor/cliproxyapi/runtime/cliproxyapi",
+        "to": "resources/cliproxyapi/cliproxyapi"
+      },
+      {
+        "from": "resources/cliproxyapi",
+        "to": "resources/cliproxyapi"
       }
     ]
   },

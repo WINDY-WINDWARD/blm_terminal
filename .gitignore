@@ -92,3 +92,6 @@ npm-deps.json
 worktrees/
 .superpowers/
 
+
+# Vendor sidecar binaries
+vendor/cliproxyapi/runtime/cliproxyapi*

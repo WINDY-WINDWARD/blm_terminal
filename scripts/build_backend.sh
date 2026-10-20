@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "Verifying CLIProxyAPI sidecar binary..."
+"${SCRIPT_DIR}/stage_cliproxyapi.sh" "${SCRIPT_DIR}/../vendor/cliproxyapi/runtime" --verify-only
+
 echo "Building BLM Backend using PyInstaller (POSIX / macOS / Linux)..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

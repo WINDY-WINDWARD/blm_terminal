@@ -32,6 +32,7 @@ $FrontendInputs = @(
     @{ Root = 'electron' },
     @{ Root = 'server' },
     @{ Root = 'public' },
+    @{ Root = 'resources' },
     @{ Root = '.'; Filter = 'server.js'; TopOnly = $true },
     @{ Root = '.'; Filter = 'package.json'; TopOnly = $true },
     @{ Root = '.'; Filter = 'package-lock.json'; TopOnly = $true },

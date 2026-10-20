@@ -39,6 +39,9 @@ let tray = null;
 let isQuitting = false;
 let pythonProcess = null;
 let nextProcess = null;
+let pythonPort = null;
+let launchToken = null;
+let isCleanedUp = false;
 
 // ── Persistent Window State & Popouts Registry ──
 const stateDir = app.getPath('userData');
@@ -210,10 +213,79 @@ if (!gotTheLock) {
     // In desktop daemon mode, keep backend alive in system tray
   });
   
-  app.on('before-quit', () => {
+  app.on('before-quit', async (event) => {
+    if (isCleanedUp) return;
+    event.preventDefault();
     isQuitting = true;
-    cleanupProcesses();
+    isCleanedUp = true;
+    await cleanupProcessesAsync();
+    app.quit();
   });
+}
+
+function resolveCliproxyBin() {
+  const isWindows = process.platform === 'win32';
+  const binName = isWindows ? 'cliproxyapi.exe' : 'cliproxyapi';
+
+  if (isDev) {
+    const devPath = path.join(app.getAppPath(), 'vendor', 'cliproxyapi', 'runtime', binName);
+    if (fs.existsSync(devPath)) return devPath;
+  }
+
+  // Packaged app paths
+  const packagedCandidate1 = path.join(process.resourcesPath, 'resources', 'cliproxyapi', binName);
+  if (fs.existsSync(packagedCandidate1)) return packagedCandidate1;
+
+  const packagedCandidate2 = path.join(process.resourcesPath, 'cliproxyapi', binName);
+  if (fs.existsSync(packagedCandidate2)) return packagedCandidate2;
+
+  return path.join(app.getAppPath(), 'vendor', 'cliproxyapi', 'runtime', binName);
+}
+
+function requestBackendShutdown() {
+  if (!pythonPort || !launchToken || !pythonProcess) return Promise.resolve();
+  const http = require('http');
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: pythonPort,
+        path: '/api/admin/shutdown',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-blm-token': launchToken
+        },
+        timeout: 2000
+      },
+      (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve());
+      }
+    );
+    req.on('error', () => resolve());
+    req.on('timeout', () => {
+      req.destroy();
+      resolve();
+    });
+    req.end();
+  });
+}
+
+async function cleanupProcessesAsync() {
+  if (pythonProcess) {
+    try {
+      await requestBackendShutdown();
+      let waited = 0;
+      while (pythonProcess && !pythonProcess.killed && waited < 1500) {
+        await new Promise((r) => setTimeout(r, 100));
+        waited += 100;
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  cleanupProcesses();
 }
 
 function cleanupProcesses() {
@@ -295,7 +367,7 @@ async function startApp() {
     // back; the token travels over stdin/IPC, never argv/env. Fixed ports are
     // gone so a local squatter can never receive the token or user data. ──
     const crypto = require('crypto');
-    const launchToken = crypto.randomBytes(32).toString('base64url');
+    launchToken = crypto.randomBytes(32).toString('base64url');
     log('Per-launch token generated (stdin/IPC only)');
     
     // Determine paths
@@ -355,6 +427,8 @@ async function startApp() {
       }
     }
 
+    const cliproxyBin = resolveCliproxyBin();
+    const cliproxyRuntimeRoot = path.join(userDataPath, 'cliproxy-runtime');
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
@@ -363,7 +437,9 @@ async function startApp() {
         LOG_DIR: backendLogDir,
         ENV: isDev ? 'development' : 'production',
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
-        SECRET_KEY: 'desktop_terminal_local_secret_key_123456789'
+        SECRET_KEY: 'desktop_terminal_local_secret_key_123456789',
+        CLIPROXY_BIN: cliproxyBin,
+        CLIPROXY_RUNTIME_ROOT: cliproxyRuntimeRoot
       },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
@@ -386,7 +462,7 @@ async function startApp() {
     }
 
     // Learn the ephemeral backend port from its stdout banner.
-    const pythonPort = await new Promise((resolve, reject) => {
+    pythonPort = await new Promise((resolve, reject) => {
       let buf = '';
       let portResolved = false;
       const timer = setTimeout(() => reject(new Error('backend did not report BLM_BACKEND_PORT in 120s')), 120000);

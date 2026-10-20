@@ -1,5 +1,11 @@
 $ErrorActionPreference = "Stop"
 
+Write-Host "Verifying CLIProxyAPI sidecar binary..."
+& powershell -ExecutionPolicy Bypass -File "$PSScriptRoot\stage_cliproxyapi.ps1" -VerifyOnly
+if ($LASTEXITCODE -ne 0) {
+    throw "CLIProxyAPI sidecar binary is missing or invalid. Run scripts/stage_cliproxyapi.ps1 first."
+}
+
 Write-Host "Building BLM Backend using PyInstaller..."
 
 # Do not leak a changed working directory to the caller (fast-build jobs and

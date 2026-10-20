@@ -1,0 +1,44 @@
+{
+  "name": "CLIProxyAPI",
+  "upstream_repository": "https://github.com/router-for-me/CLIProxyAPI",
+  "version": "v8.0.35",
+  "release_tag": "v8.0.35",
+  "release_url": "https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.35",
+  "license": "MIT",
+  "architectures": {
+    "windows_amd64": {
+      "platform": "win32",
+      "arch": "x64",
+      "asset_name": "CLIProxyAPI_8.0.35_windows_amd64.zip",
+      "download_url": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v8.0.35/CLIProxyAPI_8.0.35_windows_amd64.zip",
+      "sha256": "175a79c47705408c4ee95ff78cafb50a0542a010d3fac333162f10f0b9dbea88",
+      "archive_binary_name": "cli-proxy-api.exe",
+      "target_binary_name": "cliproxyapi.exe"
+    },
+    "darwin_arm64": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "asset_name": "CLIProxyAPI_8.0.35_darwin_aarch64.tar.gz",
+      "download_url": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v8.0.35/CLIProxyAPI_8.0.35_darwin_aarch64.tar.gz",
+      "sha256": "b6903000ae78b541e5ba0bb2db45fc15dc23cab77fb51ed4b02e03ea18fe36a5",
+      "archive_binary_name": "cli-proxy-api",
+      "target_binary_name": "cliproxyapi"
+    },
+    "darwin_amd64": {
+      "platform": "darwin",
+      "arch": "x64",
+      "asset_name": "CLIProxyAPI_8.0.35_darwin_amd64.tar.gz",
+      "download_url": "https://github.com/router-for-me/CLIProxyAPI/releases/download/v8.0.35/CLIProxyAPI_8.0.35_darwin_amd64.tar.gz",
+      "sha256": "c1335ddb5307d67684ec0531fac81e1148b68869179310ea0f4086109fbebe2b",
+      "archive_binary_name": "cli-proxy-api",
+      "target_binary_name": "cliproxyapi"
+    }
+  },
+  "unsupported_architectures": [
+    {
+      "platform": "win32",
+      "arch": "arm64",
+      "reason": "Explicitly excluded per BLM Terminal provider management plan."
+    }
+  ]
+}

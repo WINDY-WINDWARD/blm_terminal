@@ -323,3 +323,71 @@ async def update_system_config(
     await db.commit()
 
     return {"key": key, "value": val_str}
+
+
+import asyncio
+import os
+import secrets
+from typing import Annotated
+from fastapi import Request
+
+async def require_admin_or_launch_token(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Verify caller is an authenticated admin user or the Electron desktop host with valid launch token."""
+    token_header = request.headers.get("x-blm-token", "")
+    auth_header = request.headers.get("Authorization", "")
+
+    try:
+        import main as _main
+        launch_token = getattr(_main, "LAUNCH_TOKEN", None)
+    except ImportError:
+        launch_token = os.environ.get("BLM_LAUNCH_TOKEN")
+
+    if launch_token and token_header and secrets.compare_digest(token_header, launch_token):
+        if not auth_header.startswith("Bearer "):
+            return
+
+    try:
+        user = await get_admin_user(await get_current_user(request, db))
+        if user and user.is_admin:
+            return
+    except HTTPException:
+        pass
+
+    raise HTTPException(
+        status_code=403,
+        detail="Admin privileges or host launch token required",
+    )
+
+
+admin_shutdown_router = APIRouter(tags=["admin"])
+
+@admin_shutdown_router.post("/admin/shutdown")
+@admin_shutdown_router.post("/system/shutdown")
+async def shutdown_endpoint(
+    request: Request,
+    _auth: None = Depends(require_admin_or_launch_token),
+) -> dict[str, str]:
+    """Graceful shutdown endpoint for admin users and desktop host."""
+    import logging
+    _log = logging.getLogger("blm.shutdown")
+    _log.info("Graceful shutdown triggered via shutdown endpoint")
+
+    async def _perform_shutdown() -> None:
+        await asyncio.sleep(0.1)
+        server = getattr(request.app.state, "server", None)
+        if server is not None:
+            server.should_exit = True
+            return
+
+        try:
+            import signal
+            if hasattr(signal, "SIGINT"):
+                os.kill(os.getpid(), signal.SIGINT)
+        except Exception:
+            pass
+
+    asyncio.create_task(_perform_shutdown())
+    return {"status": "shutting_down"}

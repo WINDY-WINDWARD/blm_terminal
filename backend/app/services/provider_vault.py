@@ -124,6 +124,12 @@ class ProviderVault:
     def state(self) -> VaultState:
         return self._state
 
+    async def get_state(self) -> VaultState:
+        """Return the current vault state."""
+        if not self._initialized:
+            await self.initialize()
+        return self._state
+
     @property
     def is_available(self) -> bool:
         return self._state == VaultState.AVAILABLE
@@ -344,6 +350,12 @@ class ProviderVault:
                 return True
             return False
 
+    async def get_all_oauth_auth(self) -> dict[str, Any]:
+        """Return a deep copy of all stored OAuth authorization payloads."""
+        async with self._lock:
+            self._ensure_ready()
+            return json.loads(json.dumps(self._data["oauth_auth"]))
+
     async def get_endpoint_headers(self, route_id: str) -> dict[str, str] | None:
         """Retrieve custom headers configured for an endpoint route."""
         async with self._lock:
@@ -415,6 +427,12 @@ class ProviderVault:
                 self._save_unlocked()
                 return True
             return False
+
+    async def get_all_cooldown_snapshots(self) -> dict[str, Any]:
+        """Return a deep copy of all stored cooldown snapshots."""
+        async with self._lock:
+            self._ensure_ready()
+            return json.loads(json.dumps(self._data["cooldown_snapshots"]))
 
     # -----------------------------------------------------------------------
     # Generic reference helpers for `ai_provider_credentials.vault_reference`
