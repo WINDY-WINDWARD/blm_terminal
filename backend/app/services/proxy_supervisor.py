@@ -46,6 +46,7 @@ SENSITIVE_FIELD_NAMES = {
     "secret-key",
     "secret_key",
     "management_key",
+    "api-key",
     "client_key",
     "api-keys",
     "api_keys",
@@ -170,6 +171,7 @@ def generate_proxy_config(
     request_retry: int = 3,
     max_retry_credentials: int = 0,
     max_retry_interval: int = 30,
+    custom_endpoints: list[dict[str, Any]] | None = None,
 ) -> str:
     """Generate CLIProxyAPI v8 YAML configuration.
 
@@ -184,7 +186,7 @@ def generate_proxy_config(
     - zero upstream secrets written into config
     """
     auth_dir_str = str(Path(auth_dir).resolve()).replace("\\", "/")
-    return f"""config-version: 8
+    cfg = f"""config-version: 8
 
 server:
   host: "{host}"
@@ -216,6 +218,44 @@ routing:
 oauth:
   auth-dir: "{auth_dir_str}"
 """
+    if custom_endpoints:
+        custom_lines = ["\nopenai-compatibility:"]
+        for ep in custom_endpoints:
+            name = ep.get("name", "custom")
+            prefix = ep.get("prefix", name)
+            base_url = ep.get("base-url") or ep.get("base_url", "")
+            custom_lines.append(f'  - name: "{name}"')
+            custom_lines.append(f'    prefix: "{prefix}"')
+            custom_lines.append(f'    base-url: "{base_url}"')
+
+            headers = ep.get("headers")
+            if headers and isinstance(headers, dict):
+                custom_lines.append("    headers:")
+                for hk, hv in headers.items():
+                    custom_lines.append(f'      "{hk}": "{hv}"')
+
+            models = ep.get("models")
+            if models and isinstance(models, list):
+                custom_lines.append("    models:")
+                for m in models:
+                    m_name = m.get("name") if isinstance(m, dict) else str(m)
+                    custom_lines.append(f'      - name: "{m_name}"')
+
+            api_keys = ep.get("api-keys") or ep.get("api_keys")
+            if api_keys and isinstance(api_keys, list):
+                custom_lines.append("    api-keys:")
+                for ak in api_keys:
+                    if isinstance(ak, dict):
+                        k_val = ak.get("api-key") or ak.get("api_key") or ""
+                        p_val = ak.get("priority", 1)
+                        w_val = ak.get("weight", 1)
+                        custom_lines.append(f'      - api-key: "{k_val}"')
+                        custom_lines.append(f'        priority: {p_val}')
+                        custom_lines.append(f'        weight: {w_val}')
+                    else:
+                        custom_lines.append(f'      - api-key: "{ak}"')
+        cfg += "\n".join(custom_lines) + "\n"
+    return cfg
 
 
 async def materialize_vault_secrets(vault: ProviderVault, auth_dir: Path) -> int:
@@ -380,6 +420,79 @@ def cleanup_stale_runtimes(
                 logger.debug("Failed removing stale dir %s: %s", item.name, exc)
 
     return cleaned
+
+
+
+async def materialize_custom_endpoints(
+    vault: ProviderVault,
+    session: Any = None,
+) -> list[dict[str, Any]]:
+    """Load enabled custom endpoints from DB and vault secrets for CLIProxyAPI openai-compatibility."""
+    endpoints: list[dict[str, Any]] = []
+    try:
+        from app.models.ai_provider import AIProviderRoute, AIProviderCredential
+        from sqlalchemy import select
+
+        async def _query(s: Any) -> list[dict[str, Any]]:
+            res = await s.execute(
+                select(AIProviderRoute).where(
+                    AIProviderRoute.kind == "endpoint",
+                    AIProviderRoute.enabled == True,
+                )
+            )
+            routes = res.scalars().all()
+            out: list[dict[str, Any]] = []
+            for r in routes:
+                cfg = {}
+                if r.config_json:
+                    try:
+                        cfg = json.loads(r.config_json)
+                    except Exception:
+                        pass
+                base_url = cfg.get("base_url") or ""
+                if not base_url:
+                    continue
+                models = cfg.get("models") or ["default"]
+                prefix = r.proxy_prefix or r.id.replace(":", "-")
+                headers = await vault.get_endpoint_headers(r.id) or {}
+
+                c_res = await s.execute(
+                    select(AIProviderCredential).where(
+                        AIProviderCredential.route_id == r.id,
+                        AIProviderCredential.enabled == True,
+                    )
+                )
+                creds = c_res.scalars().all()
+                api_keys: list[dict[str, Any]] = []
+                for cred in creds:
+                    k = await vault.get_secret(cred.vault_reference)
+                    if k:
+                        api_keys.append({
+                            "api-key": str(k).strip(),
+                            "priority": cred.priority,
+                            "weight": cred.weight,
+                        })
+
+                out.append({
+                    "name": prefix,
+                    "prefix": prefix,
+                    "base-url": base_url,
+                    "headers": headers,
+                    "models": [{"name": m} for m in models],
+                    "api-keys": api_keys,
+                })
+            return out
+
+        if session is not None:
+            endpoints = await _query(session)
+        else:
+            from app.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as s:
+                endpoints = await _query(s)
+    except Exception as exc:
+        logger.debug("materialize_custom_endpoints: could not load endpoints: %s", exc)
+
+    return endpoints
 
 
 class ProxyManagementClient:
@@ -755,6 +868,9 @@ class ProxySupervisor:
         # Materialize secrets
         await materialize_vault_secrets(self._vault, self._auth_dir)
 
+        # Materialize custom endpoints
+        custom_endpoints = await materialize_custom_endpoints(self._vault)
+
         # Generate config
         cfg_str = generate_proxy_config(
             host=self._host,
@@ -763,6 +879,7 @@ class ProxySupervisor:
             management_key=self._management_key,
             auth_dir=self._auth_dir,
             strategy=self._strategy,
+            custom_endpoints=custom_endpoints,
         )
         cfg_path = self._runtime_dir / "config.yaml"
         cfg_path.write_text(cfg_str, encoding="utf-8")
@@ -892,6 +1009,20 @@ class ProxySupervisor:
         if self._auth_dir and self._auth_dir.exists():
             return await sync_auth_and_cooldowns(self._vault, self._auth_dir)
         return 0
+
+    async def restart(self) -> tuple[str, int, str]:
+        """Restart supervisor and return (host, port, client_key)."""
+        async with self._lock:
+            await self._cleanup_process()
+            self._state = SupervisorState.STOPPED
+            self._process = None
+            await self._start_unlocked()
+            return self._host, self._port, self._client_key
+
+    async def reload_custom_endpoints(self) -> None:
+        """If supervisor is currently running, restart to re-materialize custom endpoints."""
+        if self.is_running():
+            await self.restart()
 
     async def stop(self) -> None:
         """Gracefully stop the proxy, sync auth and cooldowns to vault, and clean runtime dir."""

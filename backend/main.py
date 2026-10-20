@@ -24,6 +24,7 @@ from sqlalchemy import create_engine, inspect as sa_inspect, text as sa_text, ev
 
 from app.config import settings
 from app.routers import (
+    ai_routes_router,
     ai_chat_router,
     ai_picks_router,
     ai_summarizer_router,
@@ -1036,6 +1037,8 @@ async def launch_token_guard(request: Request, call_next) -> Response:  # type: 
 # ---------------------------------------------------------------------------
 
 app.include_router(ai_chat_router, prefix="/api")
+app.include_router(ai_routes_router, prefix="/api")
+app.include_router(ai_routes_router)
 app.include_router(ai_picks_router, prefix="/api")
 app.include_router(ai_summarizer_router, prefix="/api")
 app.include_router(announcements_router, prefix="/api")
