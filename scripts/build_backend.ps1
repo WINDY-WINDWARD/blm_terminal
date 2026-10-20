@@ -77,6 +77,9 @@ Remove-Item -Recurse -Force "dist" -ErrorAction SilentlyContinue
     --exclude-module "camoufox.gui" `
     --collect-all "apify_fingerprint_datapoints" `
     --collect-all "language_tags" `
+    --collect-all "keyring" `
+    --hidden-import "keyring.backends.Windows" `
+    --hidden-import "keyring.backends.macOS" `
     main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE. Refusing to package without a backend." }
 if (-not (Test-Path "dist\blm-backend.exe")) { throw "PyInstaller reported success but dist\blm-backend.exe is missing. Refusing to package without a backend." }

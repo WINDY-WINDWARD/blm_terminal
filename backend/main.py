@@ -444,6 +444,32 @@ def _ensure_stock_universe() -> None:
         sync_engine.dispose()
 
 
+def _ensure_ai_provider_routes() -> None:
+    """Ensure all eight OAuth routes are seeded idempotently with stable prefixes."""
+    from app.services.route_registry import seed_oauth_routes_sync
+    sync_url = f"sqlite:///{settings.db_path}"
+    sync_engine = create_engine(sync_url, connect_args={"check_same_thread": False})
+
+    @sa_event.listens_for(sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        from app.database import _apply_sqlite_pragmas
+        cursor = dbapi_conn.cursor()
+        _apply_sqlite_pragmas(cursor)
+        cursor.close()
+
+    try:
+        with sync_engine.connect() as conn:
+            inspector = sa_inspect(conn)
+            tables = set(inspector.get_table_names())
+            if "ai_provider_routes" in tables:
+                seed_oauth_routes_sync(conn)
+                conn.commit()
+    except Exception:
+        logger.exception("_ensure_ai_provider_routes: failed to ensure OAuth provider routes")
+    finally:
+        sync_engine.dispose()
+
+
 def _ensure_user_columns() -> None:
     """Add missing user_id columns to watchlists and chat_sessions.
 
@@ -784,6 +810,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await asyncio.to_thread(_ensure_admin_user)
     await asyncio.to_thread(_ensure_watchlist_data)
     await asyncio.to_thread(_ensure_stock_universe)
+    await asyncio.to_thread(_ensure_ai_provider_routes)
     await asyncio.to_thread(_backfill_entities_double_encoding)
     await asyncio.to_thread(_migrate_deprecated_gemini_models)
 

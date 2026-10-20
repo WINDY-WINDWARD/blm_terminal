@@ -54,6 +54,9 @@ rm -rf build dist
     --exclude-module "camoufox.gui" \
     --collect-all "apify_fingerprint_datapoints" \
     --collect-all "language_tags" \
+    --collect-all "keyring" \
+    --hidden-import "keyring.backends.Windows" \
+    --hidden-import "keyring.backends.macOS" \
     main.py
 
 if [ ! -f "dist/blm-backend/blm-backend" ]; then
