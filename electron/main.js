@@ -277,7 +277,13 @@ async function cleanupProcessesAsync() {
     try {
       await requestBackendShutdown();
       let waited = 0;
-      while (pythonProcess && !pythonProcess.killed && waited < 1500) {
+      while (
+        pythonProcess &&
+        !pythonProcess.killed &&
+        pythonProcess.exitCode === null &&
+        pythonProcess.signalCode === null &&
+        waited < 1500
+      ) {
         await new Promise((r) => setTimeout(r, 100));
         waited += 100;
       }

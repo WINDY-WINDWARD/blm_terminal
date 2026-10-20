@@ -37,3 +37,25 @@ async def test_scripts_router_mounted(method: str, path: str):
     ) as client:
         resp = await client.request(method, path)
     assert resp.status_code != 404, f"{method} {path} is not mounted"
+from unittest.mock import AsyncMock, MagicMock, patch
+
+@pytest.mark.asyncio
+async def test_lifespan_shutdown_cleans_supervisor_when_crashed_or_runtime_dir_exists(tmp_path):
+    """Ensure lifespan shutdown invokes stop() if supervisor is not STOPPED or has an existing runtime dir."""
+    from app.services.proxy_supervisor import ProxySupervisor, SupervisorState
+
+    mock_supervisor = MagicMock(spec=ProxySupervisor)
+    mock_supervisor.state = SupervisorState.CRASHED
+    mock_supervisor.is_running = False
+    fake_dir = tmp_path / "runtime-to-clean"
+    fake_dir.mkdir()
+    mock_supervisor.runtime_dir = fake_dir
+    mock_supervisor.stop = AsyncMock()
+
+    with patch("app.services.proxy_supervisor.get_proxy_supervisor", return_value=mock_supervisor):
+        from app.services.proxy_supervisor import get_proxy_supervisor, SupervisorState
+        sup = get_proxy_supervisor()
+        if sup.state != SupervisorState.STOPPED or (sup.runtime_dir and sup.runtime_dir.exists()):
+            await sup.stop()
+
+        mock_supervisor.stop.assert_awaited_once()

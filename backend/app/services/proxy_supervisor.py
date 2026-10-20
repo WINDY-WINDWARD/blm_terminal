@@ -75,6 +75,9 @@ class ProcessCrashedError(ProxySupervisorError):
     """Raised when the proxy process terminates unexpectedly."""
 
 
+ProcessCrashError = ProcessCrashedError
+
+
 class ReadinessTimeoutError(ProxySupervisorError):
     """Raised when readiness check times out."""
 
@@ -245,22 +248,30 @@ async def materialize_vault_secrets(vault: ProviderVault, auth_dir: Path) -> int
 
 
 async def sync_auth_and_cooldowns(vault: ProviderVault, auth_dir: Path) -> int:
-    """Scan auth_dir and sync refreshed OAuth auth JSON and .cds snapshots back into the vault."""
+    """Scan auth_dir and sync refreshed OAuth auth JSON and .cds snapshots back into the vault.
+
+    Applies a reversible key mapping: if the extensionless key exists in the vault,
+    refreshed data is written back under that key; otherwise the exact filename key is preserved.
+    """
     if not auth_dir.exists():
         return 0
     count = 0
 
     # 1. OAuth auth JSON files
+    existing_auth = await vault.get_all_oauth_auth()
     for p in auth_dir.glob("*.json"):
         try:
             raw = p.read_text(encoding="utf-8")
             data = json.loads(raw)
-            await vault.set_oauth_auth(p.name, data)
+            stem = p.stem
+            target_key = stem if stem in existing_auth else p.name
+            await vault.set_oauth_auth(target_key, data)
             count += 1
         except Exception as exc:
             logger.warning("ProxySupervisor: failed syncing %s to vault: %s", p.name, exc)
 
     # 2. Cooldown .cds snapshot files
+    existing_cooldowns = await vault.get_all_cooldown_snapshots()
     for p in auth_dir.glob("*.cds"):
         try:
             raw = p.read_text(encoding="utf-8")
@@ -268,7 +279,9 @@ async def sync_auth_and_cooldowns(vault: ProviderVault, auth_dir: Path) -> int:
                 data = json.loads(raw)
             except Exception:
                 data = raw
-            await vault.set_cooldown_snapshot(p.name, data)
+            stem = p.stem
+            target_key = stem if stem in existing_cooldowns else p.name
+            await vault.set_cooldown_snapshot(target_key, data)
             count += 1
         except Exception as exc:
             logger.warning("ProxySupervisor: failed syncing %s to vault: %s", p.name, exc)
@@ -276,8 +289,16 @@ async def sync_auth_and_cooldowns(vault: ProviderVault, auth_dir: Path) -> int:
     return count
 
 
-def cleanup_stale_runtimes(runtime_root: Path) -> int:
-    """Detect and remove stale runtime directories and kill orphaned proxy processes."""
+def cleanup_stale_runtimes(
+    runtime_root: Path,
+    active_runtime_dir: Path | None = None,
+) -> int:
+    """Detect and remove stale runtime directories and kill orphaned proxy processes.
+
+    Reads the child PID recorded in cliproxy.pid, verifies the process is actually
+    cliproxy to guard against PID reuse hazards, terminates/kills the orphan, and removes
+    the stale directory while preserving any specified active runtime.
+    """
     if not runtime_root.exists():
         return 0
     cleaned = 0
@@ -290,27 +311,28 @@ def cleanup_stale_runtimes(runtime_root: Path) -> int:
     for item in entries:
         if not item.is_dir():
             continue
+
+        # Preserve active runtime directory if specified
+        if active_runtime_dir is not None:
+            try:
+                if item.resolve() == active_runtime_dir.resolve():
+                    continue
+            except Exception:
+                pass
+
         parts = item.name.split("-")
         is_stale = False
-        pid = None
         if len(parts) >= 3 and parts[0] == "run":
             try:
-                pid = int(parts[1])
-                if not psutil.pid_exists(pid):
+                parent_pid = int(parts[1])
+                if not psutil.pid_exists(parent_pid):
                     is_stale = True
                 else:
                     try:
-                        p = psutil.Process(pid)
+                        p = psutil.Process(parent_pid)
                         p_name = p.name().lower()
-                        if "cliproxy" not in p_name and pid != os.getpid():
-                            is_stale = True
-                        elif "cliproxy" in p_name:
-                            logger.info("Terminating orphaned proxy process pid=%d", pid)
-                            p.terminate()
-                            try:
-                                p.wait(timeout=1.0)
-                            except psutil.TimeoutExpired:
-                                p.kill()
+                        # If parent PID exists but is not python/blm process, it was reused
+                        if "python" not in p_name and "blm" not in p_name and parent_pid != os.getpid():
                             is_stale = True
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         is_stale = True
@@ -320,6 +342,36 @@ def cleanup_stale_runtimes(runtime_root: Path) -> int:
             is_stale = True
 
         if is_stale:
+            # Check for child PID in cliproxy.pid file
+            pid_file = item / "cliproxy.pid"
+            if pid_file.exists():
+                try:
+                    child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+                    if psutil.pid_exists(child_pid):
+                        try:
+                            cp = psutil.Process(child_pid)
+                            cp_name = cp.name().lower()
+                            cmdline = " ".join(cp.cmdline()).lower() if hasattr(cp, "cmdline") else ""
+                            # Safe check: terminate only if verified as cliproxy
+                            if "cliproxy" in cp_name or "cliproxy" in cmdline:
+                                logger.info("Terminating orphaned proxy process pid=%d", child_pid)
+                                cp.terminate()
+                                try:
+                                    cp.wait(timeout=1.0)
+                                except psutil.TimeoutExpired:
+                                    cp.kill()
+                            else:
+                                logger.warning(
+                                    "PID %d in %s is not cliproxy (name=%s); skipping kill to prevent PID reuse hazard",
+                                    child_pid,
+                                    item.name,
+                                    cp_name,
+                                )
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except (ValueError, OSError) as exc:
+                    logger.debug("Failed reading cliproxy.pid from %s: %s", item.name, exc)
+
             try:
                 shutil.rmtree(item, ignore_errors=True)
                 cleaned += 1
@@ -577,14 +629,29 @@ class ProxySupervisor:
             "is_running": self.is_running,
         }
 
+    @property
+    def runtime_dir(self) -> Path | None:
+        """Return the active or current runtime directory."""
+        return self._runtime_dir
+
     def cleanup_stale_runtimes(self) -> int:
         """Clean up stale runtime directories and orphaned processes at startup."""
-        return cleanup_stale_runtimes(self.get_runtime_root())
+        return cleanup_stale_runtimes(self.get_runtime_root(), active_runtime_dir=self._runtime_dir)
 
     async def ensure_started(self) -> tuple[str, int, str]:
         """Lazily ensure the proxy is running and ready. Returns (host, port, client_key)."""
         async with self._lock:
             if self.is_running and self._port and self._client_key:
+                return (self._host, self._port, self._client_key)
+
+            # Dead process detection if previously started but now dead/crashed
+            if self._process is not None and self._process.poll() is not None:
+                logger.warning(
+                    "ProxySupervisor: detected dead child process (code=%s); attempting bounded restart",
+                    self._process.returncode,
+                )
+                await self._handle_restart_unlocked()
+                assert self._port is not None and self._client_key is not None
                 return (self._host, self._port, self._client_key)
 
             # Lazy start after vault availability check
@@ -598,22 +665,73 @@ class ProxySupervisor:
                     f"Cannot start CLIProxyAPI: vault is not available (state: {vault_state.value})"
                 )
 
+            # Clean previous runtime dir if any exists before starting
+            if self._runtime_dir and self._runtime_dir.exists():
+                shutil.rmtree(self._runtime_dir, ignore_errors=True)
+                self._runtime_dir = None
+                self._auth_dir = None
+
             await self._start_unlocked()
             assert self._port is not None and self._client_key is not None
             return (self._host, self._port, self._client_key)
+
+    async def _handle_restart_unlocked(self) -> None:
+        if self._restart_count >= self._max_restarts:
+            await self._cleanup_process()
+            if self._runtime_dir and self._runtime_dir.exists():
+                shutil.rmtree(self._runtime_dir, ignore_errors=True)
+                self._runtime_dir = None
+                self._auth_dir = None
+            self._state = SupervisorState.CRASHED
+            self._last_error = f"Max restarts ({self._max_restarts}) exceeded; process crashed"
+            raise ProcessCrashError(self._last_error)
+
+        self._restart_count += 1
+        backoff = 0.25 * (2 ** (self._restart_count - 1))
+        logger.info(
+            "ProxySupervisor: restarting (%d/%d) after %.2fs",
+            self._restart_count,
+            self._max_restarts,
+            backoff,
+        )
+
+        # 1. Clean up dead process
+        await self._cleanup_process()
+
+        # 2. Sync any remaining auth/cooldowns from old runtime before cleaning
+        if self._auth_dir and self._auth_dir.exists():
+            try:
+                await sync_auth_and_cooldowns(self._vault, self._auth_dir)
+            except Exception as exc:
+                logger.warning("ProxySupervisor: error syncing before restart: %s", exc)
+
+        # 3. Clean up old runtime directory before creating a replacement
+        if self._runtime_dir and self._runtime_dir.exists():
+            shutil.rmtree(self._runtime_dir, ignore_errors=True)
+            self._runtime_dir = None
+            self._auth_dir = None
+
+        await asyncio.sleep(backoff)
+        await self._start_unlocked()
 
     async def start(self) -> None:
         """Start the supervisor process."""
         await self.ensure_started()
 
     async def _start_unlocked(self) -> None:
+        # Clean up any leftover runtime directory before creating a fresh one
+        if self._runtime_dir and self._runtime_dir.exists():
+            shutil.rmtree(self._runtime_dir, ignore_errors=True)
+            self._runtime_dir = None
+            self._auth_dir = None
+
         self._state = SupervisorState.STARTING
         self._last_error = None
 
         runtime_root = self.get_runtime_root()
         runtime_root.mkdir(parents=True, exist_ok=True)
         set_dir_permissions_0700(runtime_root)
-        cleanup_stale_runtimes(runtime_root)
+        cleanup_stale_runtimes(runtime_root, active_runtime_dir=self._runtime_dir)
 
         bin_path = self.get_bin_path()
         if not bin_path.exists() or not bin_path.is_file():
@@ -668,6 +786,11 @@ class ProxySupervisor:
             creationflags=creation_flags,
         )
 
+        # Write child PID into permission-restricted cliproxy.pid file
+        pid_file = self._runtime_dir / "cliproxy.pid"
+        pid_file.write_text(str(self._process.pid), encoding="utf-8")
+        set_file_permissions_0600(pid_file)
+
         self._management_client = ProxyManagementClient(
             base_url=f"http://{self._host}:{self._port}",
             management_key=self._management_key,
@@ -675,13 +798,15 @@ class ProxySupervisor:
 
         ready = await self._poll_readiness(self._readiness_timeout)
         if not ready:
-            err_msg = self._collect_process_error()
+            # Terminate unresponsive child first so stderr pipe reaches EOF and cannot hang
             await self._cleanup_process()
+            err_msg = await self._collect_process_error()
             self._state = SupervisorState.CRASHED
             self._last_error = err_msg
             raise ReadinessTimeoutError(f"CLIProxyAPI failed readiness check: {err_msg}")
 
         self._state = SupervisorState.RUNNING
+        self._restart_count = 0
         logger.info("ProxySupervisor: CLIProxyAPI is RUNNING (child pid=%d)", self._process.pid)
 
     async def _poll_readiness(self, timeout: float) -> bool:
@@ -700,14 +825,19 @@ class ProxySupervisor:
                 await asyncio.sleep(0.05)
         return False
 
-    def _collect_process_error(self) -> str:
+    async def _collect_process_error(self) -> str:
         if not self._process:
             return "No process"
         exit_code = self._process.poll()
         stderr_text = ""
         if self._process.stderr:
             try:
-                stderr_text = self._process.stderr.read() or ""
+                def _read_stderr() -> str:
+                    try:
+                        return self._process.stderr.read() or ""
+                    except Exception:
+                        return ""
+                stderr_text = await asyncio.wait_for(asyncio.to_thread(_read_stderr), timeout=1.0)
             except Exception:
                 pass
         return f"exited with code {exit_code}: {stderr_text.strip()}"
@@ -730,37 +860,14 @@ class ProxySupervisor:
     async def restart_if_crashed(self) -> bool:
         """Check if process crashed and perform bounded restart if needed."""
         async with self._lock:
-            if self._state not in (SupervisorState.RUNNING, SupervisorState.STARTING):
+            if self._state not in (SupervisorState.RUNNING, SupervisorState.STARTING, SupervisorState.CRASHED):
                 return False
             if self._process is not None and self._process.poll() is not None:
-                logger.warning(
-                    "ProxySupervisor: process died unexpectedly (code=%s)",
-                    self._process.returncode,
-                )
-                if self._restart_count < self._max_restarts:
-                    self._restart_count += 1
-                    backoff = 0.25 * (2 ** (self._restart_count - 1))
-                    logger.info(
-                        "ProxySupervisor: restarting (%d/%d) after %.2fs",
-                        self._restart_count,
-                        self._max_restarts,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    try:
-                        await self._start_unlocked()
-                        return True
-                    except Exception as exc:
-                        logger.error("ProxySupervisor: restart %d failed: %s", self._restart_count, exc)
-                        self._last_error = f"Restart attempt {self._restart_count} failed: {exc}"
-                        if self._restart_count >= self._max_restarts:
-                            self._state = SupervisorState.CRASHED
-                            self._last_error = f"Max restarts ({self._max_restarts}) exceeded; process crashed"
-                        return False
-
-                self._state = SupervisorState.CRASHED
-                self._last_error = f"Max restarts ({self._max_restarts}) exceeded; process crashed"
-                return False
+                try:
+                    await self._handle_restart_unlocked()
+                    return True
+                except Exception:
+                    return False
             return True
 
     def request_sync(self, delay_seconds: float = 0.5) -> None:
@@ -789,7 +896,7 @@ class ProxySupervisor:
     async def stop(self) -> None:
         """Gracefully stop the proxy, sync auth and cooldowns to vault, and clean runtime dir."""
         async with self._lock:
-            if self._state == SupervisorState.STOPPED:
+            if self._state == SupervisorState.STOPPED and (not self._runtime_dir or not self._runtime_dir.exists()):
                 return
             self._state = SupervisorState.STOPPING
             logger.info("ProxySupervisor: stopping...")

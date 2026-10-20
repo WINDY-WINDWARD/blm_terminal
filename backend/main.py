@@ -909,9 +909,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await cleanup_shared_clients()
 
     try:
-        from app.services.proxy_supervisor import get_proxy_supervisor
+        from app.services.proxy_supervisor import get_proxy_supervisor, SupervisorState
         supervisor = get_proxy_supervisor()
-        if supervisor.is_running:
+        if supervisor.state != SupervisorState.STOPPED or (supervisor.runtime_dir and supervisor.runtime_dir.exists()):
             await supervisor.stop()
             logger.info("ProxySupervisor: stopped on shutdown")
     except Exception as exc:
