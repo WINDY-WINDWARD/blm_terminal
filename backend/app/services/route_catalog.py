@@ -25,7 +25,7 @@ async def get_route_models(route_id: str, session=None) -> list[str]:
         AIProviderCredential.kind == "oauth",
     ))).scalars().all())
     if not credentials:
-        return []
+        return list(json.loads(route.config_json or "{}").get("cached_models") or [])
     supervisor = get_proxy_supervisor()
     await supervisor.ensure_started()
     management = supervisor.get_management_client()

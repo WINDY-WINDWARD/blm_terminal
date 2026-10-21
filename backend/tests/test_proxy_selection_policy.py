@@ -299,6 +299,14 @@ async def test_proxy_sticky_session_headers(monkeypatch):
 
     monkeypatch.setattr("app.services.llm_provider.get_proxy_supervisor", lambda: mock_sup)
     monkeypatch.setattr("app.services.llm_provider._get_shared_client", lambda: proxy_client)
+    monkeypatch.setattr(
+        "app.services.llm_provider.resolve_active_route_id",
+        AsyncMock(return_value="oauth:codex"),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_provider.get_route_models",
+        AsyncMock(return_value=["gpt-4o"]),
+    )
 
     async def noop_executor(tool_calls):
         return [], []

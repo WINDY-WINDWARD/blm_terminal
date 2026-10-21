@@ -225,7 +225,9 @@ def validate_model_for_route(
     if route_id != active_route_id:
         return False
 
-    if allowed_models is not None:
+    # An empty catalog means "not discoverable yet" (fresh route, proxy cold);
+    # only enforce membership when a catalog is actually available.
+    if allowed_models:
         if upstream_model not in allowed_models and model_id not in allowed_models:
             return False
 

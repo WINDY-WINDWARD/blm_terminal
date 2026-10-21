@@ -53,18 +53,26 @@ import main
 from main import app
 
 
-def complete_oauth_file(environment, completion):
-    payload = dict(completion["auth"])
-    payload["type"] = "codex"
-    payload["email"] = completion["identity"]
-    filename = "codex-" + completion["identity"].split("@", 1)[0] + ".json"
+def complete_oauth_file(environment, provider, identity, extra=None):
+    """Simulate CLIProxyAPI v8 completing a flow: the status payload is {"status": "ok"}
+    and carries no tokens, so reconciliation must read the credential file that
+    appears in the sidecar auth directory."""
+    payload = {
+        "type": provider,
+        "email": identity,
+        "access_token": "test_access_token",
+        "refresh_token": "test_refresh_token",
+    }
+    if extra:
+        payload.update(extra)
+    filename = provider + "-" + identity.split("@", 1)[0] + ".json"
 
     async def status(state):
-        target = environment["supervisor"].auth_dir / filename
-        target.write_text(json.dumps(payload), encoding="utf-8")
+        (environment["supervisor"].auth_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
         return {"status": "ok"}
 
     environment["mgmt"].get_oauth_status.side_effect = status
+    return filename
 
 
 @pytest.fixture
@@ -118,7 +126,7 @@ async def test_env(tmp_path: Path):
         "url": "https://auth.example.com/oauth/authorize",
         "expires_in": 900,
     })
-    mock_complete_oauth_file(test_env, {"status": "wait"})
+    mock_mgmt.get_oauth_status = AsyncMock(return_value={"status": "wait"})
     mock_mgmt.cancel_oauth_session = AsyncMock(return_value={"status": "cancelled"})
     mock_mgmt.reset_cooldown = AsyncMock(return_value={"status": "ok"})
     mock_mgmt.delete_credential = AsyncMock(return_value={"status": "ok"})
@@ -305,7 +313,12 @@ async def test_route_settings_update(test_env):
         assert data["updated_settings"]["ai.request_retry"] == "5"
 
         # Verify supervisor patch_config was called
-        test_env["mgmt"].patch_config.assert_called_with({"routing": {"strategy": "round-robin"}})
+        test_env["mgmt"].patch_config.assert_called_with({"routing": {
+            "strategy": "round-robin",
+            "session-affinity": False,
+            "session-affinity-ttl": "30m",
+            "retry": {"request-retry": 5, "max-retry-credentials": 2, "max-retry-interval": 45},
+        }})
 
 
 @pytest.mark.asyncio
@@ -665,11 +678,7 @@ async def test_oauth_reauth_identity_match_replaces_account(test_env):
         assert reauth_start.status_code == 200
 
         # Simulate completion with MATCHING identity
-        mgmt.get_oauth_status.return_value = {
-            "status": "completed",
-            "identity": "alice@example.com",
-            "auth": {"identity": "alice@example.com", "access_token": "new_refreshed_token"},
-        }
+        complete_oauth_file(test_env, "codex", "alice@example.com", {"access_token": "new_refreshed_token"})
 
         poll_resp = await client.get("/api/ai/routes/oauth/poll?state=reauth_state_match")
         assert poll_resp.status_code == 200
@@ -728,11 +737,7 @@ async def test_oauth_reauth_identity_mismatch_creates_new_account_with_notice(te
         assert reauth_start.status_code == 200
 
         # Simulate completion with MISMATCHED identity (bob logged in instead)
-        mgmt.get_oauth_status.return_value = {
-            "status": "completed",
-            "identity": "bob@example.com",
-            "auth": {"identity": "bob@example.com", "access_token": "bob_token"},
-        }
+        complete_oauth_file(test_env, "codex", "bob@example.com", {"access_token": "bob_token"})
 
         poll_resp = await client.get("/api/ai/routes/oauth/poll?state=reauth_state_mismatch")
         assert poll_resp.status_code == 200
@@ -808,12 +813,19 @@ async def test_account_patch_refresh_test_reset_remove(test_env):
         ref_resp = await client.post(f"/api/ai/routes/accounts/{account_id}/refresh")
         assert ref_resp.status_code == 200
 
-        # 4. Test account
+        # 4. Test account: a disabled account must not report healthy
         test_env["mgmt"].get_credentials = AsyncMock(return_value=[{"name": proxy_name, "status": "active"}])
         t_resp = await client.post(f"/api/ai/routes/accounts/{account_id}/test")
         assert t_resp.status_code == 200
-        assert t_resp.json()["status"] == "ok"
-        assert "latency_ms" in t_resp.json()
+        assert t_resp.json()["status"] == "error"
+
+        # Re-enable, then the same credential must test healthy
+        reenable = await client.patch(f"/api/ai/routes/accounts/{account_id}", json={"enabled": True})
+        assert reenable.status_code == 200
+        t_ok = await client.post(f"/api/ai/routes/accounts/{account_id}/test")
+        assert t_ok.status_code == 200
+        assert t_ok.json()["status"] == "ok"
+        assert "latency_ms" in t_ok.json()
 
         # 5. Reset cooldown
         reset_resp = await client.post(f"/api/ai/routes/accounts/{account_id}/reset-cooldown")
@@ -991,11 +1003,7 @@ async def test_oauth_callback_flow_and_zero_secret_logging(test_env, caplog):
     )
     mgr._sessions[state] = session
 
-    mgmt.get_oauth_status.return_value = {
-        "status": "completed",
-        "identity": "callback_user@example.com",
-        "auth": {"identity": "callback_user@example.com", "access_token": "SENSITIVE_OAUTH_ACCESS_TOKEN_ABC"},
-    }
+    complete_oauth_file(test_env, "codex", "callback_user@example.com", {"access_token": "SENSITIVE_OAUTH_ACCESS_TOKEN_ABC"})
 
     with caplog.at_level(logging.DEBUG):
         async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
@@ -1036,14 +1044,7 @@ async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
         "url": "https://auth.example.com/oauth/authorize",
         "expires_in": 900,
     }
-    mgmt.get_oauth_status.return_value = {
-        "status": "completed",
-        "identity": "alice@example.com",
-        "auth": {
-            "identity": "alice@example.com",
-            "access_token": "token_alice_secret_111",
-        },
-    }
+    complete_oauth_file(test_env, "codex", "alice@example.com", {"access_token": "token_alice_secret_111"})
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
         start_alice = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex", "flow": "browser"})
@@ -1063,9 +1064,9 @@ async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
             alice_cred = res.scalar_one()
             assert alice_cred.masked_identity == "a***@example.com"
 
-        alice_vault = await vault.get_oauth_auth(alice_cred.vault_reference)
+        alice_vault = await vault.get_oauth_auth(alice_cred.vault_reference.removeprefix("oauth_auth:"))
         assert alice_vault["access_token"] == "token_alice_secret_111"
-        assert alice_vault["identity"] == "alice@example.com"
+        assert alice_vault["email"] == "alice@example.com"
 
         # Step 2: User 'adam@example.com' authenticates via add-flow (replace_account_id=None)
         # adam masks to EXACT SAME mask 'a***@example.com'
@@ -1074,14 +1075,7 @@ async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
             "url": "https://auth.example.com/oauth/authorize",
             "expires_in": 900,
         }
-        mgmt.get_oauth_status.return_value = {
-            "status": "completed",
-            "identity": "adam@example.com",
-            "auth": {
-                "identity": "adam@example.com",
-                "access_token": "token_adam_secret_222",
-            },
-        }
+        complete_oauth_file(test_env, "codex", "adam@example.com", {"access_token": "token_adam_secret_222"})
 
         start_adam = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex", "flow": "browser"})
         assert start_adam.status_code == 200
@@ -1112,13 +1106,13 @@ async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
             adam_c = next(c for c in creds if c.id == adam_id)
 
         # Step 4: Verify NO CREDENTIAL LOSS in vault
-        alice_vault_check = await vault.get_oauth_auth(alice_c.vault_reference)
-        adam_vault_check = await vault.get_oauth_auth(adam_c.vault_reference)
+        alice_vault_check = await vault.get_oauth_auth(alice_c.vault_reference.removeprefix("oauth_auth:"))
+        adam_vault_check = await vault.get_oauth_auth(adam_c.vault_reference.removeprefix("oauth_auth:"))
 
         assert alice_vault_check["access_token"] == "token_alice_secret_111"
-        assert alice_vault_check["identity"] == "alice@example.com"
+        assert alice_vault_check["email"] == "alice@example.com"
         assert adam_vault_check["access_token"] == "token_adam_secret_222"
-        assert adam_vault_check["identity"] == "adam@example.com"
+        assert adam_vault_check["email"] == "adam@example.com"
 
         # Step 5: If alice logs in again via add-flow, her raw identity matches alice_c, so it updates alice_c without creating a 3rd
         mgmt.start_oauth.return_value = {
@@ -1126,14 +1120,7 @@ async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
             "url": "https://auth.example.com/oauth/authorize",
             "expires_in": 900,
         }
-        mgmt.get_oauth_status.return_value = {
-            "status": "completed",
-            "identity": "alice@example.com",
-            "auth": {
-                "identity": "alice@example.com",
-                "access_token": "token_alice_secret_v2",
-            },
-        }
+        complete_oauth_file(test_env, "codex", "alice@example.com", {"access_token": "token_alice_secret_v2"})
         start_alice2 = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex", "flow": "browser"})
         state_alice2 = start_alice2.json()["state"]
         poll_alice2 = await client.get(f"/api/ai/routes/oauth/poll?state={state_alice2}")
@@ -1147,7 +1134,7 @@ async def test_oauth_add_flow_mask_collision_no_credential_loss(test_env):
             creds_after = all_creds_res.scalars().all()
             assert len(creds_after) == 2
 
-        alice_vault_updated = await vault.get_oauth_auth(alice_c.vault_reference)
+        alice_vault_updated = await vault.get_oauth_auth(alice_c.vault_reference.removeprefix("oauth_auth:"))
         assert alice_vault_updated["access_token"] == "token_alice_secret_v2"
 
 
@@ -1585,11 +1572,7 @@ async def test_concurrent_oauth_reconciliation_single_execution(test_env):
     )
     mgr._sessions[state] = session
 
-    mgmt.get_oauth_status = AsyncMock(return_value={
-        "status": "completed",
-        "identity": "concurrent_user@example.com",
-        "auth": {"identity": "concurrent_user@example.com", "access_token": "tok_concurrent"},
-    })
+    complete_oauth_file(test_env, "codex", "concurrent_user@example.com", {"access_token": "tok_concurrent"})
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
         # Launch two poll requests concurrently

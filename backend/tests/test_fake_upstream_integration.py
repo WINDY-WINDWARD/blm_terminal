@@ -260,7 +260,11 @@ async def test_custom_endpoint_multikey_failover_401_to_success():
         async def noop_executor(calls):
             return [], []
 
-        with patch("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor):
+        with (
+            patch("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor),
+            patch("app.services.llm_provider.resolve_active_route_id", AsyncMock(return_value="endpoint:ep-401")),
+            patch("app.services.llm_provider.get_route_models", AsyncMock(return_value=["mock-model-401"])),
+        ):
             chunks: list[str] = []
             async for chunk in stream_chat_completion(
                 messages=[{"role": "user", "content": "Analyze asset volatility"}],
@@ -461,7 +465,11 @@ async def test_custom_endpoint_multikey_failover_429_to_success():
         async def noop_executor(calls):
             return [], []
 
-        with patch("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor):
+        with (
+            patch("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor),
+            patch("app.services.llm_provider.resolve_active_route_id", AsyncMock(return_value="endpoint:ep-429")),
+            patch("app.services.llm_provider.get_route_models", AsyncMock(return_value=["mock-model-429"])),
+        ):
             chunks: list[str] = []
             async for chunk in stream_chat_completion(
                 messages=[{"role": "user", "content": "Analyze market momentum"}],
@@ -562,6 +570,14 @@ async def test_tool_call_continuation_through_proxy(monkeypatch):
 
     monkeypatch.setattr("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor)
     monkeypatch.setattr("app.services.llm_provider._get_shared_client", lambda: tool_client)
+    monkeypatch.setattr(
+        "app.services.llm_provider.resolve_active_route_id",
+        AsyncMock(return_value="oauth:codex"),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_provider.get_route_models",
+        AsyncMock(return_value=["gpt-4o"]),
+    )
 
     tool_calls_executed: list[dict[str, Any]] = []
 

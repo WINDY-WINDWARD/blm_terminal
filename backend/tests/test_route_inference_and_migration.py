@@ -275,6 +275,14 @@ async def test_proxy_loop_url_and_session_headers(monkeypatch):
 
     monkeypatch.setattr("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor)
     monkeypatch.setattr("app.services.llm_provider._get_shared_client", lambda: mock_client)
+    monkeypatch.setattr(
+        "app.services.llm_provider.resolve_active_route_id",
+        AsyncMock(return_value="oauth:codex"),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_provider.get_route_models",
+        AsyncMock(return_value=["gpt-4o"]),
+    )
 
     chunks = []
     async def noop_executor(tool_calls):
@@ -337,6 +345,14 @@ async def test_proxy_loop_suppresses_429_retry(monkeypatch):
 
     monkeypatch.setattr("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor)
     monkeypatch.setattr("app.services.llm_provider._get_shared_client", lambda: mock_client)
+    monkeypatch.setattr(
+        "app.services.llm_provider.resolve_active_route_id",
+        AsyncMock(return_value="oauth:codex"),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_provider.get_route_models",
+        AsyncMock(return_value=["gpt-4o"]),
+    )
 
     events = []
     async def noop_executor(tool_calls):
@@ -387,6 +403,14 @@ async def test_direct_provider_does_not_call_proxy(monkeypatch):
     monkeypatch.setattr("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor)
     monkeypatch.setattr("app.services.llm_provider._get_shared_client", lambda: mock_client)
     monkeypatch.setattr("app.services.llm_provider.get_dynamic_ai_api_key", AsyncMock(return_value="sk-fake-openai"))
+    monkeypatch.setattr(
+        "app.services.llm_provider.resolve_active_route_id",
+        AsyncMock(return_value="direct:openai"),
+    )
+    monkeypatch.setattr(
+        "app.services.llm_provider.get_route_models",
+        AsyncMock(return_value=["gpt-4o-mini"]),
+    )
 
     async def noop_executor(tool_calls):
         return [], []

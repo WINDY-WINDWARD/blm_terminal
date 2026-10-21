@@ -111,4 +111,4 @@ def test_runtime_permissions_have_only_current_user_access(tmp_path):
         assert dacl.GetAceCount() == 1
         assert dacl.GetAce(0)[2] == current_sid
         assert dacl.GetAce(0)[1] & ntsecuritycon.FILE_ALL_ACCESS == ntsecuritycon.FILE_ALL_ACCESS
-        assert not dacl.GetAce(0)[0][1] & win32con.INHERITED_ACE
+        assert not dacl.GetAce(0)[0][1] & win32security.INHERITED_ACE

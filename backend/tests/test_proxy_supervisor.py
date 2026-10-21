@@ -68,19 +68,19 @@ def test_generate_proxy_config_flags():
     )
 
     assert "config-version: 8" in config_yaml
-    assert 'host: "127.0.0.1"' in config_yaml
+    assert "host: 127.0.0.1" in config_yaml
     assert "port: 8317" in config_yaml
     assert "allow-remote: false" in config_yaml
     assert "disable-control-panel: true" in config_yaml
-    assert 'strategy: "fill-first"' in config_yaml
+    assert "strategy: fill-first" in config_yaml
     assert "session-affinity: true" in config_yaml
-    assert 'session-affinity-ttl: "1h"' in config_yaml
+    assert "session-affinity-ttl: 1h" in config_yaml
     assert "force-model-prefix: true" in config_yaml
     assert "save-cooldown-status: true" in config_yaml
     assert "request-retry: 3" in config_yaml
     assert "max-retry-credentials: 0" in config_yaml
     assert "max-retry-interval: 30" in config_yaml
-    assert 'auth-dir: "/path/to/runtime/auth"' in config_yaml or "auth-dir:" in config_yaml
+    assert "auth-dir:" in config_yaml
 
     # No upstream OAuth or user secrets leaked
     assert "token-123" not in config_yaml
