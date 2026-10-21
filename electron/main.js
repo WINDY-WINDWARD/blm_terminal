@@ -226,6 +226,7 @@ if (!gotTheLock) {
 function resolveCliproxyBin() {
   const isWindows = process.platform === 'win32';
   const binName = isWindows ? 'cliproxyapi.exe' : 'cliproxyapi';
+  const isDev = !app.isPackaged;
 
   if (isDev) {
     const devPath = path.join(app.getAppPath(), 'vendor', 'cliproxyapi', 'runtime', binName);
