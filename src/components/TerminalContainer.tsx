@@ -21,6 +21,7 @@ import {
   authAtom,
   showTradingViewImportModalAtom,
   showSettingsModalAtom,
+  showAiProvidersModalAtom,
   settingsModalTabAtom,
   watchlistsAtom,
   activeWatchlistIdAtom,
@@ -34,6 +35,7 @@ import {
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
 import { SettingsModal } from '@/components/modals/SettingsModal';
+import { AiProvidersModal } from '@/components/modals/AiProvidersModal';
 
 function isTextInputFocused(): boolean {
   const el = document.activeElement;
@@ -72,6 +74,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [showTradingViewImportModal, setShowTradingViewImportModal] = useAtom(showTradingViewImportModalAtom);
   const [showSettingsModal, setShowSettingsModal] = useAtom(showSettingsModalAtom);
+  const [showAiProvidersModal, setShowAiProvidersModal] = useAtom(showAiProvidersModalAtom);
   const setSettingsModalTab = useSetAtom(settingsModalTabAtom);
   const [watchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
@@ -300,6 +303,12 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    if (activeCommand.toUpperCase() === 'PROVIDERS') {
+      setShowAiProvidersModal(true);
+      setActiveCommand('');
+      return;
+    }
+
     let targetCommand = activeCommand;
     if (activeCommand === 'BREAKOUT') {
       targetCommand = 'BREAKOUTS';
@@ -320,7 +329,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       }
     }
     setActiveCommand('');
-  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue, setChartOverrides, setSettingsModalTab, setShowSettingsModal, setShowTradingViewImportModal]);
+  }, [activeCommand, focusedPanel, setActivePanels, setActiveCommand, activePanels, panelCount, mergedGroups, savedLayouts, setSavedLayouts, setLayoutToast, setLayoutConfirm, setPanelCount, setMergedGroups, setPanelSizes, setFocusedPanel, setSelectedPanels, auth, processPendingQueue, setChartOverrides, setSettingsModalTab, setShowSettingsModal, setShowAiProvidersModal, setShowTradingViewImportModal]);
 
   // Handle popup widget restore requests from detached windows
   useEffect(() => {
@@ -411,6 +420,10 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       <SettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
+      />
+      <AiProvidersModal
+        isOpen={showAiProvidersModal}
+        onClose={() => setShowAiProvidersModal(false)}
       />
     </main>
   );

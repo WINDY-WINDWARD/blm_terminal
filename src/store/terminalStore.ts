@@ -410,6 +410,10 @@ export type SettingsTabId = 'workspace' | 'connections' | 'intelligence' | 'auto
 export const showSettingsModalAtom = atom<boolean>(false);
 export const settingsModalTabAtom = atom<SettingsTabId>('workspace');
 
+export type AiProvidersTabId = 'oauth' | 'custom' | 'direct';
+export const showAiProvidersModalAtom = atom<boolean>(false);
+export const aiProvidersModalTabAtom = atom<AiProvidersTabId>('oauth');
+
 // ─── Notif / Scan Sub-Filters ─────────────────────────────────────────────────
 
 /**

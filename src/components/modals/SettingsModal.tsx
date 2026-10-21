@@ -27,6 +27,7 @@ import {
   type PanelCount,
   type SavedLayout,
   showSettingsModalAtom,
+  showAiProvidersModalAtom,
   settingsModalTabAtom,
   type SettingsTabId,
 } from '@/store/terminalStore';
@@ -251,6 +252,7 @@ export interface SettingsModalProps {
 
 export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnClose, initialTab }: SettingsModalProps = {}) {
   const [globalIsOpen, setGlobalIsOpen] = useAtom(showSettingsModalAtom);
+  const setShowAiProvidersModal = useSetAtom(showAiProvidersModalAtom);
   const [globalTab, setGlobalTab] = useAtom(settingsModalTabAtom);
 
   const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : globalIsOpen;
@@ -1334,6 +1336,19 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                         <span className="text-white/50 text-[10px] leading-relaxed">
                           Best results need a paid subscription or pay-as-you-go provider. Free models work well too depending on provider/model — Google Pro has a good free tier and also comes free with Jio Sub and can be used with this app.
                         </span>
+                        <div className="flex items-center justify-between p-2 rounded bg-[#09090b] border border-terminal-amber/30 mb-1">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-mono text-zinc-400">Unified Provider & OAuth Manager:</span>
+                            <span className="text-[11px] font-mono text-white">OAuth Accounts & Routes</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowAiProvidersModal(true)}
+                            className="px-2.5 py-1 rounded bg-terminal-amber/10 hover:bg-terminal-amber/20 text-terminal-amber font-mono text-[10px] font-bold border border-terminal-amber/40 transition-colors cursor-pointer"
+                          >
+                            MANAGE PROVIDERS →
+                          </button>
+                        </div>
                         <label className="flex flex-col gap-0.5">
                           <span className="text-white/70 text-[10px]">Provider:</span>
                           <select

@@ -33,6 +33,7 @@ const WIDGET_COMMANDS: WidgetCommand[] = [
   { cmd: 'TOP', desc: 'Top movers' },
   { cmd: 'COMPANY', desc: 'Company Overview' },
   { cmd: 'SETTINGS', desc: 'App settings' },
+  { cmd: 'PROVIDERS', desc: 'AI providers & OAuth accounts' },
   { cmd: 'LARGEDEALS', desc: 'Large deals snapshot' },
   { cmd: 'BREAKOUTS', desc: '52-week breakouts' },
   { cmd: 'NEWS', desc: 'Market & company news' },
