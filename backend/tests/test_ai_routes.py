@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.auth import create_access_token, get_current_user, get_password_hash
+from app.config import settings
 from app.database import Base, get_db
 from app.models.ai_provider import AIProviderCredential, AIProviderRoute
 from app.models.system_config import SystemConfig
@@ -212,8 +213,14 @@ async def test_authentication_and_route_mounting(test_env, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_routes_includes_oauth_and_direct(test_env):
-    """Verify GET /ai/routes lists OAuth routes, direct providers, and active route."""
+async def test_list_routes_includes_oauth_and_direct(test_env, monkeypatch):
+    """Verify GET /ai/routes lists OAuth routes, direct providers, and active route.
+
+    The active route falls back to ``settings.ai_provider`` when the database has
+    no override, so pin it here; otherwise a developer's ``.env.local`` changes
+    the expected default and makes the suite environment-dependent.
+    """
+    monkeypatch.setattr(settings, "ai_provider", "aistudio")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
         resp = await client.get("/api/ai/routes")
