@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="${SCRIPT_DIR}/../backend"
 
 echo "Verifying CLIProxyAPI sidecar binary..."
-"${SCRIPT_DIR}/stage_cliproxyapi.sh" "${SCRIPT_DIR}/../vendor/cliproxyapi/runtime" --verify-only
+bash "${SCRIPT_DIR}/stage_cliproxyapi.sh" "${SCRIPT_DIR}/../vendor/cliproxyapi/runtime" --verify-only
 
 echo "Building BLM Backend using PyInstaller (POSIX / macOS / Linux)..."
 

@@ -376,7 +376,7 @@ describe('Task 7: Custom Endpoints, Direct Providers & Model Selectors', () => {
       });
     });
 
-    it('EndpointEditorModal sends empty headers object on edit when all headers are removed', async () => {
+    it('preserves stored headers when editing an endpoint without touching them', async () => {
       let patchedBody: any = null;
       server.use(
         http.patch('/api/py/ai/routes/endpoints/:id', async ({ request }) => {
@@ -393,8 +393,34 @@ describe('Task 7: Custom Endpoints, Direct Providers & Model Selectors', () => {
         />,
       );
 
-      const saveBtn = screen.getByTestId('save-endpoint-btn');
-      fireEvent.click(saveBtn);
+      fireEvent.click(screen.getByTestId('save-endpoint-btn'));
+
+      await waitFor(() => {
+        expect(patchedBody).not.toBeNull();
+        expect(patchedBody.headers).toBeUndefined();
+      });
+    });
+
+    it('sends an empty headers object when the user removes all header rows', async () => {
+      let patchedBody: any = null;
+      server.use(
+        http.patch('/api/py/ai/routes/endpoints/:id', async ({ request }) => {
+          patchedBody = await request.json();
+          return HttpResponse.json({ status: 'ok', route: mockCustomEndpointRoute });
+        }),
+      );
+
+      render(
+        <EndpointEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          route={mockCustomEndpointRoute}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /add header/i }));
+      fireEvent.click(screen.getByTitle('Remove header'));
+      fireEvent.click(screen.getByTestId('save-endpoint-btn'));
 
       await waitFor(() => {
         expect(patchedBody).not.toBeNull();

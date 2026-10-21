@@ -90,6 +90,7 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
   const [displayLabel, setDisplayLabel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [headers, setHeaders] = useState<HeaderRow[]>([]);
+  const [headersTouched, setHeadersTouched] = useState(false);
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [models, setModels] = useState<string[]>(['default']);
   const [manualModel, setManualModel] = useState('');
@@ -107,6 +108,7 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
         setBaseUrl(route.config.base_url || '');
         setModels(route.models && route.models.length > 0 ? route.models : ['default']);
         setHeaders([]);
+        setHeadersTouched(false);
         setKeys([]);
       } else {
         setDisplayLabel('');
@@ -141,14 +143,17 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
 
   // Headers helpers
   const addHeaderRow = () => {
+    setHeadersTouched(true);
     setHeaders((prev) => [...prev, { id: Math.random().toString(36).substring(7), name: '', value: '' }]);
   };
 
   const removeHeaderRow = (id: string) => {
+    setHeadersTouched(true);
     setHeaders((prev) => prev.filter((h) => h.id !== id));
   };
 
   const updateHeaderRow = (id: string, field: 'name' | 'value', val: string) => {
+    setHeadersTouched(true);
     setHeaders((prev) => prev.map((h) => (h.id === id ? { ...h, [field]: val } : h)));
   };
 
@@ -254,7 +259,9 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
           patch: {
             display_label: displayLabel.trim(),
             base_url: baseUrl.trim(),
-            headers: headersDict,
+            // Only replace headers when the user actually edited them; otherwise
+            // an unrelated edit would silently wipe stored secret headers.
+            ...(headersTouched ? { headers: headersDict } : {}),
             models: models.length > 0 ? models : ['default'],
           },
         });

@@ -252,6 +252,23 @@ export interface SettingsModalProps {
   initialTab?: SettingsTabId;
 }
 
+// Legacy provider ids in this modal map onto the route-qualified storage model.
+// 'gemini' means the Google Antigravity OAuth route; everything else is direct:/oauth:.
+const LEGACY_OAUTH_ROUTES: Record<string, string> = {
+  gemini: 'oauth:antigravity',
+  codex: 'oauth:codex',
+};
+
+function routeIdForLegacyProvider(legacy: string): string {
+  return LEGACY_OAUTH_ROUTES[legacy] ?? `direct:${legacy}`;
+}
+
+function legacyProviderFromRoute(route: string): string {
+  if (route === 'oauth:antigravity' || route === 'oauth:gemini') return 'gemini';
+  if (route === 'oauth:codex') return 'codex';
+  return route.startsWith('direct:') ? route.slice('direct:'.length) : route;
+}
+
 export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnClose, initialTab }: SettingsModalProps = {}) {
   const [globalIsOpen, setGlobalIsOpen] = useAtom(showSettingsModalAtom);
   const setShowAiProvidersModal = useSetAtom(showAiProvidersModalAtom);
@@ -557,7 +574,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
           if (stored === 'zen' || stored === 'zen-free') {
             setAiProvider('zen-paid');
           } else {
-            setAiProvider(stored);
+            setAiProvider(legacyProviderFromRoute(stored));
           }
         }
         setAiKeysConfigured({
@@ -1334,7 +1351,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                             value={aiProvider}
                             onChange={(e) => {
                               setAiProvider(e.target.value);
-                              scheduleSystemConfigSave('ai.provider', e.target.value);
+                              scheduleSystemConfigSave('ai.provider', routeIdForLegacyProvider(e.target.value));
                             }}
                             className="bg-terminal-bg border border-terminal-border px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-terminal-amber"
                           >

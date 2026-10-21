@@ -11,7 +11,7 @@
 |---|---|---|
 | **Active Route Policy** | **Strictly one active route** at any given moment | Eliminates prompt/tool divergence across models; ensures predictable execution context for chat agents, hunter/verifier workflows, and Script Lab. |
 | **Model Namespacing** | `blm:<route_id>/<upstream_model>` | Fully disambiguates models across route families, prevents collision between upstream models of the same name, and preserves auditability. |
-| **Secret Storage** | **OS Keyring + AES-256-GCM** | Master key stored in platform credential manager (Windows Credential Manager, macOS Keychain, Linux SecretService); secrets encrypted in an isolated vault (`provider_vault.enc`). **Zero plaintext fallback**. |
+| **Secret Storage** | **OS Keyring + AES-256-GCM** | Master key stored in platform credential manager (Windows Credential Manager, macOS Keychain, Linux SecretService); OAuth and custom-endpoint secrets are encrypted in an isolated vault (`provider_vault.enc`) with **no plaintext vault fallback**. Direct-provider API keys and Copilot tokens keep their existing `SystemConfig` storage path. |
 | **Proxy Supervision** | **Ephemeral sidecar (CLIProxyAPI v8.0.35)** | Managed purely by `ProxySupervisor` on loopback `127.0.0.1` on an ephemeral port. Wiped on shutdown. Direct providers bypass proxy. |
 | **Security Boundaries** | **Zero secret leakage** | No secrets in query strings, URLs, renderer responses, logs, diagnostics, or configuration dumps. Strict redaction (`[REDACTED]`). |
 | **Packaging & Licensing** | **Pinned v8.0.35 release binary** | Embedded with upstream MIT license notice in `resources/cliproxyapi/` and `electron-builder.json`. Fails closed on checksum mismatch. |
@@ -83,7 +83,7 @@ OAuth routes allow users to connect multiple accounts per provider. The CLIProxy
 2. **Browser Auth:** User approves access in their web browser.
 3. **Callback Submission:**
    - **Local Callback:** CLIProxyAPI captures the loopback redirect on its dedicated OAuth port.
-   - **Manual Callback:** In headless or restricted environments, the user inputs the authorization code or redirect URL in the `OAuthSessionDialog`. The client submits this via `POST /api/ai/routes/oauth/callback`.
+   - **Manual Callback (API only today):** `POST /api/ai/routes/oauth/callback` accepts the redirect URL or state/code. The current `OAuthSessionDialog` does not expose a manual callback input, so headless deployments should call this endpoint directly.
 4. **Polling & Reconciliation:** The client polls `GET /api/ai/routes/oauth/poll?state={state}`. Once authenticated, the credential tokens are encrypted in `ProviderVault`, CLIProxyAPI's configuration is updated, and the account status is set to `active`.
 5. **Cancellation:** Unfinished sessions are cancelled via `POST /api/ai/routes/oauth/cancel` with JSON body `{"state": "<state>"}`, preventing leaked state in CLIProxyAPI.
 
@@ -91,7 +91,7 @@ OAuth routes allow users to connect multiple accounts per provider. The CLIProxy
 - **Priority & Weight:** Each account has an integer `priority` (lower numbers tried first) and `weight` (proportional distribution among same-priority accounts). These can be patched via `PATCH /api/ai/routes/accounts/{account_id}`.
 - **Session Affinity (`X-Session-Id`):**
   - BLM generates and sends a sticky session header `X-Session-Id: {session_id}` on every inference request through the proxy.
-  - CLIProxyAPI enforces `session-affinity: true` with `session-affinity-ttl: "1h"`. All turns within a multi-turn chat session stick to the same upstream account, preventing context fragmentation and session thrashing.
+  - CLIProxyAPI enforces `session-affinity: true` with `session-affinity-ttl: 1h` (the value comes from the saved routing settings). All turns within a multi-turn chat session stick to the same upstream account, preventing context fragmentation and session thrashing.
 - **Cooldown Handling:**
   - When an account receives a 429 (Rate Limit) or 401 (Auth Expired), CLIProxyAPI places the credential into cooldown.
   - Cooldown states are backed up into the `ProviderVault` cooldown snapshot table (`save-cooldown-status: true`).
@@ -201,14 +201,14 @@ Application Start
 ```
 
 ### 5.1 Runtime Isolation & Permissions
-- **Loopback Only:** Configured with `host: "127.0.0.1"` and `allow-remote: false`. No external network interface is bound.
+- **Loopback Only:** Configured with `host: 127.0.0.1` and `allow-remote: false`. No external network interface is bound.
 - **Control Panel Disabled:** `disable-control-panel: true` ensures no unauthenticated web UI is exposed.
 - **File Permissions:** Runtime directory is restricted to `0700` (user-only read/write/execute); configuration and authentication files are set to `0600` (user-only read/write).
 
 ### 5.2 Clean Shutdown & Stale Directory Cleanup
 - `ProxySupervisor.stop()` terminates the sidecar process and completely removes the ephemeral runtime directory.
-- `atexit` and process signal handlers (`SIGTERM`, `SIGINT`) trigger synchronous cleanup during abnormal application termination.
-- On initialization, `cleanup_stale_runtimes()` scans the runtime root for any orphaned directories from prior system crashes and wipes them before starting.
+- The FastAPI `lifespan` shutdown path stops the sidecar before other workers and removes the runtime directory; abrupt kills are covered by the startup sweep below.
+- On initialization, `cleanup_stale_runtimes()` scans the runtime root for any orphaned directories from prior crashes, terminates verified orphan processes, and wipes the directories before starting.
 
 ---
 

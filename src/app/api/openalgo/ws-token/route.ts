@@ -1,16 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPythonBackendUrl, getServerInternalHeaders } from '@/lib/backendUrl';
 
+async function isAuthorizedRequest(req: NextRequest): Promise<boolean> {
+  const launchToken = process.env.BLM_LOCAL_TOKEN;
+  const requestToken = req.headers.get('x-blm-token');
+  if (launchToken && requestToken === launchToken) {
+    return true;
+  }
+
+  const authorization = req.headers.get('authorization');
+  const cookie = req.headers.get('cookie');
+  if (!authorization && !cookie) {
+    return false;
+  }
+
+  const headers: Record<string, string> = {};
+  if (authorization) headers.authorization = authorization;
+  if (cookie) headers.cookie = cookie;
+  try {
+    const res = await fetch(`${getPythonBackendUrl()}/api/auth/me`, {
+      headers,
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * GET /api/openalgo/ws-token
  * Returns the WebSocket API key so the client can authenticate with the WebSocket.
- * This is safe because:
- * 1. It only works for authenticated requests from our domain
- * 2. The API key is still only sent to authenticated users
- * 3. The key is still never stored in client-side environment files
+ * Only responds to requests authenticated with the per-launch local token
+ * (Electron injects x-blm-token) or a valid application session, so the raw key
+ * is never disclosed to unauthenticated callers.
  */
 export async function GET(req: NextRequest) {
   try {
+    if (!(await isAuthorizedRequest(req))) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     let apiKey = process.env.OPENALGO_API_KEY;
 
     if (!apiKey) {

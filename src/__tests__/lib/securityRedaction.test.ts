@@ -176,8 +176,20 @@ describe('Security Redaction & Internal Token Boundary', () => {
       }
     });
 
+    it('GET /api/openalgo/ws-token rejects unauthenticated callers', async () => {
+      delete process.env.OPENALGO_API_KEY;
+      delete process.env.BLM_LOCAL_TOKEN;
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })));
+
+      const req = new NextRequest('http://localhost/api/openalgo/ws-token');
+      const res = await wsTokenGet(req);
+
+      expect(res.status).toBe(401);
+    });
+
     it('GET /api/openalgo/ws-token retrieves key via internal endpoint for authenticated websocket', async () => {
       delete process.env.OPENALGO_API_KEY;
+      process.env.BLM_LOCAL_TOKEN = SENTINEL_INTERNAL_TOKEN;
 
       vi.stubGlobal(
         'fetch',
@@ -201,12 +213,15 @@ describe('Security Redaction & Internal Token Boundary', () => {
         }),
       );
 
-      const req = new NextRequest('http://localhost/api/openalgo/ws-token');
+      const req = new NextRequest('http://localhost/api/openalgo/ws-token', {
+        headers: { 'x-blm-token': SENTINEL_INTERNAL_TOKEN },
+      });
       const res = await wsTokenGet(req);
 
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.api_key).toBe(SENTINEL_OPENALGO_KEY);
+      delete process.env.BLM_LOCAL_TOKEN;
     });
   });
   describe('OpenAlgoServerClient', () => {

@@ -282,7 +282,7 @@ async function cleanupProcessesAsync() {
         !pythonProcess.killed &&
         pythonProcess.exitCode === null &&
         pythonProcess.signalCode === null &&
-        waited < 1500
+        waited < 10000
       ) {
         await new Promise((r) => setTimeout(r, 100));
         waited += 100;
