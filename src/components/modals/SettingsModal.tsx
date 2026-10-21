@@ -1343,7 +1343,11 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                           </div>
                           <button
                             type="button"
-                            onClick={() => setShowAiProvidersModal(true)}
+                            onClick={() => {
+                              setGlobalIsOpen(false);
+                              controlledOnClose?.();
+                              setShowAiProvidersModal(true);
+                            }}
                             className="px-2.5 py-1 rounded bg-terminal-amber/10 hover:bg-terminal-amber/20 text-terminal-amber font-mono text-[10px] font-bold border border-terminal-amber/40 transition-colors cursor-pointer"
                           >
                             MANAGE PROVIDERS →

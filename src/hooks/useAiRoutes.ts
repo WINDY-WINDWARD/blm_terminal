@@ -34,12 +34,11 @@ export function useActivateRouteMutation() {
 }
 
 export function useUpdateRouteSettingsMutation() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateAiCaches();
   return useMutation({
     mutationFn: (settings: RouteSettingsUpdate) => aiRoutesClient.updateRouteSettings(settings),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: AI_ROUTES_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: ['system-config'] });
+      invalidate();
     },
   });
 }

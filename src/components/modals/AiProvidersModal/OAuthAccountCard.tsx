@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -40,6 +40,15 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
   const [testResult, setTestResult] = useState<{ status: string; latency_ms?: number; error?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<boolean>(false);
 
+  // Sync state when props update from background refetch
+  useEffect(() => {
+    setPriorityVal(account.priority ?? 1);
+  }, [account.priority]);
+
+  useEffect(() => {
+    setWeightVal(account.weight ?? 1);
+  }, [account.weight]);
+
   const isCooldown = Boolean(account.cooldown) || account.status === 'cooldown';
   const isError = account.status === 'error' || Boolean(account.last_redacted_error);
   const isDisabled = !account.enabled;
@@ -54,6 +63,20 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
     const val = Math.max(1, Math.min(100, Math.floor(newVal || 1)));
     setWeightVal(val);
     patchAccount.mutate({ accountId: account.id, patch: { weight: val } });
+  };
+
+  const handlePriorityKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur();
+      handlePriorityChange(priorityVal);
+    }
+  };
+
+  const handleWeightKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur();
+      handleWeightChange(weightVal);
+    }
   };
 
   const handleToggleEnabled = () => {
@@ -218,15 +241,16 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
         >
           <div className="flex items-center gap-1.5">
             {testResult.status === 'ok' ? (
-              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Account verified ({testResult.latency_ms ?? 0}ms)</span>
+              </>
             ) : (
-              <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+              <>
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                <span>{testResult.error || 'Verification failed'}</span>
+              </>
             )}
-            <span>
-              {testResult.status === 'ok'
-                ? `Account verified (${testResult.latency_ms ?? 0}ms)`
-                : `Test failed: ${testResult.error || 'Connection error'}`}
-            </span>
           </div>
           <button
             type="button"
@@ -252,6 +276,7 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
               value={priorityVal}
               onChange={(e) => setPriorityVal(Number(e.target.value))}
               onBlur={() => handlePriorityChange(priorityVal)}
+              onKeyDown={handlePriorityKeyDown}
               disabled={patchAccount.isPending}
               aria-label="Account Priority"
               className="w-14 px-1.5 py-0.5 rounded bg-[#09090b] border border-zinc-700 text-white font-mono text-xs focus:border-terminal-amber outline-none"
@@ -267,6 +292,7 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
               value={weightVal}
               onChange={(e) => setWeightVal(Number(e.target.value))}
               onBlur={() => handleWeightChange(weightVal)}
+              onKeyDown={handleWeightKeyDown}
               disabled={patchAccount.isPending}
               aria-label="Account Weight"
               className="w-14 px-1.5 py-0.5 rounded bg-[#09090b] border border-zinc-700 text-white font-mono text-xs focus:border-terminal-amber outline-none"

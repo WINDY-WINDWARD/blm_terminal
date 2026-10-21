@@ -12,7 +12,35 @@ import type {
 
 const BASE_URL = '/api/py/ai/routes';
 
-async function handleResponse<T>(res: Response, fallbackError: string): Promise<T> {
+interface RequestOptions {
+  method?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+
+export async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+  fallbackError = 'Request failed',
+): Promise<T> {
+  const url = `${BASE_URL}${path}`;
+  const headers: Record<string, string> = {
+    ...options.headers,
+  };
+  let body: string | undefined = undefined;
+
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(options.body);
+  }
+
+  const res = await fetch(url, {
+    method: options.method || 'GET',
+    headers,
+    credentials: 'include',
+    body,
+  });
+
   if (!res.ok) {
     let msg = fallbackError;
     try {
@@ -27,120 +55,110 @@ async function handleResponse<T>(res: Response, fallbackError: string): Promise<
     }
     throw new Error(msg);
   }
+
   return res.json() as Promise<T>;
 }
 
 export const aiRoutesClient = {
   async listRoutes(): Promise<RoutesListResponse> {
-    const res = await fetch(BASE_URL, {
-      method: 'GET',
-      credentials: 'include',
-    });
-    return handleResponse<RoutesListResponse>(res, 'Failed to list AI provider routes');
+    return request<RoutesListResponse>('', { method: 'GET' }, 'Failed to list AI provider routes');
   },
 
   async activateRoute(routeId: string): Promise<{ status: string; active_route_id: string }> {
-    const res = await fetch(`${BASE_URL}/${encodeURIComponent(routeId)}/activate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    return handleResponse<{ status: string; active_route_id: string }>(res, 'Failed to activate route');
+    return request<{ status: string; active_route_id: string }>(
+      `/${encodeURIComponent(routeId)}/activate`,
+      { method: 'POST' },
+      'Failed to activate route',
+    );
   },
 
   async updateRouteSettings(
     settings: RouteSettingsUpdate,
   ): Promise<{ status: string; updated_settings: Record<string, string> }> {
-    const res = await fetch(`${BASE_URL}/settings`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings),
-    });
-    return handleResponse<{ status: string; updated_settings: Record<string, string> }>(
-      res,
+    return request<{ status: string; updated_settings: Record<string, string> }>(
+      '/settings',
+      { method: 'PATCH', body: settings },
       'Failed to update routing settings',
     );
   },
 
   async startOAuth(req: OAuthStartRequest): Promise<OAuthStartResponse> {
-    const res = await fetch(`${BASE_URL}/oauth/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    });
-    return handleResponse<OAuthStartResponse>(res, 'Failed to initiate OAuth session');
+    return request<OAuthStartResponse>(
+      '/oauth/start',
+      { method: 'POST', body: req },
+      'Failed to initiate OAuth session',
+    );
   },
 
   async pollOAuth(state: string): Promise<OAuthPollResponse> {
-    const res = await fetch(`${BASE_URL}/oauth/poll?state=${encodeURIComponent(state)}`, {
-      method: 'GET',
-    });
-    return handleResponse<OAuthPollResponse>(res, 'Failed to poll OAuth status');
+    return request<OAuthPollResponse>(
+      `/oauth/poll?state=${encodeURIComponent(state)}`,
+      { method: 'GET' },
+      'Failed to poll OAuth status',
+    );
   },
 
   async cancelOAuth(state: string): Promise<{ status: string; state: string }> {
-    const res = await fetch(`${BASE_URL}/oauth/cancel`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ state }),
-    });
-    return handleResponse<{ status: string; state: string }>(res, 'Failed to cancel OAuth session');
+    return request<{ status: string; state: string }>(
+      '/oauth/cancel',
+      { method: 'POST', body: { state } },
+      'Failed to cancel OAuth session',
+    );
   },
 
   async getAccount(accountId: string): Promise<CredentialSummary> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}`, {
-      method: 'GET',
-    });
-    return handleResponse<CredentialSummary>(res, 'Failed to fetch account');
+    return request<CredentialSummary>(
+      `/accounts/${encodeURIComponent(accountId)}`,
+      { method: 'GET' },
+      'Failed to fetch account',
+    );
   },
 
   async patchAccount(accountId: string, patch: AccountPatchRequest): Promise<CredentialSummary> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    return handleResponse<CredentialSummary>(res, 'Failed to update account');
+    return request<CredentialSummary>(
+      `/accounts/${encodeURIComponent(accountId)}`,
+      { method: 'PATCH', body: patch },
+      'Failed to update account',
+    );
   },
 
   async refreshAccount(accountId: string): Promise<CredentialSummary> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}/refresh`, {
-      method: 'POST',
-    });
-    return handleResponse<CredentialSummary>(res, 'Failed to refresh account');
+    return request<CredentialSummary>(
+      `/accounts/${encodeURIComponent(accountId)}/refresh`,
+      { method: 'POST' },
+      'Failed to refresh account',
+    );
   },
 
   async testAccount(accountId: string): Promise<AccountTestResponse> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}/test`, {
-      method: 'POST',
-    });
-    return handleResponse<AccountTestResponse>(res, 'Failed to test account');
-  },
-
-  async reauthAccount(accountId: string): Promise<OAuthStartResponse> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}/reauth`, {
-      method: 'POST',
-    });
-    return handleResponse<OAuthStartResponse>(res, 'Failed to start reauthentication');
+    return request<AccountTestResponse>(
+      `/accounts/${encodeURIComponent(accountId)}/test`,
+      { method: 'POST' },
+      'Failed to test account',
+    );
   },
 
   async resetAccountCooldown(accountId: string): Promise<{ status: string; account_id: string }> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}/reset-cooldown`, {
-      method: 'POST',
-    });
-    return handleResponse<{ status: string; account_id: string }>(res, 'Failed to reset cooldown');
+    return request<{ status: string; account_id: string }>(
+      `/accounts/${encodeURIComponent(accountId)}/reset-cooldown`,
+      { method: 'POST' },
+      'Failed to reset cooldown',
+    );
   },
 
   async removeAccount(accountId: string): Promise<{ status: string; account_id: string }> {
-    const res = await fetch(`${BASE_URL}/accounts/${encodeURIComponent(accountId)}`, {
-      method: 'DELETE',
-    });
-    return handleResponse<{ status: string; account_id: string }>(res, 'Failed to remove account');
+    return request<{ status: string; account_id: string }>(
+      `/accounts/${encodeURIComponent(accountId)}`,
+      { method: 'DELETE' },
+      'Failed to remove account',
+    );
   },
 
   async resetProviderVault(): Promise<VaultResetResponse> {
-    const res = await fetch(`${BASE_URL}/vault/reset`, {
-      method: 'POST',
-    });
-    return handleResponse<VaultResetResponse>(res, 'Failed to reset provider vault');
+    return request<VaultResetResponse>(
+      '/vault/reset',
+      { method: 'POST' },
+      'Failed to reset provider vault',
+    );
   },
 };

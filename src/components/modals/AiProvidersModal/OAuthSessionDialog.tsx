@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { aiRoutesClient } from '@/lib/aiRoutesClient';
 import { useInvalidateAiCaches } from '@/hooks/useAiRoutes';
+import { useModalFocusTrap } from '@/hooks/useModalFocusTrap';
 import { openLink } from '@/lib/openLink';
 import type { OAuthPollResponse, OAuthStartResponse } from '@/types/aiRoutes';
 
@@ -50,6 +51,7 @@ export function OAuthSessionDialog({
   const [codeCopied, setCodeCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
 
+  const modalRef = useRef<HTMLDivElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionRef = useRef<OAuthStartResponse | null>(null);
@@ -82,8 +84,6 @@ export function OAuthSessionDialog({
       setSession(startRes);
       setRemainingSecs(startRes.expires_in || 900);
       setPollStatus('pending');
-
-
     } catch (err) {
       setPollStatus('failed');
       setErrorMsg(err instanceof Error ? err.message : 'Failed to initiate OAuth flow');
@@ -170,22 +170,38 @@ export function OAuthSessionDialog({
     };
   }, [pollStatus, cleanupTimers]);
 
-  const handleCancel = async () => {
-    if (!session?.state) {
+  const handleCancel = useCallback(async () => {
+    if (!sessionRef.current?.state) {
       onClose();
       return;
     }
     setIsCancelling(true);
     cleanupTimers();
     try {
-      await aiRoutesClient.cancelOAuth(session.state);
+      await aiRoutesClient.cancelOAuth(sessionRef.current.state);
       setPollStatus('cancelled');
     } catch {
       setPollStatus('cancelled');
     } finally {
       setIsCancelling(false);
     }
-  };
+  }, [cleanupTimers, onClose]);
+
+  const handleDismiss = useCallback(() => {
+    if (sessionRef.current?.state && (pollStatus === 'pending' || pollStatus === 'reconciling')) {
+      cleanupTimers();
+      void aiRoutesClient.cancelOAuth(sessionRef.current.state).catch(() => {});
+    }
+    onClose();
+  }, [pollStatus, cleanupTimers, onClose]);
+
+  // Modal focus trap & scoped Escape handling
+  useModalFocusTrap({
+    id: 'oauth-session-dialog',
+    isOpen,
+    onClose: handleDismiss,
+    containerRef: modalRef,
+  });
 
   const handleCopyCode = () => {
     if (session?.user_code && typeof navigator !== 'undefined') {
@@ -215,10 +231,15 @@ export function OAuthSessionDialog({
 
   return (
     <div
+      ref={modalRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-labelledby="oauth-dialog-title"
-      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150 select-none"
+      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150 select-none outline-none"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
     >
       <div className="relative w-full max-w-lg bg-[#0c0c0f] border border-[#27272a] rounded-lg shadow-2xl p-5 flex flex-col gap-4 text-zinc-200">
         {/* Header */}
@@ -233,9 +254,9 @@ export function OAuthSessionDialog({
           </div>
           <button
             type="button"
-            onClick={pollStatus === 'pending' ? handleCancel : onClose}
+            onClick={handleDismiss}
             aria-label="Close OAuth dialog"
-            className="text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition-colors"
+            className="text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>

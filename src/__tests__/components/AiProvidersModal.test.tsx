@@ -2,7 +2,11 @@ import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/msw-server';
-import { render, screen, fireEvent, waitFor } from '../utils/renderWithProviders';
+import { render, screen, fireEvent, waitFor, createTestQueryClient } from '../utils/renderWithProviders';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { VaultResetModal } from '@/components/modals/AiProvidersModal/VaultResetModal';
+import { OAuthAccountCard } from '@/components/modals/AiProvidersModal/OAuthAccountCard';
+import { useUpdateRouteSettingsMutation } from '@/hooks/useAiRoutes';
 import { AiProvidersModal } from '@/components/modals/AiProvidersModal';
 import { CommandBar } from '@/components/CommandBar';
 import { SettingsModal } from '@/components/modals/SettingsModal';
@@ -15,7 +19,7 @@ import {
   activeCommandAtom,
   authAtom,
 } from '@/store/terminalStore';
-import type { RoutesListResponse } from '@/types/aiRoutes';
+import type { RoutesListResponse, CredentialSummary } from '@/types/aiRoutes';
 
 const baseMockRoutesResponse: RoutesListResponse = {
   routes: [
@@ -756,10 +760,11 @@ describe('AiProvidersModal', () => {
     expect(screen.getByText(/AI providers & OAuth accounts/i)).toBeInTheDocument();
   });
 
-  it('opens AiProvidersModal from SettingsModal AI Provider card', async () => {
+  it('opens AiProvidersModal from SettingsModal AI Provider card and closes SettingsModal', async () => {
+    const handleCloseSettings = vi.fn();
     render(
       <SavedLayoutsSyncProvider>
-        <SettingsModal isOpen={true} onClose={vi.fn()} initialTab="intelligence" />
+        <SettingsModal isOpen={true} onClose={handleCloseSettings} initialTab="intelligence" />
       </SavedLayoutsSyncProvider>,
       {
         wrapperProps: {
@@ -775,6 +780,8 @@ describe('AiProvidersModal', () => {
     const manageBtn = await screen.findByRole('button', { name: /MANAGE PROVIDERS →/i });
     expect(manageBtn).toBeInTheDocument();
     fireEvent.click(manageBtn);
+
+    expect(handleCloseSettings).toHaveBeenCalled();
   });
 
   // 7. Security / No-Secret DOM Assertions
@@ -797,5 +804,201 @@ describe('AiProvidersModal', () => {
     for (const el of identities) {
       expect(el.textContent).toContain('***');
     }
+  });
+
+  // 8. Fix Round Regression Tests
+  it('VaultResetModal clears typed confirmation on close/cancel and requires fresh confirmation on reopen', async () => {
+    const handleClose = vi.fn();
+    const { rerender } = render(<VaultResetModal isOpen={true} onClose={handleClose} />);
+
+    const input = screen.getByPlaceholderText('RESET') as HTMLInputElement;
+    const confirmBtn = screen.getByTestId('confirm-vault-reset-btn');
+
+    expect(confirmBtn).toBeDisabled();
+
+    // Type RESET
+    fireEvent.change(input, { target: { value: 'RESET' } });
+    expect(confirmBtn).not.toBeDisabled();
+
+    // Click Cancel
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(handleClose).toHaveBeenCalled();
+
+    // Simulate modal closing then reopening
+    rerender(<VaultResetModal isOpen={false} onClose={handleClose} />);
+    rerender(<VaultResetModal isOpen={true} onClose={handleClose} />);
+
+    const reopenedInput = screen.getByPlaceholderText('RESET') as HTMLInputElement;
+    const reopenedBtn = screen.getByTestId('confirm-vault-reset-btn');
+
+    expect(reopenedInput.value).toBe('');
+    expect(reopenedBtn).toBeDisabled();
+  });
+
+  it('handles Escape key hierarchically so exactly the topmost dialog closes without closing parent', async () => {
+    const handleCloseParent = vi.fn();
+    render(<AiProvidersModal isOpen={true} onClose={handleCloseParent} />);
+
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    // 1. Open nested VaultResetModal via Reset button
+    const resetTrigger = screen.getByRole('button', { name: /Reset provider vault/i });
+    fireEvent.click(resetTrigger);
+
+    expect(await screen.findByRole('dialog', { name: /RESET PROVIDER VAULT/i })).toBeInTheDocument();
+
+    // Press Escape - should close ONLY VaultResetModal
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /RESET PROVIDER VAULT/i })).not.toBeInTheDocument();
+    });
+    // Parent modal must STILL be open!
+    expect(handleCloseParent).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: /AI PROVIDER ROUTES & OAUTH MANAGER/i })).toBeInTheDocument();
+
+    // 2. Open nested OAuthSessionDialog via Add (Browser)
+    const addBrowserBtn = screen.getAllByText('ADD (BROWSER)')[0];
+    fireEvent.click(addBrowserBtn);
+
+    expect(await screen.findByRole('dialog', { name: /Connect Codex/i })).toBeInTheDocument();
+
+    // Press Escape - should close ONLY OAuthSessionDialog
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Connect Codex/i })).not.toBeInTheDocument();
+    });
+    // Parent modal must STILL be open!
+    expect(handleCloseParent).not.toHaveBeenCalled();
+
+    // 3. Now press Escape with no sub-dialogs open - closes parent AiProvidersModal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(handleCloseParent).toHaveBeenCalledTimes(1);
+  });
+
+  it('traps keyboard focus within the topmost active dialog and cycles with Tab and Shift+Tab', async () => {
+    render(<VaultResetModal isOpen={true} onClose={vi.fn()} />);
+
+    const dialog = screen.getByRole('dialog', { name: /RESET PROVIDER VAULT/i });
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')
+    );
+
+    expect(focusable.length).toBeGreaterThan(1);
+    const firstEl = focusable[0];
+    const lastEl = focusable[focusable.length - 1];
+
+    // Focus last element and press Tab -> cycles to first element
+    lastEl.focus();
+    expect(document.activeElement).toBe(lastEl);
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: false });
+    expect(document.activeElement).toBe(firstEl);
+
+    // Focus first element and press Shift+Tab -> cycles to last element
+    firstEl.focus();
+    expect(document.activeElement).toBe(firstEl);
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(lastEl);
+  });
+
+  it('synchronizes priority and weight from prop updates and commits immediately on Enter key', async () => {
+    const patchSpy = vi.fn();
+    server.use(
+      http.patch('/api/py/ai/routes/accounts/:accountId', async ({ params, request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        patchSpy(params.accountId, body);
+        return HttpResponse.json({ id: params.accountId, ...body });
+      })
+    );
+
+    const mockAccount: CredentialSummary = {
+      id: 'acc-test-sync',
+      route_id: 'oauth:codex',
+      kind: 'oauth',
+      masked_identity: 'user@openai.com',
+      priority: 1,
+      weight: 2,
+      enabled: true,
+      status: 'active',
+      cooldown: null,
+      last_redacted_error: null,
+      created_at: null,
+      updated_at: null,
+    };
+
+    const { rerender } = render(
+      <OAuthAccountCard account={mockAccount} providerLabel="Codex" onReauth={vi.fn()} />
+    );
+
+    const priorityInput = screen.getByLabelText(/Account Priority/i) as HTMLInputElement;
+    const weightInput = screen.getByLabelText(/Account Weight/i) as HTMLInputElement;
+
+    expect(priorityInput.value).toBe('1');
+    expect(weightInput.value).toBe('2');
+
+    // 1. Rerender with updated props (simulating React Query refetch)
+    rerender(
+      <OAuthAccountCard
+        account={{ ...mockAccount, priority: 5, weight: 10 }}
+        providerLabel="Codex"
+        onReauth={vi.fn()}
+      />
+    );
+
+    expect(priorityInput.value).toBe('5');
+    expect(weightInput.value).toBe('10');
+
+    // 2. Type new priority and commit with Enter key
+    fireEvent.change(priorityInput, { target: { value: '8' } });
+    fireEvent.keyDown(priorityInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(patchSpy).toHaveBeenCalledWith('acc-test-sync', { priority: 8 });
+    });
+
+    // 3. Type new weight and commit with Enter key
+    fireEvent.change(weightInput, { target: { value: '15' } });
+    fireEvent.keyDown(weightInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(patchSpy).toHaveBeenCalledWith('acc-test-sync', { weight: 15 });
+    });
+  });
+
+  it('invalidates ai routes, ai status, ai catalog, and system-config caches on route settings mutation', async () => {
+    const queryClient = createTestQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    server.use(
+      http.patch('/api/py/ai/routes/settings', async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ status: 'updated', updated_settings: body });
+      })
+    );
+
+    const TestComponent = () => {
+      const mutation = useUpdateRouteSettingsMutation();
+      return (
+        <button type="button" onClick={() => mutation.mutate({ strategy: 'round-robin' })}>
+          Update Settings
+        </button>
+      );
+    };
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TestComponent />
+      </QueryClientProvider>
+    );
+
+    fireEvent.click(screen.getByText('Update Settings'));
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ai', 'routes'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ai', 'status'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['ai', 'catalog'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['system-config'] });
+    });
   });
 });

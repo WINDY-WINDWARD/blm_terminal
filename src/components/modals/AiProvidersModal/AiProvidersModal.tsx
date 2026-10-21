@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useCallback } from 'react';
+import React, { useRef, useCallback } from 'react';
 import { useAtom } from 'jotai';
 import { Cpu, Globe, Key, Loader2, RefreshCw, Server, X } from 'lucide-react';
 import { aiProvidersModalTabAtom, type AiProvidersTabId } from '@/store/terminalStore';
 import { useAiRoutesQuery } from '@/hooks/useAiRoutes';
+import { useModalFocusTrap } from '@/hooks/useModalFocusTrap';
 import { TopSummary } from './TopSummary';
 import { OAuthAccountsTab } from './OAuthAccountsTab';
 import { CustomEndpointsTabPlaceholder } from './CustomEndpointsTabPlaceholder';
@@ -24,31 +25,30 @@ const TABS: { id: AiProvidersTabId; label: string; icon: React.ReactNode }[] = [
 export function AiProvidersModal({ isOpen, onClose }: AiProvidersModalProps) {
   const [activeTab, setActiveTab] = useAtom(aiProvidersModalTabAtom);
   const { data, isLoading, isError, error, refetch } = useAiRoutesQuery();
+  const modalRef = useRef<HTMLDivElement>(null);
 
   const handleClose = useCallback(() => {
     onClose();
   }, [onClose]);
 
-  // Escape key handler
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        handleClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, handleClose]);
+  // Modal focus trap & scoped Escape handling
+  useModalFocusTrap({
+    id: 'ai-providers-modal',
+    isOpen,
+    onClose: handleClose,
+    containerRef: modalRef,
+  });
 
   if (!isOpen) return null;
 
   return (
     <div
+      ref={modalRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-providers-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 select-none outline-none"
       onClick={(e) => {
         if (e.target === e.currentTarget) handleClose();
       }}

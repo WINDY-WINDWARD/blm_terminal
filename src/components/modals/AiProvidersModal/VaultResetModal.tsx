@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AlertTriangle, Loader2, RefreshCw, X } from 'lucide-react';
 import { useResetVaultMutation } from '@/hooks/useAiRoutes';
+import { useModalFocusTrap } from '@/hooks/useModalFocusTrap';
 
 interface VaultResetModalProps {
   isOpen: boolean;
@@ -13,6 +14,31 @@ export function VaultResetModal({ isOpen, onClose }: VaultResetModalProps) {
   const resetVault = useResetVaultMutation();
   const [confirmText, setConfirmText] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleClose = useCallback(() => {
+    if (resetVault.isPending) return;
+    setConfirmText('');
+    setErrorMsg(null);
+    onClose();
+  }, [resetVault.isPending, onClose]);
+
+  // Always reset input and error when modal visibility changes to false
+  useEffect(() => {
+    if (!isOpen) {
+      setConfirmText('');
+      setErrorMsg(null);
+    }
+  }, [isOpen]);
+
+  useModalFocusTrap({
+    id: 'vault-reset-modal',
+    isOpen,
+    onClose: handleClose,
+    containerRef: modalRef,
+    initialFocusRef: inputRef,
+  });
 
   if (!isOpen) return null;
 
@@ -21,6 +47,7 @@ export function VaultResetModal({ isOpen, onClose }: VaultResetModalProps) {
     try {
       await resetVault.mutateAsync();
       setConfirmText('');
+      setErrorMsg(null);
       onClose();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Vault reset failed');
@@ -31,12 +58,14 @@ export function VaultResetModal({ isOpen, onClose }: VaultResetModalProps) {
 
   return (
     <div
+      ref={modalRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-labelledby="vault-reset-title"
-      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150 select-none"
+      className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150 select-none outline-none"
       onClick={(e) => {
-        if (e.target === e.currentTarget && !resetVault.isPending) onClose();
+        if (e.target === e.currentTarget && !resetVault.isPending) handleClose();
       }}
     >
       <div className="relative w-full max-w-lg bg-[#0c0c0f] border border-rose-900/60 rounded-lg shadow-2xl p-5 flex flex-col gap-4 text-zinc-200">
@@ -49,10 +78,10 @@ export function VaultResetModal({ isOpen, onClose }: VaultResetModalProps) {
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={resetVault.isPending}
             aria-label="Close reset modal"
-            className="text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition-colors"
+            className="text-zinc-400 hover:text-white p-1 rounded hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -87,6 +116,7 @@ export function VaultResetModal({ isOpen, onClose }: VaultResetModalProps) {
               Type <span className="text-rose-400 font-bold">RESET</span> to confirm:
             </label>
             <input
+              ref={inputRef}
               id="confirm-reset-input"
               type="text"
               value={confirmText}
@@ -101,7 +131,7 @@ export function VaultResetModal({ isOpen, onClose }: VaultResetModalProps) {
         <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#27272a]">
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={resetVault.isPending}
             className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs border border-zinc-700 transition-colors cursor-pointer"
           >
