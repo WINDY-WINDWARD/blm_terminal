@@ -75,7 +75,7 @@
 
 ## 5. Scenario: Trace Attribution & Route Diagnostics
 
-1. In BLM Terminal, navigate to **AI Diagnostics** or **Route Diagnostics** (or query `GET /api/ai/diagnostics/routes`).
+1. In BLM Terminal, navigate to **AI Diagnostics** or **Route Diagnostics** (or query `GET /api/ai/routes/diagnostics`).
 2. **Verification:**
    - [ ] The recent requests are listed under Proxy Traces.
    - [ ] Each trace contains:

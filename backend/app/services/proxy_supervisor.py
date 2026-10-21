@@ -241,9 +241,9 @@ oauth:
                     m_name = m.get("name") if isinstance(m, dict) else str(m)
                     custom_lines.append(f'      - name: "{m_name}"')
 
-            api_keys = ep.get("api-keys") or ep.get("api_keys")
+            api_keys = ep.get("api-key-entries") or ep.get("api-keys") or ep.get("api_keys")
             if api_keys and isinstance(api_keys, list):
-                custom_lines.append("    api-keys:")
+                custom_lines.append("    api-key-entries:")
                 for ak in api_keys:
                     if isinstance(ak, dict):
                         k_val = ak.get("api-key") or ak.get("api_key") or ""
@@ -480,6 +480,7 @@ async def materialize_custom_endpoints(
                     "headers": headers,
                     "models": [{"name": m} for m in models],
                     "api-keys": api_keys,
+                    "api-key-entries": api_keys,
                 })
             return out
 

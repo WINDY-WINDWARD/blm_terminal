@@ -1,9 +1,9 @@
-from pathlib import Path
 """Mocked proxy selection policy tests for OAuth priority/weight, sticky sessions, cooldowns, and traces."""
 
 import asyncio
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 from typing import Any, AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 

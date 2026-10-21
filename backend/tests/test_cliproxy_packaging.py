@@ -138,7 +138,7 @@ def test_license_file_content():
     assert "Router-For.ME" in license_text
 
 def test_electron_builder_packages_cliproxyapi_and_notice():
-    """Ensure electron-builder.json includes CLIProxyAPI binary and notices for both Windows and macOS."""
+    """Validate electron-builder.json configuration mapping (not built artifacts) packages CLIProxyAPI binary and notices for both Windows and macOS."""
     eb_path = REPO_ROOT / "electron-builder.json"
     assert eb_path.exists(), "electron-builder.json missing"
     eb_config = json.loads(eb_path.read_text(encoding="utf-8"))

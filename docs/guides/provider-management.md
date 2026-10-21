@@ -33,9 +33,9 @@ BLM Terminal supports three distinct route families. Every model in the applicat
 ┌─────────────────┐             ┌─────────────────────┐          ┌──────────────────────┐
 │  oauth:<prov>   │             │   endpoint:<uuid>   │          │    direct:<prov>     │
 ├─────────────────┤             ├─────────────────────┤          ├──────────────────────┤
-│ • oauth:codex   │             │ • Custom OpenAI-    │          │ • direct:zen-free    │
-│ • oauth:antigravity           │   compatible gateway│          │ • direct:openrouter  │
-│                 │             │ • Multi-key pool    │          │ • direct:groq        │
+│ • 8 OAuth provs │             │ • Custom OpenAI-    │          │ • direct:zen-free    │
+│   codex,claude, │             │   compatible gateway│          │ • direct:openrouter  │
+│   xai,kimi,etc. │             │ • Multi-key pool    │          │ • direct:groq        │
 │ Via CLIProxyAPI │             │ • Custom headers    │          │ • direct:openai      │
 │ sidecar proxy   │             │                     │          │ • direct:anthropic   │
 │ (session affinity             │ Via CLIProxyAPI     │          │ • direct:gemini      │
@@ -53,8 +53,8 @@ BLM Terminal supports three distinct route families. Every model in the applicat
 ```
 
 ### 1.1 `oauth:<provider>` (CLIProxyAPI Sidecar)
-- **Route ID Format:** `oauth:<provider>` (e.g. `oauth:codex`, `oauth:antigravity`).
-- **Target Providers:** OAuth-authenticated services (OpenAI Codex, Antigravity/Google).
+- **Route ID Format:** `oauth:<provider>` (e.g. `oauth:codex`, `oauth:antigravity`, `oauth:claude`, `oauth:xai`, `oauth:kimi`, `oauth:kimi-ai`, `oauth:meta`, `oauth:devin`).
+- **Target Providers:** All supported OAuth services: `codex`, `antigravity`, `claude`, `xai`, `kimi`, `kimi-ai`, `meta`, `devin`.
 - **Execution Path:** Routes through the local CLIProxyAPI sidecar.
 - **Model URI Example:** `blm:oauth:codex/gpt-4o`, `blm:oauth:antigravity/claude-3-5-sonnet`.
 - **Capabilities:** Multi-account rotation, automatic OAuth refresh token handling, priority/weight assignment, cooldown timers on rate limits.
@@ -79,23 +79,23 @@ BLM Terminal supports three distinct route families. Every model in the applicat
 OAuth routes allow users to connect multiple accounts per provider. The CLIProxyAPI sidecar manages token refresh, account switching, and rate limit cooldowns.
 
 ### 2.1 Account Lifecycle & Authorization
-1. **Initiation:** Client calls `POST /api/ai/oauth/{provider}/start`. The backend queries CLIProxyAPI's `/v8/management/oauth/auth-url` to generate a state token and browser authorization URL.
+1. **Initiation:** Client calls `POST /api/ai/routes/oauth/start` with JSON body `{"provider": "<provider>"}`. The backend queries CLIProxyAPI's `/v8/management/oauth/auth-url` to generate a state token and browser authorization URL.
 2. **Browser Auth:** User approves access in their web browser.
 3. **Callback Submission:**
    - **Local Callback:** CLIProxyAPI captures the loopback redirect on its dedicated OAuth port.
-   - **Manual Callback:** In headless or restricted environments, the user inputs the authorization code or redirect URL in the `OAuthSessionDialog`. The client submits this via `POST /api/ai/oauth/callback`.
-4. **Polling & Reconciliation:** The client polls `GET /api/ai/oauth/status?state={state}`. Once authenticated, the credential tokens are encrypted in `ProviderVault`, CLIProxyAPI's configuration is updated, and the account status is set to `active`.
-5. **Cancellation:** Unfinished sessions are cancelled via `DELETE /api/ai/oauth/session?state={state}`, preventing leaked state in CLIProxyAPI.
+   - **Manual Callback:** In headless or restricted environments, the user inputs the authorization code or redirect URL in the `OAuthSessionDialog`. The client submits this via `POST /api/ai/routes/oauth/callback`.
+4. **Polling & Reconciliation:** The client polls `GET /api/ai/routes/oauth/poll?state={state}`. Once authenticated, the credential tokens are encrypted in `ProviderVault`, CLIProxyAPI's configuration is updated, and the account status is set to `active`.
+5. **Cancellation:** Unfinished sessions are cancelled via `POST /api/ai/routes/oauth/cancel` with JSON body `{"state": "<state>"}`, preventing leaked state in CLIProxyAPI.
 
 ### 2.2 Account Selection Policies & Sticky Sessions
-- **Priority & Weight:** Each account has an integer `priority` (lower numbers tried first) and `weight` (proportional distribution among same-priority accounts). These can be patched via `PATCH /api/ai/accounts/{account_id}`.
+- **Priority & Weight:** Each account has an integer `priority` (lower numbers tried first) and `weight` (proportional distribution among same-priority accounts). These can be patched via `PATCH /api/ai/routes/accounts/{account_id}`.
 - **Session Affinity (`X-Session-Id`):**
   - BLM generates and sends a sticky session header `X-Session-Id: {session_id}` on every inference request through the proxy.
   - CLIProxyAPI enforces `session-affinity: true` with `session-affinity-ttl: "1h"`. All turns within a multi-turn chat session stick to the same upstream account, preventing context fragmentation and session thrashing.
 - **Cooldown Handling:**
   - When an account receives a 429 (Rate Limit) or 401 (Auth Expired), CLIProxyAPI places the credential into cooldown.
   - Cooldown states are backed up into the `ProviderVault` cooldown snapshot table (`save-cooldown-status: true`).
-  - **Manual Cooldown Reset:** Users can clear an account's cooldown immediately using `POST /api/ai/accounts/{account_id}/reset-cooldown`. This invokes CLIProxyAPI's `/v8/management/routing/cooldown/reset` and removes the snapshot from the vault.
+  - **Manual Cooldown Reset:** Users can clear an account's cooldown immediately using `POST /api/ai/routes/accounts/{account_id}/reset-cooldown`. This invokes CLIProxyAPI's `/v8/management/routing/cooldown/reset` and removes the snapshot from the vault.
 
 ---
 
@@ -104,7 +104,7 @@ OAuth routes allow users to connect multiple accounts per provider. The CLIProxy
 Custom endpoints provide connectivity to any OpenAI-compatible HTTP inference gateway while enforcing strict client-side security policies.
 
 ### 3.1 URL Validation & Warning Signals
-During creation or modification (`POST /api/ai/endpoints` or `PUT /api/ai/endpoints/{endpoint_id}`), URLs are rigorously validated:
+During creation or modification (`POST /api/ai/routes/endpoints` or `PATCH /api/ai/routes/endpoints/{endpoint_id}`), URLs are rigorously validated:
 - **Hard Rejection:** Schemes other than `http` or `https` are immediately rejected with HTTP 422. Missing hostnames or port violations fail closed.
 - **Advisory Security Warnings (`warnings: string[]`):**
   - **Unencrypted HTTP:** Emits a warning that credentials and prompts will travel in plaintext over remote networks.
@@ -127,7 +127,7 @@ openai-compatibility:
       "X-Client": "BLM-Terminal"
     models:
       - name: "llama-3.3-70b-instruct"
-    api-keys:
+    api-key-entries:
       - api-key: "sk-primary-key"
         priority: 1
         weight: 1
@@ -160,7 +160,7 @@ When the operating system keyring is unavailable (e.g., locked session, headless
    - Proxy-based routes (`oauth:*`, `endpoint:*`) fail closed with HTTP 503 (`Vault is unavailable; unlock OS keyring`).
 3. **Recovery Procedures:**
    - **Unlock OS Keyring:** Ensure user session is logged in and keyring daemon is unlocked.
-   - **Provider-Scoped Vault Reset:** If the keyring key was permanently lost, users can call `POST /api/ai/vault/reset`. This wipes only AI provider credentials in the vault without disturbing user trading layouts, preferences, or paper trading databases.
+   - **Provider-Scoped Vault Reset:** If the keyring key was permanently lost, users can call `POST /api/ai/routes/vault/reset`. This wipes only AI provider credentials in the vault without disturbing user trading layouts, preferences, or paper trading databases.
 
 ### 4.3 Secret Leakage Safeguards
 - **Zero Secrets in URLs:** All credentials pass via headers or request bodies. No API key is ever accepted via query parameter.
@@ -217,7 +217,7 @@ Application Start
 Upgrading from earlier BLM Terminal releases automatically migrates legacy model settings without user intervention.
 
 ### 6.1 Database & Token Migration (`legacy_migration.py`)
-- **Execution:** Runs automatically during FastAPI application startup (`@app.on_event("startup")`).
+- **Execution:** Runs automatically during FastAPI application startup within the lifespan context manager (`backend/main.py` uses `lifespan` + `run_all_legacy_migrations`).
 - **Codex Migration:** Extracts legacy access tokens and refresh tokens from `SystemConfig` and inserts them into `ProviderVault` under `oauth_auth/codex`.
 - **Antigravity Migration:** Detects legacy token files on disk, verifies token validity, and migrates them into `ProviderVault`.
 - **Model Migration:** Scans active chat sessions and system configuration. Maps unnamespaced legacy model strings (e.g. `gpt-4o`, `claude-3-5-sonnet`) to the qualified `blm:<active_route_id>/<upstream_model>` format using `map_legacy_model_to_route()`.
@@ -229,8 +229,8 @@ Upgrading from earlier BLM Terminal releases automatically migrates legacy model
 
 | Symptom | Probable Cause | Resolution |
 |---|---|---|
-| **HTTP 503: "Vault is unavailable"** | OS Keyring is locked or inaccessible | Log into desktop session; ensure GNOME Keyring / macOS Keychain is unlocked. In extreme cases, trigger `POST /api/ai/vault/reset`. |
-| **`ReadinessTimeoutError` on startup** | Port conflict or missing CLIProxyAPI binary | Check if port `8317` is blocked; verify `vendor/cliproxyapi/runtime/cliproxyapi.exe` exists and has execute permissions. |
+| **HTTP 503: "Vault is unavailable"** | OS Keyring is locked or inaccessible | Log into desktop session; ensure GNOME Keyring / macOS Keychain is unlocked. In extreme cases, trigger `POST /api/ai/routes/vault/reset`. |
+| **`ReadinessTimeoutError` on startup** | Port conflict or missing CLIProxyAPI binary | Production allocates an ephemeral loopback port; read the bound port from logs or `/api/ai/routes/diagnostics`; verify `vendor/cliproxyapi/runtime/cliproxyapi.exe` exists and has execute permissions. |
 | **HTTP 401 / 429 on OAuth Route** | OAuth token expired or upstream rate limit | Open `AiProvidersModal`, click **Re-authenticate** for the affected account, or click **Reset Cooldown** if the limit has elapsed. |
 | **Tool calls not executing** | Active route model does not support tool calling | Ensure active route is set to a model with function calling support (e.g. `gpt-4o`, `claude-3.5-sonnet`). |
-| **Missing trace attribution in diagnostics** | Upstream or proxy omitted trace header | Verify proxy response includes `X-CPA-TRACE-ID`; check `GET /api/ai/diagnostics/routes` for recorded trace ring entries. |
+| **Missing trace attribution in diagnostics** | Upstream or proxy omitted trace header | Verify proxy response includes `X-CPA-TRACE-ID`; check `GET /api/ai/routes/diagnostics` for recorded trace ring entries. |
