@@ -14,6 +14,8 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import hashlib
+from pathlib import Path
 import logging
 import re
 import secrets
@@ -28,7 +30,8 @@ from app.models.ai_provider import AIProviderCredential, AIProviderRoute
 from app.services.endpoint_validator import mask_identity
 from app.services.provider_vault import ProviderVault, get_provider_vault
 from app.services.proxy_supervisor import get_proxy_supervisor
-from app.services.route_registry import OAUTH_PROVIDERS
+from app.services.route_registry import OAUTH_PROVIDERS, compute_oauth_proxy_prefix
+from app.services.proxy_supervisor import set_file_permissions_0600
 
 logger = logging.getLogger("blm.oauth_session_manager")
 
@@ -68,6 +71,7 @@ class PendingOAuthSession:
     result: dict[str, Any] | None = None
     error: str | None = None
     reconcile_event: asyncio.Event = field(default_factory=asyncio.Event)
+    auth_files: dict[str, str] = field(default_factory=dict)
 
 
 class OAuthSessionManager:
@@ -77,6 +81,7 @@ class OAuthSessionManager:
         self._ttl = ttl
         self._sessions: dict[str, PendingOAuthSession] = {}
         self._lock = asyncio.Lock()
+        self._reconcile_lock = asyncio.Lock()
 
     async def start_session(
         self,
@@ -95,6 +100,7 @@ class OAuthSessionManager:
 
         # Check vault availability
         vault = get_provider_vault()
+        await vault.get_state()
         if not vault.is_available:
             raise RuntimeError(
                 f"Provider vault is currently unavailable (state: {vault.state.value}). Cannot start OAuth."
@@ -138,6 +144,8 @@ class OAuthSessionManager:
         if flow == "device":
             params["flow"] = "device"
 
+        auth_files = self._snapshot_auth_files(supervisor.auth_dir)
+
         # Start via proxy management API
         try:
             proxy_resp = await mgmt.start_oauth(prov, params=params)
@@ -149,7 +157,7 @@ class OAuthSessionManager:
         expires_in = float(proxy_resp.get("expires_in") or self._ttl)
         now = time.time()
 
-        auth_url = proxy_resp.get("auth_url") or proxy_resp.get("url")
+        auth_url = proxy_resp.get("auth_url") or proxy_resp.get("url") or proxy_resp.get("authorization_url")
         user_code = proxy_resp.get("user_code")
         verification_uri = proxy_resp.get("verification_uri") or proxy_resp.get("verification_url")
         device_code = proxy_resp.get("device_code")
@@ -168,6 +176,7 @@ class OAuthSessionManager:
             verification_uri=verification_uri,
             interval=interval,
             status="pending",
+            auth_files=auth_files,
         )
 
         async with self._lock:
@@ -204,7 +213,7 @@ class OAuthSessionManager:
             async with self._lock:
                 session.status = "expired"
             supervisor = get_proxy_supervisor()
-            if supervisor.is_running():
+            if supervisor.is_running:
                 try:
                     await supervisor.get_management_client().cancel_oauth_session(state)
                 except Exception:
@@ -249,13 +258,13 @@ class OAuthSessionManager:
 
         # 6. Poll supervisor management client
         supervisor = get_proxy_supervisor()
-        if not supervisor.is_running():
+        if not supervisor.is_running:
             return {"status": "pending", "message": "Proxy is starting..."}
 
         try:
             status_data = await supervisor.get_management_client().get_oauth_status(state)
         except Exception as exc:
-            logger.debug("Proxy management get_oauth_status returned error for state %s: %s", state, exc)
+            logger.debug("OAuth status request failed (%s)", type(exc).__name__)
             return {"status": "pending"}
 
         p_status = str(status_data.get("status", "pending")).lower()
@@ -303,7 +312,7 @@ class OAuthSessionManager:
 
             return fail_result
 
-        if p_status not in ("completed", "success", "done"):
+        if p_status != "ok":
             return {
                 "status": "pending",
                 "interval": session.interval,
@@ -360,177 +369,100 @@ class OAuthSessionManager:
         finally:
             session.reconcile_event.set()
 
+    @staticmethod
+    def _snapshot_auth_files(auth_dir: Path | None) -> dict[str, str]:
+        if auth_dir is None or not auth_dir.exists():
+            return {}
+        return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in auth_dir.glob("*.json") if not path.is_symlink()}
+
     async def _do_reconcile(
-        self,
-        session: PendingOAuthSession,
-        status_data: dict[str, Any],
-        s: AsyncSession,
+        self, session: PendingOAuthSession, status_data: dict[str, Any], s: AsyncSession,
     ) -> dict[str, Any]:
-        """Perform database identity reconciliation and store credentials in vault."""
-        route_id = f"oauth:{session.provider}"
-        # Extract raw identity safely without logging tokens
-        raw_identity = (
-            status_data.get("identity")
-            or status_data.get("email")
-            or status_data.get("user")
-            or status_data.get("credential_name")
-            or f"{session.provider}-account"
-        )
-        new_ident = str(raw_identity).strip().lower()
-        masked = mask_identity(str(raw_identity))
-        vault = get_provider_vault()
-        notice: str | None = None
-        cred: AIProviderCredential
-
-        # Store auth payload in vault
-        auth_payload = status_data.get("auth") or status_data.get("token") or status_data
-        if isinstance(auth_payload, dict):
-            auth_payload = dict(auth_payload)
-            if "identity" not in auth_payload and "email" not in auth_payload and "user" not in auth_payload:
-                auth_payload["identity"] = str(raw_identity)
-
-        if session.replace_account_id:
-            # Query existing account
-            res = await s.execute(
-                select(AIProviderCredential).where(AIProviderCredential.id == session.replace_account_id)
+        async with self._reconcile_lock:
+            if session.status == "cancelled":
+                return {"status": "cancelled"}
+            supervisor = get_proxy_supervisor()
+            auth_dir = supervisor.auth_dir
+            if auth_dir is None:
+                raise RuntimeError("OAuth credential directory is unavailable")
+            candidates = []
+            for filename, digest in self._snapshot_auth_files(auth_dir).items():
+                if session.auth_files.get(filename) == digest:
+                    continue
+                path = auth_dir / filename
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if payload.get("type") == session.provider:
+                    candidates.append((path, payload))
+            if len(candidates) != 1:
+                raise RuntimeError("OAuth completed without one identifiable credential file; retry authorization")
+            path, payload = candidates[0]
+            identity = payload.get("email") or payload.get("account_id") or payload.get("identity") or payload.get("user")
+            if not identity:
+                raise RuntimeError("OAuth credential file has no account identity")
+            route_id = f"oauth:{session.provider}"
+            vault = get_provider_vault()
+            existing = list((await s.execute(select(AIProviderCredential).where(AIProviderCredential.route_id == route_id, AIProviderCredential.kind == "oauth"))).scalars().all())
+            matched = None
+            for credential in existing:
+                stored = await vault.get_oauth_auth(credential.vault_reference.removeprefix("oauth_auth:"))
+                if isinstance(stored, dict):
+                    stored_identity = stored.get("email") or stored.get("account_id") or stored.get("identity") or stored.get("user")
+                    if stored_identity and str(stored_identity).strip().lower() == str(identity).strip().lower():
+                        matched = credential
+                        break
+            notice = None
+            if session.replace_account_id and (matched is None or matched.id != session.replace_account_id):
+                notice = "Reauthentication identity mismatch. Added the authenticated identity as a separate account."
+            credential = matched
+            if credential is None:
+                credential = AIProviderCredential(
+                    id=str(uuid.uuid4()), route_id=route_id, kind="oauth",
+                    vault_reference=f"oauth_auth:{path.name}", proxy_credential_name=path.name,
+                    masked_identity=mask_identity(str(identity)), priority=1, weight=1,
+                    enabled=True, status="active",
+                )
+                s.add(credential)
+            old_name = credential.proxy_credential_name
+            old_reference = credential.vault_reference
+            payload.update(type=session.provider, prefix=compute_oauth_proxy_prefix(route_id),
+                           priority=credential.priority, weight=credential.weight, disabled=not credential.enabled)
+            credential.proxy_credential_name = path.name
+            credential.vault_reference = f"oauth_auth:{path.name}"
+            credential.status = "active" if credential.enabled else "disabled"
+            credential.cooldown = None
+            credential.last_redacted_error = None
+            set_file_permissions_0600(path)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            await vault.set_oauth_auth(path.name, payload)
+            await supervisor.get_management_client().update_credential(
+                path.name, enabled=credential.enabled, priority=credential.priority,
+                weight=credential.weight, prefix=payload["prefix"],
             )
-            existing = res.scalar_one_or_none()
-            if existing is not None:
-                # Identity match check: must match raw stored identity in vault
-                existing_raw = None
-                try:
-                    stored_auth = await vault.get_oauth_auth(existing.vault_reference)
-                    if isinstance(stored_auth, dict):
-                        existing_raw = stored_auth.get("identity") or stored_auth.get("email") or stored_auth.get("user")
-                    elif isinstance(stored_auth, str):
-                        parsed = json.loads(stored_auth)
-                        if isinstance(parsed, dict):
-                            existing_raw = parsed.get("identity") or parsed.get("email") or parsed.get("user")
-                except Exception:
-                    pass
+            await s.commit()
+            if old_name != path.name:
+                old_filename = old_name if old_name.endswith(".json") else f"{old_name}.json"
+                if (auth_dir / old_filename).exists():
+                    await supervisor.get_management_client().delete_credential(old_filename)
+                if supervisor._credential_keys is not None:
+                    supervisor._credential_keys.pop(old_filename, None)
+            if old_reference != credential.vault_reference:
+                await vault.remove_oauth_auth(old_reference.removeprefix("oauth_auth:"))
+            if supervisor._credential_keys is not None:
+                supervisor._credential_keys[path.name] = path.name
+            current_files = self._snapshot_auth_files(auth_dir)
+            async with self._lock:
+                for pending in self._sessions.values():
+                    pending.auth_files[path.name] = current_files[path.name]
+            supervisor.request_sync()
+            return {"status": "completed", "account_id": credential.id, "route_id": route_id,
+                    "masked_identity": credential.masked_identity, "notice": notice}
 
-                if existing_raw:
-                    is_match = (str(existing_raw).strip().lower() == new_ident)
-                else:
-                    is_match = (existing.masked_identity.strip().lower() == new_ident)
-
-                if is_match:
-                    # Replace matched account
-                    cred = existing
-                    cred.status = "active"
-                    cred.cooldown = None
-                    cred.last_redacted_error = None
-                    cred.updated_at = datetime.now(timezone.utc)
-                    await vault.set_oauth_auth(cred.vault_reference, auth_payload)
-                    notice = None
-                else:
-                    # IDENTITY MISMATCH: Do NOT overwrite! Create new account and set notice
-                    cred_id = str(uuid.uuid4())
-                    vault_ref = f"oauth_{session.provider}_{cred_id}"
-                    proxy_name = f"{session.provider}_{cred_id[:8]}"
-                    cred = AIProviderCredential(
-                        id=cred_id,
-                        route_id=route_id,
-                        kind="oauth",
-                        vault_reference=vault_ref,
-                        proxy_credential_name=proxy_name,
-                        masked_identity=masked,
-                        priority=existing.priority,
-                        weight=existing.weight,
-                        enabled=True,
-                        status="active",
-                    )
-                    s.add(cred)
-                    await vault.set_oauth_auth(vault_ref, auth_payload)
-                    notice = (
-                        f"Reauthentication identity mismatch: logged in as '{masked}' "
-                        f"instead of '{existing.masked_identity}'. Added as a new account."
-                    )
-            else:
-                # Existing not found; create new
-                cred_id = str(uuid.uuid4())
-                vault_ref = f"oauth_{session.provider}_{cred_id}"
-                proxy_name = f"{session.provider}_{cred_id[:8]}"
-                cred = AIProviderCredential(
-                    id=cred_id,
-                    route_id=route_id,
-                    kind="oauth",
-                    vault_reference=vault_ref,
-                    proxy_credential_name=proxy_name,
-                    masked_identity=masked,
-                    priority=1,
-                    weight=1,
-                    enabled=True,
-                    status="active",
-                )
-                s.add(cred)
-                await vault.set_oauth_auth(vault_ref, auth_payload)
-        else:
-            # Normal addition (no replacement requested)
-            # Only treat an account as the same if the raw identity matches the identity stored in the vault!
-            # Never overwrite based only on a mask (e.g. alice@example.com vs adam@example.com)!
-            res = await s.execute(
-                select(AIProviderCredential).where(
-                    AIProviderCredential.route_id == route_id,
-                    AIProviderCredential.kind == "oauth",
-                )
-            )
-            existing_creds = res.scalars().all()
-            matched_cred: AIProviderCredential | None = None
-
-            for ec in existing_creds:
-                existing_raw = None
-                try:
-                    stored_auth = await vault.get_oauth_auth(ec.vault_reference)
-                    if isinstance(stored_auth, dict):
-                        existing_raw = stored_auth.get("identity") or stored_auth.get("email") or stored_auth.get("user")
-                    elif isinstance(stored_auth, str):
-                        parsed = json.loads(stored_auth)
-                        if isinstance(parsed, dict):
-                            existing_raw = parsed.get("identity") or parsed.get("email") or parsed.get("user")
-                except Exception:
-                    pass
-                if existing_raw and str(existing_raw).strip().lower() == new_ident:
-                    matched_cred = ec
-                    break
-
-            if matched_cred is not None:
-                cred = matched_cred
-                cred.status = "active"
-                cred.cooldown = None
-                cred.last_redacted_error = None
-                cred.updated_at = datetime.now(timezone.utc)
-                await vault.set_oauth_auth(cred.vault_reference, auth_payload)
-            else:
-                cred_id = str(uuid.uuid4())
-                vault_ref = f"oauth_{session.provider}_{cred_id}"
-                proxy_name = f"{session.provider}_{cred_id[:8]}"
-                cred = AIProviderCredential(
-                    id=cred_id,
-                    route_id=route_id,
-                    kind="oauth",
-                    vault_reference=vault_ref,
-                    proxy_credential_name=proxy_name,
-                    masked_identity=masked,
-                    priority=1,
-                    weight=1,
-                    enabled=True,
-                    status="active",
-                )
-                s.add(cred)
-                await vault.set_oauth_auth(vault_ref, auth_payload)
-
-        await s.commit()
-        supervisor = get_proxy_supervisor()
-        supervisor.request_sync()
-
-        return {
-            "status": "completed",
-            "account_id": cred.id,
-            "route_id": route_id,
-            "masked_identity": cred.masked_identity,
-            "notice": notice,
-        }
+    async def cancel_all_sessions(self) -> None:
+        for state, session in list(self._sessions.items()):
+            if session.status in ("pending", "reconciling"):
+                await self.cancel_session(state)
+        async with self._reconcile_lock:
+            self._sessions.clear()
 
     async def cancel_session(self, state: str) -> dict[str, str]:
         """Cancel an ongoing OAuth session."""
@@ -540,7 +472,7 @@ class OAuthSessionManager:
                 session.status = "cancelled"
 
         supervisor = get_proxy_supervisor()
-        if supervisor.is_running():
+        if supervisor.is_running:
             try:
                 await supervisor.get_management_client().cancel_oauth_session(state)
             except Exception as exc:
@@ -557,7 +489,7 @@ class OAuthSessionManager:
     ) -> dict[str, Any]:
         """Submit callback payload to proxy supervisor without logging query strings or tokens."""
         supervisor = get_proxy_supervisor()
-        if supervisor.is_running():
+        if supervisor.is_running:
             payload: dict[str, Any] = {"state": state}
             if code:
                 payload["code"] = code

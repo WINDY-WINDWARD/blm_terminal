@@ -713,12 +713,8 @@ async def _resolve_provider_models(provider: str, api_key: str = "") -> list[dic
 
     # If route ID supplied
     if prov.startswith("oauth:"):
-        provider_name = prov.split(":", 1)[1]
-        raw_list = await _fetch_direct_models(provider_name, key)
-        return [
-            {"id": format_route_model_id(prov, m["id"]), "label": m.get("label", m["id"])}
-            for m in raw_list
-        ]
+        from app.services.route_catalog import get_route_catalog
+        return await get_route_catalog(prov)
     elif prov.startswith("direct:"):
         direct_name = prov.split(":", 1)[1]
         raw_list = await _fetch_direct_models(direct_name, key)
@@ -773,62 +769,8 @@ async def get_chat_models() -> list[dict]:
     active_route_id = provider_to_route_id(raw_provider)
 
     if active_route_id.startswith("oauth:"):
-        cached_models: list[str] = []
-        supervisor = get_proxy_supervisor()
-        if supervisor.is_running:
-            try:
-                mgmt = supervisor.get_management_client()
-                models = await mgmt.get_credential_models()
-                if models:
-                    cached_models = models
-                    try:
-                        from app.database import AsyncSessionLocal
-                        from app.models.ai_provider import AIProviderRoute
-
-                        async with AsyncSessionLocal() as session:
-                            r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
-                            if r:
-                                cfg = json.loads(r.config_json or "{}")
-                                cfg["cached_models"] = models
-                                r.config_json = json.dumps(cfg)
-                                await session.commit()
-                    except Exception as db_exc:
-                        logger.debug("Failed to cache oauth models: %s", db_exc)
-            except Exception as exc:
-                logger.debug("Failed to fetch credential models from supervisor: %s", exc)
-
-        if not cached_models:
-            try:
-                from app.database import AsyncSessionLocal
-                from app.models.ai_provider import AIProviderRoute
-
-                async with AsyncSessionLocal() as session:
-                    r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
-                    if r and r.config_json:
-                        cfg = json.loads(r.config_json)
-                        cached_models = cfg.get("cached_models") or []
-            except Exception:
-                pass
-
-        if not cached_models:
-            provider = active_route_id.split(":", 1)[1]
-            if provider == "codex":
-                from app.services.codex_auth import CODEX_MODELS
-                cached_models = [m["id"] for m in CODEX_MODELS]
-            elif provider == "antigravity":
-                cached_models = ["gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.8-flash-high"]
-            elif provider in ("claude", "claude-code"):
-                cached_models = [m["id"] for m in ANTHROPIC_MODELS_STATIC]
-            else:
-                cached_models = [DEFAULT_ROUTE_MODELS.get(active_route_id, "default")]
-
-        return [
-            {
-                "id": format_route_model_id(active_route_id, m),
-                "label": f"[{active_route_id.split(':', 1)[1].capitalize()}] {m}" if not m.startswith("[") else m,
-            }
-            for m in cached_models
-        ]
+        from app.services.route_catalog import get_route_catalog
+        return await get_route_catalog(active_route_id)
 
     elif active_route_id.startswith("endpoint:"):
         stored_models: list[str] = []

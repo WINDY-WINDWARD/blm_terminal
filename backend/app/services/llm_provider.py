@@ -17,12 +17,14 @@ from collections import deque
 from datetime import datetime, timezone
 from sqlalchemy import select
 from app.services.proxy_supervisor import get_proxy_supervisor
+from app.services.route_catalog import get_route_models
 from app.services.route_registry import (
     compute_oauth_proxy_prefix,
     is_route_model_id,
     map_legacy_model_to_route,
     parse_route_model_id,
     resolve_active_route_id,
+    ensure_model_belongs_to_route,
 )
 
 MAX_TRACE_ENTRIES = 100
@@ -1082,6 +1084,23 @@ async def _run_antigravity_loop(
 
 
 
+async def _stream_proxy_with_sync(supervisor, stream):
+    try:
+        async for chunk in stream:
+            yield chunk
+    finally:
+        supervisor.request_sync()
+
+
+def uses_anthropic_tools(model: str, provider: str | None = None) -> bool:
+    if is_route_model_id(model):
+        route_id, model = parse_route_model_id(model)
+        provider = route_id.removeprefix("direct:")
+    return provider in ("anthropic", "claude-code") or (
+        model in ANTHROPIC_MODELS and provider in (None, "zen", "zen-free", "zen-paid", "go")
+    )
+
+
 async def stream_chat_completion(
     messages: list[dict[str, Any]],
     model: str,
@@ -1092,12 +1111,15 @@ async def stream_chat_completion(
     session_id: str | int | None = None,
     max_tokens: int | None = None,
 ) -> AsyncGenerator[str, None]:
-    if is_route_model_id(model):
-        route_id, upstream_model = parse_route_model_id(model)
-    else:
-        active_route_id = await resolve_active_route_id()
-        qualified = map_legacy_model_to_route(model, active_route_id)
-        route_id, upstream_model = parse_route_model_id(qualified)
+    active_route_id = await resolve_active_route_id()
+    qualified = model if is_route_model_id(model) else map_legacy_model_to_route(model, active_route_id)
+    try:
+        route_id, upstream_model = ensure_model_belongs_to_route(qualified, active_route_id)
+        ensure_model_belongs_to_route(qualified, active_route_id, await get_route_models(active_route_id))
+    except (ValueError, RuntimeError) as exc:
+        yield json.dumps({"type": "error", "message": "Selected model is unavailable for the active provider route. Refresh the model list."})
+        yield json.dumps({"type": "done"})
+        return
 
     session_id_str = str(session_id).strip() if (session_id is not None and str(session_id).strip()) else f"blm-{uuid.uuid4().hex[:12]}"
 
@@ -1127,6 +1149,7 @@ async def stream_chat_completion(
         proxy_model = f"{proxy_prefix}/{upstream_model}"
 
         def _capture_proxy_headers(hdrs: httpx.Headers, status_code: int) -> None:
+            supervisor.request_sync()
             trace_id = hdrs.get("x-cpa-trace-id") or hdrs.get("X-CPA-TRACE-ID")
             if trace_id:
                 record_proxy_trace(
@@ -1144,7 +1167,7 @@ async def stream_chat_completion(
 
         extra_headers = {"X-Session-Id": session_id_str}
 
-        async for chunk in _run_openai_loop(
+        async for chunk in _stream_proxy_with_sync(supervisor, _run_openai_loop(
             full_messages,
             proxy_model,
             client_key,
@@ -1159,7 +1182,7 @@ async def stream_chat_completion(
             retry_429=False,
             on_response_headers=_capture_proxy_headers,
             max_tokens=max_tokens,
-        ):
+        )):
             yield chunk
         return
 

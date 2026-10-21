@@ -1375,7 +1375,8 @@ async def run_chat_agent(
     async def executor(tool_calls: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
         return await _run_tools_parallel(tool_calls, seen_calls, session_id, user_id)
 
-    tools = BLM_TOOLS if model not in {"minimax-m2.5", "minimax-m2.7"} else BLM_TOOLS_ANTHROPIC
+    from app.services.llm_provider import uses_anthropic_tools
+    tools = BLM_TOOLS_ANTHROPIC if uses_anthropic_tools(model) else BLM_TOOLS
 
     async for chunk in stream_chat_completion(
         messages=messages,

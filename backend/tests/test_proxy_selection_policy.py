@@ -88,15 +88,14 @@ async def policy_test_env(tmp_path: Path):
     async def override_get_current_user() -> User:
         return User(id=1, username="admin_test", is_admin=True)
 
-    mock_supervisor = MagicMock(spec=ProxySupervisor)
-    mock_supervisor.is_running.return_value = True
+    mock_supervisor = ProxySupervisor(vault=vault, runtime_root=tmp_path / "runtime")
+    from app.services.proxy_supervisor import SupervisorState
+    mock_supervisor._state = SupervisorState.RUNNING
+    mock_supervisor._process = MagicMock()
+    mock_supervisor._process.poll.return_value = None
+    mock_supervisor._auth_dir = tmp_path / "auth"
+    mock_supervisor._auth_dir.mkdir()
     mock_supervisor.ensure_started = AsyncMock(return_value=("127.0.0.1", 8317, "test-client-key"))
-    mock_supervisor.get_status.return_value = {
-        "state": "running",
-        "host": "127.0.0.1",
-        "port": 8317,
-        "pid": 54321,
-    }
 
     mock_mgmt = MagicMock(spec=ProxyManagementClient)
     mock_mgmt.health = AsyncMock(return_value=True)
@@ -104,7 +103,10 @@ async def policy_test_env(tmp_path: Path):
     mock_mgmt.patch_config = AsyncMock(return_value={"status": "ok"})
     mock_mgmt.get_credentials = AsyncMock(return_value=[])
     mock_mgmt.get_credential_models = AsyncMock(return_value=["gpt-4o", "gpt-4o-mini"])
-    mock_supervisor.get_management_client.return_value = mock_mgmt
+    mock_supervisor._management_client = mock_mgmt
+    mock_mgmt.update_credential = AsyncMock()
+    mock_mgmt.refresh_credential = AsyncMock(return_value={"status": "ok"})
+    mock_supervisor.sync_now = AsyncMock(return_value=0)
     mock_supervisor.reload_custom_endpoints = AsyncMock()
 
     main.app.dependency_overrides[get_db] = override_get_db

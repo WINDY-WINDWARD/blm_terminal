@@ -31,6 +31,9 @@ from typing import Any
 
 import httpx
 import psutil
+import yaml
+from app.services.private_files import restrict_access
+from app.services.route_registry import compute_oauth_proxy_prefix, OAUTH_PROVIDERS
 
 from app.config import settings
 from app.services.provider_vault import (
@@ -88,7 +91,9 @@ def redact_sensitive_data(val: Any) -> Any:
     if isinstance(val, dict):
         out = {}
         for k, v in val.items():
-            if str(k).lower() in SENSITIVE_FIELD_NAMES:
+            if str(k).lower() in ("headers", "header") and isinstance(v, dict):
+                out[k] = {name: "[REDACTED]" for name in v}
+            elif str(k).lower() in SENSITIVE_FIELD_NAMES:
                 out[k] = "[REDACTED]"
             else:
                 out[k] = redact_sensitive_data(v)
@@ -100,25 +105,11 @@ def redact_sensitive_data(val: Any) -> Any:
 
 def set_dir_permissions_0700(path: Path) -> None:
     """Set 0700 (rwx------) permissions on directory."""
-    if os.name != "nt":
-        try:
-            os.chmod(path, 0o700)
-        except OSError:
-            pass
+    restrict_access(path, directory=True)
 
 
 def set_file_permissions_0600(path: Path) -> None:
-    """Set 0600 (rw-------) permissions on file."""
-    if os.name != "nt":
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    else:
-        try:
-            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
+    restrict_access(path)
 
 
 def find_free_loopback_port() -> int:
@@ -172,93 +163,41 @@ def generate_proxy_config(
     max_retry_credentials: int = 0,
     max_retry_interval: int = 30,
     custom_endpoints: list[dict[str, Any]] | None = None,
+    session_affinity: bool = True,
 ) -> str:
-    """Generate CLIProxyAPI v8 YAML configuration.
-
-    Enforces:
-    - allow-remote: false
-    - disable-control-panel: true
-    - force-model-prefix: true
-    - save-cooldown-status: true
-    - configured strategy (default fill-first)
-    - sticky sessions enabled (session-affinity: true)
-    - vetted retry defaults
-    - zero upstream secrets written into config
-    """
-    auth_dir_str = str(Path(auth_dir).resolve()).replace("\\", "/")
-    cfg = f"""config-version: 8
-
-server:
-  host: "{host}"
-  port: {port}
-
-management:
-  allow-remote: false
-  secret-key: "{management_key}"
-  disable-control-panel: true
-
-access:
-  api-keys:
-    - "{client_key}"
-
-routing:
-  strategy: "{strategy}"
-  session-affinity: true
-  session-affinity-ttl: "{session_affinity_ttl}"
-  force-model-prefix: true
-
-  retry:
-    request-retry: {request_retry}
-    max-retry-credentials: {max_retry_credentials}
-    max-retry-interval: {max_retry_interval}
-
-  cooldown:
-    save-cooldown-status: true
-
-oauth:
-  auth-dir: "{auth_dir_str}"
-"""
+    config = {
+        "config-version": 8,
+        "server": {"host": host, "port": port},
+        "management": {"allow-remote": False, "secret-key": management_key, "disable-control-panel": True},
+        "access": {"api-keys": [client_key]},
+        "routing": {
+            "strategy": strategy,
+            "session-affinity": session_affinity,
+            "session-affinity-ttl": session_affinity_ttl,
+            "force-model-prefix": True,
+            "retry": {"request-retry": request_retry, "max-retry-credentials": max_retry_credentials, "max-retry-interval": max_retry_interval},
+            "cooldown": {"save-cooldown-status": True},
+        },
+        "oauth": {"auth-dir": str(Path(auth_dir).resolve()).replace("\\", "/")},
+    }
     if custom_endpoints:
-        custom_lines = ["\nopenai-compatibility:"]
-        for ep in custom_endpoints:
-            name = ep.get("name", "custom")
-            prefix = ep.get("prefix", name)
-            base_url = ep.get("base-url") or ep.get("base_url", "")
-            custom_lines.append(f'  - name: "{name}"')
-            custom_lines.append(f'    prefix: "{prefix}"')
-            custom_lines.append(f'    base-url: "{base_url}"')
-
-            headers = ep.get("headers")
-            if headers and isinstance(headers, dict):
-                custom_lines.append("    headers:")
-                for hk, hv in headers.items():
-                    custom_lines.append(f'      "{hk}": "{hv}"')
-
-            models = ep.get("models")
-            if models and isinstance(models, list):
-                custom_lines.append("    models:")
-                for m in models:
-                    m_name = m.get("name") if isinstance(m, dict) else str(m)
-                    custom_lines.append(f'      - name: "{m_name}"')
-
-            api_keys = ep.get("api-key-entries") or ep.get("api-keys") or ep.get("api_keys")
-            if api_keys and isinstance(api_keys, list):
-                custom_lines.append("    api-key-entries:")
-                for ak in api_keys:
-                    if isinstance(ak, dict):
-                        k_val = ak.get("api-key") or ak.get("api_key") or ""
-                        p_val = ak.get("priority", 1)
-                        w_val = ak.get("weight", 1)
-                        custom_lines.append(f'      - api-key: "{k_val}"')
-                        custom_lines.append(f'        priority: {p_val}')
-                        custom_lines.append(f'        weight: {w_val}')
-                    else:
-                        custom_lines.append(f'      - api-key: "{ak}"')
-        cfg += "\n".join(custom_lines) + "\n"
-    return cfg
+        from app.services.endpoint_validator import validate_custom_endpoint_url
+        entries = []
+        for endpoint in custom_endpoints:
+            base_url, _ = validate_custom_endpoint_url(endpoint.get("base-url") or endpoint.get("base_url", ""), endpoint.get("headers"))
+            entries.append({
+                "name": endpoint.get("name", "custom"),
+                "prefix": endpoint.get("prefix", endpoint.get("name", "custom")),
+                "base-url": base_url,
+                "headers": endpoint.get("headers") or {},
+                "models": [model if isinstance(model, dict) else {"name": str(model)} for model in endpoint.get("models", [])],
+                "api-key-entries": endpoint.get("api-key-entries") or endpoint.get("api-keys") or endpoint.get("api_keys") or [],
+            })
+        config["openai-compatibility"] = entries
+    return yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
 
 
-async def materialize_vault_secrets(vault: ProviderVault, auth_dir: Path) -> int:
+async def materialize_vault_secrets(vault: ProviderVault, auth_dir: Path, credentials: list[Any] | None = None) -> int:
     """Materialize encrypted OAuth auth JSON and .cds cooldown files from vault to auth_dir."""
     auth_dir.mkdir(parents=True, exist_ok=True)
     set_dir_permissions_0700(auth_dir)
@@ -267,11 +206,26 @@ async def materialize_vault_secrets(vault: ProviderVault, auth_dir: Path) -> int
     # 1. OAuth auth files
     all_auth = await vault.get_all_oauth_auth()
     for key, data in all_auth.items():
-        fname = key if key.endswith(".json") else f"{key}.json"
+        credential = None
+        if credentials is not None:
+            credential = next((entry for entry in credentials if entry.vault_reference.removeprefix("oauth_auth:") == key), None)
+            if credential is None:
+                continue
+        payload = json.loads(data) if isinstance(data, str) else dict(data)
+        provider = credential.route_id.split(":", 1)[1] if credential else payload.get("type") or key.removesuffix(".json")
+        if provider in OAUTH_PROVIDERS:
+            payload["type"] = provider
+            payload["prefix"] = compute_oauth_proxy_prefix(f"oauth:{provider}")
+        if credential is not None:
+            payload.update(priority=credential.priority, weight=credential.weight, disabled=not credential.enabled)
+        fname = credential.proxy_credential_name if credential else key
+        fname = fname if fname.endswith(".json") else f"{fname}.json"
+        if Path(fname).name != fname or "/" in fname or "\\" in fname:
+            raise ProxySupervisorError("Invalid credential filename")
         target = auth_dir / fname
-        content = json.dumps(data, indent=2) if isinstance(data, dict) else str(data)
-        target.write_text(content, encoding="utf-8")
+        target.touch(mode=0o600)
         set_file_permissions_0600(target)
+        target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         count += 1
 
     # 2. Cooldown status snapshots (.cds)
@@ -287,7 +241,7 @@ async def materialize_vault_secrets(vault: ProviderVault, auth_dir: Path) -> int
     return count
 
 
-async def sync_auth_and_cooldowns(vault: ProviderVault, auth_dir: Path) -> int:
+async def sync_auth_and_cooldowns(vault: ProviderVault, auth_dir: Path, credential_keys: dict[str, str] | None = None) -> int:
     """Scan auth_dir and sync refreshed OAuth auth JSON and .cds snapshots back into the vault.
 
     Applies a reversible key mapping: if the extensionless key exists in the vault,
@@ -304,11 +258,13 @@ async def sync_auth_and_cooldowns(vault: ProviderVault, auth_dir: Path) -> int:
             raw = p.read_text(encoding="utf-8")
             data = json.loads(raw)
             stem = p.stem
-            target_key = stem if stem in existing_auth else p.name
+            if credential_keys is not None and p.name not in credential_keys:
+                continue
+            target_key = credential_keys[p.name] if credential_keys is not None else (stem if stem in existing_auth else p.name)
             await vault.set_oauth_auth(target_key, data)
             count += 1
         except Exception as exc:
-            logger.warning("ProxySupervisor: failed syncing %s to vault: %s", p.name, exc)
+            logger.warning("ProxySupervisor: credential sync failed (%s)", type(exc).__name__)
 
     # 2. Cooldown .cds snapshot files
     existing_cooldowns = await vault.get_all_cooldown_snapshots()
@@ -496,6 +452,32 @@ async def materialize_custom_endpoints(
     return endpoints
 
 
+async def load_routing_settings(session: Any) -> dict[str, Any]:
+    from sqlalchemy import select
+    from app.models.system_config import SystemConfig
+
+    defaults = {"strategy": "fill-first", "session_affinity": True, "session_affinity_ttl": "1h", "request_retry": 3, "max_retry_credentials": 0, "max_retry_interval": 30}
+    mapping = {"ai.routing_strategy": "strategy", **{f"ai.{key}": key for key in defaults if key != "strategy"}}
+    rows = (await session.execute(select(SystemConfig).where(SystemConfig.key.in_(mapping)))).scalars().all()
+    for row in rows:
+        key = mapping[row.key]
+        if key == "session_affinity":
+            defaults[key] = row.value.lower() in ("true", "1", "yes")
+        elif key in ("request_retry", "max_retry_credentials", "max_retry_interval"):
+            defaults[key] = int(row.value)
+        else:
+            defaults[key] = row.value
+    return defaults
+
+
+def routing_config(settings: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "strategy": settings["strategy"], "session-affinity": settings["session_affinity"],
+        "session-affinity-ttl": settings["session_affinity_ttl"],
+        "retry": {key.replace("_", "-"): settings[key] for key in ("request_retry", "max_retry_credentials", "max_retry_interval")},
+    }
+
+
 class ProxyManagementClient:
     """Redacted internal management client for CLIProxyAPI /v8/management."""
 
@@ -531,7 +513,7 @@ class ProxyManagementClient:
     ) -> Any:
         url = f"{self._base_url}{endpoint}"
         headers = self._get_headers()
-        client = self._client or httpx.AsyncClient(timeout=self._timeout)
+        client = self._client or httpx.AsyncClient(timeout=self._timeout, trust_env=False)
         try:
             resp = await client.request(
                 method,
@@ -559,7 +541,7 @@ class ProxyManagementClient:
     async def health(self) -> bool:
         """Query /healthz readiness endpoint."""
         url = f"{self._base_url}/healthz"
-        client = self._client or httpx.AsyncClient(timeout=3.0)
+        client = self._client or httpx.AsyncClient(timeout=3.0, trust_env=False)
         try:
             resp = await client.get(url)
             return resp.status_code == 200
@@ -596,20 +578,22 @@ class ProxyManagementClient:
     async def get_credentials(self) -> list[dict[str, Any]]:
         """List credentials via /v8/management/credentials."""
         res = await self._request("GET", "/v8/management/credentials")
-        if isinstance(res, list):
-            return [redact_sensitive_data(x) for x in res]
-        elif isinstance(res, dict) and "credentials" in res:
-            return [redact_sensitive_data(x) for x in res["credentials"]]
-        return []
+        if not isinstance(res, dict) or not isinstance(res.get("files"), list):
+            raise ProxySupervisorError("Invalid credential listing response")
+        return [redact_sensitive_data(entry) for entry in res["files"]]
 
-    async def get_credential_models(self) -> list[str]:
-        """Retrieve aggregated models via /v8/management/credentials/models."""
-        res = await self._request("GET", "/v8/management/credentials/models")
-        if isinstance(res, list):
-            return [str(m) for m in res]
-        elif isinstance(res, dict) and "models" in res:
-            return [str(m) for m in res["models"]]
-        return []
+    async def get_credential_models(self, name: str) -> list[str]:
+        res = await self._request("GET", "/v8/management/credentials/models", params={"name": name})
+        if not isinstance(res, dict) or not isinstance(res.get("models"), list):
+            raise ProxySupervisorError("Invalid credential model response")
+        return [model["id"] for model in res["models"] if isinstance(model, dict) and isinstance(model.get("id"), str)]
+
+    async def update_credential(self, name: str, *, enabled: bool, priority: int, weight: int, prefix: str) -> None:
+        await self._request("PATCH", "/v8/management/credentials/fields", json_body={"name": name, "priority": priority, "weight": weight, "prefix": prefix})
+        await self._request("PATCH", "/v8/management/credentials/status", json_body={"name": name, "disabled": not enabled})
+
+    async def refresh_credential(self, name: str) -> dict[str, Any]:
+        return await self._request("POST", "/v8/management/credentials/refresh", json_body={"name": name})
 
     async def start_oauth(
         self, provider: str, params: dict[str, Any] | None = None
@@ -638,7 +622,7 @@ class ProxyManagementClient:
 
     async def delete_credential(self, name: str) -> dict[str, Any]:
         """Delete a credential by name via /v8/management/credentials."""
-        res = await self._request("DELETE", f"/v8/management/credentials/{name}")
+        res = await self._request("DELETE", "/v8/management/credentials", params={"name": name})
         return res if isinstance(res, dict) else {}
 
 
@@ -674,6 +658,8 @@ class ProxySupervisor:
         self._last_error: str | None = None
         self._management_client: ProxyManagementClient | None = None
         self._sync_task: asyncio.Task | None = None
+        self._credential_keys: dict[str, str] | None = None
+        self._accepting_requests = True
 
     @property
     def state(self) -> SupervisorState:
@@ -755,6 +741,9 @@ class ProxySupervisor:
     async def ensure_started(self) -> tuple[str, int, str]:
         """Lazily ensure the proxy is running and ready. Returns (host, port, client_key)."""
         async with self._lock:
+            if not self._accepting_requests:
+                raise ProxySupervisorError("Proxy supervisor is shutting down")
+            await self._vault.get_state()
             if self.is_running and self._port and self._client_key:
                 return (self._host, self._port, self._client_key)
 
@@ -815,7 +804,7 @@ class ProxySupervisor:
         # 2. Sync any remaining auth/cooldowns from old runtime before cleaning
         if self._auth_dir and self._auth_dir.exists():
             try:
-                await sync_auth_and_cooldowns(self._vault, self._auth_dir)
+                await sync_auth_and_cooldowns(self._vault, self._auth_dir, self._credential_keys)
             except Exception as exc:
                 logger.warning("ProxySupervisor: error syncing before restart: %s", exc)
 
@@ -867,7 +856,17 @@ class ProxySupervisor:
         set_dir_permissions_0700(self._auth_dir)
 
         # Materialize secrets
-        await materialize_vault_secrets(self._vault, self._auth_dir)
+        from app.database import AsyncSessionLocal
+        from app.models.ai_provider import AIProviderCredential
+        from sqlalchemy import select
+        async with AsyncSessionLocal() as session:
+            credentials = list((await session.execute(select(AIProviderCredential).where(AIProviderCredential.kind == "oauth"))).scalars().all())
+            routing_settings = await load_routing_settings(session)
+        self._credential_keys = {
+            entry.proxy_credential_name if entry.proxy_credential_name.endswith(".json") else f"{entry.proxy_credential_name}.json": entry.vault_reference.removeprefix("oauth_auth:")
+            for entry in credentials
+        }
+        await materialize_vault_secrets(self._vault, self._auth_dir, credentials)
 
         # Materialize custom endpoints
         custom_endpoints = await materialize_custom_endpoints(self._vault)
@@ -879,8 +878,8 @@ class ProxySupervisor:
             client_key=self._client_key,
             management_key=self._management_key,
             auth_dir=self._auth_dir,
-            strategy=self._strategy,
             custom_endpoints=custom_endpoints,
+            **routing_settings,
         )
         cfg_path = self._runtime_dir / "config.yaml"
         cfg_path.write_text(cfg_str, encoding="utf-8")
@@ -930,7 +929,7 @@ class ProxySupervisor:
     async def _poll_readiness(self, timeout: float) -> bool:
         start_time = time.monotonic()
         url = f"http://{self._host}:{self._port}/healthz"
-        async with httpx.AsyncClient(timeout=1.0) as client:
+        async with httpx.AsyncClient(timeout=1.0, trust_env=False) as client:
             while time.monotonic() - start_time < timeout:
                 if self._process is not None and self._process.poll() is not None:
                     return False
@@ -988,33 +987,40 @@ class ProxySupervisor:
                     return False
             return True
 
-    def request_sync(self, delay_seconds: float = 0.5) -> None:
-        """Schedule a debounced background sync of auth and cooldown files to the vault."""
+    async def _cancel_sync(self) -> None:
         if self._sync_task and not self._sync_task.done():
             self._sync_task.cancel()
+            await asyncio.gather(self._sync_task, return_exceptions=True)
+        self._sync_task = None
 
-        async def _delayed_sync() -> None:
+    def request_sync(self, delay_seconds: float = 0.5) -> None:
+        if not self._accepting_requests or (self._sync_task and not self._sync_task.done()):
+            return
+
+        async def delayed_sync() -> None:
             try:
                 await asyncio.sleep(delay_seconds)
-                if self._auth_dir and self._auth_dir.exists():
-                    await sync_auth_and_cooldowns(self._vault, self._auth_dir)
+                await self.sync_now()
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                logger.warning("ProxySupervisor: background sync error: %s", exc)
+                logger.warning("ProxySupervisor: background sync failed (%s)", type(exc).__name__)
 
-        self._sync_task = asyncio.create_task(_delayed_sync())
+        self._sync_task = asyncio.create_task(delayed_sync())
 
     async def sync_now(self) -> int:
-        """Immediately sync auth JSON and cooldowns back to the vault."""
-        if self._auth_dir and self._auth_dir.exists():
-            return await sync_auth_and_cooldowns(self._vault, self._auth_dir)
-        return 0
+        async with self._lock:
+            if self._auth_dir and self._auth_dir.exists():
+                return await sync_auth_and_cooldowns(self._vault, self._auth_dir, self._credential_keys)
+            return 0
 
     async def restart(self) -> tuple[str, int, str]:
         """Restart supervisor and return (host, port, client_key)."""
+        await self._cancel_sync()
         async with self._lock:
             await self._cleanup_process()
+            if self._auth_dir and self._auth_dir.exists():
+                await sync_auth_and_cooldowns(self._vault, self._auth_dir, self._credential_keys)
             self._state = SupervisorState.STOPPED
             self._process = None
             await self._start_unlocked()
@@ -1022,25 +1028,25 @@ class ProxySupervisor:
 
     async def reload_custom_endpoints(self) -> None:
         """If supervisor is currently running, restart to re-materialize custom endpoints."""
-        if self.is_running():
+        if self.is_running:
             await self.restart()
 
-    async def stop(self) -> None:
+    async def stop(self, *, sync: bool = True, permanent: bool = False) -> None:
         """Gracefully stop the proxy, sync auth and cooldowns to vault, and clean runtime dir."""
+        if permanent:
+            self._accepting_requests = False
+        await self._cancel_sync()
         async with self._lock:
             if self._state == SupervisorState.STOPPED and (not self._runtime_dir or not self._runtime_dir.exists()):
                 return
             self._state = SupervisorState.STOPPING
             logger.info("ProxySupervisor: stopping...")
 
-            if self._sync_task and not self._sync_task.done():
-                self._sync_task.cancel()
-
             # 1. Terminate process
             await self._cleanup_process()
 
             # 2. Final sync to vault
-            if self._auth_dir and self._auth_dir.exists():
+            if sync and self._auth_dir and self._auth_dir.exists():
                 try:
                     await sync_auth_and_cooldowns(self._vault, self._auth_dir)
                 except Exception as exc:

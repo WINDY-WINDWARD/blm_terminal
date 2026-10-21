@@ -134,7 +134,7 @@ def provider_to_route_id(provider: str | None) -> str:
         return p
 
     norm = normalize_legacy_provider_id(p)
-    if norm in OAUTH_PROVIDERS:
+    if norm in OAUTH_PROVIDERS and norm != "xai":
         return f"oauth:{norm}"
     return f"direct:{norm}"
 

@@ -36,6 +36,8 @@ dependencies = [
     "pypdf>=5.1.0",
     "keyring>=24.0.0",
     "psutil>=6.0.0",
+    "PyYAML>=6.0.0",
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

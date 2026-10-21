@@ -30,6 +30,7 @@ from app.services.route_registry import (
     parse_route_model_id,
     provider_to_route_id,
     resolve_active_route_id,
+    compute_oauth_proxy_prefix,
 )
 
 logger = logging.getLogger("blm.legacy_migration")
@@ -79,6 +80,8 @@ async def migrate_legacy_codex_tokens(vault: ProviderVault, session: AsyncSessio
         return False
 
     auth_data = {
+        "type": "codex",
+        "prefix": compute_oauth_proxy_prefix("oauth:codex"),
         "access_token": (access_token or "").strip(),
         "refresh_token": (refresh_token or "").strip(),
     }
@@ -154,6 +157,7 @@ async def migrate_legacy_antigravity_tokens(
         return False, "relogin_required"
 
     # 1. Store in vault
+    data.update(type="antigravity", prefix=compute_oauth_proxy_prefix("oauth:antigravity"))
     await vault.set_oauth_auth("antigravity", data)
 
     # 2. Identity display

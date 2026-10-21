@@ -50,6 +50,8 @@ from app.services.provider_vault import (
 from app.services.proxy_supervisor import (
     ProxySupervisor,
     get_proxy_supervisor,
+    load_routing_settings,
+    routing_config,
 )
 from app.services.route_registry import (
     DEFAULT_ROUTE_ID,
@@ -106,6 +108,7 @@ async def list_routes(
 
     # Vault state
     vault = get_provider_vault()
+    await vault.get_state()
     vault_state = vault.state.value
     recovery_state: str | None = None
     if not vault.is_available:
@@ -358,7 +361,7 @@ async def activate_route(
     # If OAuth or endpoint, ensure proxy is ready
     if clean_id.startswith("oauth:") or clean_id.startswith("endpoint:"):
         supervisor = get_proxy_supervisor()
-        if not supervisor.is_running():
+        if not supervisor.is_running:
             try:
                 await supervisor.ensure_started()
             except Exception as exc:
@@ -399,11 +402,11 @@ async def update_route_settings(
 
     # Patch live supervisor if running
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running() and body.strategy is not None:
+    if supervisor.is_running:
         try:
-            await supervisor.get_management_client().patch_config({"routing": {"strategy": body.strategy}})
+            await supervisor.get_management_client().patch_config({"routing": routing_config(await load_routing_settings(db))})
         except Exception as exc:
-            logger.debug("Failed patching live proxy settings: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to apply routing settings to proxy") from exc
 
     return {"status": "updated", "updated_settings": updates}
 
@@ -513,6 +516,21 @@ async def patch_account(
         cred.status = body.status
     cred.updated_at = datetime.now(timezone.utc)
 
+    if cred.kind == "oauth":
+        supervisor = get_proxy_supervisor()
+        await supervisor.ensure_started()
+        name = cred.proxy_credential_name
+        name = name if name.endswith(".json") else f"{name}.json"
+        try:
+            await supervisor.get_management_client().update_credential(
+                name, enabled=cred.enabled and cred.status != "disabled", priority=cred.priority,
+                weight=cred.weight, prefix=compute_oauth_proxy_prefix(cred.route_id),
+            )
+            await supervisor.sync_now()
+        except Exception as exc:
+            await db.rollback()
+            raise HTTPException(status_code=502, detail="Failed to apply account controls to proxy") from exc
+
     await db.commit()
     await db.refresh(cred)
     return _serialize_credential(cred)
@@ -529,6 +547,17 @@ async def refresh_account(
     cred = res.scalar_one_or_none()
     if cred is None:
         raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found.")
+
+    if cred.kind == "oauth":
+        supervisor = get_proxy_supervisor()
+        await supervisor.ensure_started()
+        name = cred.proxy_credential_name
+        name = name if name.endswith(".json") else f"{name}.json"
+        try:
+            await supervisor.get_management_client().refresh_credential(name)
+            await supervisor.sync_now()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Credential refresh failed; reauthentication may be required") from exc
 
     cred.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -551,7 +580,7 @@ async def test_account(
     t0 = time.perf_counter()
     if cred.kind == "oauth":
         supervisor = get_proxy_supervisor()
-        if not supervisor.is_running():
+        if not supervisor.is_running:
             try:
                 await supervisor.ensure_started()
             except Exception as exc:
@@ -591,14 +620,14 @@ async def test_account(
             proxy_creds = await mgmt.get_credentials()
             matched_pcred = None
             for pc in proxy_creds:
-                if pc.get("name") == cred.proxy_credential_name or pc.get("id") == cred.proxy_credential_name:
+                if str(pc.get("name", "")).removesuffix(".json") == cred.proxy_credential_name.removesuffix(".json"):
                     matched_pcred = pc
                     break
 
             latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
             if matched_pcred is not None:
                 p_status = str(matched_pcred.get("status", "active")).lower()
-                if p_status in ("active", "ready", "ok"):
+                if p_status in ("active", "ready", "ok") and not matched_pcred.get("disabled") and cred.enabled:
                     return {
                         "status": "ok",
                         "account_id": account_id,
@@ -625,10 +654,10 @@ async def test_account(
                         "latency_ms": latency_ms,
                     }
                 return {
-                    "status": "ok",
+                    "status": "error",
                     "account_id": account_id,
                     "masked_identity": cred.masked_identity,
-                    "proxy_status": "registered",
+                    "error": "Credential is not loaded in proxy",
                     "latency_ms": latency_ms,
                 }
         except Exception as exc:
@@ -712,7 +741,7 @@ async def reset_account_cooldown(
 
     # Reset in proxy supervisor
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.get_management_client().reset_cooldown(channel=cred.proxy_credential_name)
         except Exception as exc:
@@ -720,6 +749,7 @@ async def reset_account_cooldown(
 
     # Remove snapshot in vault
     vault = get_provider_vault()
+    await vault.get_state()
     if vault.is_available:
         await vault.remove_cooldown_snapshot(cred.proxy_credential_name)
 
@@ -738,20 +768,23 @@ async def remove_account(
     if cred is None:
         raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found.")
 
-    # 1. Delete vault secret
+    supervisor = get_proxy_supervisor()
+    if supervisor.is_running:
+        name = cred.proxy_credential_name
+        name = name if name.endswith(".json") else f"{name}.json"
+        try:
+            await supervisor.get_management_client().delete_credential(name)
+            await supervisor.sync_now()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Failed deleting credential from proxy") from exc
+        if supervisor._credential_keys is not None:
+            supervisor._credential_keys.pop(name, None)
     vault = get_provider_vault()
+    await vault.get_state()
     if vault.is_available:
         await vault.delete_secret(cred.vault_reference)
-        await vault.remove_oauth_auth(cred.vault_reference)
+        await vault.remove_oauth_auth(cred.vault_reference.removeprefix("oauth_auth:"))
         await vault.remove_cooldown_snapshot(cred.proxy_credential_name)
-
-    # 2. Delete from proxy if running
-    supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
-        try:
-            await supervisor.get_management_client().delete_credential(cred.proxy_credential_name)
-        except Exception as exc:
-            logger.debug("Failed deleting credential from proxy: %s", exc)
 
     # 3. Delete from DB
     await db.delete(cred)
@@ -778,6 +811,7 @@ async def create_endpoint(
         raise HTTPException(status_code=400, detail=str(ve)) from ve
 
     vault = get_provider_vault()
+    await vault.get_state()
     if not vault.is_available:
         raise HTTPException(
             status_code=503,
@@ -845,7 +879,7 @@ async def create_endpoint(
 
     # 4. Materialize into running supervisor
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.reload_custom_endpoints()
         except Exception as exc:
@@ -894,6 +928,7 @@ async def get_endpoint(
 
     active_route_id = await resolve_active_route_id(db)
     vault = get_provider_vault()
+    await vault.get_state()
     cfg = {}
     if route.config_json:
         try:
@@ -944,6 +979,7 @@ async def update_endpoint(
         raise HTTPException(status_code=404, detail=f"Custom endpoint '{route_id}' not found.")
 
     vault = get_provider_vault()
+    await vault.get_state()
     cfg = {}
     if route.config_json:
         try:
@@ -985,7 +1021,7 @@ async def update_endpoint(
     await db.refresh(route)
 
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.reload_custom_endpoints()
         except Exception as exc:
@@ -1041,6 +1077,7 @@ async def delete_endpoint(
 
     # Delete vault secrets
     vault = get_provider_vault()
+    await vault.get_state()
     if vault.is_available:
         await vault.remove_endpoint_headers(route_id)
         # Remove all keys for this route
@@ -1053,7 +1090,7 @@ async def delete_endpoint(
     await db.commit()
 
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.reload_custom_endpoints()
         except Exception as exc:
@@ -1085,6 +1122,7 @@ async def add_endpoint_key(
         raise HTTPException(status_code=400, detail="API key cannot be empty.")
 
     vault = get_provider_vault()
+    await vault.get_state()
     if not vault.is_available:
         raise HTTPException(
             status_code=503,
@@ -1113,7 +1151,7 @@ async def add_endpoint_key(
     await db.refresh(cred)
 
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.reload_custom_endpoints()
         except Exception as exc:
@@ -1186,7 +1224,7 @@ async def patch_endpoint_key(
     await db.refresh(cred)
 
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.reload_custom_endpoints()
         except Exception as exc:
@@ -1210,6 +1248,7 @@ async def delete_endpoint_key(
         raise HTTPException(status_code=404, detail=f"Key '{key_id}' not found on endpoint '{route_id}'.")
 
     vault = get_provider_vault()
+    await vault.get_state()
     if vault.is_available:
         await vault.delete_secret(cred.vault_reference)
 
@@ -1217,7 +1256,7 @@ async def delete_endpoint_key(
     await db.commit()
 
     supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
+    if supervisor.is_running:
         try:
             await supervisor.reload_custom_endpoints()
         except Exception as exc:
@@ -1286,6 +1325,7 @@ async def refresh_endpoint_models(
         return {"models": ["default"]}
 
     vault = get_provider_vault()
+    await vault.get_state()
     raw_headers = {}
     if vault.is_available:
         raw_headers = await vault.get_endpoint_headers(route_id) or {}
@@ -1320,7 +1360,7 @@ async def refresh_endpoint_models(
                 route.config_json = json.dumps(cfg)
                 await db.commit()
                 supervisor = get_proxy_supervisor()
-                if supervisor.is_running():
+                if supervisor.is_running:
                     try:
                         await supervisor.reload_custom_endpoints()
                     except Exception as exc:
@@ -1362,6 +1402,7 @@ async def test_endpoint(
         }
 
     vault = get_provider_vault()
+    await vault.get_state()
     headers: dict[str, str] = {}
     if vault.is_available:
         stored_headers = await vault.get_endpoint_headers(route_id)
@@ -1430,6 +1471,7 @@ async def get_diagnostics(
     supervisor = get_proxy_supervisor()
     status_summary = supervisor.get_status()
     vault = get_provider_vault()
+    await vault.get_state()
 
     traces = get_proxy_traces(limit=50)
 
@@ -1474,8 +1516,13 @@ async def reset_provider_vault(
     - Stops proxy supervisor.
     - Leaves direct provider API keys and all other database tables intact.
     """
+    supervisor = get_proxy_supervisor()
+    await get_oauth_session_manager().cancel_all_sessions()
+    await supervisor.stop(sync=False)
+
     # 1. Reset encrypted provider vault
     vault = get_provider_vault()
+    await vault.get_state()
     await vault.reset_vault()
 
     # 2. Clear credentials from database
@@ -1499,10 +1546,7 @@ async def reset_provider_vault(
         await db.commit()
         active_route = DEFAULT_ROUTE_ID
 
-    # 6. Stop proxy supervisor
-    supervisor = get_proxy_supervisor()
-    if supervisor.is_running():
-        await supervisor.stop()
+    await db.commit()
 
     return {
         "status": "reset",

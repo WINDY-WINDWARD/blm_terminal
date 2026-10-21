@@ -35,6 +35,7 @@ import keyring
 from keyring.errors import KeyringError
 
 from app.config import settings
+from app.services.private_files import restrict_access
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,7 @@ class ProviderVault:
 
             fd = os.open(str(temp_path), flags, 0o600)
             with open(fd, "wb", closefd=True) as f:
+                restrict_access(temp_path)
                 f.write(envelope)
                 f.flush()
                 os.fsync(f.fileno())
@@ -475,9 +477,12 @@ class ProviderVault:
     async def reset_vault(self) -> None:
         """Reset the vault contents to empty and rewrite encrypted file."""
         async with self._lock:
-            self._ensure_ready()
+            if self._resolve_or_create_key() is None:
+                raise VaultUnavailableError("OS keyring is unavailable; cannot reset encrypted storage")
             self._data = self._empty_vault_data()
             self._save_unlocked()
+            self._state = VaultState.AVAILABLE
+            self._initialized = True
             logger.info("ProviderVault: reset all stored secrets")
 
 

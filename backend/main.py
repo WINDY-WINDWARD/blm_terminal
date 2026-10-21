@@ -815,6 +815,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.services.provider_vault import get_provider_vault
         async with AsyncSessionLocal() as session:
             vault = get_provider_vault()
+            await vault.initialize()
             await run_all_legacy_migrations(vault, session)
     except Exception as mig_exc:
         logger.warning("Startup legacy migration warning: %s", mig_exc)
@@ -889,6 +890,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
+    try:
+        from app.services.proxy_supervisor import get_proxy_supervisor, SupervisorState
+        supervisor = get_proxy_supervisor()
+        if supervisor.state != SupervisorState.STOPPED or (supervisor.runtime_dir and supervisor.runtime_dir.exists()):
+            await supervisor.stop(permanent=True)
+            logger.info("ProxySupervisor: stopped on shutdown")
+    except Exception as exc:
+        logger.debug("ProxySupervisor: shutdown error: %s", exc)
+
     logger.info("Shutting down — cancelling background tasks...")
     cleanup_task.cancel()
 
@@ -909,14 +919,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.services.llm_provider import cleanup_shared_clients
     await cleanup_shared_clients()
 
-    try:
-        from app.services.proxy_supervisor import get_proxy_supervisor, SupervisorState
-        supervisor = get_proxy_supervisor()
-        if supervisor.state != SupervisorState.STOPPED or (supervisor.runtime_dir and supervisor.runtime_dir.exists()):
-            await supervisor.stop()
-            logger.info("ProxySupervisor: stopped on shutdown")
-    except Exception as exc:
-        logger.debug("ProxySupervisor: shutdown error: %s", exc)
+
 
 
 # ---------------------------------------------------------------------------

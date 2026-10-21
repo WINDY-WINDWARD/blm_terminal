@@ -75,12 +75,14 @@ def validate_custom_endpoint_url(
             k_str = str(k)
             v_str = str(v)
             if "\r" in k_str or "\n" in k_str or "\0" in k_str:
-                raise ValueError(f"Header name contains illegal control characters: {k_str!r}")
+                raise ValueError("Header name contains illegal control characters.")
             if "\r" in v_str or "\n" in v_str or "\0" in v_str:
                 raise ValueError(f"Header value for '{k_str}' contains illegal control characters.")
 
     # 3. Scheme and URL structure validation
     parsed = urlsplit(url.strip())
+    if parsed.query or parsed.fragment:
+        raise ValueError("Endpoint URLs cannot contain query strings or fragments; use secret headers instead.")
     scheme = parsed.scheme.lower()
     if scheme not in ("http", "https"):
         raise ValueError(f"Invalid URL scheme '{scheme}'. Only HTTP and HTTPS are permitted.")

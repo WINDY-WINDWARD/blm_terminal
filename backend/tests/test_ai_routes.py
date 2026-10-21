@@ -53,6 +53,20 @@ import main
 from main import app
 
 
+def complete_oauth_file(environment, completion):
+    payload = dict(completion["auth"])
+    payload["type"] = "codex"
+    payload["email"] = completion["identity"]
+    filename = "codex-" + completion["identity"].split("@", 1)[0] + ".json"
+
+    async def status(state):
+        target = environment["supervisor"].auth_dir / filename
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        return {"status": "ok"}
+
+    environment["mgmt"].get_oauth_status.side_effect = status
+
+
 @pytest.fixture
 async def test_env(tmp_path: Path):
     """Set up an isolated SQLite database, test vault, and app overrides."""
@@ -90,22 +104,21 @@ async def test_env(tmp_path: Path):
         return User(id=1, username="admin_test", is_admin=True)
 
     # Mock supervisor
-    mock_supervisor = MagicMock(spec=ProxySupervisor)
-    mock_supervisor.is_running.return_value = True
+    mock_supervisor = ProxySupervisor(vault=vault, runtime_root=tmp_path / "runtime")
+    from app.services.proxy_supervisor import SupervisorState
+    mock_supervisor._state = SupervisorState.RUNNING
+    mock_supervisor._process = MagicMock()
+    mock_supervisor._process.poll.return_value = None
+    mock_supervisor._auth_dir = tmp_path / "auth"
+    mock_supervisor._auth_dir.mkdir()
     mock_supervisor.ensure_started = AsyncMock(return_value=("127.0.0.1", 8317, "test-client-key"))
-    mock_supervisor.get_status.return_value = {
-        "state": "running",
-        "host": "127.0.0.1",
-        "port": 8317,
-        "pid": 12345,
-    }
     mock_mgmt = MagicMock()
     mock_mgmt.start_oauth = AsyncMock(return_value={
         "state": "test_state_123",
         "url": "https://auth.example.com/oauth/authorize",
         "expires_in": 900,
     })
-    mock_mgmt.get_oauth_status = AsyncMock(return_value={"status": "pending"})
+    mock_complete_oauth_file(test_env, {"status": "wait"})
     mock_mgmt.cancel_oauth_session = AsyncMock(return_value={"status": "cancelled"})
     mock_mgmt.reset_cooldown = AsyncMock(return_value={"status": "ok"})
     mock_mgmt.delete_credential = AsyncMock(return_value={"status": "ok"})
@@ -113,7 +126,10 @@ async def test_env(tmp_path: Path):
     mock_mgmt.submit_oauth_callback = AsyncMock(return_value={"status": "ok"})
     mock_mgmt.health = AsyncMock(return_value=True)
     mock_mgmt.get_credentials = AsyncMock(return_value=[])
-    mock_supervisor.get_management_client.return_value = mock_mgmt
+    mock_supervisor._management_client = mock_mgmt
+    mock_mgmt.update_credential = AsyncMock()
+    mock_mgmt.refresh_credential = AsyncMock(return_value={"status": "ok"})
+    mock_supervisor.sync_now = AsyncMock(return_value=0)
     mock_supervisor.reload_custom_endpoints = AsyncMock()
     mock_supervisor.request_sync = MagicMock()
     mock_supervisor.stop = AsyncMock()
@@ -574,7 +590,7 @@ async def test_oauth_start_poll_cancel_expiry(test_env):
         assert d_data["verification_uri"] == "https://github.com/login/device"
 
         # 3. Poll pending session
-        mgmt.get_oauth_status.return_value = {"status": "pending"}
+        mgmt.get_oauth_status.return_value = {"status": "wait"}
         poll_resp = await client.get("/api/ai/routes/oauth/poll?state=device_state_def")
         assert poll_resp.status_code == 200
         assert poll_resp.json()["status"] == "pending"
@@ -669,7 +685,7 @@ async def test_oauth_reauth_identity_match_replaces_account(test_env):
             assert updated_cred.priority == 3
             assert updated_cred.weight == 4
 
-        updated_auth = await vault.get_oauth_auth(vault_ref)
+        updated_auth = await vault.get_oauth_auth(updated_cred.vault_reference.removeprefix("oauth_auth:"))
         assert updated_auth["access_token"] == "new_refreshed_token"
 
 
