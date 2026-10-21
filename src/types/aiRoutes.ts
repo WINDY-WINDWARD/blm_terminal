@@ -139,3 +139,51 @@ export interface VaultResetResponse {
   vault_state: string;
   active_route_id: string;
 }
+export interface EndpointKeyInput {
+  api_key: string;
+  label?: string;
+  priority?: number;
+  weight?: number;
+}
+
+export interface EndpointKeyUpdate {
+  priority?: number;
+  weight?: number;
+  enabled?: boolean;
+  status?: string;
+}
+
+export interface CreateEndpointRequest {
+  display_label: string;
+  base_url: string;
+  headers?: Record<string, string>;
+  models?: string[];
+  keys?: EndpointKeyInput[];
+}
+
+export interface UpdateEndpointRequest {
+  display_label?: string;
+  base_url?: string;
+  headers?: Record<string, string>;
+  models?: string[];
+  enabled?: boolean;
+}
+
+export interface ModelPreviewRequest {
+  base_url: string;
+  headers?: Record<string, string>;
+  api_key?: string;
+}
+
+export interface ModelPreviewResponse {
+  models: string[];
+  notice?: string;
+}
+
+export interface EndpointTestResponse {
+  status: 'ok' | 'error' | string;
+  route_id: string;
+  status_code?: number;
+  latency_ms: number;
+  error?: string;
+}

@@ -225,8 +225,20 @@ export async function fetchProviderModels(provider: string, apiKey = ''): Promis
     .map((m) => ({ id: m.id as string, label: typeof m.label === 'string' ? m.label : (m.id as string) }));
 }
 
+export async function fetchChatModels(): Promise<ProviderModel[]> {
+  const { res, data } = await fetchJson('/api/py/ai/chat/models', undefined, 10000);
+  if (!res.ok || !Array.isArray(data)) return [];
+  return (data as { id?: unknown; label?: unknown }[])
+    .filter((m) => typeof m.id === 'string' && m.id)
+    .map((m) => ({ id: m.id as string, label: typeof m.label === 'string' ? m.label : (m.id as string) }));
+}
+
 export async function initiateGeminiOAuth(): Promise<string> {
-  const { res, data } = await fetchJson('/api/py/auth/gemini/login');
+  const { res, data } = await fetchJson('/api/py/ai/routes/oauth/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'antigravity', flow: 'browser' }),
+  });
   if (!res.ok) throw new Error('Failed to initiate Gemini login');
   const authUrl = (data as { auth_url?: unknown })?.auth_url;
   if (typeof authUrl !== 'string') throw new Error('No authorization URL returned');
@@ -234,11 +246,13 @@ export async function initiateGeminiOAuth(): Promise<string> {
 }
 
 export async function checkGeminiOAuthStatus(): Promise<{ configured: boolean; hasRefreshToken: boolean }> {
-  const { res, data } = await fetchJson('/api/py/auth/gemini/status', undefined, 5000);
+  const { res, data } = await fetchJson('/api/py/ai/routes', undefined, 5000);
   if (!res.ok) return { configured: false, hasRefreshToken: false };
-  const d = data as { configured?: unknown; has_refresh_token?: unknown };
+  const d = data as { routes?: Array<{ id: string; accounts?: Array<{ enabled?: boolean }> }> };
+  const geminiRoute = d.routes?.find((r) => r.id === 'oauth:antigravity');
+  const configured = Boolean(geminiRoute && geminiRoute.accounts && geminiRoute.accounts.length > 0);
   return {
-    configured: d.configured === true,
-    hasRefreshToken: d.has_refresh_token === true,
+    configured,
+    hasRefreshToken: configured,
   };
 }

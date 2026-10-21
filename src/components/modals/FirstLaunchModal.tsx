@@ -32,6 +32,8 @@ import { AI_PROVIDERS, AI_PROVIDER_MAP } from '@/lib/aiProviders';
 import { ENGINE_WARM_LIMIT, useWarmupMessage } from '@/components/EngineWarmup';
 import { ModelCombobox } from '@/components/ModelCombobox';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
+import { OAuthSessionDialog } from '@/components/modals/AiProvidersModal/OAuthSessionDialog';
+import { fetchChatModels } from '@/lib/onboarding';
 
 type StepId = 'eula' | 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'models' | 'done';
 
@@ -126,6 +128,7 @@ export function FirstLaunchModal() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [hunterModel, setHunterModel] = useState('');
   const [verifierModel, setVerifierModel] = useState('');
+  const [oauthSession, setOauthSession] = useState<{ isOpen: boolean; provider: string; providerLabel: string } | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -453,6 +456,11 @@ export function FirstLaunchModal() {
     else setVerifierModel(value);
     try {
       await saveSystemConfig(slot, value);
+      queryClient.invalidateQueries({ queryKey: ['ai', 'routes'] });
+      queryClient.invalidateQueries({ queryKey: ['ai', 'status'] });
+      queryClient.invalidateQueries({ queryKey: ['ai', 'catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-models'] });
+      queryClient.invalidateQueries({ queryKey: ['system-config'] });
     } catch (err: unknown) {
       if (isMountedRef.current) setAiMsg(errText(err, 'Could not save worker model'));
     }
@@ -959,7 +967,7 @@ export function FirstLaunchModal() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => void handleGeminiLogin()}
+                  onClick={() => setOauthSession({ isOpen: true, provider: 'antigravity', providerLabel: 'Google Pro (Gemini)' })}
                   disabled={aiBusy}
                   className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 disabled:opacity-50 transition-colors text-sm uppercase flex items-center justify-center gap-2 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
                 >

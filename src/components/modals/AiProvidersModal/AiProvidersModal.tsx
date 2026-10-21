@@ -8,8 +8,8 @@ import { useAiRoutesQuery } from '@/hooks/useAiRoutes';
 import { useModalFocusTrap } from '@/hooks/useModalFocusTrap';
 import { TopSummary } from './TopSummary';
 import { OAuthAccountsTab } from './OAuthAccountsTab';
-import { CustomEndpointsTabPlaceholder } from './CustomEndpointsTabPlaceholder';
-import { DirectProvidersTabPlaceholder } from './DirectProvidersTabPlaceholder';
+import { CustomEndpointsTab } from './CustomEndpointsTab';
+import { DirectProvidersTab } from './DirectProvidersTab';
 
 interface AiProvidersModalProps {
   isOpen: boolean;
@@ -155,10 +155,10 @@ export function AiProvidersModal({ isOpen, onClose }: AiProvidersModalProps) {
                   <OAuthAccountsTab routes={data.routes} activeRouteId={data.active_route_id} />
                 )}
                 {activeTab === 'custom' && (
-                  <CustomEndpointsTabPlaceholder routes={data.routes} activeRouteId={data.active_route_id} />
+                  <CustomEndpointsTab routes={data.routes} activeRouteId={data.active_route_id} />
                 )}
                 {activeTab === 'direct' && (
-                  <DirectProvidersTabPlaceholder routes={data.routes} activeRouteId={data.active_route_id} />
+                  <DirectProvidersTab routes={data.routes} activeRouteId={data.active_route_id} />
                 )}
               </div>
             </>

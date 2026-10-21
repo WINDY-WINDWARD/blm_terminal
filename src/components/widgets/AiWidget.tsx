@@ -934,19 +934,20 @@ export function AiWidget() {
   const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research', documents } = current;
 
   useEffect(() => {
-    if (!defaultModel) return;
+    if (!defaultModel || availableModels.length === 0) return;
+    const validIds = new Set(availableModels.map((m) => m.id));
     setSessionMap((prev) => {
       let changed = false;
       const next = new Map(prev);
       for (const [key, state] of next) {
-        if (!state.model) {
+        if (!state.model || !validIds.has(state.model)) {
           next.set(key, { ...state, model: defaultModel });
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [defaultModel]);
+  }, [defaultModel, availableModels]);
 
   // ── Module-level sync ──────────────────────────────────────────────────────
 
@@ -1315,12 +1316,14 @@ export function AiWidget() {
       });
 
       let liveKey: number | null = sessionKey;
+      const validModelIds = new Set(availableModels.map((m) => m.id));
+      const modelToSend = sessionState.model && validModelIds.has(sessionState.model) ? sessionState.model : defaultModel;
       const migrationFallback: SessionState = {
         messages: optimisticMessages,
         input: '',
         isStreaming: true,
         toolsDone: false,
-        model: sessionState.model || defaultModel,
+        model: modelToSend,
         mode: sessionState.mode ?? 'research',
         documents: sessionState.documents ?? [],
         abortController: abort,
@@ -1351,7 +1354,7 @@ export function AiWidget() {
             messages: historyWithUser.map((m) => ({ role: m.role, content: m.content })),
             symbol: symbol.toUpperCase(),
             exchange: exchange.toUpperCase(),
-            model: sessionState.model || defaultModel,
+            model: modelToSend,
             session_id: sessionKey,
             persona: activePersona,
             mode: sessionState.mode ?? 'research',
@@ -1690,7 +1693,7 @@ export function AiWidget() {
 
             {/* Model Selector Bento Dropdown */}
             <AiModelDropdown
-              value={model || defaultModel}
+              value={availableModels.some((m) => m.id === model) ? model : defaultModel}
               onChange={(newModel) => patchSession(activeKey, { model: newModel })}
               disabled={isStreaming}
               availableModels={availableModels}

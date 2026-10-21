@@ -200,4 +200,162 @@ describe('aiRoutesClient', () => {
 
     await expect(aiRoutesClient.activateRoute('oauth:devin')).rejects.toThrow('Internal supervisor failure');
   });
+
+  it("createEndpoint calls POST /api/py/ai/routes/endpoints with credentials and body", async () => {
+    const mockRoute = { id: "endpoint:ep-1", display_label: "Ollama", kind: "endpoint" };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockRoute));
+
+    const res = await aiRoutesClient.createEndpoint({
+      display_label: "Ollama",
+      base_url: "http://localhost:11434/v1",
+      models: ["llama3"],
+    });
+    expect(res.id).toBe("endpoint:ep-1");
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        display_label: "Ollama",
+        base_url: "http://localhost:11434/v1",
+        models: ["llama3"],
+      }),
+    });
+  });
+
+  it("getEndpoint calls GET /api/py/ai/routes/endpoints/:id", async () => {
+    const mockRoute = { id: "endpoint:ep-1", display_label: "Ollama" };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockRoute));
+
+    const res = await aiRoutesClient.getEndpoint("endpoint:ep-1");
+    expect(res.id).toBe("endpoint:ep-1");
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1", {
+      method: "GET",
+      headers: {},
+      credentials: "include",
+      body: undefined,
+    });
+  });
+
+  it("updateEndpoint calls PATCH /api/py/ai/routes/endpoints/:id with body", async () => {
+    const mockRoute = { id: "endpoint:ep-1", display_label: "Ollama Updated" };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockRoute));
+
+    const res = await aiRoutesClient.updateEndpoint("endpoint:ep-1", { display_label: "Ollama Updated" });
+    expect(res.display_label).toBe("Ollama Updated");
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ display_label: "Ollama Updated" }),
+    });
+  });
+
+  it("deleteEndpoint calls DELETE /api/py/ai/routes/endpoints/:id", async () => {
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { status: "deleted", route_id: "endpoint:ep-1" }));
+
+    const res = await aiRoutesClient.deleteEndpoint("endpoint:ep-1");
+    expect(res.status).toBe("deleted");
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1", {
+      method: "DELETE",
+      headers: {},
+      credentials: "include",
+      body: undefined,
+    });
+  });
+
+  it("addEndpointKey calls POST /api/py/ai/routes/endpoints/:id/keys with body", async () => {
+    const mockKey = { id: "k-1", masked_identity: "sk-...1234", priority: 1, weight: 1 };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockKey));
+
+    const res = await aiRoutesClient.addEndpointKey("endpoint:ep-1", { api_key: "sk-secret1234", priority: 1, weight: 1 });
+    expect(res.id).toBe("k-1");
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1/keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ api_key: "sk-secret1234", priority: 1, weight: 1 }),
+    });
+  });
+
+  it("listEndpointKeys calls GET /api/py/ai/routes/endpoints/:id/keys", async () => {
+    const mockKeys = [{ id: "k-1", masked_identity: "sk-...1234" }];
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockKeys));
+
+    const res = await aiRoutesClient.listEndpointKeys("endpoint:ep-1");
+    expect(res).toEqual(mockKeys);
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1/keys", {
+      method: "GET",
+      headers: {},
+      credentials: "include",
+      body: undefined,
+    });
+  });
+
+  it("patchEndpointKey calls PATCH /api/py/ai/routes/endpoints/:id/keys/:keyId", async () => {
+    const mockKey = { id: "k-1", enabled: false };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockKey));
+
+    const res = await aiRoutesClient.patchEndpointKey("endpoint:ep-1", "k-1", { enabled: false });
+    expect(res.enabled).toBe(false);
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1/keys/k-1", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ enabled: false }),
+    });
+  });
+
+  it("deleteEndpointKey calls DELETE /api/py/ai/routes/endpoints/:id/keys/:keyId", async () => {
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { status: "deleted", key_id: "k-1" }));
+
+    const res = await aiRoutesClient.deleteEndpointKey("endpoint:ep-1", "k-1");
+    expect(res.status).toBe("deleted");
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1/keys/k-1", {
+      method: "DELETE",
+      headers: {},
+      credentials: "include",
+      body: undefined,
+    });
+  });
+
+  it("previewEndpointModels calls POST /api/py/ai/routes/endpoints/models/preview", async () => {
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { models: ["llama3", "mistral"] }));
+
+    const res = await aiRoutesClient.previewEndpointModels({ base_url: "http://localhost:11434/v1" });
+    expect(res.models).toEqual(["llama3", "mistral"]);
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/models/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ base_url: "http://localhost:11434/v1" }),
+    });
+  });
+
+  it("refreshEndpointModels calls POST /api/py/ai/routes/endpoints/:id/models/refresh", async () => {
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { models: ["llama3.1:70b"] }));
+
+    const res = await aiRoutesClient.refreshEndpointModels("endpoint:ep-1");
+    expect(res.models).toEqual(["llama3.1:70b"]);
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1/models/refresh", {
+      method: "POST",
+      headers: {},
+      credentials: "include",
+      body: undefined,
+    });
+  });
+
+  it("testEndpoint calls POST /api/py/ai/routes/endpoints/:id/test", async () => {
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { status: "ok", route_id: "endpoint:ep-1", latency_ms: 45 }));
+
+    const res = await aiRoutesClient.testEndpoint("endpoint:ep-1");
+    expect(res.status).toBe("ok");
+    expect(res.latency_ms).toBe(45);
+    expect(fetch).toHaveBeenCalledWith("/api/py/ai/routes/endpoints/endpoint%3Aep-1/test", {
+      method: "POST",
+      headers: {},
+      credentials: "include",
+      body: undefined,
+    });
+  });
 });

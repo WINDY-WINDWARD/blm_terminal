@@ -1,12 +1,20 @@
 import type {
   AccountPatchRequest,
   AccountTestResponse,
+  CreateEndpointRequest,
   CredentialSummary,
+  EndpointKeyInput,
+  EndpointKeyUpdate,
+  EndpointTestResponse,
+  ModelPreviewRequest,
+  ModelPreviewResponse,
   OAuthPollResponse,
   OAuthStartRequest,
   OAuthStartResponse,
   RouteSettingsUpdate,
   RoutesListResponse,
+  RouteSummary,
+  UpdateEndpointRequest,
   VaultResetResponse,
 } from '@/types/aiRoutes';
 
@@ -159,6 +167,101 @@ export const aiRoutesClient = {
       '/vault/reset',
       { method: 'POST' },
       'Failed to reset provider vault',
+    );
+  },
+
+  async createEndpoint(req: CreateEndpointRequest): Promise<RouteSummary> {
+    return request<RouteSummary>(
+      '/endpoints',
+      { method: 'POST', body: req },
+      'Failed to create custom endpoint',
+    );
+  },
+
+  async getEndpoint(endpointId: string): Promise<RouteSummary> {
+    return request<RouteSummary>(
+      `/endpoints/${encodeURIComponent(endpointId)}`,
+      { method: 'GET' },
+      'Failed to fetch endpoint',
+    );
+  },
+
+  async updateEndpoint(endpointId: string, patch: UpdateEndpointRequest): Promise<RouteSummary> {
+    return request<RouteSummary>(
+      `/endpoints/${encodeURIComponent(endpointId)}`,
+      { method: 'PATCH', body: patch },
+      'Failed to update endpoint',
+    );
+  },
+
+  async deleteEndpoint(endpointId: string): Promise<{ status: string; route_id: string }> {
+    return request<{ status: string; route_id: string }>(
+      `/endpoints/${encodeURIComponent(endpointId)}`,
+      { method: 'DELETE' },
+      'Failed to delete endpoint',
+    );
+  },
+
+  async addEndpointKey(endpointId: string, key: EndpointKeyInput): Promise<CredentialSummary> {
+    return request<CredentialSummary>(
+      `/endpoints/${encodeURIComponent(endpointId)}/keys`,
+      { method: 'POST', body: key },
+      'Failed to add endpoint key',
+    );
+  },
+
+  async listEndpointKeys(endpointId: string): Promise<CredentialSummary[]> {
+    return request<CredentialSummary[]>(
+      `/endpoints/${encodeURIComponent(endpointId)}/keys`,
+      { method: 'GET' },
+      'Failed to list endpoint keys',
+    );
+  },
+
+  async patchEndpointKey(
+    endpointId: string,
+    keyId: string,
+    patch: EndpointKeyUpdate,
+  ): Promise<CredentialSummary> {
+    return request<CredentialSummary>(
+      `/endpoints/${encodeURIComponent(endpointId)}/keys/${encodeURIComponent(keyId)}`,
+      { method: 'PATCH', body: patch },
+      'Failed to update endpoint key',
+    );
+  },
+
+  async deleteEndpointKey(
+    endpointId: string,
+    keyId: string,
+  ): Promise<{ status: string; key_id: string }> {
+    return request<{ status: string; key_id: string }>(
+      `/endpoints/${encodeURIComponent(endpointId)}/keys/${encodeURIComponent(keyId)}`,
+      { method: 'DELETE' },
+      'Failed to delete endpoint key',
+    );
+  },
+
+  async previewEndpointModels(req: ModelPreviewRequest): Promise<ModelPreviewResponse> {
+    return request<ModelPreviewResponse>(
+      '/endpoints/models/preview',
+      { method: 'POST', body: req },
+      'Failed to preview endpoint models',
+    );
+  },
+
+  async refreshEndpointModels(endpointId: string): Promise<{ models: string[] }> {
+    return request<{ models: string[] }>(
+      `/endpoints/${encodeURIComponent(endpointId)}/models/refresh`,
+      { method: 'POST' },
+      'Failed to refresh endpoint models',
+    );
+  },
+
+  async testEndpoint(endpointId: string): Promise<EndpointTestResponse> {
+    return request<EndpointTestResponse>(
+      `/endpoints/${encodeURIComponent(endpointId)}/test`,
+      { method: 'POST' },
+      'Failed to test endpoint',
     );
   },
 };

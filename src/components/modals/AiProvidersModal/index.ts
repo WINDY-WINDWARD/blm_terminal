@@ -4,5 +4,6 @@ export { OAuthAccountCard } from './OAuthAccountCard';
 export { OAuthSessionDialog } from './OAuthSessionDialog';
 export { TopSummary } from './TopSummary';
 export { VaultResetModal } from './VaultResetModal';
-export { CustomEndpointsTabPlaceholder } from './CustomEndpointsTabPlaceholder';
-export { DirectProvidersTabPlaceholder } from './DirectProvidersTabPlaceholder';
+export { CustomEndpointsTab } from './CustomEndpointsTab';
+export { DirectProvidersTab } from './DirectProvidersTab';
+export { EndpointEditorModal } from './EndpointEditorModal';

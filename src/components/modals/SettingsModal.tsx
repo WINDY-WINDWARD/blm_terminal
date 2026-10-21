@@ -28,6 +28,7 @@ import {
   type SavedLayout,
   showSettingsModalAtom,
   showAiProvidersModalAtom,
+  aiProvidersModalTabAtom,
   settingsModalTabAtom,
   type SettingsTabId,
 } from '@/store/terminalStore';
@@ -38,6 +39,7 @@ import {
 } from '@/lib/layouts';
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 import { AI_PROVIDERS, AI_PROVIDER_MAP } from '@/lib/aiProviders';
+import { OAuthSessionDialog } from '@/components/modals/AiProvidersModal/OAuthSessionDialog';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
 
 const NOTIF_CONFIG_KEYS = [
@@ -253,6 +255,7 @@ export interface SettingsModalProps {
 export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnClose, initialTab }: SettingsModalProps = {}) {
   const [globalIsOpen, setGlobalIsOpen] = useAtom(showSettingsModalAtom);
   const setShowAiProvidersModal = useSetAtom(showAiProvidersModalAtom);
+  const setAiProvidersModalTab = useSetAtom(aiProvidersModalTabAtom);
   const [globalTab, setGlobalTab] = useAtom(settingsModalTabAtom);
 
   const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : globalIsOpen;
@@ -335,8 +338,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
   const [aiAvailableModels, setAiAvailableModels] = useState<{id: string, label: string}[]>([]);
   const [fetchingModels, setFetchingModels] = useState(false);
   // Codex (ChatGPT subscription) device-code login state
-  const [codexLogin, setCodexLogin] = useState<{device_auth_id: string, user_code: string, verification_url: string, interval?: number} | null>(null);
-  const [codexStatus, setCodexStatus] = useState<{logged_in: boolean} | null>(null);
+  const [oauthSession, setOauthSession] = useState<{ isOpen: boolean; provider: string; providerLabel: string } | null>(null);
   
   // OTA Updater state
   const [updaterStatus, setUpdaterStatus] = useState<string>('');
@@ -481,70 +483,7 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
       .catch(console.error);
   }, []);
 
-  const refreshCodexStatus = () => {
-    fetch('/api/py/auth/codex/status')
-      .then(r => r.json())
-      .then(d => setCodexStatus(d))
-      .catch(console.error);
-  };
-
-  useEffect(() => {
-    refreshCodexStatus();
-  }, []);
-
-  const handleCodexLoginStart = () => {
-    fetch('/api/py/auth/codex/login/start', { method: 'POST' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) {
-          setApiKeySaveStatus('Codex login failed: ' + d.error);
-          return;
-        }
-        setCodexLogin(d);
-        setApiKeySaveStatus('Enter the code in your browser, then wait…');
-        const intervalMs = Math.max(3, Number(d.interval) || 5) * 1000;
-        // Device codes expire (~15 min) — stop polling then and ask to restart.
-        const deadline = Date.now() + 15 * 60 * 1000;
-        const interval = setInterval(() => {
-          if (Date.now() > deadline) {
-            clearInterval(interval);
-            setCodexLogin(null);
-            setApiKeySaveStatus('Codex code expired — click Sign in again for a fresh code.');
-            return;
-          }
-          fetch(`/api/py/auth/codex/login/poll?device_auth_id=${encodeURIComponent(d.device_auth_id)}&user_code=${encodeURIComponent(d.user_code)}`)
-            .then(r => r.json())
-            .then(st => {
-              if (st.status === 'complete') {
-                clearInterval(interval);
-                setCodexLogin(null);
-                setApiKeySaveStatus('Codex Auth Successful!');
-                setTimeout(() => setApiKeySaveStatus(null), 3000);
-                refreshCodexStatus();
-                fetch('/api/py/system-config/ai.provider', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'codex' }) }).then(() => {
-                  setAiProvider('codex');
-                  fetch('/api/py/ai/status').then(r => r.json()).then(s => setAiAuthStatus(s));
-                });
-              } else if (st.status === 'error') {
-                clearInterval(interval);
-                setCodexLogin(null);
-                setApiKeySaveStatus('Codex login failed: ' + (st.error || 'unknown error'));
-              }
-            })
-            .catch(() => {});
-        }, intervalMs);
-      })
-      .catch(err => setApiKeySaveStatus('Failed to initiate Codex login: ' + err));
-  };
-
-  const handleCodexLogout = () => {
-    fetch('/api/py/auth/codex/logout', { method: 'POST' })
-      .then(() => {
-        refreshCodexStatus();
-        fetch('/api/py/ai/status').then(r => r.json()).then(s => setAiAuthStatus(s));
-      })
-      .catch(console.error);
-  };
+  // Unified OAuth flow replaces legacy Codex polling
 
 
 
@@ -567,6 +506,11 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
         // Specifically for AI provider settings, refresh status
         if (key.startsWith('ai.')) {
           fetch('/api/py/ai/status').then(r => r.json()).then(d => setAiAuthStatus(d));
+          qc.invalidateQueries({ queryKey: ['ai', 'routes'] });
+          qc.invalidateQueries({ queryKey: ['ai', 'status'] });
+          qc.invalidateQueries({ queryKey: ['ai', 'catalog'] });
+          qc.invalidateQueries({ queryKey: ['ai-chat-models'] });
+          qc.invalidateQueries({ queryKey: ['system-config'] });
         }
       }).catch(console.error);
     }, 500);
@@ -698,18 +642,49 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
     }
 
     setFetchingModels(true);
-    fetch('/api/py/ai/provider-models', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: aiProvider, api_key: key || '' }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) setAiAvailableModels(data);
+    fetch('/api/py/ai/chat/models')
+      .then((r) => r.json())
+      .then((models) => {
+        if (Array.isArray(models) && models.length > 0) {
+          setAiAvailableModels(models);
+        } else if (key || configured) {
+          fetch('/api/py/ai/provider-models', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: aiProvider, api_key: key || '' }),
+          })
+            .then((res) => res.json())
+            .then((data) => {
+              if (Array.isArray(data)) setAiAvailableModels(data);
+            })
+            .catch(() => {});
+        } else {
+          setAiAvailableModels([{ id: '', label: `Enter ${aiProvider} API key to fetch models` }]);
+        }
       })
-      .catch(console.error)
+      .catch(() => {
+        setAiAvailableModels([{ id: '', label: `Enter ${aiProvider} API key to fetch models` }]);
+      })
       .finally(() => setFetchingModels(false));
   }, [aiProvider, aiKeysConfigured, aiZenApiKeyInput, aiGoApiKeyInput, aiAistudioApiKeyInput, aiGroqApiKeyInput, aiNvidiaApiKeyInput, aiAnthropicApiKeyInput, aiClaudeCodeTokenInput, aiOpenaiApiKeyInput, aiOpenrouterApiKeyInput, aiDeepseekApiKeyInput, aiXaiApiKeyInput, aiTogetherApiKeyInput, aiCopilotGhTokenInput]);
+
+    // Automatically remap stale worker models to first valid active-route model
+  useEffect(() => {
+    if (aiAvailableModels.length === 0) return;
+    const validIds = new Set(aiAvailableModels.map((m) => m.id).filter(Boolean));
+    if (validIds.size === 0) return;
+    const firstValid = aiAvailableModels.find((m) => m.id)?.id;
+    if (!firstValid) return;
+
+    if (aiHunterModel && !validIds.has(aiHunterModel)) {
+      setAiHunterModel(firstValid);
+      scheduleSystemConfigSave('ai.hunter_model', firstValid);
+    }
+    if (aiVerifierModel && !validIds.has(aiVerifierModel)) {
+      setAiVerifierModel(firstValid);
+      scheduleSystemConfigSave('ai.verifier_model', firstValid);
+    }
+  }, [aiAvailableModels, aiHunterModel, aiVerifierModel]);
 
   const handleWatchlistChange = (key: string, checked: boolean) => {
     const newCols = checked
@@ -1370,76 +1345,62 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
                         </label>
 
                         {aiProvider === 'gemini' ? (
-                          <div className="flex flex-col gap-1 mt-1">
+                          <div className="flex flex-col gap-2 mt-1">
                             <span className="text-white/70 text-[10px]">Use your existing Google subscription via the Google Antigravity proxy — no API key needed.</span>
-                            <div className="p-2 border border-terminal-amber/30 bg-terminal-amber/10 rounded text-[10px] text-zinc-300 leading-relaxed">
-                              <span className="text-terminal-amber font-semibold block mb-0.5">Notice: Gemini Model Updates</span>
-                              Google now exclusively supports Gemini 3.8 Flash (High, Medium, and Low tiers). Gemini 3.1 Pro and Flash models below 3.8 have been retired by Google. All existing sessions and worker configurations are automatically remapped to Gemini 3.8 Flash internally.
-                            </div>
-                            <span className="text-white/70 text-[10px]">Gemini Authentication:</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                fetch('/api/py/auth/gemini/login')
-                                  .then(r => r.json())
-                                  .then(d => {
-                                    if (d.auth_url) {
-                                      window.open(d.auth_url, '_blank');
-                                      setApiKeySaveStatus('Awaiting Google OAuth... Check your browser.');
-                                      const interval = setInterval(() => {
-                                        fetch('/api/py/auth/gemini/status').then(r => r.json()).then(st => {
-                                          if (st.configured && st.has_refresh_token) {
-                                            clearInterval(interval);
-                                            setApiKeySaveStatus('Gemini Auth Successful!');
-                                            setTimeout(() => setApiKeySaveStatus(null), 3000);
-                                            fetch('/api/py/system-config/ai.provider', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'gemini' }) }).then(() => {
-                                              fetch('/api/py/ai/status').then(r => r.json()).then(d => setAiAuthStatus(d));
-                                            });
-                                          }
-                                        });
-                                      }, 3000);
-                                    }
-                                  })
-                                  .catch(err => setApiKeySaveStatus('Failed to initiate login: ' + err));
-                              }}
-                              className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
-                            >
-                              Login to Gemini
-                            </button>
-                          </div>
-                        ) : aiProvider === 'codex' ? (
-                          <div className="flex flex-col gap-1 mt-1">
-                            <span className="text-white/70 text-[10px]">Use your ChatGPT Plus/Pro subscription via the Codex backend — no API key needed.</span>
-                            {codexStatus?.logged_in ? (
-                              <div className="flex items-center gap-2 mt-1">
-                                <span className="text-terminal-green text-[10px]">✅ Signed in to Codex</span>
-                                <button
-                                  type="button"
-                                  onClick={handleCodexLogout}
-                                  className="px-2 py-0.5 border border-terminal-border text-white/70 hover:text-white text-[10px] uppercase transition-colors"
-                                >
-                                  Sign out
-                                </button>
-                              </div>
-                            ) : codexLogin ? (
-                              <div className="flex flex-col gap-1 mt-1 border border-terminal-border p-2">
-                                <span className="text-white/70 text-[10px]">1. Open this URL in your browser:</span>
-                                <a href={codexLogin.verification_url} target="_blank" rel="noreferrer" className="text-terminal-amber text-[10px] underline break-all">
-                                  {codexLogin.verification_url}
-                                </a>
-                                <span className="text-white/70 text-[10px]">2. Enter this code:</span>
-                                <span className="text-white font-mono text-lg font-bold tracking-widest">{codexLogin.user_code}</span>
-                                <span className="text-white/50 text-[10px] animate-pulse">Waiting for sign-in…</span>
-                              </div>
-                            ) : (
+                            <div className="flex items-center gap-2">
                               <button
                                 type="button"
-                                onClick={handleCodexLoginStart}
-                                className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start"
+                                onClick={() => {
+                                  setOauthSession({
+                                    isOpen: true,
+                                    provider: 'antigravity',
+                                    providerLabel: 'Google Pro (Gemini)',
+                                  });
+                                }}
+                                className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start cursor-pointer"
+                              >
+                                Login to Gemini
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAiProvidersModalTab('oauth');
+                                  setShowAiProvidersModal(true);
+                                }}
+                                className="px-3 py-1 bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-700 text-xs font-mono uppercase transition-colors self-start cursor-pointer"
+                              >
+                                [Open Provider Manager]
+                              </button>
+                            </div>
+                          </div>
+                        ) : aiProvider === 'codex' ? (
+                          <div className="flex flex-col gap-2 mt-1">
+                            <span className="text-white/70 text-[10px]">Use your ChatGPT Plus/Pro subscription via the Codex backend — no API key needed.</span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOauthSession({
+                                    isOpen: true,
+                                    provider: 'codex',
+                                    providerLabel: 'OpenAI Codex (ChatGPT)',
+                                  });
+                                }}
+                                className="px-3 py-1 bg-terminal-amber/20 border border-terminal-amber text-terminal-amber hover:bg-terminal-amber hover:text-black font-bold text-xs uppercase transition-colors self-start cursor-pointer"
                               >
                                 Sign in with ChatGPT
                               </button>
-                            )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAiProvidersModalTab('oauth');
+                                  setShowAiProvidersModal(true);
+                                }}
+                                className="px-3 py-1 bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-700 text-xs font-mono uppercase transition-colors self-start cursor-pointer"
+                              >
+                                [Open Provider Manager]
+                              </button>
+                            </div>
                           </div>
                         ) : activeKeyBinding ? (
                           <label className="flex flex-col gap-0.5">

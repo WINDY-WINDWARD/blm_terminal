@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { aiRoutesClient } from '@/lib/aiRoutesClient';
-import type { AccountPatchRequest, RouteSettingsUpdate } from '@/types/aiRoutes';
+import type {
+  AccountPatchRequest,
+  CreateEndpointRequest,
+  EndpointKeyInput,
+  EndpointKeyUpdate,
+  ModelPreviewRequest,
+  RouteSettingsUpdate,
+  UpdateEndpointRequest,
+} from '@/types/aiRoutes';
 
 export const AI_ROUTES_QUERY_KEY = ['ai', 'routes'] as const;
 
@@ -20,6 +28,7 @@ export function useInvalidateAiCaches() {
     queryClient.invalidateQueries({ queryKey: ['ai', 'status'] });
     queryClient.invalidateQueries({ queryKey: ['ai', 'catalog'] });
     queryClient.invalidateQueries({ queryKey: ['system-config'] });
+    queryClient.invalidateQueries({ queryKey: ['ai-chat-models'] });
   };
 }
 
@@ -97,5 +106,98 @@ export function useResetVaultMutation() {
     onSuccess: () => {
       invalidate();
     },
+  });
+}
+
+export function useCreateEndpointMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: (req: CreateEndpointRequest) => aiRoutesClient.createEndpoint(req),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function useUpdateEndpointMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: ({ endpointId, patch }: { endpointId: string; patch: UpdateEndpointRequest }) =>
+      aiRoutesClient.updateEndpoint(endpointId, patch),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function useDeleteEndpointMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: (endpointId: string) => aiRoutesClient.deleteEndpoint(endpointId),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function useAddEndpointKeyMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: ({ endpointId, key }: { endpointId: string; key: EndpointKeyInput }) =>
+      aiRoutesClient.addEndpointKey(endpointId, key),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function usePatchEndpointKeyMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: ({
+      endpointId,
+      keyId,
+      patch,
+    }: {
+      endpointId: string;
+      keyId: string;
+      patch: EndpointKeyUpdate;
+    }) => aiRoutesClient.patchEndpointKey(endpointId, keyId, patch),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function useDeleteEndpointKeyMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: ({ endpointId, keyId }: { endpointId: string; keyId: string }) =>
+      aiRoutesClient.deleteEndpointKey(endpointId, keyId),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function useRefreshEndpointModelsMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: (endpointId: string) => aiRoutesClient.refreshEndpointModels(endpointId),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
+export function useTestEndpointMutation() {
+  return useMutation({
+    mutationFn: (endpointId: string) => aiRoutesClient.testEndpoint(endpointId),
+  });
+}
+
+export function usePreviewEndpointModelsMutation() {
+  return useMutation({
+    mutationFn: (req: ModelPreviewRequest) => aiRoutesClient.previewEndpointModels(req),
   });
 }
