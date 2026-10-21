@@ -136,3 +136,31 @@ def test_license_file_content():
     license_text = LICENSE_FILE.read_text(encoding="utf-8")
     assert "MIT License" in license_text
     assert "Router-For.ME" in license_text
+
+def test_electron_builder_packages_cliproxyapi_and_notice():
+    """Ensure electron-builder.json includes CLIProxyAPI binary and notices for both Windows and macOS."""
+    eb_path = REPO_ROOT / "electron-builder.json"
+    assert eb_path.exists(), "electron-builder.json missing"
+    eb_config = json.loads(eb_path.read_text(encoding="utf-8"))
+
+    # Windows extraResources
+    win_resources = eb_config.get("win", {}).get("extraResources", [])
+    win_from_to = {item["from"]: item["to"] for item in win_resources}
+    assert "vendor/cliproxyapi/runtime/cliproxyapi.exe" in win_from_to
+    assert win_from_to["vendor/cliproxyapi/runtime/cliproxyapi.exe"] == "resources/cliproxyapi/cliproxyapi.exe"
+    assert "resources/cliproxyapi" in win_from_to
+    assert win_from_to["resources/cliproxyapi"] == "resources/cliproxyapi"
+
+    # macOS extraResources
+    mac_resources = eb_config.get("mac", {}).get("extraResources", [])
+    mac_from_to = {item["from"]: item["to"] for item in mac_resources}
+    assert "vendor/cliproxyapi/runtime/cliproxyapi" in mac_from_to
+    assert mac_from_to["vendor/cliproxyapi/runtime/cliproxyapi"] == "resources/cliproxyapi/cliproxyapi"
+    assert "resources/cliproxyapi" in mac_from_to
+    assert mac_from_to["resources/cliproxyapi"] == "resources/cliproxyapi"
+
+    # Verify notice and provenance files exist in the packaged directory
+    pkg_dir = REPO_ROOT / "resources" / "cliproxyapi"
+    assert (pkg_dir / "LICENSE").exists()
+    assert (pkg_dir / "PROVENANCE.json").exists()
+    assert (pkg_dir / "PROVENANCE.md").exists()
