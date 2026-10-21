@@ -405,7 +405,7 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
                   Optional Secret Headers
                 </span>
                 <span className="text-[10px] text-zinc-500 font-sans">
-                  Stored securely in the OS keyring vault only; never rendered in HTML or logs.
+                  Stored securely in the OS keyring vault. Existing values are never shown; saving any header edit replaces the full stored set.
                 </span>
               </div>
               <button
