@@ -13,13 +13,11 @@ import {
   acceptEula,
   checkAiStatus,
   checkBackendHealth,
-  checkGeminiOAuthStatus,
   completeFirstBoot,
-  fetchProviderModels,
+  fetchChatModels,
   getEulaStatus,
   getFirstBootStatus,
   getSetupStatus,
-  initiateGeminiOAuth,
   loginWithPassword,
   postScrapingConsent,
   saveSystemConfig,
@@ -33,7 +31,6 @@ import { ENGINE_WARM_LIMIT, useWarmupMessage } from '@/components/EngineWarmup';
 import { ModelCombobox } from '@/components/ModelCombobox';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
 import { OAuthSessionDialog } from '@/components/modals/AiProvidersModal/OAuthSessionDialog';
-import { fetchChatModels } from '@/lib/onboarding';
 
 type StepId = 'eula' | 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'models' | 'done';
 
@@ -64,7 +61,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 const inputCls =
   'w-full bg-terminal-bg border border-terminal-border p-2 text-terminal-amber text-sm focus:outline-none focus:border-terminal-amber focus:ring-1 focus:ring-terminal-amber transition-colors';
 
-export function FirstLaunchModal() {
+export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {}) {
   const [completed, setCompleted] = useAtom(onboardingCompletedAtom);
   const [, setTutorialStatus] = useAtom(tutorialStatusAtom);
   const [auth, setAuth] = useAtom(authAtom);
@@ -72,7 +69,13 @@ export function FirstLaunchModal() {
   const queryClient = useQueryClient();
 
   const [mounted, setMounted] = useState(false);
-  const [stepIdx, setStepIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(() => {
+    if (initialStep) {
+      const idx = STEPS.findIndex((s) => s.id === initialStep);
+      return idx >= 0 ? idx : 0;
+    }
+    return 0;
+  });
 
   // backend step
   const [health, setHealth] = useState<HealthResult | null>(null);
@@ -118,7 +121,6 @@ export function FirstLaunchModal() {
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMsg, setAiMsg] = useState('');
-  const geminiPollRef = useRef<NodeJS.Timeout | null>(null);
   const keyDebounceRef = useRef<NodeJS.Timeout | null>(null);
   // Guards async continuations (debounced saves, OAuth polling) against
   // setting state after the modal unmounts.
@@ -133,12 +135,7 @@ export function FirstLaunchModal() {
   useEffect(() => {
     setMounted(true);
     return () => {
-      isMountedRef.current = false;
-      if (geminiPollRef.current) {
-        clearInterval(geminiPollRef.current);
-        geminiPollRef.current = null;
-      }
-      if (keyDebounceRef.current) {
+      isMountedRef.current = false;      if (keyDebounceRef.current) {
         clearTimeout(keyDebounceRef.current);
         keyDebounceRef.current = null;
       }
@@ -192,7 +189,7 @@ export function FirstLaunchModal() {
           if (st) setAiStatus(st);
           if (st?.isConfigured && aiProvider !== 'codex') {
             const key = aiProvider === 'gemini' ? '' : aiKey;
-            await loadProviderModels(aiProvider, key);
+            await loadProviderModels();
           }
         } catch {
           // loadProviderModels already clears the list on failure.
@@ -330,7 +327,25 @@ export function FirstLaunchModal() {
   // the modal reappeared mid-session and the unrecorded accept trapped the
   // user in the tour forever. An accept made while unreachable re-flashes
   // on the next healthy boot instead of trapping the user here.
-  if (!mounted) return null;
+  // Automatically remap stale worker models to first valid active-route model
+  useEffect(() => {
+    if (providerModels.length === 0) return;
+    const validIds = new Set(providerModels.map((m) => m.id).filter(Boolean));
+    if (validIds.size === 0) return;
+    const firstValid = providerModels.find((m) => m.id)?.id;
+    if (!firstValid) return;
+
+    if (!hunterModel || !validIds.has(hunterModel)) {
+      setHunterModel(firstValid);
+      void saveSystemConfig('ai.hunter_model', firstValid);
+    }
+    if (!verifierModel || !validIds.has(verifierModel)) {
+      setVerifierModel(firstValid);
+      void saveSystemConfig('ai.verifier_model', firstValid);
+    }
+  }, [providerModels, hunterModel, verifierModel]);
+
+    if (!mounted) return null;
   if (completed && !(eulaStatus?.reachable === true && eulaStatus?.accepted === false)) return null;
 
   // Loading gate: while the backend flag is unread, show a spinner instead
@@ -438,11 +453,11 @@ export function FirstLaunchModal() {
   const providerKeyPlaceholder = (p: string): string =>
     AI_PROVIDER_MAP[p]?.placeholder ?? 'sk-…';
 
-  // Load the provider's model catalog for the hunter/verifier pickers.
-  const loadProviderModels = async (provider: string, key: string) => {
+    // Load the route-qualified model catalog for the hunter/verifier pickers.
+  const loadProviderModels = async () => {
     setModelsLoading(true);
     try {
-      const models = await fetchProviderModels(provider, key);
+      const models = await fetchChatModels();
       if (isMountedRef.current) setProviderModels(models);
     } catch {
       if (isMountedRef.current) setProviderModels([]);
@@ -450,6 +465,7 @@ export function FirstLaunchModal() {
       if (isMountedRef.current) setModelsLoading(false);
     }
   };
+
 
   const handleWorkerModelChange = async (slot: 'ai.hunter_model' | 'ai.verifier_model', value: string) => {
     if (slot === 'ai.hunter_model') setHunterModel(value);
@@ -466,12 +482,7 @@ export function FirstLaunchModal() {
     }
   };
 
-  const handleProviderChange = (newProvider: string) => {
-    if (geminiPollRef.current) {
-      clearInterval(geminiPollRef.current);
-      geminiPollRef.current = null;
-    }
-    setAiProvider(newProvider);
+  const handleProviderChange = (newProvider: string) => {    setAiProvider(newProvider);
     setAiMsg('');
     setAiBusy(false);
     setAiKey('');
@@ -494,51 +505,7 @@ export function FirstLaunchModal() {
     }
   };
 
-  const handleGeminiLogin = async () => {
-    setAiMsg('');
-    setAiBusy(true);
-    if (geminiPollRef.current) {
-      clearInterval(geminiPollRef.current);
-      geminiPollRef.current = null;
-    }
-    try {
-      const authUrl = await initiateGeminiOAuth();
-      window.open(authUrl, '_blank');
-      setAiMsg('Awaiting Google OAuth... Complete sign-in in your browser window.');
-      geminiPollRef.current = setInterval(async () => {
-        if (!isMountedRef.current) {
-          if (geminiPollRef.current) {
-            clearInterval(geminiPollRef.current);
-            geminiPollRef.current = null;
-          }
-          return;
-        }
-        try {
-          const status = await checkGeminiOAuthStatus();
-          if (status.configured && status.hasRefreshToken) {
-            if (geminiPollRef.current) {
-              clearInterval(geminiPollRef.current);
-              geminiPollRef.current = null;
-            }
-            await saveSystemConfig('ai.provider', 'gemini');
-            const st = await checkAiStatus();
-            if (!isMountedRef.current) return;
-            setAiStatus(st);
-            setAiMsg('Gemini connected successfully!');
-            setAiBusy(false);
-            if (st.isConfigured) void loadProviderModels('gemini', '');
-          }
-        } catch {
-          // Keep polling
-        }
-      }, 2500);
-    } catch (err: unknown) {
-      if (!isMountedRef.current) return;
-      setAiBusy(false);
-      setAiMsg(errText(err, 'Failed to initiate Google OAuth'));
-    }
-  };
-
+  
   const handleKeyChange = (val: string) => {
     setAiKey(val);
     setAiMsg('');
@@ -558,7 +525,7 @@ export function FirstLaunchModal() {
         if (!isMountedRef.current) return;
         setAiStatus(st);
         setAiMsg(st.isConfigured ? 'Connected successfully.' : '');
-        if (st.isConfigured) void loadProviderModels(aiProvider, trimmed);
+        if (st.isConfigured) void loadProviderModels();
         else setProviderModels([]);
       } catch (err: unknown) {
         if (isMountedRef.current) setAiMsg(errText(err, 'Could not save AI key'));
@@ -1116,6 +1083,23 @@ export function FirstLaunchModal() {
           )}
         </div>
       </div>
+      {oauthSession && (
+        <OAuthSessionDialog
+          isOpen={oauthSession.isOpen}
+          provider={oauthSession.provider}
+          providerLabel={oauthSession.providerLabel}
+          flow={oauthSession.provider === 'codex' ? 'device' : 'browser'}
+          onClose={() => setOauthSession(null)}
+          onSuccess={() => {
+            setOauthSession(null);
+            checkAiStatus().then((st) => {
+              if (!isMountedRef.current) return;
+              setAiStatus(st);
+              if (st?.isConfigured) void loadProviderModels();
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

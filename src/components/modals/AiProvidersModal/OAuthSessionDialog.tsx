@@ -21,7 +21,7 @@ interface OAuthSessionDialogProps {
   isOpen: boolean;
   provider: string;
   providerLabel: string;
-  flow: 'browser' | 'device';
+  flow?: 'browser' | 'device';
   replaceAccountId?: string | null;
   replaceAccountIdentity?: string | null;
   onClose: () => void;
@@ -32,7 +32,7 @@ export function OAuthSessionDialog({
   isOpen,
   provider,
   providerLabel,
-  flow,
+  flow = provider === 'codex' ? 'device' : 'browser',
   replaceAccountId,
   replaceAccountIdentity,
   onClose,
@@ -236,6 +236,7 @@ export function OAuthSessionDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="oauth-dialog-title"
+      data-testid="oauth-session-dialog"
       className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150 select-none outline-none"
       onClick={(e) => {
         if (e.target === e.currentTarget) handleDismiss();

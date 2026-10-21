@@ -69,6 +69,7 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
 
   // Deletion confirm state
   const [deletingRouteId, setDeletingRouteId] = useState<string | null>(null);
+  const [tabError, setTabError] = useState<string | null>(null);
 
   const handleOpenCreate = () => {
     setEditingRoute(null);
@@ -81,10 +82,13 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
   };
 
   const handleDeleteRoute = async (routeId: string) => {
+    setTabError(null);
     try {
       await deleteEndpointMutation.mutateAsync(routeId);
       setDeletingRouteId(null);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Delete endpoint failed';
+      setTabError(msg);
       console.error('Delete endpoint failed', err);
     }
   };
@@ -137,6 +141,7 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
 
   const handleSaveNewKey = async (endpointId: string) => {
     if (!newKeyInput.trim()) return;
+    setTabError(null);
     try {
       await addKeyMutation.mutateAsync({
         endpointId,
@@ -151,12 +156,33 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
       setNewKeyPriority(1);
       setNewKeyWeight(1);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Add key failed';
+      setTabError(msg);
       console.error('Add key failed', err);
     }
   };
 
   return (
     <div data-testid="custom-endpoints-tab" className="flex flex-col gap-4 font-sans">
+      {tabError && (
+        <div
+          data-testid="custom-endpoints-error-banner"
+          className="p-3 bg-rose-950/40 border border-rose-800 rounded-lg flex items-center justify-between text-rose-300 font-mono text-xs"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>{tabError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setTabError(null)}
+            className="text-zinc-400 hover:text-white p-1 cursor-pointer"
+            title="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Intro Bento Banner */}
       <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-start gap-3">

@@ -254,7 +254,7 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
           patch: {
             display_label: displayLabel.trim(),
             base_url: baseUrl.trim(),
-            headers: Object.keys(headersDict).length > 0 ? headersDict : undefined,
+            headers: headersDict,
             models: models.length > 0 ? models : ['default'],
           },
         });

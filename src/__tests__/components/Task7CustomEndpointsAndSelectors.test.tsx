@@ -17,6 +17,7 @@ import {
   aiProvidersModalTabAtom,
   onboardingCompletedAtom,
   authAtom,
+  advancedScrapingConsentAtom,
 } from '@/store/terminalStore';
 import type { RouteSummary } from '@/types/aiRoutes';
 
@@ -344,6 +345,62 @@ describe('Task 7: Custom Endpoints, Direct Providers & Model Selectors', () => {
         expect(deletedKey).toBe(true);
       });
     });
+    it('displays error banner when endpoint deletion or key addition fails', async () => {
+      server.use(
+        http.delete('/api/py/ai/routes/endpoints/:id', () => {
+          return new HttpResponse(JSON.stringify({ detail: 'Endpoint is locked by active session' }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }),
+      );
+
+      render(
+        <CustomEndpointsTab
+          routes={[mockCustomEndpointRoute]}
+          activeRouteId="direct:aistudio"
+        />,
+      );
+
+      // Click delete button on endpoint card
+      const delBtn = screen.getByTestId('delete-endpoint-endpoint:ep-uuid-1');
+      fireEvent.click(delBtn);
+
+      // Confirm delete
+      const confirmBtn = screen.getByTestId('confirm-delete-btn-endpoint:ep-uuid-1');
+      fireEvent.click(confirmBtn);
+
+      await waitFor(() => {
+        const errorBanner = screen.getByTestId('custom-endpoints-error-banner');
+        expect(errorBanner).toHaveTextContent('Endpoint is locked by active session');
+      });
+    });
+
+    it('EndpointEditorModal sends empty headers object on edit when all headers are removed', async () => {
+      let patchedBody: any = null;
+      server.use(
+        http.patch('/api/py/ai/routes/endpoints/:id', async ({ request }) => {
+          patchedBody = await request.json();
+          return HttpResponse.json({ status: 'ok', route: mockCustomEndpointRoute });
+        }),
+      );
+
+      render(
+        <EndpointEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          route={mockCustomEndpointRoute}
+        />,
+      );
+
+      const saveBtn = screen.getByTestId('save-endpoint-btn');
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(patchedBody).not.toBeNull();
+        expect(patchedBody.headers).toEqual({});
+      });
+    });
   });
 
   // ── 2. Direct Providers Tab ──────────────────────────────────────────────────
@@ -525,25 +582,98 @@ describe('Task 7: Custom Endpoints, Direct Providers & Model Selectors', () => {
       expect(codexStatusCalled).not.toHaveBeenCalled();
     });
 
-    it('FirstLaunchModal loads route-qualified models and remaps stale worker models', async () => {
+    it('SettingsModal renders OAuthSessionDialog when sign in with ChatGPT is clicked', async () => {
+      server.use(
+        http.post('/api/py/layouts/bulk-sync', () => HttpResponse.json({ status: 'ok', layouts: [], tombstones: [] })),
+        http.get('/api/watchlists', () => HttpResponse.json([])),
+        http.get('/api/py/system_config/browser-status', () => HttpResponse.json({ available: false })),
+        http.get('/api/py/system_config/consent', () => HttpResponse.json({ status: 'ok' })),
+        http.get('/api/py/system-config', () => {
+          return HttpResponse.json({
+            'ai.provider': 'codex',
+          });
+        }),
+        http.get('/api/py/ai/status', () => {
+          return HttpResponse.json({
+            provider: 'codex',
+            is_configured: false,
+          });
+        }),
+        http.get('/api/py/ai/chat/models', () => {
+          return HttpResponse.json([]);
+        }),
+        http.post('/api/py/ai/routes/oauth/start', () => {
+          return HttpResponse.json({
+            session_id: 'sess-123',
+            provider: 'codex',
+            flow: 'device',
+            user_code: 'ABCD-EFGH',
+            verification_uri: 'https://auth0.openai.com/activate',
+            expires_in: 900,
+            interval: 5,
+          });
+        }),
+      );
+
+      render(
+        <SavedLayoutsSyncProvider>
+          <SettingsModal />
+        </SavedLayoutsSyncProvider>,
+        {
+          wrapperProps: {
+            initialAtomValues: [
+              [showSettingsModalAtom, true],
+              [authAtom, { user: { id: 'admin', is_admin: true } }],
+            ],
+          },
+        },
+      );
+
+      // Switch to AI tab
+      await waitFor(() => {
+        const aiTab = screen.getByRole('button', { name: /INTELLIGENCE/i });
+        fireEvent.click(aiTab);
+      });
+
+
+      // Find and click "Sign in with ChatGPT"
+      const signInBtn = await screen.findByRole('button', { name: /Sign in with ChatGPT/i });
+      fireEvent.click(signInBtn);
+
+      // OAuthSessionDialog must render in the DOM
+      await waitFor(() => {
+        expect(screen.getByTestId('oauth-session-dialog')).toBeInTheDocument();
+        expect(screen.getByText(/Connect OpenAI Codex \(ChatGPT\)/i)).toBeInTheDocument();
+      });
+    });
+
+    it('FirstLaunchModal advances to models step, loads route-qualified catalog, and remaps stale worker models', async () => {
       let savedHunter = '';
       let savedVerifier = '';
 
       server.use(
-        http.get('/api/py/first-boot', () => HttpResponse.json({ first_boot: true })),
-        http.get('/api/py/eula', () => HttpResponse.json({ accepted: true })),
-        http.get('/api/py/eula-status', () => HttpResponse.json({ accepted: true, reachable: true })),
-        http.get('/api/py/auth/setup-status', () => HttpResponse.json({ database_ready: true, admin_created: true })),
-        http.get('/api/py/setup-status', () =>
-          HttpResponse.json({ database_ready: true, admin_created: true }),
+        http.get('/api/py/first-boot', () =>
+          HttpResponse.json({ reachable: true, onboardingCompleted: false }),
         ),
+        http.get('/api/py/eula', () => HttpResponse.json({ accepted: true })),
+        http.get('/api/py/eula-status', () =>
+          HttpResponse.json({ accepted: true, reachable: true, version: 'eula-v1' }),
+        ),
+        http.get('/api/py/auth/setup-status', () =>
+          HttpResponse.json({ database_ready: true, admin_created: true, needs_setup: false }),
+        ),
+        http.get('/api/py/system-config', () => {
+          return HttpResponse.json({
+            'ai.provider': 'aistudio',
+          });
+        }),
         http.get('/api/py/ai/status', () =>
-          HttpResponse.json({ provider: 'aistudio', is_configured: true }),
+          HttpResponse.json({ provider: 'aistudio', is_configured: true, isConfigured: true }),
         ),
         http.get('/api/py/ai/chat/models', () => {
           return HttpResponse.json([
-            { id: 'direct:aistudio/gemini-3.8-flash-high', label: 'Gemini 3.8 Flash High' },
-            { id: 'direct:aistudio/gemini-3.8-flash-low', label: 'Gemini 3.8 Flash Low' },
+            { id: 'blm:direct:aistudio/gemini-3.8-flash-high', label: 'Gemini 3.8 Flash High' },
+            { id: 'blm:direct:aistudio/gemini-3.8-flash-low', label: 'Gemini 3.8 Flash Low' },
           ]);
         }),
         http.put('/api/py/system-config/:key', async ({ params, request }) => {
@@ -556,18 +686,115 @@ describe('Task 7: Custom Endpoints, Direct Providers & Model Selectors', () => {
 
       render(<FirstLaunchModal />, {
         wrapperProps: {
-          initialAtomValues: [[onboardingCompletedAtom, false]],
+          initialAtomValues: [
+            [onboardingCompletedAtom, false],
+            [authAtom, { user: { id: 'admin', username: 'admin', is_admin: true } }],
+            [advancedScrapingConsentAtom, true],
+          ],
         },
       });
 
-      // Step starts at welcome/eula/backend etc.
-      // We verify fetchChatModels is available and loads properly
-      const { fetchChatModels } = await import('@/lib/onboarding');
-      const models = await fetchChatModels();
-      expect(models).toHaveLength(2);
-      expect(models[0].id).toBe('direct:aistudio/gemini-3.8-flash-high');
+      // 1. Wizard loads at 'welcome' step (EULA is pre-agreed)
+      expect(await screen.findByText('Welcome to BLM Terminal.')).toBeInTheDocument();
+
+      // Click Continue to step 2: 'backend'
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+      // Wait for backend health check to succeed, then click Continue to step 3: 'admin'
+      await waitFor(() => {
+        expect(screen.getByText('Checking engine status')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+      // Admin is already signed in via authAtom, click Continue to step 4: 'consent'
+      await waitFor(() => {
+        expect(screen.getByText(/Signed in as admin/i)).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+      // Consent is agreed via atom, click Continue to step 5: 'ai'
+      await waitFor(() => {
+        expect(screen.getByText(/Data extraction & privacy/i)).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+      // On 'ai' step, click Continue to step 6: 'models'
+      await waitFor(() => {
+        expect(screen.getByText(/AI assistant \(optional\)/i)).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+
+      // 2. Now on the 'models' step: verify worker models section renders
+      await waitFor(() => {
+        expect(screen.getByText('HUNTER MODEL')).toBeInTheDocument();
+        expect(screen.getByText('VERIFIER MODEL')).toBeInTheDocument();
+      });
+
+      // 3. Verify automatic remapping to first valid route-qualified model and saved values
+      await waitFor(() => {
+        expect(savedHunter).toBe('blm:direct:aistudio/gemini-3.8-flash-high');
+        expect(savedVerifier).toBe('blm:direct:aistudio/gemini-3.8-flash-high');
+      });
+
+      // 4. Verify ModelCombobox displays route-qualified labels
+      expect(screen.getAllByText('Gemini 3.8 Flash High').length).toBeGreaterThan(0);
     });
+
+    it('FirstLaunchModal renders OAuthSessionDialog when Google Gemini login is clicked', async () => {
+      server.use(
+        http.get('/api/py/first-boot', () =>
+          HttpResponse.json({ reachable: true, onboardingCompleted: false }),
+        ),
+        http.get('/api/py/eula-status', () =>
+          HttpResponse.json({ accepted: true, reachable: true, version: 'eula-v1' }),
+        ),
+        http.get('/api/py/ai/status', () =>
+          HttpResponse.json({ provider: 'gemini', is_configured: false }),
+        ),
+        http.get('/api/py/system-config', () => {
+          return HttpResponse.json({ 'ai.provider': 'gemini' });
+        }),
+        http.post('/api/py/ai/routes/oauth/start', () => {
+          return HttpResponse.json({
+            session_id: 'sess-gemini-1',
+            provider: 'antigravity',
+            flow: 'browser',
+            auth_url: 'https://accounts.google.com/o/oauth2/auth?...',
+            expires_in: 600,
+            interval: 5,
+          });
+        }),
+      );
+
+      render(<FirstLaunchModal initialStep="ai" />, {
+        wrapperProps: {
+          initialAtomValues: [
+            [onboardingCompletedAtom, false],
+            [authAtom, { user: { id: 'admin', username: 'admin', is_admin: true } }],
+          ],
+        },
+      });
+
+      // Wait for first boot probe to settle past 'Reading setup state...'
+      await waitFor(() => {
+        expect(screen.queryByText(/Reading setup state/i)).not.toBeInTheDocument();
+      });
+
+      // Switch to Gemini provider
+      const select = await screen.findByRole('combobox');
+      fireEvent.change(select, { target: { value: 'gemini' } });
+
+      // Click "Login with Google (Gemini)"
+      const loginBtn = await screen.findByRole('button', { name: /Login with Google \(Gemini\)/i });
+      fireEvent.click(loginBtn);
+
+      // OAuthSessionDialog must render in the DOM
+      await waitFor(() => {
+        expect(screen.getByTestId('oauth-session-dialog')).toBeInTheDocument();
+        expect(screen.getByText(/Connect Google Pro \(Gemini\)/i)).toBeInTheDocument();
+      });
     });
+  });
   // ── 5. AiWidget Model Selection & Stale Remapping ────────────────────────────
 
   describe('AiWidget & Model Selector Integration', () => {

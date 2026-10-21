@@ -1665,6 +1665,26 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
           </button>
         </div>
       </div>
+      {oauthSession && (
+        <OAuthSessionDialog
+          isOpen={oauthSession.isOpen}
+          provider={oauthSession.provider}
+          providerLabel={oauthSession.providerLabel}
+          flow={oauthSession.provider === 'codex' ? 'device' : 'browser'}
+          onClose={() => setOauthSession(null)}
+          onSuccess={() => {
+            setOauthSession(null);
+            fetch('/api/py/ai/status')
+              .then((r) => r.json())
+              .then((d) => setAiAuthStatus(d))
+              .catch(console.error);
+            qc.invalidateQueries({ queryKey: ['ai', 'routes'] });
+            qc.invalidateQueries({ queryKey: ['ai', 'status'] });
+            qc.invalidateQueries({ queryKey: ['ai', 'catalog'] });
+            qc.invalidateQueries({ queryKey: ['ai-chat-models'] });
+          }}
+        />
+      )}
     </div>
   );
 }
