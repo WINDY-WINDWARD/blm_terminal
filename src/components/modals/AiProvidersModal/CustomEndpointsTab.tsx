@@ -454,10 +454,17 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
                             <span>Priority:</span>
                             <input
                               type="number"
+                              step="1"
                               min="1"
                               max="100"
                               value={newKeyPriority}
-                              onChange={(e) => setNewKeyPriority(parseInt(e.target.value) || 1)}
+                              aria-label="New endpoint key priority"
+                              aria-describedby="new-endpoint-key-routing-help"
+                              title="Lower numbers are tried first."
+                              onChange={(e) => {
+                                const value = e.currentTarget.valueAsNumber;
+                                if (Number.isFinite(value)) setNewKeyPriority(Math.max(1, Math.min(100, Math.floor(value))));
+                              }}
                               className="w-14 bg-[#121216] border border-zinc-700 px-1.5 py-1 rounded text-white"
                             />
                           </label>
@@ -465,15 +472,26 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
                             <span>Weight:</span>
                             <input
                               type="number"
+                              step="1"
                               min="1"
                               max="100"
                               value={newKeyWeight}
-                              onChange={(e) => setNewKeyWeight(parseInt(e.target.value) || 1)}
+                              aria-label="New endpoint key weight"
+                              aria-describedby="new-endpoint-key-routing-help"
+                              title="Share of requests among keys with equal priority."
+                              onChange={(e) => {
+                                const value = e.currentTarget.valueAsNumber;
+                                if (Number.isFinite(value)) setNewKeyWeight(Math.max(1, Math.min(100, Math.floor(value))));
+                              }}
                               className="w-14 bg-[#121216] border border-zinc-700 px-1.5 py-1 rounded text-white"
                             />
                           </label>
                         </div>
                       </div>
+                      <p id="new-endpoint-key-routing-help" className="text-[10px] leading-relaxed text-zinc-500">
+                        <span>Priority - lower numbers are tried first.</span>{' '}
+                        <span>Weight - share of requests among keys with equal priority.</span>
+                      </p>
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"

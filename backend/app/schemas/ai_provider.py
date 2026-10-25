@@ -70,12 +70,18 @@ class AccountPatchRequest(BaseModel):
 
 class OAuthStartRequest(BaseModel):
     provider: str
-    flow: str = "browser"  # "browser" | "device"
+    flow: str | None = None  # "browser" only; legacy "device" rejected with 400
     replace_account_id: str | None = None
 
 
 class OAuthCancelRequest(BaseModel):
     state: str
+
+
+class OAuthCallbackRequest(BaseModel):
+    state: str
+    code: str | None = None
+    redirect_url: str | None = None
 
 
 class ModelPreviewRequest(BaseModel):

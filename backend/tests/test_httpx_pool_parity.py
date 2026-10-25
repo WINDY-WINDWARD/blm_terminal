@@ -267,8 +267,9 @@ async def test_ai_chat_service_shared_client_recreated_on_loop_change() -> None:
 def test_ai_chat_service_openai_loop_uses_shared_factory() -> None:
     """_run_openai_loop must call _get_shared_client (not build a fresh client)."""
     import inspect
+    from app.services import llm_provider
 
-    src = inspect.getsource(ai_chat_service._run_openai_loop)
+    src = inspect.getsource(llm_provider._run_openai_loop)
     # The new pattern replaces `async with httpx.AsyncClient(...) as client:`
     # with `client = _get_shared_client()`.
     assert "async with httpx.AsyncClient" not in src, (
@@ -276,19 +277,6 @@ def test_ai_chat_service_openai_loop_uses_shared_factory() -> None:
     )
     assert "_get_shared_client" in src, (
         "_run_openai_loop must call _get_shared_client"
-    )
-
-
-def test_ai_chat_service_anthropic_loop_uses_shared_factory() -> None:
-    """_run_anthropic_loop must call _get_shared_client (not build a fresh client)."""
-    import inspect
-
-    src = inspect.getsource(ai_chat_service._run_anthropic_loop)
-    assert "async with httpx.AsyncClient" not in src, (
-        "_run_anthropic_loop must no longer use a fresh `async with httpx.AsyncClient`"
-    )
-    assert "_get_shared_client" in src, (
-        "_run_anthropic_loop must call _get_shared_client"
     )
 
 

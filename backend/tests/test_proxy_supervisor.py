@@ -528,3 +528,165 @@ async def test_proxy_management_client_redaction_and_headers():
     client._client = mock_http
     assert await client.health() is True
     mock_http.get.assert_called_with("http://127.0.0.1:8317/healthz")
+
+
+@pytest.mark.asyncio
+async def test_model_cache_invalidated_on_lifecycle_events(tmp_path, mock_vault):
+    """Verify _MODEL_CACHE entries are cleared on restart, stop, and _start_unlocked."""
+    from app.services.proxy_supervisor import _MODEL_CACHE
+
+    fake_bin = tmp_path / ("cliproxy.exe" if sys.platform == "win32" else "cliproxy")
+    fake_bin.touch()
+
+    supervisor = ProxySupervisor(
+        bin_path=fake_bin,
+        runtime_root=tmp_path / "runtime",
+        vault=mock_vault,
+    )
+
+    sup_id = id(supervisor)
+    _MODEL_CACHE[(sup_id, "antigravity")] = (100.0, ("model-a", "model-b"))
+    _MODEL_CACHE[(99999999, "other")] = (100.0, ("other-model",))
+
+    # Test stop invalidates
+    supervisor._invalidate_model_cache()
+    assert (sup_id, "antigravity") not in _MODEL_CACHE
+    assert (99999999, "other") in _MODEL_CACHE
+
+    # Populate again
+    _MODEL_CACHE[(sup_id, "antigravity")] = (200.0, ("model-a",))
+
+    # Mock _cleanup_process, _cancel_sync, sync_auth_and_cooldowns, _start_unlocked for restart
+    with patch.object(supervisor, "_cleanup_process", new_callable=AsyncMock), \
+         patch.object(supervisor, "_start_unlocked", new_callable=AsyncMock), \
+         patch.object(supervisor, "_cancel_sync", new_callable=AsyncMock):
+        await supervisor.restart()
+
+    assert (sup_id, "antigravity") not in _MODEL_CACHE
+
+    # Populate again
+    _MODEL_CACHE[(sup_id, "antigravity")] = (300.0, ("model-a",))
+    with patch.object(supervisor, "_cleanup_process", new_callable=AsyncMock), \
+         patch.object(supervisor, "_cancel_sync", new_callable=AsyncMock):
+        await supervisor.stop()
+
+    assert (sup_id, "antigravity") not in _MODEL_CACHE
+    _MODEL_CACHE.pop((99999999, "other"), None)
+
+
+@pytest.mark.asyncio
+async def test_recover_suppresses_restart_during_oauth_flow(tmp_path, mock_vault):
+    fake_bin = tmp_path / ("cliproxy.exe" if sys.platform == "win32" else "cliproxy")
+    fake_bin.touch()
+
+    supervisor = ProxySupervisor(
+        bin_path=fake_bin,
+        runtime_root=tmp_path / "runtime",
+        vault=mock_vault,
+    )
+    supervisor._state = SupervisorState.RUNNING
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = None
+    supervisor._process = mock_proc
+    supervisor._port = 9999
+    supervisor._client_key = "test-client-key"
+    expected_endpoint = (supervisor._host, supervisor._port, supervisor._client_key)
+
+    supervisor.hold_oauth_flow(seconds=300.0)
+
+    with patch.object(supervisor, "_cleanup_process", new_callable=AsyncMock) as mock_cleanup, \
+         patch.object(supervisor, "_start_unlocked", new_callable=AsyncMock) as mock_start:
+        res = await supervisor.recover("first_event_timeout", preserve_oauth_flow=True)
+
+    assert res == expected_endpoint
+    mock_cleanup.assert_not_called()
+    mock_start.assert_not_called()
+    assert supervisor._last_suppressed_reason == "first_event_timeout"
+    assert supervisor._last_recovery_reason == ""
+    assert supervisor._recovery_count == 0
+
+
+@pytest.mark.asyncio
+async def test_recover_restarts_and_records_reason(tmp_path, mock_vault):
+    from app.services.proxy_supervisor import _MODEL_CACHE
+
+    fake_bin = tmp_path / ("cliproxy.exe" if sys.platform == "win32" else "cliproxy")
+    fake_bin.touch()
+
+    supervisor = ProxySupervisor(
+        bin_path=fake_bin,
+        runtime_root=tmp_path / "runtime",
+        vault=mock_vault,
+    )
+    supervisor._state = SupervisorState.RUNNING
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = None
+    supervisor._process = mock_proc
+    supervisor._port = 9999
+    supervisor._client_key = "test-client-key"
+
+    supervisor.hold_oauth_flow(seconds=300.0)
+
+    sup_id = id(supervisor)
+    _MODEL_CACHE[(sup_id, "antigravity")] = (100.0, ("model-a",))
+
+    with patch.object(supervisor, "_cleanup_process", new_callable=AsyncMock) as mock_cleanup, \
+         patch.object(supervisor, "_start_unlocked", new_callable=AsyncMock) as mock_start, \
+         patch.object(supervisor, "_cancel_sync", new_callable=AsyncMock):
+        res = await supervisor.recover("first_event_timeout", preserve_oauth_flow=False)
+
+    mock_cleanup.assert_called_once()
+    mock_start.assert_called_once()
+    assert supervisor._recovery_count == 1
+    assert supervisor._last_recovery_reason == "first_event_timeout"
+    assert (sup_id, "antigravity") not in _MODEL_CACHE
+
+
+@pytest.mark.asyncio
+async def test_restart_delegates_to_recover(tmp_path, mock_vault):
+    fake_bin = tmp_path / ("cliproxy.exe" if sys.platform == "win32" else "cliproxy")
+    fake_bin.touch()
+
+    supervisor = ProxySupervisor(
+        bin_path=fake_bin,
+        runtime_root=tmp_path / "runtime",
+        vault=mock_vault,
+    )
+    supervisor._port = 8317
+    supervisor._client_key = "client-key"
+
+    with patch.object(supervisor, "_cleanup_process", new_callable=AsyncMock), \
+         patch.object(supervisor, "_start_unlocked", new_callable=AsyncMock), \
+         patch.object(supervisor, "_cancel_sync", new_callable=AsyncMock):
+        await supervisor.restart()
+
+    assert supervisor._last_recovery_reason == "explicit_restart"
+    assert supervisor._recovery_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_started_restarts_on_unresponsive_management_api(tmp_path, mock_vault):
+    fake_bin = tmp_path / ("cliproxy.exe" if sys.platform == "win32" else "cliproxy")
+    fake_bin.touch()
+
+    supervisor = ProxySupervisor(
+        bin_path=fake_bin,
+        runtime_root=tmp_path / "runtime",
+        vault=mock_vault,
+    )
+    supervisor._state = SupervisorState.RUNNING
+    mock_proc = MagicMock()
+    mock_proc.poll.return_value = None
+    supervisor._process = mock_proc
+    supervisor._port = 8317
+    supervisor._client_key = "client-key"
+
+    with patch.object(supervisor, "_management_api_responsive", new_callable=AsyncMock, return_value=False), \
+         patch.object(supervisor, "_cleanup_process", new_callable=AsyncMock), \
+         patch.object(supervisor, "_start_unlocked", new_callable=AsyncMock), \
+         patch.object(supervisor, "_cancel_sync", new_callable=AsyncMock):
+        await supervisor.ensure_started()
+
+    assert supervisor._last_recovery_reason == "management_unresponsive"
+    assert supervisor._recovery_count == 1
+

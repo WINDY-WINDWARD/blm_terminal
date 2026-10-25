@@ -8,10 +8,12 @@ import type {
   EndpointTestResponse,
   ModelPreviewRequest,
   ModelPreviewResponse,
+  OAuthCallbackRequest,
   OAuthPollResponse,
   OAuthStartRequest,
   OAuthStartResponse,
   RouteSettingsUpdate,
+  RouteModelCatalogResponse,
   RoutesListResponse,
   RouteSummary,
   UpdateEndpointRequest,
@@ -72,6 +74,10 @@ export const aiRoutesClient = {
     return request<RoutesListResponse>('', { method: 'GET' }, 'Failed to list AI provider routes');
   },
 
+  async listRouteModels(): Promise<RouteModelCatalogResponse> {
+    return request<RouteModelCatalogResponse>('/models', { method: 'GET' }, 'Failed to list route models');
+  },
+
   async activateRoute(routeId: string): Promise<{ status: string; active_route_id: string }> {
     return request<{ status: string; active_route_id: string }>(
       `/${encodeURIComponent(routeId)}/activate`,
@@ -111,6 +117,14 @@ export const aiRoutesClient = {
       '/oauth/cancel',
       { method: 'POST', body: { state } },
       'Failed to cancel OAuth session',
+    );
+  },
+
+  async submitOAuthCallback(req: OAuthCallbackRequest): Promise<OAuthPollResponse> {
+    return request<OAuthPollResponse>(
+      '/oauth/callback',
+      { method: 'POST', body: req },
+      'Failed to submit OAuth callback',
     );
   },
 

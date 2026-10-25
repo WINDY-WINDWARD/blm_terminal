@@ -18,6 +18,9 @@ export function useAiRoutesQuery() {
     queryFn: () => aiRoutesClient.listRoutes(),
     refetchInterval: 15_000,
     staleTime: 5_000,
+    retry: 1,
+    retryDelay: 1000,
+    refetchOnWindowFocus: false,
   });
 }
 

@@ -11,7 +11,6 @@ import {
   Plus,
   Radio,
   Shield,
-  Smartphone,
   Zap,
 } from 'lucide-react';
 import { useActivateRouteMutation } from '@/hooks/useAiRoutes';
@@ -46,7 +45,6 @@ interface DialogState {
   isOpen: boolean;
   provider: string;
   providerLabel: string;
-  flow: 'browser' | 'device';
   replaceAccountId?: string | null;
   replaceAccountIdentity?: string | null;
 }
@@ -58,15 +56,13 @@ export function OAuthAccountsTab({ routes, activeRouteId }: OAuthAccountsTabProp
     isOpen: false,
     provider: 'codex',
     providerLabel: 'Codex',
-    flow: 'browser',
   });
 
-  const handleStartOAuth = (provider: string, providerLabel: string, flow: 'browser' | 'device') => {
+  const handleStartOAuth = (provider: string, providerLabel: string) => {
     setDialogState({
       isOpen: true,
       provider,
       providerLabel,
-      flow,
       replaceAccountId: null,
       replaceAccountIdentity: null,
     });
@@ -77,8 +73,7 @@ export function OAuthAccountsTab({ routes, activeRouteId }: OAuthAccountsTabProp
       isOpen: true,
       provider,
       providerLabel,
-      flow: 'browser',
-      replaceAccountId: accountId,
+        replaceAccountId: accountId,
       replaceAccountIdentity: identity,
     });
   };
@@ -166,24 +161,13 @@ export function OAuthAccountsTab({ routes, activeRouteId }: OAuthAccountsTabProp
                   </span>
 
                   <div className="flex items-center gap-1.5">
-                    {/* Add (Browser) */}
                     <button
                       type="button"
-                      onClick={() => handleStartOAuth(def.id, def.label, 'browser')}
+                      onClick={() => handleStartOAuth(def.id, def.label)}
                       className="px-2 py-0.5 rounded bg-terminal-amber/10 hover:bg-terminal-amber/20 text-terminal-amber font-mono text-[10px] font-bold border border-terminal-amber/30 transition-colors flex items-center gap-1 cursor-pointer"
                     >
                       <Plus className="w-3 h-3" />
-                      ADD (BROWSER)
-                    </button>
-
-                    {/* Add (Device) */}
-                    <button
-                      type="button"
-                      onClick={() => handleStartOAuth(def.id, def.label, 'device')}
-                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-[10px] font-bold border border-zinc-700 transition-colors flex items-center gap-1 cursor-pointer"
-                    >
-                      <Smartphone className="w-3 h-3 text-zinc-400" />
-                      ADD (DEVICE)
+                      ADD ACCOUNT
                     </button>
                   </div>
                 </div>
@@ -216,7 +200,6 @@ export function OAuthAccountsTab({ routes, activeRouteId }: OAuthAccountsTabProp
         isOpen={dialogState.isOpen}
         provider={dialogState.provider}
         providerLabel={dialogState.providerLabel}
-        flow={dialogState.flow}
         replaceAccountId={dialogState.replaceAccountId}
         replaceAccountIdentity={dialogState.replaceAccountIdentity}
         onClose={handleCloseDialog}

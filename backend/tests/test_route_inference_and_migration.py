@@ -618,3 +618,50 @@ async def test_run_all_legacy_migrations_session_rollback_on_failure(async_db, m
         # Later stages must NOT fail with PendingRollbackError!
         assert results.get("models_migrated") is True
         assert "models_error" not in results
+
+
+@pytest.mark.asyncio
+async def test_resolve_oauth_route_models_error_produces_model_list_error_warning():
+    """Verify that when live discovery errors (non-timeout) and no fallbacks exist,
+    _resolve_oauth_route_models returns code 'model_list_error'."""
+    from app.services.route_catalog import _resolve_oauth_route_models
+    from app.models.ai_provider import AIProviderRoute, AIProviderCredential
+
+    route = AIProviderRoute(
+        id="oauth:github-copilot",
+        display_label="GitHub Copilot",
+        provider="github-copilot",
+        kind="oauth",
+        enabled=True,
+        config_json=json.dumps({}),
+    )
+    cred = AIProviderCredential(
+        id="cred-1",
+        route_id="oauth:github-copilot",
+        kind="oauth",
+        vault_reference="vault:github-copilot",
+        proxy_credential_name="copilot-test",
+        status="active",
+    )
+
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [cred]
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.is_running = True
+    mock_client = AsyncMock()
+    mock_client.get_credential_models = AsyncMock(side_effect=RuntimeError("500 Server Error"))
+    mock_supervisor.get_management_client = MagicMock(return_value=mock_client)
+    mock_supervisor.get_auth_dir = MagicMock(return_value=None)
+
+    with patch("app.services.route_catalog.get_proxy_supervisor", return_value=mock_supervisor):
+        models, warning = await _resolve_oauth_route_models(route, mock_session, live_timeout=0.5)
+
+    assert models == []
+    assert warning is not None
+    assert warning["code"] == "model_list_error"
+    assert warning["message"] == "Model list discovery failed"
+    assert warning["route_id"] == "oauth:github-copilot"
+

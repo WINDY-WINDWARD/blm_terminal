@@ -55,24 +55,62 @@ router = APIRouter(prefix="/ai", tags=["ai-chat"])
 @router.get("/status")
 async def get_ai_status():
     """Return the current provider configuration status and route health."""
+    from app.services.direct_proxy_routes import is_supported_direct_route, direct_proxy_prefix
+
     route_id = await resolve_active_route_id()
     is_configured = await is_ai_provider_configured(route_id)
     free_tier = (route_id == "direct:zen-free" or route_id == "zen-free")
 
-    route_health: dict[str, Any] = {"healthy": is_configured}
-    if route_id.startswith("oauth:") or route_id.startswith("endpoint:"):
-        supervisor = get_proxy_supervisor()
-        status_dict = supervisor.get_status()
-        route_health.update({
+    supervisor = get_proxy_supervisor()
+    status_dict = supervisor.get_status()
+
+    if route_id.startswith("direct:"):
+        is_supported = is_supported_direct_route(route_id)
+        models_ok = False
+        if is_supported and is_configured:
+            try:
+                models = await supervisor.list_proxy_models(direct_proxy_prefix(route_id))
+                models_ok = bool(models)
+            except Exception:
+                models_ok = False
+
+        is_healthy = bool(is_supported and is_configured and models_ok and status_dict.get("state") != "crashed")
+        route_health = {
+            "healthy": is_healthy,
+            "transport": "proxy",
+            "proxy_status": status_dict.get("state", "stopped"),
+            "status": "ok" if is_healthy else ("unsupported" if not is_supported else ("configured" if is_configured else "unconfigured")),
+        }
+    elif route_id.startswith("oauth:") or route_id.startswith("endpoint:"):
+        route_health = {
             "proxy_status": status_dict.get("state", "stopped"),
             "is_running": status_dict.get("is_running", False),
             "healthy": is_configured and status_dict.get("state") != "crashed",
-        })
+        }
     else:
-        route_health.update({
-            "status": "ok" if is_configured else "unconfigured",
-            "healthy": is_configured,
-        })
+        # Bare provider name or other route
+        canon_id = provider_to_route_id(route_id)
+        if canon_id.startswith("direct:"):
+            is_supported = is_supported_direct_route(canon_id)
+            models_ok = False
+            if is_supported and is_configured:
+                try:
+                    models = await supervisor.list_proxy_models(direct_proxy_prefix(canon_id))
+                    models_ok = bool(models)
+                except Exception:
+                    models_ok = False
+            is_healthy = bool(is_supported and is_configured and models_ok and status_dict.get("state") != "crashed")
+            route_health = {
+                "healthy": is_healthy,
+                "transport": "proxy",
+                "proxy_status": status_dict.get("state", "stopped"),
+                "status": "ok" if is_healthy else ("unsupported" if not is_supported else ("configured" if is_configured else "unconfigured")),
+            }
+        else:
+            route_health = {
+                "status": "ok" if is_configured else "unconfigured",
+                "healthy": is_configured,
+            }
 
     return {
         "provider": route_id,
@@ -246,60 +284,10 @@ FALLBACK_ZEN_MODELS = [
 
 
 async def fetch_zen_models(api_key: str = "", *, free_only: bool = False) -> list[dict[str, Any]]:
-    """Fetch OpenCode Zen models, listing free models at the top followed by paid models.
-
-    The /models endpoint is publicly readable, so even callers without a key
-    get the live list. With free_only=True (zen-free provider) only the free
-    models are returned.
-    """
-    import time
-
-    now = time.monotonic()
-    if _ZEN_MODELS_CACHE["models"] and (now - _ZEN_MODELS_CACHE["ts"]) < 600.0:
-        cached = _ZEN_MODELS_CACHE["models"]
-        return [m for m in cached if m.get("is_free")] if free_only else cached
-
-    credential = api_key.strip() if api_key else ""
-    if not credential or credential == "none":
-        credential = "public"
-
-    url = "https://opencode.ai/zen/v1/models"
-    headers = {
-        "Authorization": f"Bearer {credential}",
-        "User-Agent": "opencode/1.18.31",
-        "x-opencode-client": "cli",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            models_data = data.get("data", [])
-
-            free_list: list[dict[str, Any]] = []
-            paid_list: list[dict[str, Any]] = []
-            for m in models_data:
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                if "-free" in mid.lower():
-                    free_list.append({"id": mid, "label": f"[FREE] {mid}", "is_free": True})
-                else:
-                    paid_list.append({"id": mid, "label": mid, "is_free": False})
-
-            free_list.sort(key=lambda x: x["id"])
-            paid_list.sort(key=lambda x: x["id"])
-            sorted_models = free_list + paid_list
-            if sorted_models:
-                _ZEN_MODELS_CACHE["models"] = sorted_models
-                _ZEN_MODELS_CACHE["ts"] = now
-                return free_list if free_only else sorted_models
-    except Exception as e:
-        logger.warning("Failed to fetch dynamic Zen models: %s", e)
-
+    """Legacy helper preserved for backward compatibility tests; returns static fallback models."""
     if free_only:
         return [m for m in FALLBACK_ZEN_MODELS if m.get("is_free")]
-    return FALLBACK_ZEN_MODELS
+    return list(FALLBACK_ZEN_MODELS)
 
 
 # Model IDs that are not text-chat capable (TTS, image, video, audio,
@@ -328,416 +316,44 @@ _NVIDIA_NONCHAT = (
 )
 
 
-async def fetch_aistudio_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Fetch the live model list from Google AI Studio (live fetch only).
-
-    Returns [] when no key is configured or the fetch fails. The /models
-    endpoint returns IDs with a "models/" prefix which the chat endpoint does
-    not accept, so the prefix is stripped. Retired (1.x/2.x) models are
-    excluded — only models that accept chat requests are listed.
-    """
-    key = api_key.strip() if api_key else ""
-    if not key or key == "none":
-        return []
-    url = "https://generativelanguage.googleapis.com/v1beta/openai/models"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
-            resp.raise_for_status()
-            data = resp.json()
-            result: list[dict[str, Any]] = []
-            for m in data.get("data", []):
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                if mid.startswith("models/"):
-                    mid = mid[len("models/"):]
-                if any(t in mid.lower() for t in _AISTUDIO_NONCHAT):
-                    continue
-                if mid.lower().startswith(_AISTUDIO_RETIRED_PREFIXES):
-                    continue
-                label = m.get("display_name") or mid
-                result.append({"id": mid, "label": label})
-            result.sort(key=lambda x: x["id"])
-            return result
-    except Exception as e:
-        logger.warning("Failed to fetch AI Studio models: %s", e)
-    return []
-
-
-async def fetch_groq_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Fetch the live model list from Groq (live fetch only).
-
-    Returns [] when no key is configured or the fetch fails. Speech,
-    transcription, and guard models are filtered out.
-    """
-    key = api_key.strip() if api_key else ""
-    if not key or key == "none":
-        return []
-    url = "https://api.groq.com/openai/v1/models"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
-            resp.raise_for_status()
-            data = resp.json()
-            result: list[dict[str, Any]] = []
-            for m in data.get("data", []):
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                if any(t in mid.lower() for t in _GROQ_NONCHAT):
-                    continue
-                out_modalities = m.get("output_modalities") or []
-                if out_modalities and "text" not in out_modalities:
-                    continue
-                label = m.get("name") or mid
-                result.append({"id": mid, "label": label})
-            result.sort(key=lambda x: x["id"])
-            return result
-    except Exception as e:
-        logger.warning("Failed to fetch Groq models: %s", e)
-    return []
-
-
-async def fetch_nvidia_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Fetch the live model list from NVIDIA NIM (live fetch only).
-
-    Returns [] when no key is configured or the fetch fails. Embedding,
-    vision, guard, and other non-chat models are filtered out.
-    """
-    key = api_key.strip() if api_key else ""
-    if not key or key == "none":
-        return []
-    url = "https://integrate.api.nvidia.com/v1/models"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers={"Authorization": f"Bearer {key}"})
-            resp.raise_for_status()
-            data = resp.json()
-            result: list[dict[str, Any]] = []
-            for m in data.get("data", []):
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                if any(t in mid.lower() for t in _NVIDIA_NONCHAT):
-                    continue
-                owner = m.get("owned_by") or ""
-                label = f"{mid} ({owner})" if owner else mid
-                result.append({"id": mid, "label": label})
-            result.sort(key=lambda x: x["id"])
-            return result
-    except Exception as e:
-        logger.warning("Failed to fetch NVIDIA models: %s", e)
-    return []
-
-
-# --- Multi-provider model catalogs -------------------------------------------
-
-# Static list for Anthropic direct + Claude Code OAuth (the /v1/models endpoint
-# is cursor-paginated and OAuth tokens can't use it reliably — curated instead).
-ANTHROPIC_MODELS_STATIC = [
-    {"id": "claude-opus-4-7", "label": "[Anthropic] claude-opus-4-7 (flagship)"},
-    {"id": "claude-sonnet-4-6", "label": "[Anthropic] claude-sonnet-4-6 (balanced)"},
-    {"id": "claude-haiku-4-5-20251001", "label": "[Anthropic] claude-haiku-4-5 (fast)"},
-]
-
-# Static list for DeepSeek (tiny catalog — live fetch adds nothing).
-DEEPSEEK_MODELS_STATIC = [
-    {"id": "deepseek-chat", "label": "[DeepSeek] deepseek-chat (V4)"},
-    {"id": "deepseek-reasoner", "label": "[DeepSeek] deepseek-reasoner (thinking)"},
-]
-
-
-async def _fetch_openai_compat_models(
-    base_url: str,
-    api_key: str,
-    *,
-    label: str,
-    log_name: str,
-    extra_headers: dict[str, str] | None = None,
-    keep: Any = None,
-    drop_substrings: tuple[str, ...] = (),
-) -> list[dict[str, Any]]:
-    """Generic live fetch for OpenAI-compatible /models endpoints.
-
-    ``keep`` is an optional predicate(mid, entry) for allow-listing; entries
-    containing any of ``drop_substrings`` (case-insensitive) are excluded.
-    """
-    key = api_key.strip() if api_key else ""
-    if not key or key == "none":
-        return []
-    headers = {"Authorization": f"Bearer {key}"}
-    if extra_headers:
-        headers.update(extra_headers)
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{base_url}/models", headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            result: list[dict[str, Any]] = []
-            for m in data.get("data", []):
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                if drop_substrings and any(t in mid.lower() for t in drop_substrings):
-                    continue
-                if keep is not None and not keep(mid, m):
-                    continue
-                result.append({"id": mid, "label": f"[{label}] {mid}"})
-            result.sort(key=lambda x: x["id"])
-            return result
-    except Exception as e:
-        logger.warning("Failed to fetch %s models: %s", log_name, e)
-    return []
-
-
-async def fetch_openai_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Live fetch from api.openai.com — chat models only (gpt-*, o*)."""
-    return await _fetch_openai_compat_models(
-        "https://api.openai.com/v1", api_key, label="OpenAI", log_name="OpenAI",
-        keep=lambda mid, _m: mid.startswith(("gpt-", "o1", "o3", "o4")),
-        drop_substrings=("audio", "transcribe", "tts", "image", "realtime", "moderation", "embedding"),
-    )
-
-
-async def fetch_openrouter_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Live fetch from OpenRouter — tool-capable models with >= 8k context.
-
-    OpenRouter exposes 300+ models; the capability filter keeps the dropdown
-    to models that can actually drive the agentic loop.
-    """
-    key = api_key.strip() if api_key else ""
-    if not key or key == "none":
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "HTTP-Referer": "https://localhost:4455",
-                    "X-Title": "BLM Terminal",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            result: list[dict[str, Any]] = []
-            for m in data.get("data", []):
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                if (m.get("context_length") or 0) < 8192:
-                    continue
-                params = m.get("supported_parameters") or []
-                if params and "tools" not in params:
-                    continue
-                result.append({"id": mid, "label": f"[OpenRouter] {mid}"})
-            result.sort(key=lambda x: x["id"])
-            return result
-    except Exception as e:
-        logger.warning("Failed to fetch OpenRouter models: %s", e)
-    return []
-
-
-async def fetch_xai_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Live fetch from api.x.ai — grok-* chat models."""
-    return await _fetch_openai_compat_models(
-        "https://api.x.ai/v1", api_key, label="xAI", log_name="xAI",
-        keep=lambda mid, _m: "grok" in mid.lower(),
-        drop_substrings=("image", "embedding"),
-    )
-
-
-async def fetch_together_models(api_key: str = "") -> list[dict[str, Any]]:
-    """Live fetch from Together AI — type=chat entries."""
-    return await _fetch_openai_compat_models(
-        "https://api.together.xyz/v1", api_key, label="Together", log_name="Together AI",
-        keep=lambda mid, m: (m.get("type") or "chat") == "chat",
-        drop_substrings=("image", "embedding", "audio", "moderation", "rerank"),
-    )
-
-
-async def fetch_copilot_models(gh_token: str = "") -> list[dict[str, Any]]:
-    """Live fetch from the Copilot /models endpoint via the exchanged token.
-
-    Handles both the OpenAI-style {"data": [...]} envelope and a bare list
-    (endpoint shape varies by account type).
-    """
-    key = gh_token.strip() if gh_token else ""
-    if not key or key == "none":
-        return []
-    try:
-        from app.services.llm_provider import _COPILOT_EDITOR_HEADERS, get_copilot_inference_token
-        token, base_url, _ = await get_copilot_inference_token(key)
-        if not token:
-            return []
-        headers = {"Authorization": f"Bearer {token}", **_COPILOT_EDITOR_HEADERS}
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{base_url}/models", headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            entries = data.get("data", data) if isinstance(data, dict) else data
-            if not isinstance(entries, list):
-                return []
-            result: list[dict[str, Any]] = []
-            for m in entries:
-                if not isinstance(m, dict):
-                    continue
-                mid = m.get("id", "")
-                if not mid:
-                    continue
-                result.append({"id": mid, "label": f"[Copilot] {mid}"})
-            result.sort(key=lambda x: x["id"])
-            return result
-    except Exception as e:
-        logger.warning("Failed to fetch Copilot models: %s", e)
-    return []
-
-
 class ProviderModelsRequest(BaseModel):
     provider: str
     api_key: str = ""
 
 
-async def _fetch_direct_models(prov: str, api_key: str = "") -> list[dict]:
-    prov = prov.lower().strip()
-    if prov in ("gemini", "antigravity"):
-        return [
-            {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
-            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
-            {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
-        ]
-
-    if prov == "zen-free":
-        return await fetch_zen_models("", free_only=True)
-
-    if prov in ("zen-paid", "zen"):
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("zen-paid")
-        return await fetch_zen_models(key)
-
-    if prov == "aistudio":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("aistudio")
-        return await fetch_aistudio_models(key)
-
-    if prov == "groq":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("groq")
-        return await fetch_groq_models(key)
-
-    if prov == "nvidia":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("nvidia")
-        return await fetch_nvidia_models(key)
-
-    if prov in ("anthropic", "claude-code"):
-        prefix = "Claude Code" if prov == "claude-code" else "Anthropic"
-        return [
-            {"id": m["id"], "label": m["label"].replace("[Anthropic]", f"[{prefix}]")}
-            for m in ANTHROPIC_MODELS_STATIC
-        ]
-
-    if prov == "openai":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("openai")
-        return await fetch_openai_models(key)
-
-    if prov == "openrouter":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("openrouter")
-        return await fetch_openrouter_models(key)
-
-    if prov == "deepseek":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("deepseek")
-        return await fetch_deepseek_models(key)
-
-    if prov == "xai":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("xai")
-        return await fetch_xai_models(key)
-
-    if prov == "together":
-        key = api_key.strip()
-        if not key or key == "none":
-            key = await get_dynamic_ai_api_key("together")
-        return await fetch_together_models(key)
-
-    if prov == "copilot":
-        token = api_key.strip()
-        if not token or token == "none":
-            token = await get_dynamic_ai_api_key("copilot")
-        return await fetch_copilot_models(token)
-
-    if prov == "codex":
-        from app.services.codex_auth import CODEX_MODELS
-        return CODEX_MODELS
-
-    if prov == "go":
-        base_url = "https://opencode.ai/zen/go/v1"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                headers = {}
-                if api_key and api_key != "none":
-                    headers["Authorization"] = f"Bearer {api_key}"
-                resp = await client.get(
-                    f"{base_url}/models",
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                models = data.get("data", [])
-                result = [{"id": m.get("id"), "label": m.get("id")} for m in models if m.get("id")]
-                result.sort(key=lambda x: x["id"])
-                return result or AVAILABLE_MODELS
-        except Exception as e:
-            logger.warning("Failed to fetch dynamic models for go: %s", e)
-            return AVAILABLE_MODELS
-
-    return []
-
-
 async def _resolve_provider_models(provider: str, api_key: str = "") -> list[dict]:
     """Internal helper for resolving models by provider/route ID and optional key."""
     prov = provider.strip()
-    key = api_key.strip()
+    route_id = prov if (prov.startswith("oauth:") or prov.startswith("direct:") or prov.startswith("endpoint:")) else provider_to_route_id(prov)
 
-    # If route ID supplied
-    if prov.startswith("oauth:"):
+    if route_id.startswith("oauth:"):
         from app.services.route_catalog import get_route_catalog
-        return await get_route_catalog(prov)
-    elif prov.startswith("direct:"):
-        direct_name = prov.split(":", 1)[1]
-        raw_list = await _fetch_direct_models(direct_name, key)
-        return [
-            {"id": format_route_model_id(prov, m["id"]), "label": m.get("label", m["id"])}
-            for m in raw_list
-        ]
-    elif prov.startswith("endpoint:"):
+        return await get_route_catalog(route_id)
+    elif route_id.startswith("endpoint:"):
         stored_models: list[str] = []
         try:
             from app.database import AsyncSessionLocal
             from app.models.ai_provider import AIProviderRoute
 
             async with AsyncSessionLocal() as session:
-                r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == prov))).scalar_one_or_none()
+                r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == route_id))).scalar_one_or_none()
                 if r and r.config_json:
                     cfg = json.loads(r.config_json)
                     stored_models = cfg.get("models") or cfg.get("cached_models") or []
         except Exception:
             pass
-        return [{"id": format_route_model_id(prov, m), "label": m} for m in stored_models]
+        from app.services.route_catalog import _filter_chat_models
+        stored_models = _filter_chat_models(list(stored_models))
+        return [{"id": format_route_model_id(route_id, m), "label": m} for m in stored_models]
+    elif route_id.startswith("direct:"):
+        from app.services.direct_proxy_routes import is_supported_direct_route
+        if not is_supported_direct_route(route_id):
+            return []
+        from app.services.route_catalog import get_route_models
+        models = await get_route_models(route_id)
+        return [{"id": format_route_model_id(route_id, m), "label": m} for m in models]
 
-    return await _fetch_direct_models(prov, key)
+    return []
 
 
 @router.post("/provider-models")
@@ -750,65 +366,80 @@ async def get_provider_models(payload: ProviderModelsRequest) -> list[dict]:
 
 @router.get("/chat/models")
 async def get_chat_models() -> list[dict]:
-    """Return available model options dynamically based on the active provider route."""
-    raw_provider = await get_dynamic_ai_provider()
+    """Return model options across every configured route (active route first).
 
-    # Legacy bare string compatibility for tests/older callers
-    if raw_provider == "gemini":
-        return [
-            {"id": "gemini-3.8-flash-medium", "label": "Gemini 3.8 Flash (Medium)"},
-            {"id": "gemini-3.8-flash-low",    "label": "Gemini 3.8 Flash (Fast / Low)"},
-            {"id": "gemini-3.8-flash-high",   "label": "Gemini 3.8 Flash (Reasoning / High)"},
-        ]
-    if raw_provider == "zen-free":
-        return await fetch_zen_models("", free_only=True)
-    if raw_provider in ("zen", "zen-paid"):
-        api_key = await get_dynamic_ai_api_key("zen-paid")
-        return await fetch_zen_models(api_key)
+    Legacy callers expect a flat list; newer UI prefers GET /ai/routes/models.
+    Per-message routing honors the route embedded in the selected model id, so
+    this endpoint must never pin the list to the active route alone.
+    """
+    try:
+        from app.services.route_catalog import get_all_route_catalogs
 
-    active_route_id = provider_to_route_id(raw_provider)
+        routes, _warnings = await get_all_route_catalogs()
+        flat: list[dict] = []
+        for route in routes:
+            route_label = route.get("label", route.get("route_id", ""))
+            for m in route.get("models", []):
+                flat.append({"id": m["id"], "label": "[" + route_label + "] " + m["label"]})
+        if flat:
+            return flat
+    except Exception as exc:
+        logger.warning("get_chat_models aggregated catalog failed: %s", exc)
 
-    if active_route_id.startswith("oauth:"):
-        from app.services.route_catalog import get_route_catalog
-        return await get_route_catalog(active_route_id)
+    # Fallback: previous active-route-only behavior (never 500, never empty-crash).
+    try:
+        raw_provider = await get_dynamic_ai_provider()
+        active_route_id = provider_to_route_id(raw_provider)
 
-    elif active_route_id.startswith("endpoint:"):
-        stored_models: list[str] = []
-        try:
-            from app.database import AsyncSessionLocal
-            from app.models.ai_provider import AIProviderRoute
+        if active_route_id.startswith("oauth:"):
+            from app.services.route_catalog import get_route_catalog
+            return await get_route_catalog(active_route_id)
 
-            async with AsyncSessionLocal() as session:
-                r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
-                if r and r.config_json:
-                    cfg = json.loads(r.config_json)
-                    stored_models = cfg.get("models") or cfg.get("cached_models") or []
-        except Exception:
-            pass
-        if not stored_models:
-            stored_models = ["default"]
+        elif active_route_id.startswith("endpoint:"):
+            stored_models: list[str] = []
+            try:
+                from app.database import AsyncSessionLocal
+                from app.models.ai_provider import AIProviderRoute
 
-        return [
-            {
-                "id": format_route_model_id(active_route_id, m),
-                "label": f"[Endpoint] {m}",
-            }
-            for m in stored_models
-        ]
+                async with AsyncSessionLocal() as session:
+                    r = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == active_route_id))).scalar_one_or_none()
+                    if r and r.config_json:
+                        cfg = json.loads(r.config_json)
+                        stored_models = cfg.get("models") or cfg.get("cached_models") or []
+            except Exception:
+                pass
+            from app.services.route_catalog import _filter_chat_models
+            stored_models = _filter_chat_models(list(stored_models))
+            if not stored_models:
+                stored_models = ["default"]
 
-    direct_prov = active_route_id.split(":", 1)[1] if active_route_id.startswith("direct:") else active_route_id
-    raw_models = await _fetch_direct_models(direct_prov)
-    return [
-        {
-            "id": format_route_model_id(active_route_id, m["id"]),
-            "label": m.get("label", m["id"]),
-        }
-        for m in raw_models
-    ]
+            return [
+                {
+                    "id": format_route_model_id(active_route_id, m),
+                    "label": f"[Endpoint] {m}",
+                }
+                for m in stored_models
+            ]
 
+        elif active_route_id.startswith("direct:"):
+            from app.services.direct_proxy_routes import is_supported_direct_route
+            if not is_supported_direct_route(active_route_id):
+                return []
+            from app.services.route_catalog import get_route_models
+            models = await get_route_models(active_route_id)
+            return [
+                {
+                    "id": format_route_model_id(active_route_id, m),
+                    "label": m,
+                }
+                for m in models
+            ]
 
+    except Exception as exc:
+        logger.warning("get_chat_models failed: %s", exc)
+        return []
 
-
+    return []
 
 
 @router.get("/chat/sessions", response_model=list[SessionSummary])
@@ -1060,7 +691,7 @@ async def chat(
     symbol = request.symbol.upper()
     exchange = request.exchange.upper()
     active_route_id = await resolve_active_route_id()
-    active_model = map_legacy_model_to_route(request.model, active_route_id)
+    active_model = map_legacy_model_to_route(request.model, active_route_id, preserve_qualified=True)
     
     current_user_id.set(current_user.id)
 
@@ -1138,6 +769,7 @@ async def chat(
                 mode=request.mode,
                 user_id=current_user.id,
                 document_context=document_context,
+                allow_external_route=True,
             ):
                 # Track content and tool calls for persistence
                 try:

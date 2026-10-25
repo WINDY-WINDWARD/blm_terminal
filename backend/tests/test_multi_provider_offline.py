@@ -109,6 +109,7 @@ async def test_proxy_loop_terminal_and_error():
             tools=[],
             tool_executor=fake_executor,
             max_iter=1,
+            base_url="http://127.0.0.1:8123/v1",
             retry_429=False,
         ):
             events.append(json.loads(chunk))
@@ -142,18 +143,6 @@ def test_proxy_request_conversion():
 
     proxy_model = f"{prefix}/{upstream}"
     assert proxy_model == f"{prefix}/gpt-4o"
-
-
-def test_copilot_token_validation():
-    from app.services.llm_provider import validate_copilot_token
-
-    assert validate_copilot_token("")[0] is False
-    assert validate_copilot_token("ghp_abc123")[0] is False
-    assert "ghp_" in validate_copilot_token("ghp_abc123")[1]
-    assert validate_copilot_token("gho_abc")[0] is True
-    assert validate_copilot_token("ghu_abc")[0] is True
-    assert validate_copilot_token("github_pat_abc")[0] is True
-    assert validate_copilot_token("randomstring")[0] is False
 
 
 def test_oauth_and_jwt_helpers():

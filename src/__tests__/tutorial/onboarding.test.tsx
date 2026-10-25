@@ -2,9 +2,12 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { driver } from 'driver.js';
 import { TourGuide } from '@/components/tutorial/TourGuide';
 import { FirstLaunchModal } from '@/components/modals/FirstLaunchModal';
-import { onboardingCompletedAtom, tutorialStatusAtom } from '@/store/terminalStore';
-import { getFirstBootStatus, getEulaStatus, acceptEula } from '@/lib/onboarding';
+import { AiProvidersModalHost } from '@/components/modals/AiProvidersModalHost';
+import { onboardingCompletedAtom, showAiProvidersModalAtom, tutorialStatusAtom } from '@/store/terminalStore';
+import { getFirstBootStatus, getEulaStatus, acceptEula, checkAiStatus } from '@/lib/onboarding';
 import { render, screen, act, waitFor, fireEvent } from '@/__tests__/utils/renderWithProviders';
+import { http, HttpResponse } from 'msw';
+import { server } from '@/__tests__/mocks/msw-server';
 
 vi.mock('driver.js', () => ({
   driver: vi.fn(() => ({ drive: vi.fn(), destroy: vi.fn() })),
@@ -12,12 +15,13 @@ vi.mock('driver.js', () => ({
 
 vi.mock('@/lib/onboarding', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/onboarding')>();
-  return { ...actual, getFirstBootStatus: vi.fn(), getEulaStatus: vi.fn(), acceptEula: vi.fn() };
+  return { ...actual, getFirstBootStatus: vi.fn(), getEulaStatus: vi.fn(), acceptEula: vi.fn(), checkAiStatus: vi.fn() };
 });
 
 const mockedGetFirstBootStatus = vi.mocked(getFirstBootStatus);
 const mockedGetEulaStatus = vi.mocked(getEulaStatus);
 const mockedAcceptEula = vi.mocked(acceptEula);
+const mockedCheckAiStatus = vi.mocked(checkAiStatus);
 
 const mockedDriver = vi.mocked(driver);
 
@@ -199,5 +203,60 @@ describe('FirstLaunchModal gating', () => {
     const link = screen.getByRole('link', { name: /setup video/i });
     expect(link).toHaveAttribute('href', 'https://youtu.be/wmbhDGowNbM');
     expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('uses provider management instead of a legacy provider or key field during onboarding', async () => {
+    mockedGetFirstBootStatus.mockResolvedValue({ reachable: true, onboardingCompleted: false });
+    mockedCheckAiStatus.mockResolvedValue({ provider: 'antigravity', isConfigured: false });
+    render(<FirstLaunchModal initialStep="ai" />, {
+      wrapperProps: { initialAtomValues: [[onboardingCompletedAtom, false]] },
+    });
+
+    expect(await screen.findByText('AI assistant (optional)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /OPEN PROVIDER MANAGER/i })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/sk-/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Login with Google|Sign in with ChatGPT/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the AI step open and refreshes status when the provider manager closes', async () => {
+    mockedGetFirstBootStatus.mockResolvedValue({ reachable: true, onboardingCompleted: false });
+    mockedCheckAiStatus
+      .mockResolvedValueOnce({ provider: 'antigravity', isConfigured: false })
+      .mockResolvedValueOnce({ provider: 'antigravity', isConfigured: true });
+    server.use(
+      http.get('/api/py/ai/routes', () => HttpResponse.json({
+        routes: [],
+        active_route_id: '',
+        proxy_status: { state: 'stopped', pid: null, port: null, uptime_seconds: 0, restart_count: 0 },
+        vault_state: 'available',
+        recovery_state: null,
+        settings: { strategy: 'priority', session_affinity: false, session_affinity_ttl: '1h', request_retry: 0, max_retry_credentials: 1, max_retry_interval: 0 },
+      })),
+    );
+
+    render(
+      <>
+        <FirstLaunchModal initialStep="ai" />
+        <AiProvidersModalHost />
+      </>,
+      {
+        wrapperProps: {
+          initialAtomValues: [
+            [onboardingCompletedAtom, false],
+            [showAiProvidersModalAtom, false],
+          ],
+        },
+      }
+    );
+
+    expect(await screen.findByText('Status: not configured')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /OPEN PROVIDER MANAGER/i }));
+    expect(await screen.findByText(/AI PROVIDER ROUTES & OAUTH MANAGER/i)).toBeInTheDocument();
+    expect(screen.getByText('AI assistant (optional)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Close AI providers modal/i }));
+    await waitFor(() => expect(screen.getByText('Status: connected')).toBeInTheDocument());
+    expect(mockedCheckAiStatus).toHaveBeenCalledTimes(2);
   });
 });

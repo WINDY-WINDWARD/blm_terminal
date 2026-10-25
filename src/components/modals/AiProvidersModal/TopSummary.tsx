@@ -45,6 +45,12 @@ export function TopSummary({ data }: TopSummaryProps) {
     .reduce((acc, r) => acc + (r.keys?.length || 0), 0);
 
   const currentStrategy = (data.settings?.strategy || 'fill-first') as RoutingStrategy;
+  const strategyDescriptions: Record<string, string> = {
+    'fill-first': 'Use the first healthy account until it cools down.',
+    'round-robin': 'Rotate among healthy accounts.',
+    priority: 'Use strict priority tiers.',
+  };
+  const strategyDescription = strategyDescriptions[currentStrategy] ?? strategyDescriptions['fill-first'];
   const stickyEnabled = Boolean(data.settings?.session_affinity);
 
   const handleStrategyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -182,7 +188,9 @@ export function TopSummary({ data }: TopSummaryProps) {
             <option value="round-robin">round-robin</option>
             <option value="priority">priority</option>
           </select>
-          <span className="text-[10px] text-zinc-500">Account dispatch</span>
+          <span data-testid="routing-strategy-description" className="text-[10px] leading-relaxed text-zinc-500">
+            {strategyDescription}
+          </span>
         </div>
 
         {/* 5. Sticky Session Toggle */}

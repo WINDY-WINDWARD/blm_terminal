@@ -28,7 +28,7 @@ async def summarize(request: SummarizeRequest) -> SummaryResult:
 
     except RuntimeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         )
 
     except Exception as exc:
@@ -61,7 +61,7 @@ async def summarize_alerts(request: AlertSummarizeRequest) -> AlertDigestResult:
 
     except RuntimeError as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         )
 
     except Exception as exc:

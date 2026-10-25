@@ -55,8 +55,6 @@ def _get_shared_client() -> httpx.AsyncClient:
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_ITER = 10
-
 # Models that use the Anthropic /messages endpoint on Go
 ANTHROPIC_MODELS: frozenset[str] = frozenset({"minimax-m2.5", "minimax-m2.7"})
 
@@ -1361,6 +1359,7 @@ async def run_chat_agent(
     mode: str | None = None,
     user_id: int | None = None,
     document_context: str | None = None,
+    allow_external_route: bool = False,
 ) -> AsyncGenerator[str, None]:
     system_prompt = _get_system_prompt(symbol, exchange, persona, mode)
     if document_context:
@@ -1375,9 +1374,7 @@ async def run_chat_agent(
     async def executor(tool_calls: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
         return await _run_tools_parallel(tool_calls, seen_calls, session_id, user_id)
 
-    from app.services.llm_provider import uses_anthropic_tools
-    tools = BLM_TOOLS_ANTHROPIC if uses_anthropic_tools(model) else BLM_TOOLS
-
+    tools = BLM_TOOLS
     async for chunk in stream_chat_completion(
         messages=messages,
         model=model,
@@ -1385,5 +1382,6 @@ async def run_chat_agent(
         tool_executor=executor,
         system_prompt=system_prompt,
         session_id=session_id,
+        allow_external_route=allow_external_route,
     ):
         yield chunk

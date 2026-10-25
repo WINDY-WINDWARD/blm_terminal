@@ -1,5 +1,5 @@
 # Pinned CLIProxyAPI downloader and staging script for Windows.
-# Stages official CLIProxyAPI v8.0.35 to vendor/cliproxyapi/runtime/cliproxyapi.exe.
+# Stages official CLIProxyAPI v8.0.39 to vendor/cliproxyapi/runtime/cliproxyapi.exe.
 param(
     [string]$TargetDir,
     [switch]$VerifyOnly,
@@ -16,10 +16,10 @@ if (-not $TargetDir) {
     $TargetDir = Join-Path $RepoRoot "vendor\cliproxyapi\runtime"
 }
 
-$Version = "v8.0.35"
-$AssetName = "CLIProxyAPI_8.0.35_windows_amd64.zip"
-$ExpectedSha256 = "175a79c47705408c4ee95ff78cafb50a0542a010d3fac333162f10f0b9dbea88"
-$ExpectedBinarySha256 = "e142a8bd7c425e3c28026ffd0bf4e9774668bd60ea4a4d52c5057bd4a884738d"
+$Version = "v8.0.39"
+$AssetName = "CLIProxyAPI_8.0.39_windows_amd64.zip"
+$ExpectedSha256 = "41ab6cdde60e9c190ded5f7fce27e5b3090a83b75895d7fbb879675f563936e0"
+$ExpectedBinarySha256 = "42574a2a028058ab0e7473e15b99cbb5e5370a46c70839c830758ee549b7a052"
 $DownloadUrl = "https://github.com/router-for-me/CLIProxyAPI/releases/download/$Version/$AssetName"
 $TargetExe = Join-Path $TargetDir "cliproxyapi.exe"
 

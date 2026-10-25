@@ -182,13 +182,13 @@ async def is_ai_provider_configured(provider: Optional[str] = None) -> bool:
     # Direct providers and Copilot
     direct_prov = route_id.split(":", 1)[1] if route_id.startswith("direct:") else route_id
 
-    if direct_prov == "copilot":
-        from app.services.llm_provider import get_copilot_inference_token
+    from app.services.direct_proxy_routes import get_direct_route
 
-        gh_token = await get_dynamic_ai_api_key("copilot")
-        token, _, _ = await get_copilot_inference_token(gh_token or "none")
-        return token is not None
-    elif direct_prov == ZEN_FREE:
+    spec = get_direct_route(route_id)
+    if spec is not None and not spec.supported:
+        return False
+
+    if direct_prov == ZEN_FREE:
         return True
     else:
         api_key = await get_dynamic_ai_api_key(direct_prov)
@@ -196,7 +196,7 @@ async def is_ai_provider_configured(provider: Optional[str] = None) -> bool:
 
 
 async def get_configured_verifier_model() -> str:
-    """Return the user-configured verifier model, route-qualified for the active route."""
+    """Return the verifier model, qualifying legacy IDs against the active route."""
     active_route = await resolve_active_route_id()
     verifier_model: str | None = None
 
@@ -214,11 +214,11 @@ async def get_configured_verifier_model() -> str:
     except Exception as e:
         logger.warning("Failed to read ai.verifier_model from db: %s", e)
 
-    return map_legacy_model_to_route(verifier_model, active_route)
+    return map_legacy_model_to_route(verifier_model, active_route, preserve_qualified=True)
 
 
 async def get_configured_hunter_model() -> str:
-    """Return the user-configured hunter model, route-qualified for the active route."""
+    """Return the hunter model, qualifying legacy IDs against the active route."""
     active_route = await resolve_active_route_id()
     hunter_model: str | None = None
 
@@ -236,4 +236,4 @@ async def get_configured_hunter_model() -> str:
     except Exception as e:
         logger.warning("Failed to read ai.hunter_model from db: %s", e)
 
-    return map_legacy_model_to_route(hunter_model, active_route)
+    return map_legacy_model_to_route(hunter_model, active_route, preserve_qualified=True)

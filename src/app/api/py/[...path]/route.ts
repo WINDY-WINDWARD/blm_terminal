@@ -70,9 +70,34 @@ async function proxyRequest(
         : undefined
 
     const isSse = request.headers.get('accept')?.includes('text/event-stream')
-    
-    // Give streams 10 mins; give standard requests 60s to allow for cold-start web harvesting / rate-limited endpoints
-    const timeoutMs = isSse ? 600000 : 60000
+    const normalizedPath = (params.path || []).filter(Boolean).join('/')
+    const isSummary =
+      normalizedPath === 'ai/summarize' || normalizedPath === 'ai/alerts/summarize'
+    // Chat always streams, but browsers and server-side callers do not reliably
+    // send `Accept: text/event-stream`. Treat it as a stream by path so the
+    // 60s non-stream budget never aborts an in-flight chat SSE response.
+    const isChatStream = normalizedPath === 'ai/chat'
+    // OAuth URL generation and callback submission can take tens of seconds on
+    // a cold sidecar; the 60s default would abort the start call before the
+    // proxy responds and leave the modal waiting with no authorization URL.
+    const isOauthFlow =
+      normalizedPath === 'ai/routes/oauth/start' ||
+      normalizedPath === 'ai/routes/oauth/callback'
+
+    // Give summarizer 660s (exceeding backend 600s stream cap by 60s);
+    // give the agent chat loop 30 mins (it may run up to 60 tool iterations
+    // under a 1500s in-loop wall-clock guard); give other streams 10 mins
+    // (600s); give OAuth flow calls 120s; give standard requests 60s to allow
+    // for cold-start web harvesting / rate-limited endpoints
+    const timeoutMs = isSummary
+      ? 660000
+      : isChatStream
+        ? 1800000
+        : isSse
+          ? 600000
+          : isOauthFlow
+            ? 120000
+            : 60000
 
     const upstream = await fetch(upstreamUrl, {
       method: request.method,
@@ -146,9 +171,12 @@ async function proxyRequest(
     if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
     return res
   } catch (err: unknown) {
+    const errorName = err instanceof Error ? err.name : ''
     const message = err instanceof Error ? err.message : 'Unknown error'
 
     if (
+      errorName === 'TimeoutError' ||
+      errorName === 'AbortError' ||
       message.includes('Timeout') ||
       message.includes('timeout') ||
       message.includes('abort') ||

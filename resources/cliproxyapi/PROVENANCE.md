@@ -2,15 +2,15 @@
 
 - **Package**: CLIProxyAPI
 - **Upstream Repository**: https://github.com/router-for-me/CLIProxyAPI
-- **Release Version**: v8.0.35
+- **Release Version**: v8.0.39
 - **License**: MIT (see LICENSE)
 
 ## Verified Release Assets & Checksums
 
 | Target | Platform / Arch | Upstream Asset | Archive SHA-256 Checksum | Target Binary | Staged Binary SHA-256 |
 |---|---|---|---|---|---|
-| Windows x64 | win32 / x64 | CLIProxyAPI_8.0.35_windows_amd64.zip | `175a79c47705408c4ee95ff78cafb50a0542a010d3fac333162f10f0b9dbea88` | `vendor/cliproxyapi/runtime/cliproxyapi.exe` | `e142a8bd7c425e3c28026ffd0bf4e9774668bd60ea4a4d52c5057bd4a884738d` |
-| macOS Apple Silicon | darwin / arm64 | CLIProxyAPI_8.0.35_darwin_aarch64.tar.gz | `b6903000ae78b541e5ba0bb2db45fc15dc23cab77fb51ed4b02e03ea18fe36a5` | `vendor/cliproxyapi/runtime/cliproxyapi` | `2b327650d076752a025c590c463827ada7596bf8b5db610233996e12facf5ea8` |
-| macOS Intel | darwin / x64 | CLIProxyAPI_8.0.35_darwin_amd64.tar.gz | `c1335ddb5307d67684ec0531fac81e1148b68869179310ea0f4086109fbebe2b` | `vendor/cliproxyapi/runtime/cliproxyapi` | `aaaff01623aa6e5db00a11175badd78f9a6b5e8cf6c8270195e6c4fa68dd30eb` |
+| Windows x64 | win32 / x64 | CLIProxyAPI_8.0.39_windows_amd64.zip | `41ab6cdde60e9c190ded5f7fce27e5b3090a83b75895d7fbb879675f563936e0` | `vendor/cliproxyapi/runtime/cliproxyapi.exe` | `42574a2a028058ab0e7473e15b99cbb5e5370a46c70839c830758ee549b7a052` |
+| macOS Apple Silicon | darwin / arm64 | CLIProxyAPI_8.0.39_darwin_aarch64.tar.gz | `1febf0f15bef7cc70630496a4f5b145d1faafedf2c8bf0ae4d5648f0972b24be` | `vendor/cliproxyapi/runtime/cliproxyapi` | `510a1f974a5b409bd9ee016d6f9ebcf6eb0b0f2a562858543d15af0e8deb5275` |
+| macOS Intel | darwin / x64 | CLIProxyAPI_8.0.39_darwin_amd64.tar.gz | `1cb6ab8893811b5838d59b22a11bf4c9332cdbc40e66de18edbd4c926f2635ea` | `vendor/cliproxyapi/runtime/cliproxyapi` | `f1fef944619f05781f06d2286610291565a5924c10a1beda650774e473555bb2` |
 
 Windows ARM64 is explicitly unsupported.

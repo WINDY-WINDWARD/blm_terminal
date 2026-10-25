@@ -1,6 +1,6 @@
 # BLM Terminal: Provider Management & Routing Architecture
 
-> **Status:** Implemented (Tasks 1–8).  
+> **Status:** Implementation documented; live OAuth verification remains pending.
 > **Scope:** Unified AI provider routing, CLIProxyAPI sidecar supervisor, OS keyring-backed encryption, custom OpenAI-compatible endpoints, OAuth account rotation, and legacy migration.
 
 ---
@@ -11,10 +11,10 @@
 |---|---|---|
 | **Active Route Policy** | **Strictly one active route** at any given moment | Eliminates prompt/tool divergence across models; ensures predictable execution context for chat agents, hunter/verifier workflows, and Script Lab. |
 | **Model Namespacing** | `blm:<route_id>/<upstream_model>` | Fully disambiguates models across route families, prevents collision between upstream models of the same name, and preserves auditability. |
-| **Secret Storage** | **OS Keyring + AES-256-GCM** | Master key stored in platform credential manager (Windows Credential Manager, macOS Keychain, Linux SecretService); OAuth and custom-endpoint secrets are encrypted in an isolated vault (`provider_vault.enc`) with **no plaintext vault fallback**. Direct-provider API keys and Copilot tokens keep their existing `SystemConfig` storage path. |
-| **Proxy Supervision** | **Ephemeral sidecar (CLIProxyAPI v8.0.35)** | Managed purely by `ProxySupervisor` on loopback `127.0.0.1` on an ephemeral port. Wiped on shutdown. Direct providers bypass proxy. |
+| **Secret Storage** | **OS Keyring + AES-256-GCM** | Master key stored in platform credential manager (Windows Credential Manager, macOS Keychain, Linux SecretService); OAuth and custom-endpoint secrets are encrypted in an isolated vault (`provider_vault.enc`) with **no plaintext vault fallback**. Direct-provider API keys keep their existing `SystemConfig` storage path. |
+| **Proxy Supervision** | **Ephemeral sidecar (CLIProxyAPI v8.0.39)** | Managed purely by `ProxySupervisor` on loopback `127.0.0.1` on an ephemeral port. Wiped on shutdown. All inference requests go through the bundled sidecar at `127.0.0.1`. |
 | **Security Boundaries** | **Zero secret leakage** | No secrets in query strings, URLs, renderer responses, logs, diagnostics, or configuration dumps. Strict redaction (`[REDACTED]`). |
-| **Packaging & Licensing** | **Pinned v8.0.35 release binary** | Embedded with upstream MIT license notice in `resources/cliproxyapi/` and `electron-builder.json`. Fails closed on checksum mismatch. |
+| **Packaging & Licensing** | **Pinned v8.0.39 release binary** | Embedded with upstream MIT license notice in `resources/cliproxyapi/` and `electron-builder.json`. Fails closed on checksum mismatch. |
 
 ---
 
@@ -33,23 +33,23 @@ BLM Terminal supports three distinct route families. Every model in the applicat
 ┌─────────────────┐             ┌─────────────────────┐          ┌──────────────────────┐
 │  oauth:<prov>   │             │   endpoint:<uuid>   │          │    direct:<prov>     │
 ├─────────────────┤             ├─────────────────────┤          ├──────────────────────┤
-│ • 8 OAuth provs │             │ • Custom OpenAI-    │          │ • direct:zen-free    │
-│   codex,claude, │             │   compatible gateway│          │ • direct:openrouter  │
-│   xai,kimi,etc. │             │ • Multi-key pool    │          │ • direct:groq        │
-│ Via CLIProxyAPI │             │ • Custom headers    │          │ • direct:openai      │
-│ sidecar proxy   │             │                     │          │ • direct:anthropic   │
-│ (session affinity             │ Via CLIProxyAPI     │          │ • direct:gemini      │
-│  & cooldowns)   │             │ sidecar proxy       │          │ • direct:copilot     │
+│ • 8 OAuth provs │             │ • Custom OpenAI-    │          │ • direct:aistudio    │
+│   codex,claude, │             │   compatible gateway│          │ • direct:openai      │
+│   xai,kimi,etc. │             │ • Multi-key pool    │          │ • direct:anthropic   │
+│ Via CLIProxyAPI │             │ • Custom headers    │          │ • direct:zen-paid    │
+│ sidecar proxy   │             │                     │          │ • direct:groq, nvidia│
+│ (session affinity             │ Via CLIProxyAPI     │          │ • direct:openrouter  │
+│  & cooldowns)   │             │ sidecar proxy       │          │ Via CLIProxyAPI proxy│
 └────────┬────────┘             └──────────┬──────────┘          └──────────┬───────────┘
          │                                 │                                │
-         └────────────────┬────────────────┘                                │
-                          ▼                                                 ▼
-             ┌─────────────────────────┐                       ┌────────────────────────┐
-             │ CLIProxyAPI Sidecar     │                       │ Native BLM Provider    │
-             │ (127.0.0.1:ephemeral)   │                       │ (Direct HTTPS Client)  │
-             └────────────┬────────────┘                       └────────────┬───────────┘
-                          ▼                                                 ▼
-               Upstream AI Gateways                               Upstream AI Gateways
+         └─────────────────────────────────┼────────────────────────────────┘
+                                           ▼
+                             ┌─────────────────────────┐
+                             │ CLIProxyAPI Sidecar     │
+                             │ (127.0.0.1:ephemeral)   │
+                             └────────────┬────────────┘
+                                          ▼
+                                Upstream AI Gateways
 ```
 
 ### 1.1 `oauth:<provider>` (CLIProxyAPI Sidecar)
@@ -66,11 +66,11 @@ BLM Terminal supports three distinct route families. Every model in the applicat
 - **Model URI Example:** `blm:endpoint:550e8400-e29b-41d4-a716-446655440000/llama-3.3-70b-instruct`.
 - **Capabilities:** Weighted multi-key pool with automatic 401/429 failover, custom HTTP headers, prefix isolation.
 
-### 1.3 `direct:<provider>` (Native Direct Provider Execution)
-- **Route ID Format:** `direct:<provider>` (e.g. `direct:zen-free`, `direct:openrouter`, `direct:groq`, `direct:openai`, `direct:anthropic`, `direct:gemini`, `direct:copilot`).
-- **Execution Path:** **Bypasses CLIProxyAPI entirely.** Requests are executed directly by `backend/app/services/llm_provider.py` using native asynchronous HTTP clients.
-- **Model URI Example:** `blm:direct:openrouter/anthropic/claude-3.5-sonnet`, `blm:direct:zen-free/zen-default`.
-- **Copilot Path:** GitHub Copilot remains on BLM's dedicated token and API path.
+### 1.3 `direct:<provider>` (Direct API-Key Provider Execution via Sidecar)
+- **Route ID Format:** `direct:<provider>` (e.g. `direct:aistudio`, `direct:anthropic`, `direct:openai`, `direct:zen-paid`, `direct:go`, `direct:groq`, `direct:nvidia`, `direct:openrouter`, `direct:deepseek`, `direct:xai`, `direct:together`).
+- **Execution Path:** **All inference requests go through the bundled CLIProxyAPI v8.0.39 sidecar at `127.0.0.1`.** Direct providers are mapped onto CLIProxyAPI configuration sections (`openai-compatibility`, `gemini-api-key`, `claude-api-key`) with a stable `blm-<hex>` model prefix.
+- **Model URI Example:** `blm:direct:openrouter/anthropic/claude-3.5-sonnet`, `blm:direct:openai/gpt-4o`.
+- **Unsupported Legacy Providers:** GitHub Copilot (`direct:copilot`) and Claude Code OAuth token (`direct:claude-code`) routes are unsupported by CLIProxyAPI 8.0.39. Both are hidden from route listings and the UI, and the backend rejects activation with HTTP 400.
 
 ---
 
@@ -79,16 +79,16 @@ BLM Terminal supports three distinct route families. Every model in the applicat
 OAuth routes allow users to connect multiple accounts per provider. The CLIProxyAPI sidecar manages token refresh, account switching, and rate limit cooldowns.
 
 ### 2.1 Account Lifecycle & Authorization
-1. **Initiation:** Client calls `POST /api/ai/routes/oauth/start` with JSON body `{"provider": "<provider>"}`. The backend queries CLIProxyAPI's `/v8/management/oauth/auth-url` to generate a state token and browser authorization URL.
-2. **Browser Auth:** User approves access in their web browser.
-3. **Callback Submission:**
-   - **Local Callback:** CLIProxyAPI captures the loopback redirect on its dedicated OAuth port.
-   - **Manual Callback (API only today):** `POST /api/ai/routes/oauth/callback` accepts the redirect URL or state/code. The current `OAuthSessionDialog` does not expose a manual callback input, so headless deployments should call this endpoint directly.
-4. **Polling & Reconciliation:** The client polls `GET /api/ai/routes/oauth/poll?state={state}`. Once authenticated, the credential tokens are encrypted in `ProviderVault`, CLIProxyAPI's configuration is updated, and the account status is set to `active`.
-5. **Cancellation:** Unfinished sessions are cancelled via `POST /api/ai/routes/oauth/cancel` with JSON body `{"state": "<state>"}`, preventing leaked state in CLIProxyAPI.
+1. **Initiation:** The client calls `POST /api/ai/routes/oauth/start` with `{"provider": "<provider>"}`. The backend asks CLIProxyAPI for a browser authorization URL and its redirect URI; OAuth is browser-only.
+2. **Loopback callback:** For an HTTP redirect URI with an explicit port on a loopback host (`localhost`, `127.0.0.1`, or `::1`), BLM starts a temporary callback listener bound only to loopback. It registers the exact callback path and OAuth state, accepts only that matching callback, and shuts down the listener when no pending session uses it. The listener is not exposed on a LAN or public interface.
+3. **Manual fallback:** If the provider returns a redirect URI that cannot be safely handled by the loopback listener, the start response reports `callback_mode: "manual"`. The browser flow still opens; the dialog then accepts the full callback URL and submits it in the JSON request body to `POST /api/ai/routes/oauth/callback`. The URL and its query values are not put in another URL or written to logs.
+4. **Port conflict:** If the callback port is already occupied or cannot be bound, OAuth start returns HTTP 503 with `callback_port_unavailable`. Close the process using that port and retry. BLM does not silently switch to a non-loopback listener.
+5. **Polling & reconciliation:** The client polls `GET /api/ai/routes/oauth/poll?state={state}`. On success, credentials are encrypted in `ProviderVault`, CLIProxyAPI is updated, and the account is reconciled as active.
+6. **Cancellation and expiry:** Cancelling or expiring a pending session unregisters its callback; application shutdown closes the listener and all registrations.
 
 ### 2.2 Account Selection Policies & Sticky Sessions
-- **Priority & Weight:** Each account has an integer `priority` (lower numbers tried first) and `weight` (proportional distribution among same-priority accounts). These can be patched via `PATCH /api/ai/routes/accounts/{account_id}`.
+- **Priority & Weight:** Each account has an integer from 1–100. Lower priority numbers are tried first; weight is the proportional share among accounts with equal priority. These can be patched via `PATCH /api/ai/routes/accounts/{account_id}`.
+- **Routing strategy:** `fill-first` uses the first healthy account until it cools down; `round-robin` rotates among healthy accounts; `priority` uses strict priority tiers.
 - **Session Affinity (`X-Session-Id`):**
   - BLM generates and sends a sticky session header `X-Session-Id: {session_id}` on every inference request through the proxy.
   - CLIProxyAPI enforces `session-affinity: true` with `session-affinity-ttl: 1h` (the value comes from the saved routing settings). All turns within a multi-turn chat session stick to the same upstream account, preventing context fragmentation and session thrashing.
@@ -137,6 +137,10 @@ openai-compatibility:
 ```
 - **Failover Mechanism:** When the primary key returns HTTP 401 (Unauthorized) or HTTP 429 (Rate Limit), CLIProxyAPI automatically marks the key in cooldown and retries the request using the secondary key without dropping the stream or returning an error to the user.
 
+### 3.4 Custom Endpoint Preview & Testing Invariant
+- **Local-Only Preview:** Custom endpoint configuration preview and URL/header sanity checks run purely local-side without dispatching live requests.
+- **Sidecar Routing for Test & Refresh:** Live credential validation, test calls, and model list refreshes are routed through the bundled CLIProxyAPI sidecar at `127.0.0.1`, preserving the proxy-only inference invariant.
+
 ---
 
 ## 4. Keyring Storage & Secret-Handling Guarantees
@@ -156,7 +160,7 @@ All sensitive credentials—including OAuth access/refresh tokens, custom endpoi
 When the operating system keyring is unavailable (e.g., locked session, headless Linux without D-Bus, or restricted Windows service account):
 1. The vault enters `VaultState.UNAVAILABLE` and raises `VaultUnavailableError`.
 2. The application degrades gracefully:
-   - Existing direct providers configured via unencrypted `SystemConfig` (e.g. `direct:zen-free`) continue to function.
+   - Existing direct providers configured via unencrypted `SystemConfig` (e.g. `direct:zen-paid`) continue to function because their keys are mapped into CLIProxyAPI runtime config entries.
    - Proxy-based routes (`oauth:*`, `endpoint:*`) fail closed with HTTP 503 (`Vault is unavailable; unlock OS keyring`).
 3. **Recovery Procedures:**
    - **Unlock OS Keyring:** Ensure user session is logged in and keyring daemon is unlocked.
@@ -223,6 +227,17 @@ Upgrading from earlier BLM Terminal releases automatically migrates legacy model
 - **Model Migration:** Scans active chat sessions and system configuration. Maps unnamespaced legacy model strings (e.g. `gpt-4o`, `claude-3-5-sonnet`) to the qualified `blm:<active_route_id>/<upstream_model>` format using `map_legacy_model_to_route()`.
 - **Transactional Safety:** Migrations run within atomic database transactions with automatic rollback on error.
 
+### 6.2 Resilient Model Discovery
+- **OAuth routes:** BLM queries model lists for enabled OAuth credentials concurrently, with a five-second timeout per credential. Successful results have proxy/provider prefixes removed, are deduplicated, and are best-effort cached in the route configuration.
+- **Fallback order when live discovery yields no models:** use `cached_models` from the route configuration; then model-ID hints from that route's local auth files (without using or returning tokens); then the built-in static model list for Antigravity only; otherwise return an empty list with a safe warning (`model_list_timeout` or `model_list_unavailable`).
+- **Other routes:** Custom endpoints use their configured `models`, falling back to `cached_models`; direct providers are queried through their catalog APIs via the sidecar.
+- **Partial catalogs:** `GET /api/ai/routes/models` returns available routes even when another route fails, and includes warnings for unavailable route catalogs. Chat model discovery reuses the resilient route resolver, so a slow OAuth model endpoint does not turn the model-list request into an HTTP 500.
+
+### 6.3 Worker Models Across Routes
+- Hunter and verifier settings use route-qualified model IDs such as `blm:oauth:codex/gpt-4o`. A configured worker may use a different enabled route from the active chat route; the ID is preserved rather than silently remapped.
+- Before inference, BLM verifies that the selected route is enabled and that the model exists in that route's current catalog. Disabled routes and missing models are rejected.
+- The cross-route allowance is limited to background worker/summarizer call sites. Interactive chat remains restricted to the active route. If a saved worker model is temporarily absent from the catalog, the selector shows it as unavailable instead of silently replacing it.
+
 ---
 
 ## 7. Troubleshooting & Operational Guide
@@ -230,6 +245,8 @@ Upgrading from earlier BLM Terminal releases automatically migrates legacy model
 | Symptom | Probable Cause | Resolution |
 |---|---|---|
 | **HTTP 503: "Vault is unavailable"** | OS Keyring is locked or inaccessible | Log into desktop session; ensure GNOME Keyring / macOS Keychain is unlocked. In extreme cases, trigger `POST /api/ai/routes/vault/reset`. |
+| **OAuth start returns `callback_port_unavailable`** | Another local process occupies the provider's loopback callback port | Close the process using that port, then restart browser authorization. The callback listener binds loopback only. |
+| **OAuth dialog asks for a callback URL** | The provider redirect cannot be safely registered as a local loopback callback | Complete browser authorization and paste the full redirect URL into the manual fallback field; do not copy it into logs or diagnostics. |
 | **`ReadinessTimeoutError` on startup** | Port conflict or missing CLIProxyAPI binary | Production allocates an ephemeral loopback port; read the bound port from logs or `/api/ai/routes/diagnostics`; verify `vendor/cliproxyapi/runtime/cliproxyapi.exe` exists and has execute permissions. |
 | **HTTP 401 / 429 on OAuth Route** | OAuth token expired or upstream rate limit | Open `AiProvidersModal`, click **Re-authenticate** for the affected account, or click **Reset Cooldown** if the limit has elapsed. |
 | **Tool calls not executing** | Active route model does not support tool calling | Ensure active route is set to a model with function calling support (e.g. `gpt-4o`, `claude-3.5-sonnet`). |

@@ -21,7 +21,6 @@ interface OAuthSessionDialogProps {
   isOpen: boolean;
   provider: string;
   providerLabel: string;
-  flow?: 'browser' | 'device';
   replaceAccountId?: string | null;
   replaceAccountIdentity?: string | null;
   onClose: () => void;
@@ -32,7 +31,6 @@ export function OAuthSessionDialog({
   isOpen,
   provider,
   providerLabel,
-  flow = provider === 'codex' ? 'device' : 'browser',
   replaceAccountId,
   replaceAccountIdentity,
   onClose,
@@ -48,8 +46,9 @@ export function OAuthSessionDialog({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [remainingSecs, setRemainingSecs] = useState<number>(0);
   const [isCancelling, setIsCancelling] = useState(false);
-  const [codeCopied, setCodeCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
+  const [manualInput, setManualInput] = useState('');
+  const [isSubmittingManual, setIsSubmittingManual] = useState(false);
 
   const modalRef = useRef<HTMLDivElement>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -68,17 +67,31 @@ export function OAuthSessionDialog({
     }
   }, []);
 
+  const safeDisplayError = (msg: string | null): string => {
+    if (!msg) return 'An unexpected error occurred.';
+    if (msg.includes('callback_port_unavailable')) {
+      return 'callback_port_unavailable: Callback port is unavailable.';
+    }
+    // Redact query strings or sensitive URLs from error displays
+    const queryIdx = msg.indexOf('?');
+    if (queryIdx !== -1) {
+      return msg.substring(0, queryIdx) + ' (query parameters redacted)';
+    }
+    return msg;
+  };
+
   // Initialize OAuth session
   const initSession = useCallback(async () => {
     cleanupTimers();
     setPollStatus('initializing');
     setErrorMsg(null);
     setPollResult(null);
+    setManualInput('');
+    setIsSubmittingManual(false);
 
     try {
       const startRes = await aiRoutesClient.startOAuth({
         provider,
-        flow,
         replace_account_id: replaceAccountId || undefined,
       });
       setSession(startRes);
@@ -86,9 +99,10 @@ export function OAuthSessionDialog({
       setPollStatus('pending');
     } catch (err) {
       setPollStatus('failed');
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to initiate OAuth flow');
+      const rawMsg = err instanceof Error ? err.message : 'Failed to initiate OAuth flow';
+      setErrorMsg(safeDisplayError(rawMsg));
     }
-  }, [provider, flow, replaceAccountId, cleanupTimers]);
+  }, [provider, replaceAccountId, cleanupTimers]);
 
   useEffect(() => {
     if (isOpen) {
@@ -129,7 +143,7 @@ export function OAuthSessionDialog({
         } else if (res.status === 'failed') {
           cleanupTimers();
           setPollStatus('failed');
-          setErrorMsg(res.error || 'Authorization failed');
+          setErrorMsg(safeDisplayError(res.error || 'Authorization failed'));
         } else if (res.status === 'reconciling') {
           setPollStatus('reconciling');
         }
@@ -137,7 +151,7 @@ export function OAuthSessionDialog({
         if (err instanceof Error && err.message.includes('not found')) {
           cleanupTimers();
           setPollStatus('failed');
-          setErrorMsg(err.message);
+          setErrorMsg(safeDisplayError(err.message));
         }
       }
     };
@@ -195,6 +209,45 @@ export function OAuthSessionDialog({
     onClose();
   }, [pollStatus, cleanupTimers, onClose]);
 
+  const handleManualSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = manualInput.trim();
+    if (!trimmed || !sessionRef.current?.state) return;
+
+    setIsSubmittingManual(true);
+    setErrorMsg(null);
+    try {
+      const res = await aiRoutesClient.submitOAuthCallback({
+        state: sessionRef.current.state,
+        redirect_url: trimmed,
+      });
+      if (res && res.status === 'completed') {
+        cleanupTimers();
+        setPollStatus('completed');
+        setPollResult(res);
+        invalidateCaches();
+        onSuccess?.({ accountId: res.account_id, notice: res.notice });
+      } else if (res && res.status === 'failed') {
+        cleanupTimers();
+        setPollStatus('failed');
+        setErrorMsg(safeDisplayError(res.error || 'Authorization failed'));
+      } else if (res && res.status === 'expired') {
+        cleanupTimers();
+        setPollStatus('expired');
+      } else if (res && res.status === 'cancelled') {
+        cleanupTimers();
+        setPollStatus('cancelled');
+      }
+    } catch (err) {
+      cleanupTimers();
+      setPollStatus('failed');
+      const msg = err instanceof Error ? err.message : 'Failed to submit callback';
+      setErrorMsg(safeDisplayError(msg));
+    } finally {
+      setIsSubmittingManual(false);
+    }
+  };
+
   // Modal focus trap & scoped Escape handling
   useModalFocusTrap({
     id: 'oauth-session-dialog',
@@ -202,14 +255,6 @@ export function OAuthSessionDialog({
     onClose: handleDismiss,
     containerRef: modalRef,
   });
-
-  const handleCopyCode = () => {
-    if (session?.user_code && typeof navigator !== 'undefined') {
-      navigator.clipboard.writeText(session.user_code);
-      setCodeCopied(true);
-      setTimeout(() => setCodeCopied(false), 2000);
-    }
-  };
 
   const handleCopyUrl = () => {
     if (session?.auth_url && typeof navigator !== 'undefined') {
@@ -275,94 +320,82 @@ export function OAuthSessionDialog({
           {pollStatus === 'initializing' && (
             <div className="flex flex-col items-center justify-center py-8 gap-3 text-zinc-400">
               <Loader2 className="w-6 h-6 animate-spin text-terminal-amber" />
-              <span className="font-mono text-xs">Initiating {flow} authorization session...</span>
+              <span className="font-mono text-xs">Initiating authorization session...</span>
             </div>
           )}
 
           {(pollStatus === 'pending' || pollStatus === 'reconciling') && (
-            <>
-              {flow === 'browser' ? (
-                <div className="flex flex-col gap-3">
-                  <p className="text-zinc-300 leading-relaxed">
-                    Complete authorization in your system browser window. Your session will automatically verify and
-                    connect once approved.
-                  </p>
+            <div className="flex flex-col gap-3">
+              <p className="text-zinc-300 leading-relaxed">
+                Complete authorization in your system browser window. Your session will automatically verify and
+                connect once approved.
+              </p>
 
-                  <div className="p-3 bg-zinc-900/80 border border-zinc-800 rounded flex flex-col gap-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-mono text-zinc-400">Authorization URL:</span>
-                      <button
-                        type="button"
-                        onClick={handleCopyUrl}
-                        className="text-[11px] font-mono text-terminal-amber hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        {urlCopied ? (
-                          <>
-                            <Check className="w-3 h-3 text-terminal-green" /> Copied!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" /> Copy URL
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    {session?.auth_url && (
-                      <button
-                        type="button"
-                        onClick={() => openLink(session.auth_url!, 'external')}
-                        className="w-full py-2 px-3 rounded bg-terminal-amber hover:bg-amber-400 text-black font-mono font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        OPEN BROWSER TO LOGIN
-                      </button>
+              <div className="p-3 bg-zinc-900/80 border border-zinc-800 rounded flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono text-zinc-400">Authorization URL:</span>
+                  <button
+                    type="button"
+                    onClick={handleCopyUrl}
+                    className="text-[11px] font-mono text-terminal-amber hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    {urlCopied ? (
+                      <>
+                        <Check className="w-3 h-3 text-terminal-green" /> Copied!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" /> Copy URL
+                      </>
                     )}
-                  </div>
+                  </button>
                 </div>
-              ) : (
-                /* Device Code Flow */
-                <div className="flex flex-col gap-3">
-                  <p className="text-zinc-300 leading-relaxed">
-                    Follow these steps on your other device or browser to authorize:
+                {session?.auth_url && (
+                  <button
+                    type="button"
+                    onClick={() => openLink(session.auth_url!, 'external')}
+                    className="w-full py-2 px-3 rounded bg-terminal-amber hover:bg-amber-400 text-black font-mono font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    OPEN BROWSER TO LOGIN
+                  </button>
+                )}
+              </div>
+
+              {session?.callback_mode === 'manual' && (
+                <form
+                  onSubmit={handleManualSubmit}
+                  className="flex flex-col gap-2 p-3 bg-zinc-900/60 border border-zinc-700/80 rounded"
+                >
+                  <label htmlFor="manual-callback-input" className="text-[11px] font-mono text-zinc-300 flex items-center justify-between">
+                    <span>Paste Full Callback URL:</span>
+                    <span className="text-zinc-500 text-[10px]">Manual redirect mode</span>
+                  </label>
+                  <p className="text-[10px] text-zinc-400">
+                    If your browser redirected to a localhost URL that was not automatically handled, paste the full redirect URL here:
                   </p>
-
-                  {session?.user_code && (
-                    <div className="p-4 bg-zinc-900 border border-zinc-700 rounded flex flex-col items-center gap-2">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400">
-                        Enter This One-Time Code:
-                      </span>
-                      <div className="text-2xl font-mono font-black tracking-widest text-terminal-amber py-1 px-4 rounded bg-black/60 border border-terminal-amber/40">
-                        {session.user_code}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleCopyCode}
-                        className="mt-1 text-xs font-mono text-terminal-amber hover:underline flex items-center gap-1.5 cursor-pointer"
-                      >
-                        {codeCopied ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-terminal-green" /> Code Copied!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" /> Copy Code
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
-
-                  {session?.verification_uri && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="manual-callback-input"
+                      data-testid="manual-callback-input"
+                      type="text"
+                      value={manualInput}
+                      onChange={(e) => setManualInput(e.target.value)}
+                      placeholder="http://localhost:51121/oauth-callback?code=..."
+                      disabled={isSubmittingManual}
+                      className="flex-1 bg-black/60 border border-zinc-700 focus:border-terminal-amber px-2.5 py-1.5 rounded text-xs font-mono text-white placeholder-zinc-600 outline-none"
+                    />
                     <button
-                      type="button"
-                      onClick={() => openLink(session.verification_uri!, 'external')}
-                      className="w-full py-2 px-3 rounded bg-terminal-amber hover:bg-amber-400 text-black font-mono font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      type="submit"
+                      data-testid="manual-callback-submit"
+                      disabled={isSubmittingManual || !manualInput.trim()}
+                      className="px-3 py-1.5 rounded bg-terminal-amber hover:bg-amber-400 disabled:opacity-40 text-black font-mono font-bold text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                     >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      OPEN VERIFICATION PAGE
+                      {isSubmittingManual ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                      SUBMIT
                     </button>
-                  )}
-                </div>
+                  </div>
+                </form>
               )}
 
               {/* Waiting status indicator & countdown */}
@@ -375,7 +408,7 @@ export function OAuthSessionDialog({
                   Expires in: <span className="text-terminal-amber font-bold">{formatCountdown(remainingSecs)}</span>
                 </div>
               </div>
-            </>
+            </div>
           )}
 
           {pollStatus === 'completed' && (
@@ -434,7 +467,7 @@ export function OAuthSessionDialog({
                 <AlertTriangle className="w-4 h-4" />
                 Authorization Failed
               </div>
-              <p className="text-xs font-mono text-zinc-300">{errorMsg || 'An unexpected error occurred.'}</p>
+              <p className="text-xs font-mono text-zinc-300">{safeDisplayError(errorMsg)}</p>
             </div>
           )}
         </div>
