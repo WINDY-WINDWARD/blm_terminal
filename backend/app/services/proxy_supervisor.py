@@ -33,6 +33,7 @@ import httpx
 import psutil
 import yaml
 from app.services.private_files import restrict_access
+from app.services.redaction import SENSITIVE_FIELD_NAMES, redact_mapping
 from app.services.route_registry import compute_oauth_proxy_prefix, OAUTH_PROVIDERS
 
 from app.config import settings
@@ -45,22 +46,10 @@ from app.services.provider_vault import (
 
 logger = logging.getLogger("blm.proxy_supervisor")
 
-SENSITIVE_FIELD_NAMES = {
-    "secret-key",
-    "secret_key",
-    "management_key",
-    "api-key",
-    "client_key",
-    "api-keys",
-    "api_keys",
-    "authorization",
-    "x-management-key",
-    "token",
-    "access_token",
-    "refresh_token",
-    "api_key",
-    "password",
-}
+# The sidecar's /v1/models aggregates upstream catalogs and can be slow; keep
+# explicit refreshes responsive without re-querying on every UI poll.
+_MODEL_CACHE: dict[tuple[int, str], tuple[float, tuple[str, ...]]] = {}
+_MODEL_CACHE_TTL = 300.0
 
 
 class SupervisorState(str, Enum):
@@ -87,20 +76,12 @@ class ReadinessTimeoutError(ProxySupervisorError):
 
 
 def redact_sensitive_data(val: Any) -> Any:
-    """Recursively redact sensitive keys from nested dicts/lists for safe logging and diagnostics."""
-    if isinstance(val, dict):
-        out = {}
-        for k, v in val.items():
-            if str(k).lower() in ("headers", "header") and isinstance(v, dict):
-                out[k] = {name: "[REDACTED]" for name in v}
-            elif str(k).lower() in SENSITIVE_FIELD_NAMES:
-                out[k] = "[REDACTED]"
-            else:
-                out[k] = redact_sensitive_data(v)
-        return out
-    elif isinstance(val, list):
-        return [redact_sensitive_data(x) for x in val]
-    return val
+    """Recursively redact sensitive keys from nested dicts/lists for safe logging and diagnostics.
+
+    Kept as a thin alias so existing imports keep working; the rules live in
+    ``app.services.redaction``.
+    """
+    return redact_mapping(val)
 
 
 def set_dir_permissions_0700(path: Path) -> None:
@@ -163,6 +144,7 @@ def generate_proxy_config(
     max_retry_credentials: int = 0,
     max_retry_interval: int = 30,
     custom_endpoints: list[dict[str, Any]] | None = None,
+    direct_providers: list[dict[str, Any]] | None = None,
     session_affinity: bool = True,
 ) -> str:
     config = {
@@ -194,6 +176,19 @@ def generate_proxy_config(
                 "api-key-entries": endpoint.get("api-key-entries") or endpoint.get("api-keys") or endpoint.get("api_keys") or [],
             })
         config["openai-compatibility"] = entries
+
+    if direct_providers:
+        openai_entries = config.setdefault("openai-compatibility", [])
+        for provider in direct_providers:
+            section = provider.get("section")
+            entry = {key: value for key, value in provider.items() if key != "section"}
+            if section == "openai-compatibility":
+                openai_entries.append(entry)
+            elif section in ("gemini-api-key", "claude-api-key"):
+                config.setdefault(section, []).append(entry)
+        if not openai_entries:
+            config.pop("openai-compatibility", None)
+
     return yaml.safe_dump(config, sort_keys=False, allow_unicode=True)
 
 
@@ -510,10 +505,14 @@ class ProxyManagementClient:
         endpoint: str,
         json_body: Any = None,
         params: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         url = f"{self._base_url}{endpoint}"
         headers = self._get_headers()
-        client = self._client or httpx.AsyncClient(timeout=self._timeout, trust_env=False)
+        client = self._client or httpx.AsyncClient(
+            timeout=timeout if timeout is not None else self._timeout,
+            trust_env=False,
+        )
         try:
             resp = await client.request(
                 method,
@@ -602,7 +601,15 @@ class ProxyManagementClient:
         query_params = {"provider": provider}
         if params:
             query_params.update(params)
-        res = await self._request("GET", "/v8/management/oauth/auth-url", params=query_params)
+        # OAuth URL generation can take longer than the default management
+        # timeout on a cold sidecar (the provider metadata fetch happens
+        # inline), so give this call its own budget.
+        res = await self._request(
+            "GET",
+            "/v8/management/oauth/auth-url",
+            params=query_params,
+            timeout=60.0,
+        )
         return res if isinstance(res, dict) else {}
 
     async def submit_oauth_callback(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -612,7 +619,18 @@ class ProxyManagementClient:
 
     async def get_oauth_status(self, state: str) -> dict[str, Any]:
         """Query OAuth flow status via /v8/management/oauth/status."""
-        res = await self._request("GET", "/v8/management/oauth/status", params={"state": state})
+        try:
+            res = await asyncio.wait_for(
+                self._request(
+                    "GET",
+                    "/v8/management/oauth/status",
+                    params={"state": state},
+                    timeout=3.0,
+                ),
+                timeout=3.5,
+            )
+        except (asyncio.TimeoutError, httpx.TimeoutException) as exc:
+            raise ProxySupervisorError("OAuth status query timed out") from exc
         return res if isinstance(res, dict) else {}
 
     async def cancel_oauth_session(self, state: str) -> dict[str, Any]:
@@ -652,6 +670,13 @@ class ProxySupervisor:
         self._client_key: str | None = None
         self._management_key: str | None = None
         self._process: subprocess.Popen | None = None
+        # The sidecar logs every request it serves. Its output must never go to
+        # an unread pipe: once the OS buffer fills, the child blocks inside its
+        # logger while holding internal locks, and every management endpoint
+        # (/config, /auth-files, /oauth/*) hangs forever while /healthz still
+        # answers. Redirect to a file instead and read it only for diagnostics.
+        self._log_handle: Any | None = None
+        self._log_path: Path | None = None
         self._runtime_dir: Path | None = None
         self._auth_dir: Path | None = None
         self._restart_count: int = 0
@@ -660,6 +685,20 @@ class ProxySupervisor:
         self._sync_task: asyncio.Task | None = None
         self._credential_keys: dict[str, str] | None = None
         self._accepting_requests = True
+        self._last_management_probe_at: float = 0.0
+        # While an OAuth consent flow is pending, restarting the sidecar would
+        # discard the in-memory flow state and break the callback. Suppress the
+        # wedge probe until the flow finishes or this deadline expires.
+        self._oauth_flow_deadline: float = 0.0
+        self._last_recovery_reason: str = ""
+        self._last_suppressed_reason: str = ""
+        self._recovery_count: int = 0
+
+    def hold_oauth_flow(self, seconds: float = 600.0) -> None:
+        self._oauth_flow_deadline = time.monotonic() + seconds
+
+    def release_oauth_flow(self) -> None:
+        self._oauth_flow_deadline = 0.0
 
     @property
     def state(self) -> SupervisorState:
@@ -717,6 +756,28 @@ class ProxySupervisor:
             raise ProxySupervisorError("CLIProxyAPI is not running; management client unavailable")
         return self._management_client
 
+    async def _management_api_responsive(self) -> bool:
+        """Probe the sidecar's management plane, which wedges independently of /healthz.
+
+        A hung management API means OAuth start and credential operations will time
+        out, and inference typically stalls on the same process. Probe at most once
+        every 15s so normal requests do not pay for it.
+        """
+        now = time.monotonic()
+        if now - self._last_management_probe_at < 15.0:
+            return True
+        self._last_management_probe_at = now
+        try:
+            client = self.get_management_client()
+            await asyncio.wait_for(client.get_credentials(), timeout=3.0)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "ProxySupervisor: management API probe failed (%s)",
+                type(exc).__name__,
+            )
+            return False
+
     def get_status(self) -> dict[str, Any]:
         """Return non-secret status summary."""
         return {
@@ -745,27 +806,32 @@ class ProxySupervisor:
                 raise ProxySupervisorError("Proxy supervisor is shutting down")
             await self._vault.get_state()
             if self.is_running and self._port and self._client_key:
-                return (self._host, self._port, self._client_key)
+                # Do not restart on auth-file mtime changes: the sidecar
+                # rewrites its own auth files on token refresh, and replacing
+                # the process mid-run discards the warm credential state. A
+                # genuinely wedged child is recovered by the management probe
+                # below and by the first-event watchdog in the inference path.
+                if time.monotonic() < self._oauth_flow_deadline:
+                    return (self._host, self._port, self._client_key)
+                if await self._management_api_responsive():
+                    return (self._host, self._port, self._client_key)
+                return await self._recover_unlocked("management_unresponsive")
 
             # Dead process detection if previously started but now dead/crashed
             if self._process is not None and self._process.poll() is not None:
-                logger.warning(
-                    "ProxySupervisor: detected dead child process (code=%s); attempting bounded restart",
-                    self._process.returncode,
-                )
-                await self._handle_restart_unlocked()
-                assert self._port is not None and self._client_key is not None
-                return (self._host, self._port, self._client_key)
+                return await self._recover_unlocked("dead_child")
 
-            # Lazy start after vault availability check
+            # The sidecar also serves API-key direct routes, so a locked vault must
+            # not prevent startup. Vault-backed materialization is skipped instead.
             if hasattr(self._vault, "get_state"):
                 res = self._vault.get_state()
                 vault_state = await res if asyncio.iscoroutine(res) else res
             else:
                 vault_state = getattr(self._vault, "state", VaultState.KEYRING_UNAVAILABLE)
             if vault_state != VaultState.AVAILABLE:
-                raise VaultUnavailableError(
-                    f"Cannot start CLIProxyAPI: vault is not available (state: {vault_state.value})"
+                logger.warning(
+                    "ProxySupervisor: starting without vault materialization (state=%s)",
+                    vault_state.value,
                 )
 
             # Clean previous runtime dir if any exists before starting
@@ -777,6 +843,55 @@ class ProxySupervisor:
             await self._start_unlocked()
             assert self._port is not None and self._client_key is not None
             return (self._host, self._port, self._client_key)
+
+    async def _vault_is_available(self) -> bool:
+        try:
+            if hasattr(self._vault, "get_state"):
+                res = self._vault.get_state()
+                state = await res if asyncio.iscoroutine(res) else res
+            else:
+                state = getattr(self._vault, "state", VaultState.KEYRING_UNAVAILABLE)
+            return state == VaultState.AVAILABLE
+        except Exception as exc:
+            logger.warning("ProxySupervisor: vault state check failed (%s)", type(exc).__name__)
+            return False
+
+    async def list_proxy_models(self, prefix: str) -> list[str]:
+        """Return the proxy's catalog for one model prefix, stripped of the prefix."""
+        cache_key = (id(self), prefix)
+        cached = _MODEL_CACHE.get(cache_key)
+        if cached is not None and (time.monotonic() - cached[0]) < _MODEL_CACHE_TTL:
+            return list(cached[1])
+
+        try:
+            host, port, client_key = await self.ensure_started()
+            async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+                resp = await client.get(
+                    f"http://{host}:{port}/v1/models",
+                    headers={"Authorization": f"Bearer {client_key}"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.warning("ProxySupervisor: model listing failed (%s)", type(exc).__name__)
+            return []
+
+        marker = f"{prefix}/"
+        models: set[str] = set()
+        for item in data.get("data", []) if isinstance(data, dict) else []:
+            model_id = item.get("id") if isinstance(item, dict) else None
+            if isinstance(model_id, str) and model_id.startswith(marker):
+                models.add(model_id[len(marker):])
+        resolved = sorted(models)
+        _MODEL_CACHE[cache_key] = (time.monotonic(), tuple(resolved))
+        return resolved
+
+    def _invalidate_model_cache(self) -> None:
+        """Invalidate cached proxy model lists for this supervisor instance."""
+        sup_id = id(self)
+        to_del = [k for k in _MODEL_CACHE if k[0] == sup_id]
+        for k in to_del:
+            _MODEL_CACHE.pop(k, None)
 
     async def _handle_restart_unlocked(self) -> None:
         if self._restart_count >= self._max_restarts:
@@ -822,6 +937,7 @@ class ProxySupervisor:
         await self.ensure_started()
 
     async def _start_unlocked(self) -> None:
+        self._invalidate_model_cache()
         # Clean up any leftover runtime directory before creating a fresh one
         if self._runtime_dir and self._runtime_dir.exists():
             shutil.rmtree(self._runtime_dir, ignore_errors=True)
@@ -862,14 +978,33 @@ class ProxySupervisor:
         async with AsyncSessionLocal() as session:
             credentials = list((await session.execute(select(AIProviderCredential).where(AIProviderCredential.kind == "oauth"))).scalars().all())
             routing_settings = await load_routing_settings(session)
-        self._credential_keys = {
-            entry.proxy_credential_name if entry.proxy_credential_name.endswith(".json") else f"{entry.proxy_credential_name}.json": entry.vault_reference.removeprefix("oauth_auth:")
-            for entry in credentials
-        }
-        await materialize_vault_secrets(self._vault, self._auth_dir, credentials)
 
-        # Materialize custom endpoints
-        custom_endpoints = await materialize_custom_endpoints(self._vault)
+        from app.services.direct_proxy_routes import build_direct_proxy_entries
+
+        vault_available = await self._vault_is_available()
+        if vault_available:
+            self._credential_keys = {
+                entry.proxy_credential_name if entry.proxy_credential_name.endswith(".json") else f"{entry.proxy_credential_name}.json": entry.vault_reference.removeprefix("oauth_auth:")
+                for entry in credentials
+            }
+            try:
+                await materialize_vault_secrets(self._vault, self._auth_dir, credentials)
+            except Exception as exc:
+                logger.warning(
+                    "ProxySupervisor: OAuth materialization skipped (%s)", type(exc).__name__
+                )
+            try:
+                custom_endpoints = await materialize_custom_endpoints(self._vault)
+            except Exception as exc:
+                logger.warning(
+                    "ProxySupervisor: custom endpoint materialization skipped (%s)", type(exc).__name__
+                )
+                custom_endpoints = []
+        else:
+            self._credential_keys = {}
+            custom_endpoints = []
+
+        direct_providers = await build_direct_proxy_entries()
 
         # Generate config
         cfg_str = generate_proxy_config(
@@ -879,6 +1014,7 @@ class ProxySupervisor:
             management_key=self._management_key,
             auth_dir=self._auth_dir,
             custom_endpoints=custom_endpoints,
+            direct_providers=direct_providers,
             **routing_settings,
         )
         cfg_path = self._runtime_dir / "config.yaml"
@@ -894,10 +1030,35 @@ class ProxySupervisor:
                 subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0x08000000
             )
 
+        self._log_path = self._runtime_dir / "cliproxy.log"
+        try:
+            self._close_log_handle()
+            # Keep the sidecar log bounded across restarts; it only needs to
+            # hold enough recent output to explain a crash.
+            try:
+                if self._log_path.exists() and self._log_path.stat().st_size > 8 * 1024 * 1024:
+                    self._log_path.unlink()
+            except OSError:
+                pass
+            self._log_handle = self._log_path.open("a", encoding="utf-8", errors="replace")
+            restrict_access(self._log_path)
+        except Exception as exc:
+            logger.warning(
+                "ProxySupervisor: cannot open sidecar log file (%s); discarding output",
+                type(exc).__name__,
+            )
+            self._log_handle = None
+            self._log_path = None
+
+        stdout_target = self._log_handle if self._log_handle is not None else subprocess.DEVNULL
+        stderr_target = (
+            subprocess.STDOUT if self._log_handle is not None else subprocess.DEVNULL
+        )
+
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=stdout_target,
+            stderr=stderr_target,
             text=True,
             cwd=str(self._runtime_dir),
             creationflags=creation_flags,
@@ -942,22 +1103,38 @@ class ProxySupervisor:
                 await asyncio.sleep(0.05)
         return False
 
+    def _close_log_handle(self) -> None:
+        """Close the sidecar log file, tolerating repeated or partial cleanup."""
+        handle = self._log_handle
+        self._log_handle = None
+        if handle is None:
+            return
+        try:
+            handle.close()
+        except Exception:
+            pass
+
     async def _collect_process_error(self) -> str:
         if not self._process:
             return "No process"
         exit_code = self._process.poll()
-        stderr_text = ""
-        if self._process.stderr:
+        log_tail = ""
+        log_path = self._log_path
+        if log_path is not None:
             try:
-                def _read_stderr() -> str:
+                def _read_tail() -> str:
                     try:
-                        return self._process.stderr.read() or ""
+                        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+                            fh.seek(0, 2)
+                            size = fh.tell()
+                            fh.seek(max(0, size - 2048))
+                            return fh.read()
                     except Exception:
                         return ""
-                stderr_text = await asyncio.wait_for(asyncio.to_thread(_read_stderr), timeout=1.0)
+                log_tail = await asyncio.wait_for(asyncio.to_thread(_read_tail), timeout=1.0)
             except Exception:
                 pass
-        return f"exited with code {exit_code}: {stderr_text.strip()}"
+        return f"exited with code {exit_code}: {log_tail.strip()}"
 
     async def _cleanup_process(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -973,6 +1150,9 @@ class ProxySupervisor:
                     self._process.wait(timeout=1.0)
             except Exception as exc:
                 logger.debug("ProxySupervisor: error cleaning process: %s", exc)
+        # The log file is opened for the child's stdout/stderr; close it before
+        # the runtime directory is removed so Windows can delete the file.
+        self._close_log_handle()
 
     async def restart_if_crashed(self) -> bool:
         """Check if process crashed and perform bounded restart if needed."""
@@ -1014,25 +1194,44 @@ class ProxySupervisor:
                 return await sync_auth_and_cooldowns(self._vault, self._auth_dir, self._credential_keys)
             return 0
 
+    async def recover(self, reason: str, *, preserve_oauth_flow: bool = False) -> tuple[str, int, str]:
+        """Recover supervisor with reason tracking and optional OAuth flow preservation."""
+        async with self._lock:
+            return await self._recover_unlocked(reason, preserve_oauth_flow=preserve_oauth_flow)
+
+    async def _recover_unlocked(self, reason: str, *, preserve_oauth_flow: bool = False) -> tuple[str, int, str]:
+        if preserve_oauth_flow and self.is_running and time.monotonic() < self._oauth_flow_deadline:
+            logger.warning("ProxySupervisor: restart suppressed (reason=%s); OAuth flow in progress", reason)
+            self._last_suppressed_reason = reason
+            return self._host, self._port, self._client_key
+
+        self._last_recovery_reason = reason
+        self._recovery_count += 1
+        logger.warning("ProxySupervisor: restarting sidecar (reason=%s count=%s)", reason, self._recovery_count)
+
+        self._invalidate_model_cache()
+        await self._cancel_sync()
+        await self._cleanup_process()
+        if self._auth_dir and self._auth_dir.exists():
+            await sync_auth_and_cooldowns(self._vault, self._auth_dir, self._credential_keys)
+        self._state = SupervisorState.STOPPED
+        self._process = None
+        await self._start_unlocked()
+        return self._host, self._port, self._client_key
+
     async def restart(self) -> tuple[str, int, str]:
         """Restart supervisor and return (host, port, client_key)."""
-        await self._cancel_sync()
-        async with self._lock:
-            await self._cleanup_process()
-            if self._auth_dir and self._auth_dir.exists():
-                await sync_auth_and_cooldowns(self._vault, self._auth_dir, self._credential_keys)
-            self._state = SupervisorState.STOPPED
-            self._process = None
-            await self._start_unlocked()
-            return self._host, self._port, self._client_key
+        return await self.recover("explicit_restart")
 
     async def reload_custom_endpoints(self) -> None:
         """If supervisor is currently running, restart to re-materialize custom endpoints."""
+        _MODEL_CACHE.clear()
         if self.is_running:
             await self.restart()
 
     async def stop(self, *, sync: bool = True, permanent: bool = False) -> None:
         """Gracefully stop the proxy, sync auth and cooldowns to vault, and clean runtime dir."""
+        self._invalidate_model_cache()
         if permanent:
             self._accepting_requests = False
         await self._cancel_sync()
@@ -1065,6 +1264,7 @@ class ProxySupervisor:
             self._client_key = None
             self._management_key = None
             self._runtime_dir = None
+            self._log_path = None
             self._auth_dir = None
             self._management_client = None
             logger.info("ProxySupervisor: stopped successfully")

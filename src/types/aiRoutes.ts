@@ -24,6 +24,7 @@ export interface RouteHealth {
   proxy_status?: string;
   account_count?: number;
   key_count?: number;
+  transport?: 'proxy' | 'direct' | string;
 }
 
 export interface RouteConfigSummary {
@@ -32,6 +33,7 @@ export interface RouteConfigSummary {
   has_headers?: boolean;
   header_names?: string[];
   is_configured?: boolean;
+  transport?: 'proxy' | 'direct' | string;
   [key: string]: unknown;
 }
 
@@ -89,22 +91,56 @@ export interface RoutesListResponse {
   settings: RouteSettings;
 }
 
+export interface RouteModelCatalogModel {
+  id: string;
+  label: string;
+}
+
+export interface RouteModelCatalogEntry {
+  route_id: string;
+  label: string;
+  kind: string;
+  provider: string;
+  models: RouteModelCatalogModel[];
+}
+
+export interface RouteModelCatalogWarning {
+  route_id: string;
+  code: string;
+  message: string;
+}
+
+export interface RouteModelCatalogResponse {
+  routes: RouteModelCatalogEntry[];
+  warnings: RouteModelCatalogWarning[];
+}
+
+export type OAuthCallbackMode = 'loopback' | 'manual';
+
 export interface OAuthStartRequest {
   provider: string;
-  flow?: 'browser' | 'device';
+  flow?: 'browser';
   replace_account_id?: string | null;
 }
 
 export interface OAuthStartResponse {
   state: string;
   provider: string;
-  flow: 'browser' | 'device';
+  flow?: 'browser';
+  callback_mode: OAuthCallbackMode;
+  callback_url: string | null;
   auth_url?: string | null;
   user_code?: string | null;
   verification_uri?: string | null;
   expires_in: number;
   interval: number;
   status: string;
+}
+
+export interface OAuthCallbackRequest {
+  state: string;
+  code?: string | null;
+  redirect_url?: string | null;
 }
 
 export interface OAuthPollResponse {

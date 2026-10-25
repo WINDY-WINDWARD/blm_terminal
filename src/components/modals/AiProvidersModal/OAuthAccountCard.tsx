@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -28,6 +28,11 @@ interface OAuthAccountCardProps {
   onReauth: (accountId: string, identity: string) => void;
 }
 
+function clampRoutingValue(value: number | null | undefined): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(100, Math.floor(value ?? 1)));
+}
+
 export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAccountCardProps) {
   const patchAccount = usePatchAccountMutation();
   const refreshAccount = useRefreshAccountMutation();
@@ -35,18 +40,19 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
   const resetCooldown = useResetCooldownMutation();
   const removeAccount = useRemoveAccountMutation();
 
-  const [priorityVal, setPriorityVal] = useState<number>(account.priority ?? 1);
-  const [weightVal, setWeightVal] = useState<number>(account.weight ?? 1);
+  const [priorityVal, setPriorityVal] = useState<number>(() => clampRoutingValue(account.priority));
+  const [weightVal, setWeightVal] = useState<number>(() => clampRoutingValue(account.weight));
   const [testResult, setTestResult] = useState<{ status: string; latency_ms?: number; error?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<boolean>(false);
+  const routingHelpId = useId();
 
   // Sync state when props update from background refetch
   useEffect(() => {
-    setPriorityVal(account.priority ?? 1);
+    setPriorityVal(clampRoutingValue(account.priority));
   }, [account.priority]);
 
   useEffect(() => {
-    setWeightVal(account.weight ?? 1);
+    setWeightVal(clampRoutingValue(account.weight));
   }, [account.weight]);
 
   const isCooldown = Boolean(account.cooldown) || account.status === 'cooldown';
@@ -54,13 +60,21 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
   const isDisabled = !account.enabled;
 
   const handlePriorityChange = (newVal: number) => {
-    const val = Math.max(1, Math.min(100, Math.floor(newVal || 1)));
+    if (!Number.isFinite(newVal)) {
+      setPriorityVal(clampRoutingValue(account.priority));
+      return;
+    }
+    const val = clampRoutingValue(newVal);
     setPriorityVal(val);
     patchAccount.mutate({ accountId: account.id, patch: { priority: val } });
   };
 
   const handleWeightChange = (newVal: number) => {
-    const val = Math.max(1, Math.min(100, Math.floor(newVal || 1)));
+    if (!Number.isFinite(newVal)) {
+      setWeightVal(clampRoutingValue(account.weight));
+      return;
+    }
+    const val = clampRoutingValue(newVal);
     setWeightVal(val);
     patchAccount.mutate({ accountId: account.id, patch: { weight: val } });
   };
@@ -271,14 +285,20 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
             <span>Priority:</span>
             <input
               type="number"
+              step="1"
               min="1"
               max="100"
-              value={priorityVal}
-              onChange={(e) => setPriorityVal(Number(e.target.value))}
+              value={Number.isFinite(priorityVal) ? priorityVal : ''}
+              onChange={(e) => {
+                const value = e.currentTarget.valueAsNumber;
+                setPriorityVal(Number.isFinite(value) ? clampRoutingValue(value) : Number.NaN);
+              }}
               onBlur={() => handlePriorityChange(priorityVal)}
               onKeyDown={handlePriorityKeyDown}
               disabled={patchAccount.isPending}
               aria-label="Account Priority"
+              aria-describedby={routingHelpId}
+              title="Lower numbers are tried first."
               className="w-14 px-1.5 py-0.5 rounded bg-[#09090b] border border-zinc-700 text-white font-mono text-xs focus:border-terminal-amber outline-none"
             />
           </label>
@@ -287,18 +307,27 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
             <span>Weight:</span>
             <input
               type="number"
+              step="1"
               min="1"
               max="100"
-              value={weightVal}
-              onChange={(e) => setWeightVal(Number(e.target.value))}
+              value={Number.isFinite(weightVal) ? weightVal : ''}
+              onChange={(e) => {
+                const value = e.currentTarget.valueAsNumber;
+                setWeightVal(Number.isFinite(value) ? clampRoutingValue(value) : Number.NaN);
+              }}
               onBlur={() => handleWeightChange(weightVal)}
               onKeyDown={handleWeightKeyDown}
               disabled={patchAccount.isPending}
               aria-label="Account Weight"
+              aria-describedby={routingHelpId}
+              title="Share of requests among accounts with equal priority."
               className="w-14 px-1.5 py-0.5 rounded bg-[#09090b] border border-zinc-700 text-white font-mono text-xs focus:border-terminal-amber outline-none"
             />
           </label>
         </div>
+        <p id={routingHelpId} className="w-full text-[10px] leading-relaxed text-zinc-500">
+          Priority - lower numbers are tried first. Weight - share of requests among accounts with equal priority.
+        </p>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1.5 shrink-0 flex-wrap">

@@ -6,7 +6,7 @@ Test Architecture & Verification:
    - Starts an in-process fake OpenAI-compatible HTTP upstream server on a free loopback port.
    - Exercises real configuration serialization via `materialize_custom_endpoints` and
      `generate_proxy_config`.
-   - Spawns the vendored CLIProxyAPI binary (v8.0.35) on an ephemeral loopback port.
+   - Spawns the vendored CLIProxyAPI binary (v8.0.39) on an ephemeral loopback port.
    - If the binary is absent (e.g. non-packaged CI), tests cleanly skip via `pytest.skip`.
    - Dispatches requests via BLM Terminal's real `stream_chat_completion` client loop.
    - Key 1 returns HTTP 401 Unauthorized (or HTTP 429 Too Many Requests).

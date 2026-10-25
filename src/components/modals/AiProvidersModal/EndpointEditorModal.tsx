@@ -475,6 +475,10 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
 
               {keys.length > 0 && (
                 <div className="flex flex-col gap-2">
+                  <p id="endpoint-editor-key-routing-help" className="text-[10px] leading-relaxed text-zinc-500">
+                    <span>Priority - lower numbers are tried first.</span>{' '}
+                    <span>Weight - share of requests among keys with equal priority.</span>
+                  </p>
                   {keys.map((k) => (
                     <div key={k.id} className="p-2.5 rounded bg-[#09090b] border border-zinc-800 flex flex-col gap-2">
                       <div className="flex items-center gap-2">
@@ -500,10 +504,17 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
                           <span>Priority:</span>
                           <input
                             type="number"
+                            step="1"
                             min="1"
                             max="100"
                             value={k.priority}
-                            onChange={(e) => updateKeyRow(k.id, 'priority', parseInt(e.target.value) || 1)}
+                            aria-label="Endpoint key priority"
+                            aria-describedby="endpoint-editor-key-routing-help"
+                            title="Lower numbers are tried first."
+                            onChange={(e) => {
+                              const value = e.currentTarget.valueAsNumber;
+                              if (Number.isFinite(value)) updateKeyRow(k.id, 'priority', Math.max(1, Math.min(100, Math.floor(value))));
+                            }}
                             className="w-16 bg-[#121216] border border-zinc-700 px-2 py-0.5 rounded text-white"
                           />
                         </label>
@@ -511,10 +522,17 @@ export function EndpointEditorModal({ isOpen, onClose, route }: EndpointEditorMo
                           <span>Weight:</span>
                           <input
                             type="number"
+                            step="1"
                             min="1"
                             max="100"
                             value={k.weight}
-                            onChange={(e) => updateKeyRow(k.id, 'weight', parseInt(e.target.value) || 1)}
+                            aria-label="Endpoint key weight"
+                            aria-describedby="endpoint-editor-key-routing-help"
+                            title="Share of requests among keys with equal priority."
+                            onChange={(e) => {
+                              const value = e.currentTarget.valueAsNumber;
+                              if (Number.isFinite(value)) updateKeyRow(k.id, 'weight', Math.max(1, Math.min(100, Math.floor(value))));
+                            }}
                             className="w-16 bg-[#121216] border border-zinc-700 px-2 py-0.5 rounded text-white"
                           />
                         </label>

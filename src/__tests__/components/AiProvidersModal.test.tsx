@@ -8,6 +8,9 @@ import { VaultResetModal } from '@/components/modals/AiProvidersModal/VaultReset
 import { OAuthAccountCard } from '@/components/modals/AiProvidersModal/OAuthAccountCard';
 import { useUpdateRouteSettingsMutation } from '@/hooks/useAiRoutes';
 import { AiProvidersModal } from '@/components/modals/AiProvidersModal';
+import { AiProvidersModalHost } from '@/components/modals/AiProvidersModalHost';
+import { CustomEndpointsTab } from '@/components/modals/AiProvidersModal/CustomEndpointsTab';
+import { EndpointEditorModal } from '@/components/modals/AiProvidersModal/EndpointEditorModal';
 import { CommandBar } from '@/components/CommandBar';
 import { SettingsModal } from '@/components/modals/SettingsModal';
 import { TerminalContainer } from '@/components/TerminalContainer';
@@ -19,7 +22,7 @@ import {
   activeCommandAtom,
   authAtom,
 } from '@/store/terminalStore';
-import type { RoutesListResponse, CredentialSummary } from '@/types/aiRoutes';
+import type { RoutesListResponse, CredentialSummary, RouteSummary } from '@/types/aiRoutes';
 
 const baseMockRoutesResponse: RoutesListResponse = {
   routes: [
@@ -206,13 +209,13 @@ const baseMockRoutesResponse: RoutesListResponse = {
       kind: 'direct',
       provider: 'aistudio',
       display_label: 'Google AI Studio',
-      proxy_prefix: null,
+      proxy_prefix: 'blm-303883bf0c4964ae',
       enabled: true,
       is_active: true,
-      health: { healthy: true, status: 'active' },
+      health: { healthy: true, status: 'active', transport: 'proxy' },
       accounts: [],
       keys: [],
-      config: { is_configured: true },
+      config: { is_configured: true, transport: 'proxy' },
       models: ['gemini-2.5-pro'],
       recovery_state: null,
     },
@@ -234,6 +237,22 @@ const baseMockRoutesResponse: RoutesListResponse = {
     max_retry_credentials: 0,
     max_retry_interval: 30,
   },
+};
+
+const mockEndpointRoute: RouteSummary = {
+  id: 'endpoint:test',
+  kind: 'endpoint',
+  provider: 'custom',
+  display_label: 'Test Endpoint',
+  proxy_prefix: 'test-endpoint',
+  enabled: true,
+  is_active: false,
+  health: { healthy: true, status: 'configured', key_count: 0 },
+  accounts: [],
+  keys: [],
+  config: { base_url: 'https://example.com/v1' },
+  models: ['test-model'],
+  recovery_state: null,
 };
 
 describe('AiProvidersModal', () => {
@@ -425,6 +444,90 @@ describe('AiProvidersModal', () => {
     await waitFor(() => {
       expect(patchSpy).toHaveBeenCalledWith({ strategy: 'round-robin' });
     });
+  });
+
+  it('explains each routing strategy in the top summary', async () => {
+    let strategy = 'fill-first';
+    server.use(
+      http.get('/api/py/ai/routes', () => HttpResponse.json({
+        ...baseMockRoutesResponse,
+        settings: { ...baseMockRoutesResponse.settings, strategy },
+      })),
+      http.patch('/api/py/ai/routes/settings', async ({ request }) => {
+        const body = (await request.json()) as { strategy?: string };
+        strategy = body.strategy ?? strategy;
+        return HttpResponse.json({ status: 'updated', updated_settings: body });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+    expect(screen.getByTestId('routing-strategy-description')).toHaveTextContent(
+      'Use the first healthy account until it cools down.',
+    );
+
+    fireEvent.change(screen.getByTestId('routing-strategy-select'), { target: { value: 'round-robin' } });
+    await waitFor(() => expect(screen.getByTestId('routing-strategy-description')).toHaveTextContent('Rotate among healthy accounts.'));
+
+    fireEvent.change(screen.getByTestId('routing-strategy-select'), { target: { value: 'priority' } });
+    await waitFor(() => expect(screen.getByTestId('routing-strategy-description')).toHaveTextContent('Use strict priority tiers.'));
+  });
+
+  it('explains and bounds OAuth account priority and weight inputs', async () => {
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    const account = screen.getByTestId('account-card-acc-codex-1');
+    const priority = account.querySelector('input[aria-label="Account Priority"]') as HTMLInputElement;
+    const weight = account.querySelector('input[aria-label="Account Weight"]') as HTMLInputElement;
+    expect(account).toHaveTextContent('Priority - lower numbers are tried first.');
+    expect(account).toHaveTextContent('Weight - share of requests among accounts with equal priority.');
+    expect(priority).toHaveAttribute('title', 'Lower numbers are tried first.');
+    expect(weight).toHaveAttribute('title', 'Share of requests among accounts with equal priority.');
+    expect(priority).toHaveAttribute('aria-describedby');
+    expect(weight).toHaveAttribute('aria-describedby');
+
+    fireEvent.change(priority, { target: { value: '125' } });
+    expect(priority).toHaveValue(100);
+    fireEvent.blur(priority);
+    await waitFor(() => expect(priority).toHaveValue(100));
+    expect(account).toBeInTheDocument();
+  });
+
+  it('explains and bounds inline custom endpoint key priority and weight inputs', () => {
+    render(<CustomEndpointsTab routes={[mockEndpointRoute]} activeRouteId="" />);
+    fireEvent.click(screen.getByTestId('add-key-toggle-endpoint:test'));
+
+    const priority = screen.getByLabelText('New endpoint key priority');
+    const weight = screen.getByLabelText('New endpoint key weight');
+    expect(screen.getByText('Priority - lower numbers are tried first.')).toBeInTheDocument();
+    expect(screen.getByText('Weight - share of requests among keys with equal priority.')).toBeInTheDocument();
+    expect(priority).toHaveAttribute('title', 'Lower numbers are tried first.');
+    expect(weight).toHaveAttribute('title', 'Share of requests among keys with equal priority.');
+    expect(priority).toHaveAttribute('aria-describedby');
+    expect(weight).toHaveAttribute('aria-describedby');
+
+    fireEvent.change(priority, { target: { value: '125' } });
+    expect(priority).toHaveValue(100);
+    fireEvent.change(priority, { target: { value: '' } });
+    expect(priority).toHaveValue(100);
+  });
+
+  it('explains and bounds key routing inputs in the endpoint editor', () => {
+    render(<EndpointEditorModal isOpen={true} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Add Key/i }));
+
+    const priority = screen.getByLabelText('Endpoint key priority');
+    const weight = screen.getByLabelText('Endpoint key weight');
+    expect(screen.getByText('Priority - lower numbers are tried first.')).toBeInTheDocument();
+    expect(screen.getByText('Weight - share of requests among keys with equal priority.')).toBeInTheDocument();
+    expect(priority).toHaveAttribute('title', 'Lower numbers are tried first.');
+    expect(weight).toHaveAttribute('title', 'Share of requests among keys with equal priority.');
+    expect(priority).toHaveAttribute('aria-describedby');
+    expect(weight).toHaveAttribute('aria-describedby');
+
+    fireEvent.change(weight, { target: { value: '0' } });
+    expect(weight).toHaveValue(1);
   });
 
   it('handles sticky session toggle and calls update settings', async () => {
@@ -649,9 +752,9 @@ describe('AiProvidersModal', () => {
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
     const codexGroup = screen.getByTestId('oauth-provider-group-codex');
-    const addBrowserBtn = codexGroup.querySelector('button:has-text("ADD (BROWSER)")') || screen.getAllByText('ADD (BROWSER)')[0];
+    const addAccountBtn = screen.getAllByText(/ADD ACCOUNT/i)[0];
 
-    fireEvent.click(addBrowserBtn);
+    fireEvent.click(addAccountBtn);
 
     // Verify dialog opened
     expect(await screen.findByRole('dialog', { name: /Connect Codex/i })).toBeInTheDocument();
@@ -668,19 +771,149 @@ describe('AiProvidersModal', () => {
     });
   });
 
-  it('opens device-code OAuth flow and displays user code and verification URI', async () => {
+  it('enforces browser-only OAuth with no device controls anywhere in the DOM', async () => {
     render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
-    const codexGroup = screen.getByTestId('oauth-provider-group-codex');
-    const addDeviceBtn = codexGroup.querySelector('button:has-text("ADD (DEVICE)")') || screen.getAllByText('ADD (DEVICE)')[0];
+    // Assert NO device buttons exist in any provider group
+    expect(screen.queryByText(/ADD \(DEVICE\)/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/DEVICE/i)).not.toBeInTheDocument();
 
-    fireEvent.click(addDeviceBtn);
+    // Assert ADD ACCOUNT button is present
+    const addAccountBtns = screen.getAllByText(/ADD ACCOUNT/i);
+    expect(addAccountBtns.length).toBeGreaterThan(0);
+  });
+
+  it('displays manual callback paste input and submit button when callback_mode is manual', async () => {
+    const submitCallbackSpy = vi.fn();
+    server.use(
+      http.post('/api/py/ai/routes/oauth/start', () => {
+        return HttpResponse.json({
+          state: 'test-manual-state-123',
+          provider: 'codex',
+          callback_mode: 'manual',
+          callback_url: null,
+          auth_url: 'https://auth.openai.com/authorize?state=test-manual-state-123',
+          expires_in: 900,
+          interval: 5,
+          status: 'pending',
+        });
+      }),
+      http.post('/api/py/ai/routes/oauth/callback', async ({ request }) => {
+        const body = await request.json();
+        submitCallbackSpy(body);
+        return HttpResponse.json({ status: 'completed', account_id: 'acc-1' });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    const addAccountBtns = screen.getAllByText(/ADD ACCOUNT/i);
+    fireEvent.click(addAccountBtns[0]);
 
     expect(await screen.findByRole('dialog', { name: /Connect Codex/i })).toBeInTheDocument();
-    expect(screen.getByText('WDJB-MJHT')).toBeInTheDocument();
-    expect(screen.getByText(/OPEN VERIFICATION PAGE/i)).toBeInTheDocument();
-    expect(screen.getByText(/Copy Code/i)).toBeInTheDocument();
+
+    // Manual mode input and submit button
+    const pasteInput = await screen.findByTestId('manual-callback-input');
+    expect(pasteInput).toBeInTheDocument();
+    const submitBtn = screen.getByTestId('manual-callback-submit');
+    expect(submitBtn).toBeInTheDocument();
+
+    // Submit paste
+    fireEvent.change(pasteInput, {
+      target: { value: 'http://localhost:51121/oauth-callback?state=test-manual-state-123&code=my_code_xyz' },
+    });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(submitCallbackSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          state: 'test-manual-state-123',
+          redirect_url: 'http://localhost:51121/oauth-callback?state=test-manual-state-123&code=my_code_xyz',
+        })
+      );
+    });
+  });
+
+  it('handles immediate failed response in manual callback submit UI, stopping timers and showing sanitized failure', async () => {
+    const submitCallbackSpy = vi.fn();
+    server.use(
+      http.post('/api/py/ai/routes/oauth/start', () => {
+        return HttpResponse.json({
+          provider: 'codex',
+          state: 'test-manual-state-failed',
+          callback_mode: 'manual',
+          callback_url: null,
+          auth_url: 'https://auth.openai.com/authorize?state=test-manual-state-failed',
+          expires_in: 900,
+          interval: 5,
+          status: 'pending',
+        });
+      }),
+      http.post('/api/py/ai/routes/oauth/callback', async ({ request }) => {
+        const body = await request.json();
+        submitCallbackSpy(body);
+        return HttpResponse.json({
+          status: 'failed',
+          error: 'Access denied by upstream provider?secret_param=TOP_SECRET_TOKEN_456',
+        });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    const addAccountBtns = screen.getAllByText(/ADD ACCOUNT/i);
+    fireEvent.click(addAccountBtns[0]);
+
+    expect(await screen.findByRole('dialog', { name: /Connect Codex/i })).toBeInTheDocument();
+
+    const pasteInput = await screen.findByTestId('manual-callback-input');
+    const submitBtn = screen.getByTestId('manual-callback-submit');
+
+    // Verify initial pending timer/waiting indicator exists
+    expect(screen.getByText(/Waiting for approval/i)).toBeInTheDocument();
+
+    // Submit paste
+    fireEvent.change(pasteInput, {
+      target: { value: 'http://localhost:51121/oauth-callback?state=test-manual-state-failed&error=access_denied' },
+    });
+    fireEvent.click(submitBtn);
+
+    // Verify callback was called
+    await waitFor(() => {
+      expect(submitCallbackSpy).toHaveBeenCalled();
+    });
+
+    // Verify sanitized failure is displayed
+    expect(await screen.findByText(/Authorization Failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Access denied by upstream provider \(query parameters redacted\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/TOP_SECRET_TOKEN_456/i)).not.toBeInTheDocument();
+
+    // Verify timers/waiting indicator are stopped and removed
+    expect(screen.queryByText(/Waiting for approval/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Expires in:/i)).not.toBeInTheDocument();
+  });
+
+  it('displays port conflict error without leaking query parameters when callback_port_unavailable occurs', async () => {
+    server.use(
+      http.post('/api/py/ai/routes/oauth/start', () => {
+        return HttpResponse.json(
+          { detail: 'callback_port_unavailable' },
+          { status: 503 }
+        );
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    const addAccountBtns = screen.getAllByText(/ADD ACCOUNT/i);
+    fireEvent.click(addAccountBtns[0]);
+
+    expect(await screen.findByRole('dialog', { name: /Connect Codex/i })).toBeInTheDocument();
+    expect(await screen.findByText(/callback_port_unavailable|Callback port is unavailable/i)).toBeInTheDocument();
   });
 
   it('displays prominent Reauth Mismatch Notice when OAuth poll returns identity mismatch', async () => {
@@ -722,8 +955,8 @@ describe('AiProvidersModal', () => {
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
     const codexGroup = screen.getByTestId('oauth-provider-group-codex');
-    const addBrowserBtn = screen.getAllByText('ADD (BROWSER)')[0];
-    fireEvent.click(addBrowserBtn);
+    const addAccountBtn = screen.getAllByText(/ADD ACCOUNT/i)[0];
+    fireEvent.click(addAccountBtn);
 
     expect(await screen.findByText(/Session Expired/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Try Again/i })).toBeInTheDocument();
@@ -733,9 +966,12 @@ describe('AiProvidersModal', () => {
   it('opens AiProvidersModal when PROVIDERS command is executed in TerminalContainer', async () => {
     render(
       <SavedLayoutsSyncProvider>
-        <TerminalContainer>
-          <div data-testid="terminal-inner">App</div>
-        </TerminalContainer>
+        <>
+          <TerminalContainer>
+            <div data-testid="terminal-inner">App</div>
+          </TerminalContainer>
+          <AiProvidersModalHost />
+        </>
       </SavedLayoutsSyncProvider>,
       {
         wrapperProps: {
@@ -764,7 +1000,10 @@ describe('AiProvidersModal', () => {
     const handleCloseSettings = vi.fn();
     render(
       <SavedLayoutsSyncProvider>
-        <SettingsModal isOpen={true} onClose={handleCloseSettings} initialTab="intelligence" />
+        <>
+          <SettingsModal isOpen={true} onClose={handleCloseSettings} initialTab="intelligence" />
+          <AiProvidersModalHost />
+        </>
       </SavedLayoutsSyncProvider>,
       {
         wrapperProps: {
@@ -782,6 +1021,7 @@ describe('AiProvidersModal', () => {
     fireEvent.click(manageBtn);
 
     expect(handleCloseSettings).toHaveBeenCalled();
+    expect(await screen.findByRole('dialog', { name: /AI PROVIDER ROUTES & OAUTH MANAGER/i })).toBeInTheDocument();
   });
 
   // 7. Security / No-Secret DOM Assertions
@@ -858,8 +1098,8 @@ describe('AiProvidersModal', () => {
     expect(screen.getByRole('dialog', { name: /AI PROVIDER ROUTES & OAUTH MANAGER/i })).toBeInTheDocument();
 
     // 2. Open nested OAuthSessionDialog via Add (Browser)
-    const addBrowserBtn = screen.getAllByText('ADD (BROWSER)')[0];
-    fireEvent.click(addBrowserBtn);
+    const addAccountBtn = screen.getAllByText(/ADD ACCOUNT/i)[0];
+    fireEvent.click(addAccountBtn);
 
     expect(await screen.findByRole('dialog', { name: /Connect Codex/i })).toBeInTheDocument();
 
@@ -917,8 +1157,8 @@ describe('AiProvidersModal', () => {
       route_id: 'oauth:codex',
       kind: 'oauth',
       masked_identity: 'user@openai.com',
-      priority: 1,
-      weight: 2,
+      priority: 125,
+      weight: 0,
       enabled: true,
       status: 'active',
       cooldown: null,
@@ -934,8 +1174,8 @@ describe('AiProvidersModal', () => {
     const priorityInput = screen.getByLabelText(/Account Priority/i) as HTMLInputElement;
     const weightInput = screen.getByLabelText(/Account Weight/i) as HTMLInputElement;
 
-    expect(priorityInput.value).toBe('1');
-    expect(weightInput.value).toBe('2');
+    expect(priorityInput.value).toBe('100');
+    expect(weightInput.value).toBe('1');
 
     // 1. Rerender with updated props (simulating React Query refetch)
     rerender(
@@ -948,6 +1188,10 @@ describe('AiProvidersModal', () => {
 
     expect(priorityInput.value).toBe('5');
     expect(weightInput.value).toBe('10');
+
+    fireEvent.change(priorityInput, { target: { value: '' } });
+    fireEvent.blur(priorityInput);
+    expect(priorityInput.value).toBe('5');
 
     // 2. Type new priority and commit with Enter key
     fireEvent.change(priorityInput, { target: { value: '8' } });

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import httpx
 import logging
 import re
 from datetime import datetime, timezone, timedelta
@@ -16,6 +17,7 @@ import time
 from app.workers.lifecycle import _startup_pipeline_done
 from app.services.llm_provider import stream_chat_completion
 from app.services.ai_chat_service import BLM_TOOLS, _run_tools_parallel
+from app.services.redaction import redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,7 @@ async def _get_config_value(db: AsyncSession, key: str) -> str | None:
         row = res.first()
         return row[0] if row else None
     except Exception as e:
-        logger.warning(f"Failed to read system_config {key}: {e}")
+        logger.warning("Failed to read system_config %s: %s", key, type(e).__name__)
         return None
 
 
@@ -111,7 +113,7 @@ async def get_dynamic_models():
             if configs.get("ai.verifier_model"):
                 verifier = configs["ai.verifier_model"]
     except Exception as e:
-        logger.warning("Failed to fetch dynamic AI models: %s", e)
+        logger.warning("Failed to fetch dynamic AI models: %s", type(e).__name__)
 
     if hunter.startswith("gemini-"):
         from app.routers.system_config import normalize_gemini_worker_model
@@ -320,7 +322,7 @@ async def _save_trace(db: AsyncSession, symbol: str, role: str, prompt: str, res
         db.add(trace)
         await db.commit()
     except Exception as e:
-        logger.error(f"Failed to save AI trace: {e}")
+        logger.error("Failed to save AI trace: %s", type(e).__name__)
 
 
 def _extract_json_block(content: str, tag: str) -> dict | list:
@@ -342,7 +344,12 @@ def _extract_json_block(content: str, tag: str) -> dict | list:
 
 
 
-async def _run_agent_loop(messages: list[dict], model: str, system_prompt: str | None = None) -> str:
+async def _run_agent_loop(
+    messages: list[dict],
+    model: str,
+    system_prompt: str | None = None,
+    label: str = "Agent",
+) -> str:
     seen_calls = set()
     async def executor(tool_calls: list[dict]) -> tuple[list[str], list[dict]]:
         return await _run_tools_parallel(tool_calls, seen_calls)
@@ -354,15 +361,32 @@ async def _run_agent_loop(messages: list[dict], model: str, system_prompt: str |
         tools=BLM_TOOLS,
         tool_executor=executor,
         system_prompt=system_prompt,
-        max_iter=60
+        max_iter=60,
+        allow_external_route=True,
+        # Agent loops think longer than a chat turn; don't abort a healthy
+        # generation while the model is still reasoning.
+        first_delta_deadline=600.0,
+        idle_delta_deadline=600.0,
     ):
         evt = json.loads(chunk)
         if evt["type"] == "token":
             full_content += evt["text"]
         elif evt["type"] == "error":
-            raise RuntimeError(f"Antigravity API error: {evt['message']}")
+            err_class = evt.get("error_class", "")
+            msg = evt.get("message", "API error")
+            err_prefix = f" [{err_class}]" if err_class else ""
+            raise RuntimeError(f"AI provider error{err_prefix}: {msg}")
             
+    if not full_content.strip():
+        raise RuntimeError(f"{label} stream produced empty content")
     return full_content
+
+
+def _is_read_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.ReadTimeout, TimeoutError)):
+        return True
+    msg = str(exc)
+    return any(term in msg for term in ("ReadTimeout", "FirstDeltaTimeout", "IdleDeltaTimeout", "TotalStreamTimeout", "read timed out", "Read timed out"))
 
 
 async def _run_agent_loop_retry(
@@ -375,15 +399,19 @@ async def _run_agent_loop_retry(
     """Run the agent loop, retrying transport/API errors (429, tokens, network).
 
     Parse errors are NOT retried here — they surface from _extract_json_block
-    in the caller, where retrying cannot help.
+    in the caller, where retrying cannot help. Within one AI Picks run,
+    ReadTimeout is not repeated.
     """
     last_err: Exception | None = None
     for i in range(attempts):
         try:
-            return await _run_agent_loop(messages, model, system_prompt)
+            return await _run_agent_loop(messages, model, system_prompt, label=label)
         except Exception as e:
             last_err = e
-            logger.warning(f"{label} attempt {i + 1}/{attempts} failed: {e}")
+            logger.warning("%s attempt %d/%d failed: %s", label, i + 1, attempts, type(e).__name__)
+            if _is_read_timeout_error(e):
+                logger.warning(f"{label} encountered read timeout: aborting retries for this run")
+                break
             if i < attempts - 1:
                 await asyncio.sleep(2.0 * (2 ** i))
     assert last_err is not None
@@ -409,8 +437,9 @@ async def _call_hunter(db: AsyncSession, market_context: str = "") -> tuple[list
         )
     except Exception as e:
         duration = int((time.time() - start_time) * 1000)
-        await _save_trace(db, "MULTI", "HUNTER", full_prompt, "", duration, "FAILED", str(e))
-        return [], f"Hunter API failed after retries: {e}"
+        err_msg = redact_text(str(e))
+        await _save_trace(db, "MULTI", "HUNTER", full_prompt, "", duration, "FAILED", err_msg)
+        return [], f"Hunter API failed after retries: {err_msg}"
 
     duration = int((time.time() - start_time) * 1000)
     await _save_trace(db, "MULTI", "HUNTER", full_prompt, text, duration, "SUCCESS")
@@ -418,8 +447,8 @@ async def _call_hunter(db: AsyncSession, market_context: str = "") -> tuple[list
     try:
         return _extract_json_block(text, "picks"), None
     except Exception as e:
-        logger.error(f"Hunter parsing failed: {e}. Raw content: {text}")
-        return [], f"Hunter output unparseable: {e}"
+        logger.error("Hunter parsing failed: %s", type(e).__name__)
+        return [], f"Hunter output unparseable: {type(e).__name__}"
 
 
 async def _call_verifier(db: AsyncSession, proposed_picks: list[dict], market_context: str = "") -> tuple[list[dict], str | None]:
@@ -442,8 +471,9 @@ async def _call_verifier(db: AsyncSession, proposed_picks: list[dict], market_co
         )
     except Exception as e:
         duration = int((time.time() - start_time) * 1000)
-        await _save_trace(db, "MULTI", "VERIFIER", full_prompt, "", duration, "FAILED", str(e))
-        return [], f"Verifier API failed after retries: {e}"
+        err_msg = redact_text(str(e))
+        await _save_trace(db, "MULTI", "VERIFIER", full_prompt, "", duration, "FAILED", err_msg)
+        return [], f"Verifier API failed after retries: {err_msg}"
 
     duration = int((time.time() - start_time) * 1000)
     await _save_trace(db, "MULTI", "VERIFIER", full_prompt, text, duration, "SUCCESS")
@@ -451,12 +481,19 @@ async def _call_verifier(db: AsyncSession, proposed_picks: list[dict], market_co
     try:
         return _extract_json_block(text, "verified_picks"), None
     except Exception as e:
-        logger.error(f"Verifier parsing failed: {e}. Raw content: {text}")
-        return [], f"Verifier output unparseable: {e}"
+        logger.error("Verifier parsing failed: %s", type(e).__name__)
+        return [], f"Verifier output unparseable: {type(e).__name__}"
 
 
-async def _call_evaluator(db: AsyncSession, pick_data: dict, market_context: str = "") -> dict:
-    """Loop 3: Run evaluator for an existing pick (HOLD stays the safe default)."""
+async def _call_evaluator(
+    pick_data: dict,
+    market_context: str = "",
+) -> tuple[dict, str | None]:
+    """Loop 3: Run evaluator for an existing pick (HOLD stays the safe default).
+
+    Persists evaluator traces to their own AsyncSessionLocal session to avoid
+    concurrent use of the outer Loop 3 session. Returns (evaluation, error).
+    """
     start_time = time.time()
 
     sys_prompt = EVALUATOR_PROMPT + "\n\n" + market_context
@@ -474,18 +511,41 @@ async def _call_evaluator(db: AsyncSession, pick_data: dict, market_context: str
         )
     except Exception as e:
         duration = int((time.time() - start_time) * 1000)
-        await _save_trace(db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, "", duration, "FAILED", str(e))
-        return {"note": f"Evaluation failed due to API error: {str(e)}", "action": "HOLD"}
+        err_msg = redact_text(str(e))
+        try:
+            async with AsyncSessionLocal() as trace_db:
+                await _save_trace(trace_db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, "", duration, "FAILED", err_msg)
+        except Exception as te:
+            logger.error("Failed to save evaluator failure trace: %s", type(te).__name__)
+        return {"note": "Evaluation failed due to API error.", "action": "HOLD"}, f"Evaluator API failed after retries: {err_msg}"
 
     duration = int((time.time() - start_time) * 1000)
-    await _save_trace(db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, text, duration, "SUCCESS")
+    parsed_eval = None
+    parse_error = None
+    try:
+        raw_json = _extract_json_block(text, "evaluation")
+        if not isinstance(raw_json, dict):
+            parse_error = f"Evaluator output must be a JSON object, got {type(raw_json).__name__}"
+        else:
+            parsed_eval = raw_json
+    except Exception as e:
+        logger.error("Evaluator parsing failed: %s", type(e).__name__)
+        parse_error = f"Evaluator output unparseable: {type(e).__name__}"
+
+    if parse_error:
+        try:
+            async with AsyncSessionLocal() as trace_db:
+                await _save_trace(trace_db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, text, duration, "FAILED", parse_error)
+        except Exception as te:
+            logger.error(f"Failed to save evaluator parse failure trace: {te}")
+        return {"note": "Failed to generate evaluation.", "action": "HOLD"}, parse_error
 
     try:
-        return _extract_json_block(text, "evaluation")
-    except Exception as e:
-        logger.error(f"Evaluator parsing failed: {e}. Raw content: {text}")
-
-    return {"note": "Failed to generate evaluation.", "action": "HOLD"}
+        async with AsyncSessionLocal() as trace_db:
+            await _save_trace(trace_db, pick_data.get("symbol", "UNKNOWN"), "EVALUATOR", full_prompt, text, duration, "SUCCESS")
+    except Exception as te:
+        logger.error(f"Failed to save evaluator success trace: {te}")
+    return parsed_eval, None
 
 
 
@@ -648,7 +708,7 @@ async def run_loop_1_and_2(late: bool = False) -> str:
 
 
 async def run_loop_3(late: bool = False) -> bool:
-    """Execute Evaluator (5pm) pipeline. Returns True on commit. Raises on failure."""
+    """Execute Evaluator (5pm) pipeline. Returns True on commit/success, False on evaluator failure."""
     from app.jobs.runner import report_progress
 
     report_progress("job.ai_picks_evening", 10, "Fetching live market context & active picks...")
@@ -688,16 +748,16 @@ async def run_loop_3(late: bool = False) -> bool:
                         # Picks are abandoned after 2+ fully elapsed business days (roughly 48h of market time).
                         business_days = _calculate_business_days_elapsed(pick_created_at)
                         if business_days >= 2:
-                            res = (pick_id, {"action": "ABANDON", "note": f"Auto-abandoned after {business_days} fully elapsed business days with no action."})
+                            res = (pick_id, {"action": "ABANDON", "note": f"Auto-abandoned after {business_days} fully elapsed business days with no action."}, None)
                         else:
-                            eval_data = await _call_evaluator(db, p_data, market_context)
-                            res = (pick_id, eval_data)
+                            eval_data, eval_err = await _call_evaluator(p_data, market_context)
+                            res = (pick_id, eval_data, eval_err)
                     else:
-                        eval_data = await _call_evaluator(db, p_data, market_context)
-                        res = (pick_id, eval_data)
+                        eval_data, eval_err = await _call_evaluator(p_data, market_context)
+                        res = (pick_id, eval_data, eval_err)
                 except Exception as e:
                     logger.error(f"Failed to evaluate pick {pick_id}: {e}")
-                    res = (pick_id, {"action": "HOLD", "note": f"Evaluation failed due to API error: {str(e)}"})
+                    res = (pick_id, {"action": "HOLD", "note": f"Evaluation failed due to API error: {str(e)}"}, str(e))
 
                 async with eval_lock:
                     completed_eval_count += 1
@@ -718,10 +778,16 @@ async def run_loop_3(late: bool = False) -> bool:
 
         eval_results = await asyncio.gather(*tasks)
 
+        errors = [err for _, _, err in eval_results if err]
+        if errors:
+            logger.error(f"Loop 3 failed: {len(errors)} evaluator(s) failed: {errors}")
+            report_progress("job.ai_picks_evening", 95, f"Evaluator failed for {len(errors)} pick(s): {errors[0]}")
+            return False
+
         report_progress("job.ai_picks_evening", 90, "Updating pick statuses and notes in database...")
         # Sequentially apply results to DB objects
         pick_map = {p.id: p for p in active_picks}
-        for pid, eval_data in eval_results:
+        for pid, eval_data, _ in eval_results:
             pick = pick_map[pid]
             notes = list(pick.notes)
 
@@ -791,9 +857,10 @@ def _execute_morning_run(late: bool) -> None:
     try:
         outcome = _run_async(run_loop_1_and_2(late=late))
     except Exception as e:
-        logger.exception(f"Error in Morning AI Picks: {e}")
+        err_name = type(e).__name__
+        logger.error("Error in Morning AI Picks: %s", err_name)
         update_job_status_sync("job.ai_picks_morning", "failed", progress=0,
-                               message="Failed", error=str(e)[:512])
+                               message="Failed", error=f"Morning run error: {err_name}")
         return
     now = datetime.now(timezone.utc)
     if outcome == "ok":
@@ -809,9 +876,10 @@ def _execute_morning_run(late: bool) -> None:
                                message="No setups today", last_completed=now)
     else:  # "error:<detail>" — token/network/parse failure. Next boot retries.
         detail = outcome[6:] if outcome.startswith("error:") else outcome
-        logger.error(f"Morning AI Picks failed: {detail}")
+        clean_detail = redact_text(detail)
+        logger.error("Morning AI Picks failed: %s", clean_detail)
         update_job_status_sync("job.ai_picks_morning", "failed", progress=0,
-                               message="Failed", error=detail[:512])
+                               message="Failed", error=clean_detail[:512])
 
 
 def _execute_evening_run(late: bool) -> None:
@@ -822,12 +890,20 @@ def _execute_evening_run(late: bool) -> None:
     update_job_status_sync("job.ai_picks_evening", "running", progress=10,
                            message=f"Executing AI Evaluator...{tag}")
     try:
-        _run_async(run_loop_3(late=late))
+        success = _run_async(run_loop_3(late=late))
     except Exception as e:
-        logger.exception(f"Error in Evening AI Picks: {e}")
+        err_name = type(e).__name__
+        logger.error("Error in Evening AI Picks: %s", err_name)
         update_job_status_sync("job.ai_picks_evening", "failed", progress=0,
-                               message="Failed", error=str(e)[:512])
+                               message="Failed", error=f"Evening run error: {err_name}")
         return
+
+    if not success:
+        logger.error("Evening AI Picks failed: evaluator run failed")
+        update_job_status_sync("job.ai_picks_evening", "failed", progress=0,
+                               message="Failed", error="Evaluator run failed")
+        return
+
     update_job_status_sync("job.ai_picks_evening", "completed", progress=100,
                            message="Completed successfully" + (" (catch-up)" if late else ""),
                            last_completed=datetime.now(timezone.utc))
@@ -851,7 +927,7 @@ def ai_picks_morning_worker() -> None:
             logger.info("AI Picks Morning: missed run detected, catching up now (late).")
             _execute_morning_run(late=True)
     except Exception:
-        logger.exception("AI Picks Morning: catch-up check failed")
+        logger.error("AI Picks Morning: catch-up check failed: %s", type(e).__name__ if "e" in locals() else "error")
 
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.ai_picks_morning"):
@@ -869,7 +945,7 @@ def ai_picks_morning_worker() -> None:
             try:
                 due = _run_async(_morning_catchup_due())
             except Exception:
-                logger.exception("AI Picks Morning: pre-run check failed, running anyway")
+                logger.error("AI Picks Morning: pre-run check failed, running anyway")
                 due = True
             if not due:
                 logger.info("AI Picks Morning: already completed today, skipping scheduled run.")
@@ -898,7 +974,7 @@ def ai_picks_evening_worker() -> None:
             logger.info("AI Picks Evening: unevaluated picks found past close, catching up now (late).")
             _execute_evening_run(late=True)
     except Exception:
-        logger.exception("AI Picks Evening: catch-up check failed")
+        logger.error("AI Picks Evening: catch-up check failed: %s", type(e).__name__ if "e" in locals() else "error")
 
     while not _shutdown_event.is_set():
         if not _is_job_enabled("job.ai_picks_evening"):
@@ -915,7 +991,7 @@ def ai_picks_evening_worker() -> None:
             try:
                 done = _run_async(_eval_done_today())
             except Exception:
-                logger.exception("AI Picks Evening: pre-run check failed, running anyway")
+                logger.error("AI Picks Evening: pre-run check failed, running anyway")
                 done = False
             if done:
                 logger.info("AI Picks Evening: already evaluated today, skipping scheduled run.")

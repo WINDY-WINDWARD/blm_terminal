@@ -31,6 +31,21 @@ describe('aiRoutesClient', () => {
     });
   });
 
+  it('listRouteModels calls GET /api/py/ai/routes/models with credentials', async () => {
+    const mockData = { routes: [], warnings: [] };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockData));
+
+    const res = await aiRoutesClient.listRouteModels();
+
+    expect(res).toEqual(mockData);
+    expect(fetch).toHaveBeenCalledWith('/api/py/ai/routes/models', {
+      method: 'GET',
+      headers: {},
+      credentials: 'include',
+      body: undefined,
+    });
+  });
+
   it('activateRoute calls POST /api/py/ai/routes/:routeId/activate with credentials', async () => {
     vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { status: 'activated', active_route_id: 'oauth:codex' }));
 
@@ -57,17 +72,48 @@ describe('aiRoutesClient', () => {
     });
   });
 
-  it('startOAuth calls POST /api/py/ai/routes/oauth/start with credentials and json body', async () => {
-    const mockStart = { state: 's-123', provider: 'codex', flow: 'device', expires_in: 900, interval: 5, status: 'pending' };
+  it('startOAuth calls POST /api/py/ai/routes/oauth/start with credentials and json body (browser only)', async () => {
+    const mockStart = {
+      state: 's-123',
+      provider: 'codex',
+      callback_mode: 'loopback',
+      callback_url: 'http://localhost:51121/oauth-callback',
+      expires_in: 900,
+      interval: 5,
+      status: 'pending',
+    };
     vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockStart));
 
-    const res = await aiRoutesClient.startOAuth({ provider: 'codex', flow: 'device' });
+    const res = await aiRoutesClient.startOAuth({ provider: 'codex' });
     expect(res.state).toBe('s-123');
+    expect(res.callback_mode).toBe('loopback');
     expect(fetch).toHaveBeenCalledWith('/api/py/ai/routes/oauth/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ provider: 'codex', flow: 'device' }),
+      body: JSON.stringify({ provider: 'codex' }),
+    });
+  });
+
+  it('submitOAuthCallback calls POST /api/py/ai/routes/oauth/callback with JSON body', async () => {
+    const mockResp = { status: 'completed', account_id: 'acc-1', masked_identity: 'user@example.com' };
+    vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, mockResp));
+
+    const res = await aiRoutesClient.submitOAuthCallback({
+      state: 's-123',
+      code: 'c-456',
+      redirect_url: 'http://localhost:51121/oauth-callback?state=s-123&code=c-456',
+    });
+    expect(res.status).toBe('completed');
+    expect(fetch).toHaveBeenCalledWith('/api/py/ai/routes/oauth/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        state: 's-123',
+        code: 'c-456',
+        redirect_url: 'http://localhost:51121/oauth-callback?state=s-123&code=c-456',
+      }),
     });
   });
 

@@ -122,6 +122,7 @@ class AISummarizer:
                     system_prompt="Return one short acknowledgement.",
                     max_iter=1,
                     max_tokens=32,
+                    allow_external_route=True,
                 ):
                     try:
                         evt = json.loads(chunk)
@@ -173,6 +174,7 @@ class AISummarizer:
                 system_prompt=system_prompt,
                 max_iter=5,
                 max_tokens=max_tokens,
+                allow_external_route=True,
             ):
                 try:
                     evt = json.loads(chunk)

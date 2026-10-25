@@ -35,7 +35,6 @@ import {
 import { useSavedLayoutsSync } from '@/hooks/useSavedLayoutsSync';
 import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
 import { SettingsModal } from '@/components/modals/SettingsModal';
-import { AiProvidersModal } from '@/components/modals/AiProvidersModal';
 
 function isTextInputFocused(): boolean {
   const el = document.activeElement;
@@ -74,7 +73,7 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [showTradingViewImportModal, setShowTradingViewImportModal] = useAtom(showTradingViewImportModalAtom);
   const [showSettingsModal, setShowSettingsModal] = useAtom(showSettingsModalAtom);
-  const [showAiProvidersModal, setShowAiProvidersModal] = useAtom(showAiProvidersModalAtom);
+  const [, setShowAiProvidersModal] = useAtom(showAiProvidersModalAtom);
   const setSettingsModalTab = useSetAtom(settingsModalTabAtom);
   const [watchlists] = useAtom(watchlistsAtom);
   const [activeWatchlistId, setActiveWatchlistId] = useAtom(activeWatchlistIdAtom);
@@ -420,10 +419,6 @@ export function TerminalContainer({ children }: { children: React.ReactNode }) {
       <SettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
-      />
-      <AiProvidersModal
-        isOpen={showAiProvidersModal}
-        onClose={() => setShowAiProvidersModal(false)}
       />
     </main>
   );

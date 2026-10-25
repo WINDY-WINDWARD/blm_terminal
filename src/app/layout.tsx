@@ -9,6 +9,7 @@ import { LayoutToast } from "@/components/LayoutToast";
 import { UpdateModal } from "@/components/UpdateModal";
 import { AdvancedScrapingModal } from "@/components/modals/AdvancedScrapingModal";
 import { FirstLaunchModal } from "@/components/modals/FirstLaunchModal";
+import { AiProvidersModalHost } from "@/components/modals/AiProvidersModalHost";
 import { TourGuide } from "@/components/tutorial/TourGuide";
 
 const jetBrainsMono = { variable: "font-mono" };
@@ -33,6 +34,7 @@ export default function RootLayout({
           <UpdateModal />
           <AdvancedScrapingModal />
           <FirstLaunchModal />
+          <AiProvidersModalHost />
           <TourGuide />
         </Providers>
       </body>

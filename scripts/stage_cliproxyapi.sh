@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pinned CLIProxyAPI downloader and staging script for macOS.
-# Stages official CLIProxyAPI v8.0.35 to vendor/cliproxyapi/runtime/cliproxyapi.
+# Stages official CLIProxyAPI v8.0.39 to vendor/cliproxyapi/runtime/cliproxyapi.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,17 +8,17 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TARGET_DIR="${1:-${REPO_ROOT}/vendor/cliproxyapi/runtime}"
 VERIFY_ONLY="${2:-}"
 
-VERSION="v8.0.35"
+VERSION="v8.0.39"
 ARCH="$(uname -m)"
 
 if [ "${ARCH}" = "arm64" ] || [ "${ARCH}" = "aarch64" ]; then
-    ASSET_NAME="CLIProxyAPI_8.0.35_darwin_aarch64.tar.gz"
-    EXPECTED_SHA256="b6903000ae78b541e5ba0bb2db45fc15dc23cab77fb51ed4b02e03ea18fe36a5"
-    EXPECTED_BINARY_SHA256="2b327650d076752a025c590c463827ada7596bf8b5db610233996e12facf5ea8"
+    ASSET_NAME="CLIProxyAPI_8.0.39_darwin_aarch64.tar.gz"
+    EXPECTED_SHA256="1febf0f15bef7cc70630496a4f5b145d1faafedf2c8bf0ae4d5648f0972b24be"
+    EXPECTED_BINARY_SHA256="510a1f974a5b409bd9ee016d6f9ebcf6eb0b0f2a562858543d15af0e8deb5275"
 elif [ "${ARCH}" = "x86_64" ]; then
-    ASSET_NAME="CLIProxyAPI_8.0.35_darwin_amd64.tar.gz"
-    EXPECTED_SHA256="c1335ddb5307d67684ec0531fac81e1148b68869179310ea0f4086109fbebe2b"
-    EXPECTED_BINARY_SHA256="aaaff01623aa6e5db00a11175badd78f9a6b5e8cf6c8270195e6c4fa68dd30eb"
+    ASSET_NAME="CLIProxyAPI_8.0.39_darwin_amd64.tar.gz"
+    EXPECTED_SHA256="1cb6ab8893811b5838d59b22a11bf4c9332cdbc40e66de18edbd4c926f2635ea"
+    EXPECTED_BINARY_SHA256="f1fef944619f05781f06d2286610291565a5924c10a1beda650774e473555bb2"
 else
     echo "Error: Unsupported architecture ${ARCH} on macOS" >&2
     exit 1

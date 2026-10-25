@@ -1,7 +1,7 @@
-from app.services.antigravity_auth import get_antigravity_token
 """LLM Provider module for abstracting AI API interactions."""
 
 import json
+import time
 import logging
 import asyncio
 import os
@@ -12,6 +12,7 @@ import httpx
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
+from urllib.parse import urlparse
 from app.config import settings
 from collections import deque
 from datetime import datetime, timezone
@@ -63,240 +64,11 @@ def clear_proxy_traces() -> None:
 
 from app.services.ai_config import get_dynamic_ai_provider, get_dynamic_ai_api_key
 
-# ---------------------------------------------------------------------------
-# Claude Code identity for OAuth (subscription) requests.
-# Anthropic routes OAuth by user-agent — requests without it intermittently
-# 500 — and rejects UA versions too far behind the real release, so the
-# installed `claude --version` is detected once per process with a static
-# fallback kept current (mirrors Hermes' anthropic_adapter).
-# ---------------------------------------------------------------------------
-_CLAUDE_CODE_VERSION_FALLBACK = "2.1.74"
-_claude_code_version_cache: str | None = None
-
-
-def _get_claude_code_version() -> str:
-    """Installed Claude Code version, else the static fallback (cached)."""
-    global _claude_code_version_cache
-    if _claude_code_version_cache is None:
-        _claude_code_version_cache = _CLAUDE_CODE_VERSION_FALLBACK
-        try:
-            import subprocess
-
-            for cmd in ("claude", "claude-code"):
-                try:
-                    result = subprocess.run(
-                        [cmd, "--version"],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        version = result.stdout.strip().split()[0]
-                        if version and version[0].isdigit():
-                            _claude_code_version_cache = version
-                            break
-                except Exception:
-                    continue
-        except Exception:
-            pass
-    return _claude_code_version_cache
-
-
-# Beta gates for OAuth/subscription auth (matches Claude Code / pi-ai / OpenCode).
-# oauth-2025-04-20 enables Bearer auth (without it: 401 "OAuth authentication
-# is currently not supported"); claude-code-20250219 is the Claude Code gate.
-_OAUTH_BETAS = (
-    "interleaved-thinking-2025-05-14,"
-    "fine-grained-tool-streaming-2025-05-14,"
-    "claude-code-20250219,oauth-2025-04-20"
-)
-
-# System prefix Hermes injects for OAuth (Anthropic validates the client
-# identity; without it the credential can 400 as "only authorized for use
-# with Claude Code").
-_CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
-
-
 def _is_oauth_token(credential: str) -> bool:
     """True for Claude Code setup-tokens (sk-ant-oat…), which need Bearer auth."""
     return isinstance(credential, str) and credential.strip().startswith("sk-ant-oat")
 
 
-# ---------------------------------------------------------------------------
-# GitHub Copilot inference-token cache.
-# A raw GitHub token is NOT usable for inference directly — it must be
-# exchanged at https://api.github.com/copilot_internal/v2/token for a
-# short-lived `tid=…` token (~30 min TTL). Cached here with the server's
-# expires_at; refreshed 2 min early (mirrors Hermes' copilot_auth).
-# ---------------------------------------------------------------------------
-_copilot_token: str | None = None
-_copilot_token_expires_at: float = 0.0
-_copilot_token_base_url: str | None = None
-_copilot_token_fp: str | None = None
-
-_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
-_COPILOT_DEFAULT_BASE_URL = "https://api.githubcopilot.com"
-_COPILOT_EXCHANGE_USER_AGENT = "GitHubCopilotChat/0.26.7"
-_COPILOT_EDITOR_VERSION = "vscode/1.104.1"
-_COPILOT_EDITOR_HEADERS = {
-    "Editor-Version": _COPILOT_EDITOR_VERSION,
-    "User-Agent": _COPILOT_EXCHANGE_USER_AGENT,
-    "Copilot-Integration-Id": "vscode-chat",
-    "Openai-Intent": "conversation-panel",
-    "X-Initiator": "agent",
-}
-
-# Token families the Copilot API exchanges (mirrors Hermes' validate_copilot_token).
-# Classic PATs (ghp_*) are rejected upstream with an opaque error — fail fast here.
-_COPILOT_SUPPORTED_PREFIXES = ("gho_", "github_pat_", "ghu_")
-_COPILOT_EXCHANGE_ATTEMPTS = 3
-_COPILOT_REFRESH_MARGIN_SECONDS = 120
-
-
-def validate_copilot_token(token: str) -> tuple[bool, str]:
-    """Check the token family before any network call. Returns (ok, message)."""
-    token = (token or "").strip()
-    if not token or token == "none":
-        return False, "No GitHub token configured"
-    if token.startswith("ghp_"):
-        return (
-            False,
-            "Classic Personal Access Tokens (ghp_*) are not accepted by the Copilot API. "
-            "Use a fine-grained PAT (github_pat_*) with Copilot access, "
-            "`gh auth login` (gho_*), or the Copilot CLI / extension OAuth token (ghu_*).",
-        )
-    if not token.startswith(_COPILOT_SUPPORTED_PREFIXES):
-        return (
-            False,
-            f"Unsupported GitHub token format for the Copilot API. "
-            f"Supported prefixes: {', '.join(_COPILOT_SUPPORTED_PREFIXES)}.",
-        )
-    return True, "OK"
-
-
-def _try_gh_cli_token() -> str | None:
-    """`gh auth token` fallback when no usable env/DB token is set (cached 5 min)."""
-    import shutil
-    import subprocess
-
-    gh = shutil.which("gh")
-    if not gh:
-        return None
-    try:
-        result = subprocess.run(
-            [gh, "auth", "token"],
-            capture_output=True, text=True, timeout=5,
-            stdin=subprocess.DEVNULL,
-        )
-    except Exception:
-        return None
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
-    return None
-
-
-def _derive_copilot_base_url(api_token: str, endpoints: Any) -> str:
-    """Account-specific inference host: exchange `endpoints.api` wins (enterprise /
-    proxied accounts), else derive from the token's `proxy-ep`, else default."""
-    if isinstance(endpoints, dict):
-        api_ep = str(endpoints.get("api") or "").strip().rstrip("/")
-        if api_ep:
-            return api_ep
-    m = re.search(r"(?:^|;)\s*proxy-ep=([^;\s]+)", api_token or "")
-    if m:
-        host = re.sub(r"^https?://", "", m.group(1), count=1).rstrip("/")
-        host = re.sub(r"^proxy\.", "api.", host, count=1)
-        if host:
-            return f"https://{host}"
-    return _COPILOT_DEFAULT_BASE_URL
-
-
-async def get_copilot_inference_token(
-    gh_token: str,
-) -> tuple[str | None, str, str | None]:
-    """Exchange a GitHub token for (inference_token, base_url, error).
-
-    Returns (None, base_url, error_message) when the exchange fails — the
-    error message is user-actionable (bad token family vs network vs denied).
-    """
-    global _copilot_token, _copilot_token_expires_at, _copilot_token_base_url, _copilot_token_fp
-
-    import hashlib
-    import time as _time
-
-    token = (gh_token or "").strip()
-    if (not token or token == "none") and not os.environ.get("COPILOT_GITHUB_TOKEN"):
-        # `gh auth token` fallback only when no explicit token is configured,
-        # so an exported-but-invalid token is never silently overridden.
-        cli_token = await asyncio.to_thread(_try_gh_cli_token)
-        if cli_token:
-            token = cli_token
-
-    fp = hashlib.sha256(token.encode()).hexdigest()[:16] if token else None
-    now = _time.time()
-    if (
-        _copilot_token
-        and fp == _copilot_token_fp
-        and _copilot_token_expires_at > (now + _COPILOT_REFRESH_MARGIN_SECONDS)
-    ):
-        return _copilot_token, _copilot_token_base_url or _COPILOT_DEFAULT_BASE_URL, None
-
-    valid, msg = validate_copilot_token(token)
-    if not valid:
-        return None, _COPILOT_DEFAULT_BASE_URL, msg
-
-    last_exc: Exception | None = None
-    for attempt in range(1, _COPILOT_EXCHANGE_ATTEMPTS + 1):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    _COPILOT_TOKEN_URL,
-                    headers={
-                        "Accept": "application/json",
-                        "Authorization": f"token {token}",
-                        "User-Agent": _COPILOT_EXCHANGE_USER_AGENT,
-                        "Editor-Version": _COPILOT_EDITOR_VERSION,
-                    },
-                )
-            if resp.status_code in (401, 403, 404):
-                return None, _COPILOT_DEFAULT_BASE_URL, (
-                    f"GitHub rejected the token (HTTP {resp.status_code}). "
-                    "Check that it has Copilot access and is not expired."
-                )
-            if resp.status_code != 200:
-                last_exc = RuntimeError(f"HTTP {resp.status_code}")
-                await asyncio.sleep(1.5 * attempt)
-                continue
-            data = resp.json()
-            api_token = data.get("token", "")
-            if not api_token:
-                return None, _COPILOT_DEFAULT_BASE_URL, "Copilot exchange returned an empty token."
-            try:
-                expires_at = float(data.get("expires_at") or 0) or (now + 1800)
-            except (TypeError, ValueError):
-                expires_at = now + 1800
-            base_url = _derive_copilot_base_url(api_token, data.get("endpoints"))
-            _copilot_token = api_token
-            _copilot_token_expires_at = expires_at
-            _copilot_token_base_url = base_url
-            _copilot_token_fp = fp
-            return _copilot_token, base_url, None
-        except Exception as e:
-            last_exc = e
-            if attempt < _COPILOT_EXCHANGE_ATTEMPTS:
-                await asyncio.sleep(1.5 * attempt)
-    return None, _COPILOT_DEFAULT_BASE_URL, f"Copilot token exchange failed: {last_exc}"
-
-
-def clear_copilot_token_cache() -> None:
-    """Drop the cached inference token (e.g. after the GH token is rotated)."""
-    global _copilot_token, _copilot_token_expires_at, _copilot_token_base_url, _copilot_token_fp
-    _copilot_token = None
-    _copilot_token_expires_at = 0.0
-    _copilot_token_base_url = None
-    _copilot_token_fp = None
-
-
-# Back-compat alias: the previous constant name pointed at the default host.
-_COPILOT_BASE_URL = _COPILOT_DEFAULT_BASE_URL
 
 # ---------------------------------------------------------------------------
 # OpenCode client identity — mirrors packages/opencode/src/session/llm/request.ts
@@ -343,37 +115,30 @@ def _rate_limit_wait(retry_after: str | None, body: str = "") -> float:
 
 
 def _friendly_gateway_error(api_label: str, status_code: int, body_text: str) -> str:
-    """Translate known gateway failure shapes into actionable messages.
-
-    The Zen free tier in particular fails in cryptic ways (FreeTierError
-    rate-limiting, rotated models, capacity 500s). Users get guidance
-    instead of a raw JSON blob; the raw excerpt is kept for debugging.
-    """
-    raw = body_text[:200]
-    low = body_text.lower()
+    """Translate known gateway failure shapes into actionable messages without leaking raw bodies."""
+    low = (body_text or "").lower()
     if "freetiererror" in low or "free tier can only be used from within opencode" in low:
         return (
             f"{api_label} free tier is unavailable right now — OpenCode is "
             "rate-limiting free requests from outside its own app. Wait a few "
-            "minutes and retry, or switch to Zen Paid / another provider. "
-            f"(Raw: {raw})"
+            "minutes and retry, or switch to Zen Paid / another provider."
         )
     if "model is unavailable" in low:
         return (
             f"The selected model is currently unavailable on {api_label} "
-            f"(rotated or pulled). Pick another model. (Raw: {raw})"
+            "(rotated or pulled). Pick another model."
         )
     if status_code == 500 and "internal server error" in low:
         return (
             f"{api_label} hit an internal error (likely free-tier capacity). "
-            f"Retry in a bit or switch provider. (Raw: {raw})"
+            "Retry in a bit or switch provider."
         )
     # Quota exhaustion (Google RESOURCE_EXHAUSTED / QUOTA_EXHAUSTED, or
     # "Individual quota reached" style messages). Extract the reset window
     # ("Resets in 19h56m16s") when the provider includes one.
     if status_code == 429 or "resource_exhausted" in low or "quota" in low:
         reset = ""
-        m = re.search(r"[Rr]esets? in ([0-9hms. ]+)", body_text)
+        m = re.search(r"[Rr]esets? in ([0-9hms. ]+)", body_text or "")
         if m:
             reset = f" — resets in ~{m.group(1).strip()}"
         return (
@@ -386,86 +151,125 @@ def _friendly_gateway_error(api_label: str, status_code: int, body_text: str) ->
             f"{api_label} rejected the credentials ({status_code}). "
             "Reconnect the provider in Settings → AI."
         )
-    return f"{api_label} {status_code}: {body_text[:300]}"
-
-# Mirrors the plugin's getRandomizedHeaders() from constants.js
-_AG_VERSION = "2.5.5"
-_AG_PLATFORMS = ["windows/amd64", "darwin/arm64", "darwin/amd64"]
-_AG_API_CLIENTS = [
-    "google-cloud-sdk antigravity/2.5.5"
-]
-
-def _get_antigravity_headers(token: str) -> dict[str, str]:
-    platform = random.choice(_AG_PLATFORMS)
-    return {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": f"antigravity/{_AG_VERSION} {platform}",
-        "X-Goog-Api-Client": random.choice(_AG_API_CLIENTS),
-        "Content-Type": "application/json",
-    }
-
-# ---------------------------------------------------------------------------
-# Gemini schema transformer — port of toGeminiSchema() from gemini.js
-# Antigravity uses strict protobuf validation:
-#   - type values must be UPPERCASE ("object" → "OBJECT")
-#   - several JSON-Schema fields are unsupported and must be stripped
-#   - ARRAY types must have an 'items' field
-# ---------------------------------------------------------------------------
-_UNSUPPORTED_SCHEMA_FIELDS = frozenset({
-    "additionalProperties", "$schema", "$id", "$comment", "$ref", "$defs",
-    "definitions", "const", "contentMediaType", "contentEncoding",
-    "if", "then", "else", "not", "patternProperties",
-    "unevaluatedProperties", "unevaluatedItems",
-    "dependentRequired", "dependentSchemas", "propertyNames",
-    "minContains", "maxContains",
-})
-
-def _to_gemini_schema(schema: Any) -> Any:
-    """Recursively transform a JSON Schema dict to Gemini-compatible format."""
-    if not schema or not isinstance(schema, dict):
-        return schema
-    property_names: set[str] = set(schema.get("properties", {}).keys())
-    result: dict[str, Any] = {}
-    for key, value in schema.items():
-        if key in _UNSUPPORTED_SCHEMA_FIELDS:
-            continue
-        if key == "type" and isinstance(value, str):
-            result[key] = value.upper()
-        elif key == "properties" and isinstance(value, dict):
-            result[key] = {k: _to_gemini_schema(v) for k, v in value.items()}
-        elif key == "items" and isinstance(value, dict):
-            result[key] = _to_gemini_schema(value)
-        elif key in ("anyOf", "oneOf", "allOf") and isinstance(value, list):
-            result[key] = [_to_gemini_schema(i) for i in value]
-        elif key == "required" and isinstance(value, list):
-            if property_names:
-                valid = [p for p in value if isinstance(p, str) and p in property_names]
-                if valid:
-                    result[key] = valid
-            else:
-                result[key] = value
-        else:
-            result[key] = value
-    # Gemini requires ARRAY schemas to have an 'items' field
-    if result.get("type") == "ARRAY" and "items" not in result:
-        result["items"] = {"type": "STRING"}
-    return result
+    return f"{api_label} {status_code}: request failed."
 
 
-# Module-level shared httpx client
-_SHARED_CLIENT_TIMEOUT = 120.0
+def _friendly_network_error(api_label: str, exc: BaseException) -> str:
+    """Name an httpx transport failure without leaking credentials or raw exception details."""
+    kind = type(exc).__name__
+    return (
+        f"{api_label} network error ({kind}). "
+        "The provider did not answer — retry, or pick another route."
+    )
+
+# Module-level shared httpx client and explicit stream deadlines
+_SHARED_STREAM_TIMEOUT = httpx.Timeout(connect=15.0, read=330.0, write=60.0, pool=15.0)
+_DEFAULT_STREAM_TIMEOUT = _SHARED_STREAM_TIMEOUT
+_SHARED_CLIENT_TIMEOUT = _DEFAULT_STREAM_TIMEOUT
+
+_FIRST_DELTA_DEADLINE = 240.0
+_IDLE_DELTA_DEADLINE = 300.0
+_TOTAL_STREAM_CAP = 600.0
+# A wedged sidecar accepts the connection but never emits an event. Bound the
+# wait for the first event so a stuck child is replaced instead of hanging the UI.
+_PROXY_FIRST_EVENT_TIMEOUT = 150.0
+
+# Agent-loop budget. Tool-driven turns can legitimately run long, so the cap is
+# 60 turns with a one-shot instruction to wrap up at 45, and a wall-clock guard
+# that ends the run cleanly before the transport budget aborts it mid-stream.
+_DEFAULT_MAX_ITER = 60
+_ITERATION_WARNING_AT = 45
+_LOOP_WALL_CLOCK_CAP = 1500.0
+_ITERATION_BUDGET_WARNING = (
+    "You have 15 tool iterations remaining out of 60. "
+    "Stop gathering new data, synthesise what you already have, and give your "
+    "final answer now. If something essential is still missing, state that "
+    "explicitly instead of continuing to call tools."
+)
+_WALL_CLOCK_EXHAUSTED_MESSAGE = (
+    "Agent hit its 25-minute time budget before finishing. "
+    "Narrow the question or retry."
+)
+
 _shared_clients: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+class StreamDeadlineTracker:
+    def __init__(
+        self,
+        api_label: str,
+        model: str,
+        first_delta_deadline: float = _FIRST_DELTA_DEADLINE,
+        idle_delta_deadline: float = _IDLE_DELTA_DEADLINE,
+        total_stream_cap: float = _TOTAL_STREAM_CAP,
+    ):
+        self.api_label = api_label
+        self.model = model
+        self.first_delta_deadline = first_delta_deadline
+        self.idle_delta_deadline = idle_delta_deadline
+        self.total_stream_cap = total_stream_cap
+        self.start_time = time.monotonic()
+        self.last_meaningful_time = self.start_time
+        self.has_meaningful_delta = False
+        self.stage = "initial_response"
+
+    def record_meaningful_delta(self):
+        self.has_meaningful_delta = True
+        self.last_meaningful_time = time.monotonic()
+        self.stage = "streaming_deltas"
+
+    def next_timeout(self) -> tuple[float, str]:
+        now = time.monotonic()
+        cap_remaining = (self.start_time + self.total_stream_cap) - now
+        if cap_remaining <= 0:
+            return 0.0, "TotalStreamTimeout"
+
+        if not self.has_meaningful_delta:
+            delta_remaining = (self.start_time + self.first_delta_deadline) - now
+            timeout_type = "FirstDeltaTimeout"
+        else:
+            delta_remaining = (self.last_meaningful_time + self.idle_delta_deadline) - now
+            timeout_type = "IdleDeltaTimeout"
+
+        if delta_remaining <= 0:
+            return 0.0, timeout_type
+
+        if cap_remaining < delta_remaining:
+            return cap_remaining, "TotalStreamTimeout"
+        return delta_remaining, timeout_type
+
+    def make_error_event(self, error_class: str, detail: str = "") -> dict[str, Any]:
+        elapsed = time.monotonic() - self.start_time
+        logger.error(
+            "Stream timeout error: route=%s model=%s stage=%s elapsed=%.1fs error_class=%s",
+            self.api_label,
+            self.model,
+            self.stage,
+            elapsed,
+            error_class,
+        )
+        msg = f"{self.api_label} timed out ({error_class}) during {self.stage}."
+        if detail:
+            msg = f"{msg} {detail}"
+        else:
+            msg = f"{msg} The provider did not respond in time."
+        return {
+            "type": "error",
+            "error_class": error_class,
+            "stage": self.stage,
+            "message": msg,
+        }
+
 
 def _get_shared_client() -> httpx.AsyncClient:
     global _shared_clients
     try:
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
-        # Fallback if no loop is running yet (shouldn't really happen during async execution)
-        return httpx.AsyncClient(timeout=_SHARED_CLIENT_TIMEOUT)
+        return httpx.AsyncClient(timeout=_DEFAULT_STREAM_TIMEOUT)
         
     if current_loop not in _shared_clients:
-        _shared_clients[current_loop] = httpx.AsyncClient(timeout=_SHARED_CLIENT_TIMEOUT)
+        _shared_clients[current_loop] = httpx.AsyncClient(timeout=_DEFAULT_STREAM_TIMEOUT)
     return _shared_clients[current_loop]
 
 async def cleanup_shared_clients():
@@ -475,16 +279,367 @@ async def cleanup_shared_clients():
         try:
             await client.aclose()
         except Exception as e:
-            logger.warning(f"Error closing shared httpx client: {e}")
+            logger.warning("Error closing shared httpx client: %s", type(e).__name__)
     _shared_clients.clear()
 
-MAX_ITER = 10
-ANTHROPIC_MODELS: frozenset[str] = frozenset({"minimax-m2.5", "minimax-m2.7"})
+def parse_sse_chunk(raw: str) -> dict[str, Any] | None:
+    """Parse a single SSE data payload into a JSON object.
+
+    Accepts raw payloads with or without the leading 'data:' prefix, stripped
+    of line breaks. Returns None for '[DONE]', empty/blank lines, keep-alives,
+    or malformed JSON (logging decode failures at DEBUG level without raising).
+    """
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s or s.startswith(":"):
+        return None
+    if s.startswith("data:"):
+        s = s[5:].strip()
+    if not s or s == "[DONE]":
+        return None
+    try:
+        data = json.loads(s)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError as exc:
+        logger.debug("Failed to decode SSE JSON chunk: %s", exc)
+        return None
+
+
+class StreamAccumulator:
+    """Accumulates streaming deltas and tool-call fragments for one assistant turn."""
+
+    def __init__(self) -> None:
+        self.content: str = ""
+        self.reasoning: str = ""
+        self.finish_reason: str | None = None
+        self.tool_calls_map: dict[int, dict[str, Any]] = {}
+        self.usage: dict[str, Any] | None = None
+
+    def apply(self, chunk: dict[str, Any]) -> dict[str, Any] | None:
+        """Apply a parsed SSE chunk to internal state.
+
+        Returns an incremental event dict to emit (e.g. token or error), or None.
+        Updates finish_reason, reasoning, content, and fragments in tool_calls_map.
+        """
+        if not isinstance(chunk, dict):
+            return None
+
+        if "usage" in chunk and chunk["usage"]:
+            self.usage = chunk["usage"]
+
+        choices = chunk.get("choices")
+        if not choices:
+            return None
+
+        choice = choices[0]
+        # Track finish_reason if present (do not overwrite with None)
+        self.finish_reason = choice.get("finish_reason") or self.finish_reason
+        delta = choice.get("delta") or {}
+
+        if delta.get("reasoning_content"):
+            self.reasoning += delta["reasoning_content"]
+
+        content_delta = delta.get("content")
+        if content_delta:
+            self.content += content_delta
+
+        for tc in delta.get("tool_calls", []):
+            self._apply_tool_call(tc)
+
+        if content_delta:
+            return {"type": "token", "text": content_delta}
+        return None
+
+    def _apply_tool_call(self, tc: dict[str, Any]) -> None:
+        idx = tc.get("index", 0)
+        if idx not in self.tool_calls_map:
+            self.tool_calls_map[idx] = {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            }
+        entry = self.tool_calls_map[idx]
+        frag_id = tc.get("id") or ""
+        # Some OpenAI-compatible gateways (Google AI Studio)
+        # omit `index` on parallel tool calls — every
+        # fragment defaults to 0. A new non-empty id on an
+        # already-started entry means a new call: allocate
+        # a fresh slot instead of concatenating garbage.
+        if (
+            frag_id
+            and entry["id"]
+            and frag_id != entry["id"]
+            and entry["function"]["name"]
+        ):
+            idx = max(self.tool_calls_map) + 1
+            self.tool_calls_map[idx] = {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            }
+            entry = self.tool_calls_map[idx]
+
+        entry["id"] += frag_id
+        fn = tc.get("function") or {}
+        entry["function"]["name"] += fn.get("name") or ""
+        entry["function"]["arguments"] += fn.get("arguments") or ""
+        # Gemini 3.x ships a thought_signature alongside each
+        # function call; it must be echoed back verbatim or
+        # the next turn is rejected with a 400.
+        if tc.get("extra_content") and not entry.get("extra_content"):
+            entry["extra_content"] = tc["extra_content"]
+
+    def has_meaningful_delta(self, chunk: dict[str, Any]) -> bool:
+        """Return True if chunk contains content, reasoning, or tool calls."""
+        choices = chunk.get("choices")
+        if not choices:
+            return False
+        delta = choices[0].get("delta") or {}
+        return bool(
+            delta.get("reasoning_content")
+            or delta.get("content")
+            or delta.get("tool_calls")
+        )
+
+    def finalize(self) -> dict[str, Any]:
+        """Return terminal summary of accumulated turn state."""
+        return {
+            "content": self.content,
+            "reasoning": self.reasoning,
+            "finish_reason": self.finish_reason,
+            "tool_calls_map": self.tool_calls_map,
+            "usage": self.usage,
+        }
+
 
 # The tool executor callback signature:
 # Takes a list of normalized tool calls: [{"id": str, "name": str, "args": dict}]
 # Returns: tuple(list[str] (sse_events), list[dict] (tool_messages for LLM history))
 ToolExecutor = Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[dict[str, Any]]]]]
+
+
+def _extract_normalised_tool_calls(
+    tool_calls_map: dict[int, dict[str, Any]],
+    passthrough_thought_signature: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Format tool calls for assistant message history, executor arguments, and SSE notifications.
+
+    Returns:
+        echoed_calls: tool calls array suitable for assistant message dict
+        normalised: list of [{"id": ..., "name": ..., "args": ...}] for tool_executor
+        events: list of JSON serialized tool_call SSE events
+    """
+    tool_calls_list = [tool_calls_map[i] for i in sorted(tool_calls_map)]
+    echoed_calls: list[dict[str, Any]] = []
+    normalised: list[dict[str, Any]] = []
+    events: list[str] = []
+
+    for tc in tool_calls_list:
+        call = {"id": tc["id"], "type": "function", "function": tc["function"]}
+        if passthrough_thought_signature and tc.get("extra_content"):
+            call["extra_content"] = tc["extra_content"]
+        echoed_calls.append(call)
+
+        try:
+            args_preview = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
+        except json.JSONDecodeError:
+            args_preview = {}
+        events.append(json.dumps({"type": "tool_call", "name": tc["function"]["name"], "args": args_preview}))
+        normalised.append({"id": tc["id"], "name": tc["function"]["name"], "args": args_preview})
+
+    return echoed_calls, normalised, events
+
+
+async def _read_sse_stream(
+    line_iter: AsyncGenerator[str, None],
+    tracker: StreamDeadlineTracker,
+    accumulator: StreamAccumulator,
+) -> AsyncGenerator[str, None]:
+    """Iterate SSE lines, enforce deadline timeouts, and apply deltas to accumulator."""
+    while True:
+        timeout_val, timeout_type = tracker.next_timeout()
+        if timeout_val <= 0:
+            yield json.dumps(tracker.make_error_event(timeout_type))
+            yield json.dumps({"type": "done"})
+            return
+        try:
+            line = await asyncio.wait_for(line_iter.__anext__(), timeout=timeout_val)
+        except StopAsyncIteration:
+            break
+        except (asyncio.TimeoutError, TimeoutError):
+            yield json.dumps(tracker.make_error_event(timeout_type))
+            yield json.dumps({"type": "done"})
+            return
+
+        chunk = parse_sse_chunk(line)
+        if not chunk:
+            continue
+
+        token_event = accumulator.apply(chunk)
+        if token_event:
+            yield json.dumps(token_event)
+
+        if accumulator.has_meaningful_delta(chunk):
+            tracker.record_meaningful_delta()
+
+        if accumulator.finish_reason:
+            break
+
+
+def _build_stream_error(
+    exc: BaseException,
+    tracker: StreamDeadlineTracker | None,
+    api_label: str,
+    model: str,
+) -> tuple[str, str]:
+    """Construct error class, log and return (error_event_json, done_event_json)."""
+    error_class = type(exc).__name__
+    stage = "initial_response" if (not tracker or not tracker.has_meaningful_delta) else "streaming_deltas"
+    elapsed = (time.monotonic() - tracker.start_time) if tracker else 0.0
+    if isinstance(exc, httpx.TimeoutException):
+        logger.error("Stream timeout error: route=%s model=%s stage=%s elapsed=%.1fs error_class=%s", api_label, model, stage, elapsed, error_class)
+        msg = f"{api_label} transport timed out ({error_class}) during {stage}."
+    else:
+        logger.error("Stream request error: route=%s model=%s stage=%s elapsed=%.1fs error_class=%s", api_label, model, stage, elapsed, error_class)
+        msg = _friendly_network_error(api_label, exc)
+    err = json.dumps({"type": "error", "error_class": error_class, "stage": stage, "message": msg})
+    return err, json.dumps({"type": "done"})
+
+
+def _format_stream_turn_headers(
+    api_key: str,
+    session_id: str | int | None,
+    opencode_headers: bool,
+    extra_headers: dict[str, str] | None,
+) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key or 'public'}",
+        "Content-Type": "application/json",
+    }
+    if opencode_headers:
+        headers.update(_opencode_headers(session_id))
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
+def _build_turn_payload(
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    max_tokens: int | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "max_tokens": max_tokens if max_tokens is not None else 4096,
+        "stream": True,
+        "messages": messages,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    return payload
+
+
+async def _dispatch_stream_turn(
+    client: httpx.AsyncClient,
+    response: httpx.Response,
+    tracker_config: tuple[float, float, float],
+    api_label: str,
+    model: str,
+) -> AsyncGenerator[tuple[str, Any], None]:
+    """Consume the SSE stream from an open 200 response, yielding events and done summary."""
+    init_first_dl, init_idle_dl, init_stream_cap = tracker_config
+    tracker = StreamDeadlineTracker(
+        api_label=api_label,
+        model=model,
+        first_delta_deadline=init_first_dl,
+        idle_delta_deadline=init_idle_dl,
+        total_stream_cap=init_stream_cap,
+    )
+    accumulator = StreamAccumulator()
+
+    terminated = False
+    async for ev in _read_sse_stream(response.aiter_lines(), tracker, accumulator):
+        yield ("event", ev)
+        # `_read_sse_stream` emits terminal events only for deadline
+        # timeouts. Inspect the parsed type rather than substring-matching
+        # the serialized JSON: assistant text may itself contain
+        # '"type": "done"', which would suppress the turn summary and
+        # leave the caller waiting for a done event that never arrives.
+        if _is_terminal_stream_event(ev):
+            terminated = True
+    if not terminated:
+        yield ("done", accumulator.finalize())
+
+
+def _is_terminal_stream_event(event: str) -> bool:
+    """Return True when a serialized stream event is a terminal error/done."""
+    try:
+        parsed = json.loads(event)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("type") in {"error", "done"}
+
+
+async def _run_stream_turn(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    stream_kwargs: dict[str, Any],
+    tracker_config: tuple[float, float, float],
+    api_label: str,
+    model: str,
+    retry_429: bool,
+    on_response_headers: Callable[[httpx.Headers, int], None] | None = None,
+) -> AsyncGenerator[tuple[str, Any], None]:
+    """Execute one streaming HTTP turn with retries, deadlines, and SSE parsing."""
+    max_attempts = 4 if retry_429 else 1
+
+    for attempt in range(max_attempts):
+        tracker: StreamDeadlineTracker | None = None
+        try:
+            async with client.stream("POST", url, json=payload, headers=headers, **stream_kwargs) as response:
+                if on_response_headers:
+                    try:
+                        on_response_headers(response.headers, response.status_code)
+                    except Exception as trace_exc:
+                        logger.debug("Trace callback exception: %s", type(trace_exc).__name__)
+
+                if response.status_code == 429:
+                    body = await response.aread()
+                    if not retry_429:
+                        msg = _friendly_gateway_error(api_label, response.status_code, body.decode(errors="replace"))
+                        yield ("event", json.dumps({"type": "error", "message": msg}))
+                        yield ("event", json.dumps({"type": "done"}))
+                        return
+                    wait_s = _rate_limit_wait(response.headers.get("retry-after"), body.decode(errors="replace"))
+                    logger.warning("%s 429 (attempt %d/4) — waiting %.0fs", api_label, attempt + 1, wait_s)
+                    await asyncio.sleep(wait_s)
+                    continue
+
+                if response.status_code != 200:
+                    body = await response.aread()
+                    msg = _friendly_gateway_error(api_label, response.status_code, body.decode(errors="replace"))
+                    yield ("event", json.dumps({"type": "error", "message": msg}))
+                    yield ("event", json.dumps({"type": "done"}))
+                    return
+
+                async for item in _dispatch_stream_turn(client, response, tracker_config, api_label, model):
+                    yield item
+                return
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            err_ev, done_ev = _build_stream_error(exc, tracker, api_label, model)
+            yield ("event", err_ev)
+            yield ("event", done_ev)
+            return
+
+    yield ("event", json.dumps({"type": "error", "message": f"{api_label} 429: rate limit persistent after retries"}))
+    yield ("event", json.dumps({"type": "done"}))
 
 
 async def _run_openai_loop(
@@ -493,7 +648,7 @@ async def _run_openai_loop(
     api_key: str,
     tools: list[dict[str, Any]],
     tool_executor: ToolExecutor,
-    max_iter: int = 10,
+    max_iter: int = _DEFAULT_MAX_ITER,
     base_url: str | None = None,
     session_id: str | int | None = None,
     api_label: str = "Zen API",
@@ -504,584 +659,99 @@ async def _run_openai_loop(
     max_tokens: int | None = None,
     retry_429: bool = True,
     on_response_headers: Callable[[httpx.Headers, int], None] | None = None,
+    first_byte_timeout: float | None = None,
+    first_delta_deadline: float | None = None,
+    idle_delta_deadline: float | None = None,
+    total_stream_cap: float | None = None,
 ) -> AsyncGenerator[str, None]:
-    endpoint = base_url or settings.zen_base_url
+    if not base_url:
+        raise RuntimeError("No base_url provided to _run_openai_loop")
+    parsed = urlparse(base_url)
+    if not _is_loopback_host(parsed.hostname):
+        raise RuntimeError(f"base_url host must be loopback, got {parsed.hostname!r}")
+    endpoint = base_url.rstrip("/")
     url = f"{endpoint}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key or 'public'}",
-        "Content-Type": "application/json",
-    }
-    if opencode_headers:
-        headers.update(_opencode_headers(session_id))
-    if extra_headers:
-        headers.update(extra_headers)
-    
+    headers = _format_stream_turn_headers(api_key, session_id, opencode_headers, extra_headers)
+    stream_kwargs = {"timeout": request_timeout} if request_timeout is not None else {}
+    tracker_config = (
+        first_delta_deadline if first_delta_deadline is not None else (first_byte_timeout if first_byte_timeout is not None else _FIRST_DELTA_DEADLINE),
+        idle_delta_deadline if idle_delta_deadline is not None else _IDLE_DELTA_DEADLINE,
+        total_stream_cap if total_stream_cap is not None else _TOTAL_STREAM_CAP,
+    )
     client = _get_shared_client()
+    loop_started = time.monotonic()
+
     for _iteration in range(max_iter):
-        payload = {
-            "model": model,
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "max_tokens": max_tokens if max_tokens is not None else 4096,
-            "stream": True,
-            "messages": messages,
-        }
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-
-        # Resilient streaming request: on 429, wait out the rate limit and
-        # re-issue the same payload (no state lost — we are at the top of an
-        # iteration). Bounded so a hard outage still surfaces as an error.
-        # NOTE: some OpenAI-compatible gateways (Google AI Studio) return
-        # finish_reason "stop" even when tool_calls are present, so tool
-        # execution takes priority over the finish reason below.
-        streamed: tuple[str, str, str | None, dict[int, dict[str, Any]]] | None = None
-        stream_kwargs: dict[str, Any] = {}
-        if request_timeout is not None:
-            stream_kwargs["timeout"] = request_timeout
-        max_attempts = 4 if retry_429 else 1
-        for _attempt in range(max_attempts):
-            try:
-                async with client.stream("POST", url, json=payload, headers=headers, **stream_kwargs) as response:
-                    if on_response_headers:
-                        try:
-                            on_response_headers(response.headers, response.status_code)
-                        except Exception as trace_exc:
-                            logger.debug("Trace callback exception: %s", trace_exc)
-
-                    if response.status_code == 429:
-                        body = await response.aread()
-                        if not retry_429:
-                            msg = _friendly_gateway_error(api_label, response.status_code, body.decode(errors="replace"))
-                            yield json.dumps({"type": "error", "message": msg})
-                            yield json.dumps({"type": "done"})
-                            return
-                        wait_s = _rate_limit_wait(
-                            response.headers.get("retry-after"), body.decode(errors="replace")
-                        )
-                        logger.warning("%s 429 (attempt %d/4) — waiting %.0fs", api_label, _attempt + 1, wait_s)
-                        await asyncio.sleep(wait_s)
-                        continue
-                    if response.status_code != 200:
-                        body = await response.aread()
-                        msg = _friendly_gateway_error(api_label, response.status_code, body.decode(errors="replace"))
-                        yield json.dumps({"type": "error", "message": msg})
-                        yield json.dumps({"type": "done"})
-                        return
-
-                    content = ""
-                    reasoning = ""
-                    finish_reason: str | None = None
-                    tool_calls_map: dict[int, dict[str, Any]] = {}
-
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        raw = line[5:].strip()
-                        if not raw or raw == "[DONE]":
-                            continue
-                        try:
-                            chunk = json.loads(raw)
-                        except json.JSONDecodeError:
-                            continue
-
-                        choices = chunk.get("choices")
-                        if not choices:
-                            continue
-                        choice = choices[0]
-                        finish_reason = choice.get("finish_reason") or finish_reason
-                        delta = choice.get("delta", {})
-
-                        if delta.get("reasoning_content"):
-                            reasoning += delta["reasoning_content"]
-
-                        if delta.get("content"):
-                            content += delta["content"]
-                            yield json.dumps({"type": "token", "text": delta["content"]})
-
-                        for tc in delta.get("tool_calls", []):
-                            idx = tc.get("index", 0)
-                            if idx not in tool_calls_map:
-                                tool_calls_map[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                            entry = tool_calls_map[idx]
-                            frag_id = tc.get("id") or ""
-                            # Some OpenAI-compatible gateways (Google AI Studio)
-                            # omit `index` on parallel tool calls — every
-                            # fragment defaults to 0. A new non-empty id on an
-                            # already-started entry means a new call: allocate
-                            # a fresh slot instead of concatenating garbage.
-                            if (
-                                frag_id
-                                and entry["id"]
-                                and frag_id != entry["id"]
-                                and entry["function"]["name"]
-                            ):
-                                idx = max(tool_calls_map) + 1
-                                tool_calls_map[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                                entry = tool_calls_map[idx]
-                            entry["id"] += frag_id
-                            fn = tc.get("function") or {}
-                            entry["function"]["name"] += fn.get("name") or ""
-                            entry["function"]["arguments"] += fn.get("arguments") or ""
-                            # Gemini 3.x ships a thought_signature alongside each
-                            # function call; it must be echoed back verbatim or
-                            # the next turn is rejected with a 400.
-                            if tc.get("extra_content") and not entry.get("extra_content"):
-                                entry["extra_content"] = tc["extra_content"]
-                    streamed = (content, reasoning, finish_reason, tool_calls_map)
-                    break
-            except httpx.RequestError as exc:
-                yield json.dumps({"type": "error", "message": f"Network error: {exc}"})
-                yield json.dumps({"type": "done"})
-                return
-
-        if streamed is None:
-            yield json.dumps({"type": "error", "message": f"{api_label} 429: rate limit persistent after retries"})
+        if _iteration + 1 == _ITERATION_WARNING_AT:
+            messages.append({"role": "system", "content": _ITERATION_BUDGET_WARNING})
+            logger.info(
+                "Agent loop reached %s of %s iterations; injected wrap-up warning",
+                _iteration + 1,
+                max_iter,
+            )
+        if time.monotonic() - loop_started > _LOOP_WALL_CLOCK_CAP:
+            logger.warning(
+                "Agent loop exceeded %.0fs wall clock after %s iterations",
+                _LOOP_WALL_CLOCK_CAP,
+                _iteration,
+            )
+            yield json.dumps({"type": "error", "message": _WALL_CLOCK_EXHAUSTED_MESSAGE})
             yield json.dumps({"type": "done"})
             return
-        content, reasoning, finish_reason, tool_calls_map = streamed
 
-        tool_calls_list = [tool_calls_map[i] for i in sorted(tool_calls_map)]
+        payload = _build_turn_payload(model, messages, tools, max_tokens)
+        turn_gen = _run_stream_turn(
+            client=client,
+            url=url,
+            payload=payload,
+            headers=headers,
+            stream_kwargs=stream_kwargs,
+            tracker_config=tracker_config,
+            api_label=api_label,
+            model=model,
+            retry_429=retry_429,
+            on_response_headers=on_response_headers,
+        )
 
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
-        if tool_calls_list:
-            echoed_calls = []
-            for tc in tool_calls_list:
-                call = {"id": tc["id"], "type": "function", "function": tc["function"]}
-                if passthrough_thought_signature and tc.get("extra_content"):
-                    call["extra_content"] = tc["extra_content"]
-                echoed_calls.append(call)
+        turn_summary = None
+        async for kind, val in turn_gen:
+            if kind == "event":
+                yield val
+            elif kind == "done":
+                turn_summary = val
+
+        if turn_summary is None:
+            return
+
+        echoed_calls, normalised, call_events = _extract_normalised_tool_calls(
+            turn_summary["tool_calls_map"],
+            passthrough_thought_signature=passthrough_thought_signature,
+        )
+
+        assistant_msg: dict[str, Any] = {"role": "assistant", "content": turn_summary["content"] or None}
+        if echoed_calls:
             assistant_msg["tool_calls"] = echoed_calls
         messages.append(assistant_msg)
 
-        if tool_calls_list:
-            normalised = []
-            for tc in tool_calls_list:
-                try:
-                    args_preview = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-                except json.JSONDecodeError:
-                    args_preview = {}
-                yield json.dumps({"type": "tool_call", "name": tc["function"]["name"], "args": args_preview})
-                normalised.append({"id": tc["id"], "name": tc["function"]["name"], "args": args_preview})
-
+        if normalised:
+            for ev in call_events:
+                yield ev
             sse_events, tool_msgs = await tool_executor(normalised)
-
             for ev in sse_events:
                 yield ev
-
             for tm in tool_msgs:
-                messages.append({"role": "tool", "tool_call_id": tm.get("tool_call_id") or tm.get("id", ""), "content": tm.get("content", "")})
-            continue
-
-        yield json.dumps({"type": "done"})
-        return
-
-    yield json.dumps({"type": "error", "message": f"Agent exceeded {max_iter} iterations. Try a more specific question."})
-    yield json.dumps({"type": "done"})
-
-
-async def _run_anthropic_loop(
-    messages: list[dict[str, Any]],
-    system_prompt: str,
-    model: str,
-    api_key: str,
-    tools: list[dict[str, Any]],
-    tool_executor: ToolExecutor,
-    max_iter: int = 10,
-    base_url: str | None = None,
-    session_id: str | int | None = None,
-    auth_mode: str = "api_key",
-    opencode_headers: bool = True,
-    max_tokens: int | None = None,
-) -> AsyncGenerator[str, None]:
-    endpoint = base_url or settings.zen_base_url
-    url = f"{endpoint}/messages"
-    if auth_mode == "oauth":
-        # Claude Code setup-token (sk-ant-oat01…): Bearer auth behind the OAuth
-        # beta gate + Claude Code client identity (mirrors Hermes'
-        # build_anthropic_client style="oauth"). Without oauth-2025-04-20 the
-        # API 401s ("OAuth authentication is currently not supported");
-        # without the claude-code user-agent it intermittently 500s or 400s
-        # ("only authorized for use with Claude Code").
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "anthropic-version": "2023-06-01",
-            "anthropic-beta": _OAUTH_BETAS,
-            "Content-Type": "application/json",
-            "user-agent": f"claude-code/{_get_claude_code_version()} (external, cli)",
-            "x-app": "cli",
-        }
-    else:
-        headers = {
-            "x-api-key": api_key or "public",
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-        }
-        if opencode_headers:
-            headers.update(_opencode_headers(session_id))
-    client = _get_shared_client()
-    
-    for _iteration in range(max_iter):
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens if max_tokens is not None else 4096,
-            "system": system_prompt,
-            "stream": True,
-            "messages": messages,
-        }
-        if tools:
-            payload["tools"] = tools
-
-        try:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                if response.status_code != 200:
-                    body = await response.aread()
-                    msg = _friendly_gateway_error("Zen API", response.status_code, body.decode(errors="replace"))
-                    yield json.dumps({"type": "error", "message": msg})
-                    yield json.dumps({"type": "done"})
-                    return
-
-                block_types: dict[int, str] = {}
-                block_ids: dict[int, str] = {}
-                block_names: dict[int, str] = {}
-                block_args: dict[int, str] = {}
-                block_text: dict[int, str] = {}
-                stop_reason: str | None = None
-
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"): continue
-                    raw = line[5:].strip()
-                    if not raw or raw == "[DONE]": continue
-                    try:
-                        ev = json.loads(raw)
-                    except json.JSONDecodeError: continue
-
-                    etype = ev.get("type", "")
-
-                    if etype == "content_block_start":
-                        idx = ev["index"]
-                        block = ev.get("content_block", {})
-                        btype = block.get("type", "")
-                        block_types[idx] = btype
-                        if btype == "tool_use":
-                            block_ids[idx] = block.get("id", "")
-                            block_names[idx] = block.get("name", "")
-                            block_args[idx] = ""
-                        elif btype == "text":
-                            block_text[idx] = ""
-
-                    elif etype == "content_block_delta":
-                        idx = ev["index"]
-                        delta = ev.get("delta", {})
-                        dtype = delta.get("type", "")
-
-                        if dtype == "text_delta":
-                            text = delta.get("text", "")
-                            block_text[idx] = block_text.get(idx, "") + text
-                            yield json.dumps({"type": "token", "text": text})
-                        elif dtype == "input_json_delta":
-                            block_args[idx] = block_args.get(idx, "") + delta.get("partial_json", "")
-
-                    elif etype == "message_delta":
-                        stop_reason = ev.get("delta", {}).get("stop_reason")
-
-        except httpx.RequestError as exc:
-            yield json.dumps({"type": "error", "message": f"Network error: {exc}"})
-            yield json.dumps({"type": "done"})
-            return
-
-        content_blocks: list[dict[str, Any]] = []
-        tool_use_indices: list[int] = []
-
-        for idx in sorted(block_types):
-            btype = block_types[idx]
-            if btype == "text":
-                text_val = block_text.get(idx, "")
-                if text_val:
-                    content_blocks.append({"type": "text", "text": text_val})
-            elif btype == "tool_use":
-                try:
-                    input_val = json.loads(block_args.get(idx, "{}") or "{}")
-                except json.JSONDecodeError:
-                    input_val = {}
-                content_blocks.append({
-                    "type": "tool_use",
-                    "id": block_ids[idx],
-                    "name": block_names[idx],
-                    "input": input_val,
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tm.get("tool_call_id") or tm.get("id", ""),
+                    "content": tm.get("content", ""),
                 })
-                tool_use_indices.append(idx)
-
-        messages.append({"role": "assistant", "content": content_blocks})
-
-        if stop_reason == "end_turn" or (stop_reason is None and not tool_use_indices):
-            yield json.dumps({"type": "done"})
-            return
-
-        if tool_use_indices:
-            normalised = []
-            for idx in tool_use_indices:
-                try:
-                    args_preview = json.loads(block_args.get(idx, "{}") or "{}")
-                except json.JSONDecodeError:
-                    args_preview = {}
-                yield json.dumps({"type": "tool_call", "name": block_names[idx], "args": args_preview})
-                normalised.append({"id": block_ids[idx], "name": block_names[idx], "args": args_preview})
-
-            sse_events, tool_msgs = await tool_executor(normalised)
-
-            for ev in sse_events:
-                yield ev
-
-            tool_result_blocks = [
-                {"type": "tool_result", "tool_use_id": tm["id"], "content": tm["content"]}
-                for tm in tool_msgs
-            ]
-            messages.append({"role": "user", "content": tool_result_blocks})
             continue
 
         yield json.dumps({"type": "done"})
         return
 
-    yield json.dumps({"type": "error", "message": f"Agent exceeded {max_iter} iterations."})
+    yield json.dumps({"type": "error", "message": f"Agent reached the {max_iter}-iteration limit. Try a more specific question."})
     yield json.dumps({"type": "done"})
-
-
-# Standalone helper kept for legacy tests/migration
-async def _run_antigravity_loop(
-    messages: list[dict[str, Any]],
-    model: str,
-    tools: list[dict[str, Any]],
-    tool_executor: ToolExecutor,
-    max_iter: int = 10,
-    max_tokens: int | None = None,
-) -> AsyncGenerator[str, None]:
-    token = await get_antigravity_token()
-    if not token:
-        yield json.dumps({"type": "error", "message": "Failed to get Antigravity token. Please authenticate."})
-        yield json.dumps({"type": "done"})
-        return
-
-    # Google now exclusively supports gemini-3.8-flash with high, medium, and low tiers
-    m_clean = (model or "").strip().lower()
-    if m_clean.endswith("-high"):
-        thinking_level = "high"
-        wire_model = "gemini-3.8-flash-high"
-    elif m_clean.endswith("-medium") or m_clean in ("gemini-3.8-flash", "gemini"):
-        thinking_level = "medium"
-        wire_model = "gemini-3.8-flash-medium"
-    elif m_clean.endswith("-low"):
-        thinking_level = "low"
-        wire_model = "gemini-3.8-flash-low"
-    else:
-        thinking_level = "low"
-        wire_model = "gemini-3.8-flash-low"
-    url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
-    headers = _get_antigravity_headers(token)
-
-    gemini_tools = [{"functionDeclarations": []}]
-    if tools:
-        for t in tools:
-            fn = t.get("function", t)
-            decl = {
-                "name": fn["name"],
-                "description": fn["description"],
-                "parameters": _to_gemini_schema(fn.get("parameters", {}))
-            }
-            gemini_tools[0]["functionDeclarations"].append(decl)
-
-    client = _get_shared_client()
-    empty_retries = 0
-    
-    for _iteration in range(max_iter):
-        contents = []
-        system_text: str | None = None
-        for m in messages:
-            role = m["role"]
-            if role == "system":
-                # Accumulate system text; emitted as systemInstruction, not a content turn
-                system_text = (system_text + "\n\n" + m["content"]) if system_text else m["content"]
-            elif role == "user":
-                if contents and contents[-1]["role"] == "user":
-                    contents[-1]["parts"].append({"text": m["content"]})
-                else:
-                    contents.append({"role": "user", "parts": [{"text": m["content"]}]})
-            elif role == "assistant":
-                parts = []
-                if m.get("content"):
-                    parts.append({"text": m["content"]})
-                if m.get("tool_calls"):
-                    first_fc = True
-                    for tc in m["tool_calls"]:
-                        args_str = tc["function"].get("arguments", "{}")
-                        if not args_str:
-                            args_str = "{}"
-                        try:
-                            args = json.loads(args_str)
-                        except json.JSONDecodeError:
-                            args = {}
-                        fc_part: dict[str, Any] = {
-                            "functionCall": {
-                                "name": tc["function"]["name"],
-                                "args": args
-                            }
-                        }
-                        if first_fc:
-                            # First functionCall in a model turn MUST carry a
-                            # thought_signature. Use the captured value if present,
-                            # otherwise inject the sentinel to avoid a 400 error.
-                            sig = tc.get("thought_signature") or "skip_thought_signature_validator"
-                            fc_part["thought_signature"] = sig
-                            fc_part["thoughtSignature"] = sig
-                            first_fc = False
-                        # Parallel calls (index > 0) must NOT carry a signature.
-                        parts.append(fc_part)
-                contents.append({"role": "model", "parts": parts})
-            elif role == "tool":
-                part = {
-                    "functionResponse": {
-                        "name": m.get("name", "unknown_tool"),
-                        "response": {"result": m.get("content", "")}
-                    }
-                }
-                if contents and contents[-1]["role"] == "user":
-                    contents[-1]["parts"].append(part)
-                else:
-                    contents.append({"role": "user", "parts": [part]})
-
-        gen_config: dict[str, Any] = {
-            "thinkingConfig": {
-                "includeThoughts": True,
-                "thinkingLevel": thinking_level,
-            }
-        }
-        if max_tokens is not None:
-            gen_config["maxOutputTokens"] = max_tokens
-
-        request_body: dict[str, Any] = {
-            "sessionId": "terminal-session",
-            "contents": contents,
-            "generationConfig": gen_config,
-        }
-        if system_text:
-            # Mirror plugin: systemInstruction.role = "user", parts[0].text
-            request_body["systemInstruction"] = {
-                "role": "user",
-                "parts": [{"text": system_text}]
-            }
-        if gemini_tools[0]["functionDeclarations"]:
-            request_body["tools"] = gemini_tools
-
-        payload = {
-            "project": "rising-fact-p41fc",
-            "model": wire_model,
-            "requestType": "agent",
-            "userAgent": "antigravity",
-            "requestId": "agent-random-uuid",
-            "request": request_body,
-        }
-
-        try:
-            async with client.stream("POST", url, json=payload, headers=headers) as response:
-                if response.status_code != 200:
-                    body = await response.aread()
-                    logger.error("Antigravity API error %s: %s", response.status_code, body.decode()[:500])
-                    msg = _friendly_gateway_error("Antigravity API", response.status_code, body.decode(errors="replace"))
-                    yield json.dumps({"type": "error", "message": msg})
-                    yield json.dumps({"type": "done"})
-                    return
-
-                content = ""
-                tool_calls_list = []
-                
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"): continue
-                    raw = line[5:].strip()
-                    if not raw or raw == "[DONE]": continue
-                    try:
-                        chunk = json.loads(raw)
-                    except json.JSONDecodeError: continue
-
-                    response_wrapper = chunk.get("response", chunk)
-                    candidates = response_wrapper.get("candidates", [])
-                    if not candidates: continue
-                    parts = (candidates[0].get("content") or {}).get("parts", [])
-                    
-                    for part in parts:
-                        # Gemini may interleave private thought chunks with answer
-                        # text. Only answer text belongs in the assistant content
-                        # consumed by the client and downstream parsers.
-                        if "text" in part and part.get("thought") is not True:
-                            delta = part["text"]
-                            content += delta
-                            yield json.dumps({"type": "token", "text": delta})
-                        if "functionCall" in part:
-                            fc = part["functionCall"]
-                            # Capture the thought_signature emitted alongside this
-                            # functionCall part — the API requires it on the first
-                            # functionCall in the next turn's model content block.
-                            sig = part.get("thoughtSignature") or part.get("thought_signature")
-                            tool_calls_list.append({
-                                "id": f"call_{len(tool_calls_list)}",
-                                "type": "function",
-                                "thought_signature": sig,
-                                "function": {
-                                    "name": fc["name"],
-                                    "arguments": json.dumps(fc.get("args", {}))
-                                }
-                            })
-
-        except httpx.RequestError as exc:
-            yield json.dumps({"type": "error", "message": f"Network error: {exc}"})
-            yield json.dumps({"type": "done"})
-            return
-
-        if not content and not tool_calls_list:
-            empty_retries += 1
-            if empty_retries > 1:
-                yield json.dumps({"type": "error", "message": "Model returned empty response after retry."})
-                yield json.dumps({"type": "done"})
-                return
-            continue
-
-        empty_retries = 0
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
-        if tool_calls_list:
-            assistant_msg["tool_calls"] = tool_calls_list
-        messages.append(assistant_msg)
-
-        if not tool_calls_list:
-            yield json.dumps({"type": "done"})
-            return
-
-        normalised = []
-        for tc in tool_calls_list:
-            try:
-                args_preview = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-            except json.JSONDecodeError:
-                args_preview = {}
-            yield json.dumps({"type": "tool_call", "name": tc["function"]["name"], "args": args_preview})
-            normalised.append({"id": tc["id"], "name": tc["function"]["name"], "args": args_preview})
-
-        sse_events, tool_msgs = await tool_executor(normalised)
-
-        for ev in sse_events:
-            yield ev
-
-        for tm in tool_msgs:
-            tname = "unknown_tool"
-            for n in normalised:
-                if n["id"] == tm["id"]:
-                    tname = n["name"]
-                    break
-            messages.append({"role": "tool", "tool_call_id": tm["id"], "name": tname, "content": tm["content"]})
-        continue
-
-    yield json.dumps({"type": "error", "message": f"Agent exceeded {max_iter} iterations."})
-    yield json.dumps({"type": "done"})
-
-
 
 
 async def _stream_proxy_with_sync(supervisor, stream):
@@ -1089,16 +759,57 @@ async def _stream_proxy_with_sync(supervisor, stream):
         async for chunk in stream:
             yield chunk
     finally:
+        try:
+            if hasattr(stream, "aclose"):
+                await stream.aclose()
+        except Exception:
+            pass
         supervisor.request_sync()
 
 
-def uses_anthropic_tools(model: str, provider: str | None = None) -> bool:
-    if is_route_model_id(model):
-        route_id, model = parse_route_model_id(model)
-        provider = route_id.removeprefix("direct:")
-    return provider in ("anthropic", "claude-code") or (
-        model in ANTHROPIC_MODELS and provider in (None, "zen", "zen-free", "zen-paid", "go")
-    )
+async def _is_route_enabled(route_id: str) -> bool:
+    try:
+        from app.services.ai_config import is_ai_provider_configured
+
+        if route_id.startswith("direct:"):
+            return await is_ai_provider_configured(route_id)
+
+        from app.database import AsyncSessionLocal
+        from app.models.ai_provider import AIProviderRoute
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(AIProviderRoute.enabled).where(AIProviderRoute.id == route_id)
+            )
+            route_enabled = result.scalar_one_or_none() is True
+
+        if not route_enabled:
+            return False
+        if route_id.startswith("oauth:"):
+            return await is_ai_provider_configured(route_id)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to validate route %s (%s)", route_id, type(exc).__name__)
+        return False
+
+
+
+
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    h = host.strip("[]")
+    return h in _LOOPBACK_HOSTS
+
+
+def _loopback_proxy_base_url(host: str, port: int) -> str:
+    """Build the sidecar base URL and refuse anything that is not loopback."""
+    if not _is_loopback_host(host):
+        raise RuntimeError("CLIProxyAPI must listen on loopback")
+    return f"http://{host}:{port}/v1"
 
 
 async def stream_chat_completion(
@@ -1107,28 +818,42 @@ async def stream_chat_completion(
     tools: list[dict[str, Any]],
     tool_executor: ToolExecutor,
     system_prompt: str | None = None,
-    max_iter: int = 10,
+    max_iter: int = _DEFAULT_MAX_ITER,
     session_id: str | int | None = None,
     max_tokens: int | None = None,
+    allow_external_route: bool = False,
+    first_delta_deadline: float | None = None,
+    idle_delta_deadline: float | None = None,
 ) -> AsyncGenerator[str, None]:
     active_route_id = await resolve_active_route_id()
     qualified = model if is_route_model_id(model) else map_legacy_model_to_route(model, active_route_id)
     try:
-        route_id, upstream_model = ensure_model_belongs_to_route(qualified, active_route_id)
-        ensure_model_belongs_to_route(qualified, active_route_id, await get_route_models(active_route_id))
+        route_id, upstream_model = parse_route_model_id(qualified)
+        if route_id != active_route_id:
+            if not allow_external_route or not await _is_route_enabled(route_id):
+                raise ValueError(f"Route '{route_id}' is disabled or unavailable for this request")
+        ensure_model_belongs_to_route(qualified, route_id, await get_route_models(route_id))
     except (ValueError, RuntimeError) as exc:
-        yield json.dumps({"type": "error", "message": "Selected model is unavailable for the active provider route. Refresh the model list."})
+        yield json.dumps({"type": "error", "message": "Selected model is unavailable for its provider route. Refresh the model list."})
         yield json.dumps({"type": "done"})
         return
 
     session_id_str = str(session_id).strip() if (session_id is not None and str(session_id).strip()) else f"blm-{uuid.uuid4().hex[:12]}"
 
-    if route_id.startswith("oauth:") or route_id.startswith("endpoint:"):
-        supervisor = get_proxy_supervisor()
-        host, port, client_key = await supervisor.ensure_started()
-        base_url = f"http://{host}:{port}/v1"
+    from app.services.direct_proxy_routes import direct_proxy_prefix, get_direct_route
 
-        proxy_prefix = None
+    if route_id.startswith("direct:"):
+        spec = get_direct_route(route_id)
+        if spec is not None and not spec.supported:
+            yield json.dumps({"type": "error", "message": spec.unavailable_reason})
+            yield json.dumps({"type": "done"})
+            return
+
+    supervisor = get_proxy_supervisor()
+    host, port, client_key = await supervisor.ensure_started()
+
+    proxy_prefix = None
+    if route_id.startswith(("oauth:", "endpoint:")):
         try:
             from app.database import AsyncSessionLocal
             from app.models.ai_provider import AIProviderRoute
@@ -1138,43 +863,46 @@ async def stream_chat_completion(
                 res = await db_session.execute(r_stmt)
                 proxy_prefix = res.scalar_one_or_none()
         except Exception as exc:
-            logger.debug("Failed to query route proxy_prefix from DB: %s", exc)
+            logger.debug("Failed to query route proxy_prefix from DB: %s", type(exc).__name__)
 
-        if not proxy_prefix:
-            if route_id.startswith("oauth:"):
-                proxy_prefix = compute_oauth_proxy_prefix(route_id)
-            else:
-                proxy_prefix = route_id.replace(":", "-")
+    if not proxy_prefix:
+        if route_id.startswith("direct:"):
+            proxy_prefix = direct_proxy_prefix(route_id)
+        elif route_id.startswith("oauth:"):
+            proxy_prefix = compute_oauth_proxy_prefix(route_id)
+        else:
+            proxy_prefix = route_id.replace(":", "-")
 
-        proxy_model = f"{proxy_prefix}/{upstream_model}"
+    proxy_model = f"{proxy_prefix}/{upstream_model}"
 
-        def _capture_proxy_headers(hdrs: httpx.Headers, status_code: int) -> None:
-            supervisor.request_sync()
-            trace_id = hdrs.get("x-cpa-trace-id") or hdrs.get("X-CPA-TRACE-ID")
-            if trace_id:
-                record_proxy_trace(
-                    trace_id=trace_id,
-                    route_id=route_id,
-                    session_id=session_id_str,
-                    status_code=status_code,
-                    upstream_model=upstream_model,
-                )
+    def _capture_proxy_headers(hdrs: httpx.Headers, status_code: int) -> None:
+        supervisor.request_sync()
+        trace_id = hdrs.get("x-cpa-trace-id") or hdrs.get("X-CPA-TRACE-ID")
+        if trace_id:
+            record_proxy_trace(
+                trace_id=trace_id,
+                route_id=route_id,
+                session_id=session_id_str,
+                status_code=status_code,
+                upstream_model=upstream_model,
+            )
 
-        full_messages = []
-        if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
-        full_messages.extend(messages)
+    full_messages = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt})
+    full_messages.extend(messages)
 
-        extra_headers = {"X-Session-Id": session_id_str}
+    extra_headers = {"X-Session-Id": session_id_str}
 
-        async for chunk in _stream_proxy_with_sync(supervisor, _run_openai_loop(
+    def _open_stream(h: str, p: int, ck: str):
+        return _stream_proxy_with_sync(supervisor, _run_openai_loop(
             full_messages,
             proxy_model,
-            client_key,
+            ck,
             tools,
             tool_executor,
             max_iter=max_iter,
-            base_url=base_url,
+            base_url=_loopback_proxy_base_url(h, p),
             session_id=session_id_str,
             api_label=f"Proxy ({route_id})",
             opencode_headers=False,
@@ -1182,133 +910,44 @@ async def stream_chat_completion(
             retry_429=False,
             on_response_headers=_capture_proxy_headers,
             max_tokens=max_tokens,
-        )):
-            yield chunk
-        return
+            first_delta_deadline=first_delta_deadline if first_delta_deadline is not None else _FIRST_DELTA_DEADLINE,
+            idle_delta_deadline=idle_delta_deadline if idle_delta_deadline is not None else _IDLE_DELTA_DEADLINE,
+            total_stream_cap=_TOTAL_STREAM_CAP,
+        ))
 
-    provider = route_id.split(":", 1)[1] if route_id.startswith("direct:") else route_id
-    model = upstream_model
+    async def _first_event(stream):
+        try:
+            return await asyncio.wait_for(
+                stream.__anext__(), timeout=_PROXY_FIRST_EVENT_TIMEOUT
+            )
+        except StopAsyncIteration:
+            return None
 
-    api_key = await get_dynamic_ai_api_key(provider)
-
-    if provider == "zen-free":
-        api_key = "public"
-    elif not api_key or api_key == "none":
-        yield json.dumps({"type": "error", "message": f"{provider.upper()} API Key is not configured."})
-        yield json.dumps({"type": "done"})
-        return
-
-    if provider in ("anthropic", "claude-code"):
-        oauth_mode = provider == "claude-code" or _is_oauth_token(api_key)
-        sys_prompt = system_prompt or ""
-        if oauth_mode and not sys_prompt.startswith(_CLAUDE_CODE_SYSTEM_PREFIX):
-            sys_prompt = f"{_CLAUDE_CODE_SYSTEM_PREFIX} {sys_prompt}".strip()
-        anthropic_messages = [m for m in messages if m.get("role") != "system"]
-        async for chunk in _run_anthropic_loop(
-            anthropic_messages,
-            sys_prompt,
-            model,
-            api_key,
-            tools,
-            tool_executor,
-            max_iter,
-            base_url="https://api.anthropic.com/v1",
-            session_id=session_id_str,
-            auth_mode="oauth" if oauth_mode else "api_key",
-            opencode_headers=False,
-            max_tokens=max_tokens,
-        ):
-            yield chunk
-        return
-
-    if provider == "copilot":
-        copilot_token, copilot_base_url, copilot_error = await get_copilot_inference_token(api_key)
-        if not copilot_token:
-            yield json.dumps({"type": "error", "message": f"Copilot not available. {copilot_error or 'Check the GitHub token.'}"})
+    stream = _open_stream(host, port, client_key)
+    try:
+        first = None
+        try:
+            first = await _first_event(stream)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Proxy produced no events within %.0fs; restarting sidecar",
+                _PROXY_FIRST_EVENT_TIMEOUT,
+            )
+            try:
+                if hasattr(stream, "aclose"):
+                    await stream.aclose()
+            except Exception:
+                pass
+            host, port, client_key = await supervisor.recover("first_event_timeout", preserve_oauth_flow=True)
+            stream = _open_stream(host, port, client_key)
+            first = await _first_event(stream)
+        if first is not None:
+            yield first
+            async for chunk in stream:
+                yield chunk
+        else:
             yield json.dumps({"type": "done"})
-            return
-        full_messages = []
-        if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
-        full_messages.extend(messages)
-        async for chunk in _run_openai_loop(
-            full_messages, model, copilot_token, tools, tool_executor, max_iter,
-            base_url=copilot_base_url, session_id=session_id_str,
-            api_label="Copilot", opencode_headers=False,
-            extra_headers=_COPILOT_EDITOR_HEADERS,
-            max_tokens=max_tokens,
-        ):
-            yield chunk
-        return
-
-    api_label = "Zen API"
-    use_opencode_headers = True
-    passthrough_thought_signature = False
-    request_timeout: float | None = None
-    extra_headers: dict[str, str] | None = None
-    if provider in ("zen-free", "zen-paid", "zen"):
-        base_url = "https://opencode.ai/zen/v1"
-    elif provider == "go":
-        base_url = "https://opencode.ai/zen/go/v1"
-    elif provider == "aistudio":
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-        api_label = "AI Studio"
-        use_opencode_headers = False
-        passthrough_thought_signature = True
-    elif provider == "groq":
-        base_url = "https://api.groq.com/openai/v1"
-        api_label = "Groq"
-        use_opencode_headers = False
-    elif provider == "nvidia":
-        base_url = "https://integrate.api.nvidia.com/v1"
-        api_label = "NVIDIA"
-        use_opencode_headers = False
-        request_timeout = 300.0
-    elif provider == "openai":
-        base_url = "https://api.openai.com/v1"
-        api_label = "OpenAI"
-        use_opencode_headers = False
-    elif provider == "openrouter":
-        base_url = "https://openrouter.ai/api/v1"
-        api_label = "OpenRouter"
-        use_opencode_headers = False
-        extra_headers = {
-            "HTTP-Referer": "https://localhost:4455",
-            "X-Title": "BLM Terminal",
-        }
-    elif provider == "deepseek":
-        base_url = "https://api.deepseek.com/v1"
-        api_label = "DeepSeek"
-        use_opencode_headers = False
-    elif provider == "xai":
-        base_url = "https://api.x.ai/v1"
-        api_label = "xAI"
-        use_opencode_headers = False
-    elif provider == "together":
-        base_url = "https://api.together.xyz/v1"
-        api_label = "Together"
-        use_opencode_headers = False
-    else:
-        base_url = settings.zen_base_url
-
-    if model in ANTHROPIC_MODELS and provider in ("zen-free", "zen-paid", "zen", "go"):
-        anthropic_messages = [m for m in messages if m.get("role") != "system"]
-        sys_prompt = system_prompt or ""
-        async for chunk in _run_anthropic_loop(
-            anthropic_messages, sys_prompt, model, api_key, tools, tool_executor,
-            max_iter, base_url=base_url, session_id=session_id_str, max_tokens=max_tokens
-        ):
-            yield chunk
-    else:
-        full_messages = []
-        if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
-        full_messages.extend(messages)
-        async for chunk in _run_openai_loop(
-            full_messages, model, api_key, tools, tool_executor, max_iter,
-            base_url=base_url, session_id=session_id_str, api_label=api_label,
-            opencode_headers=use_opencode_headers,
-            passthrough_thought_signature=passthrough_thought_signature,
-            request_timeout=request_timeout, extra_headers=extra_headers, max_tokens=max_tokens
-        ):
-            yield chunk
+    except Exception as exc:
+        logger.warning("Proxy inference stream failed: %s", type(exc).__name__)
+        yield json.dumps({"type": "error", "message": "Inference stream failed (connection error). Try again."})
+        yield json.dumps({"type": "done"})

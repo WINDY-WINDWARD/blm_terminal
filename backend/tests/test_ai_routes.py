@@ -143,7 +143,7 @@ async def test_env(tmp_path: Path):
     mock_supervisor.request_sync = MagicMock()
     mock_supervisor.stop = AsyncMock()
 
-    oauth_mgr = OAuthSessionManager()
+    oauth_mgr = OAuthSessionManager(session_factory=session_factory)
 
     # Overrides
     app.dependency_overrides[get_db] = override_get_db
@@ -236,8 +236,11 @@ async def test_list_routes_includes_oauth_and_direct(test_env, monkeypatch):
         for p in OAUTH_PROVIDERS:
             assert f"oauth:{p}" in route_ids
 
-        for p in DIRECT_PROVIDERS:
-            assert f"direct:{p}" in route_ids
+        from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS
+        for rid in SUPPORTED_ROUTE_IDS:
+            assert rid in route_ids
+        assert "direct:copilot" not in route_ids
+        assert "direct:claude-code" not in route_ids
 
         # Verify active route has is_active == True
         active_route = next(r for r in data["routes"] if r["id"] == DEFAULT_ROUTE_ID)
@@ -260,11 +263,14 @@ async def test_direct_provider_resilience_when_keyring_fails(test_env, monkeypat
         assert "operating in degraded mode" in (data["recovery_state"] or "")
 
         # Direct providers remain available and have recovery_state=None
+        from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS
         direct_routes = [r for r in data["routes"] if r["kind"] == "direct"]
-        assert len(direct_routes) >= len(DIRECT_PROVIDERS)
+        assert len(direct_routes) == len(SUPPORTED_ROUTE_IDS)
         for dr in direct_routes:
             assert dr["recovery_state"] is None
-            assert len(dr["models"]) >= 1
+            assert dr["id"] not in ("direct:copilot", "direct:claude-code")
+            assert dr["proxy_prefix"] is not None
+            assert dr["health"]["transport"] == "proxy"
 
 
 @pytest.mark.asyncio
@@ -287,7 +293,14 @@ async def test_route_activation_and_validation(test_env):
         assert resp2.status_code == 200
         assert resp2.json()["active_route_id"] == "oauth:codex"
 
-        # 3. Reject invalid route formats and non-existent providers
+        # 3. Reject invalid route formats, unsupported direct routes, and non-existent providers
+        bad_copilot = await client.post("/api/ai/routes/direct:copilot/activate")
+        assert bad_copilot.status_code == 400
+        assert "CLIProxyAPI 8.0.39 has no GitHub Copilot provider" in bad_copilot.json()["detail"]
+
+        bad_claude_code = await client.post("/api/ai/routes/direct:claude-code/activate")
+        assert bad_claude_code.status_code == 400
+
         bad1 = await client.post("/api/ai/routes/invalid_prefix:foo/activate")
         assert bad1.status_code == 400
 
@@ -528,45 +541,38 @@ async def test_custom_endpoint_and_key_crud_lifecycle(test_env):
 
 @pytest.mark.asyncio
 async def test_endpoint_model_preview_refresh_test(test_env):
-    """Verify endpoint model preview, model refresh, and connectivity test."""
+    """Verify endpoint model preview, model refresh, and connectivity test via proxy."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
-        # Mock httpx models call
-        mock_models_resp = MagicMock()
-        mock_models_resp.status_code = 200
-        mock_models_resp.json.return_value = {
-            "data": [
-                {"id": "gpt-4o"},
-                {"id": "gpt-4o-mini"},
-            ]
-        }
+        # 1. Preview is local only without network calls
+        prev_resp = await client.post(
+            "/api/ai/routes/endpoints/models/preview",
+            json={"base_url": "https://api.openai.com/v1", "api_key": "sk-preview-key"},
+        )
+        assert prev_resp.status_code == 200
+        assert prev_resp.json()["models"] == []
+        assert "preview is local" in prev_resp.json()["notice"]
 
-        with patch("httpx.AsyncClient.get", AsyncMock(return_value=mock_models_resp)):
-            # 1. Preview
-            prev_resp = await client.post(
-                "/api/ai/routes/endpoints/models/preview",
-                json={"base_url": "https://api.openai.com/v1", "api_key": "sk-preview-key"},
-            )
-            assert prev_resp.status_code == 200
-            assert prev_resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
+        # Create endpoint to test refresh and connectivity
+        create_resp = await client.post(
+            "/api/ai/routes/endpoints",
+            json={"display_label": "Test Refresh EP", "base_url": "https://api.openai.com/v1"},
+        )
+        ep_id = create_resp.json()["id"]
 
-            # Create endpoint to test refresh and connectivity
-            create_resp = await client.post(
-                "/api/ai/routes/endpoints",
-                json={"display_label": "Test Refresh EP", "base_url": "https://api.openai.com/v1"},
-            )
-            ep_id = create_resp.json()["id"]
+        test_env["supervisor"].list_proxy_models = AsyncMock(return_value=["gpt-4o", "gpt-4o-mini"])
 
-            # 2. Refresh
-            ref_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/models/refresh")
-            assert ref_resp.status_code == 200
-            assert ref_resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
+        # 2. Refresh via supervisor.list_proxy_models
+        ref_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/models/refresh")
+        assert ref_resp.status_code == 200
+        assert ref_resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
 
-            # 3. Test connectivity
-            test_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
-            assert test_resp.status_code == 200
-            assert test_resp.json()["status"] == "ok"
-            assert "latency_ms" in test_resp.json()
+        # 3. Test connectivity via proxy
+        test_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
+        assert test_resp.status_code == 200
+        assert test_resp.json()["status"] == "ok"
+        assert "latency_ms" in test_resp.json()
+        assert test_resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
 
 
 @pytest.mark.asyncio
@@ -592,22 +598,25 @@ async def test_oauth_start_poll_cancel_expiry(test_env):
         assert b_data["auth_url"] == "https://claude.ai/oauth/authorize"
         assert b_data["flow"] == "browser"
 
-        # 2. Start device flow
-        mgmt.start_oauth.return_value = {
-            "state": "device_state_def",
-            "user_code": "WDJB-MJHT",
-            "verification_uri": "https://github.com/login/device",
-            "interval": 5,
-            "expires_in": 600,
-        }
+        # 2. Start device flow is rejected with HTTP 400
         start_device = await client.post(
             "/api/ai/routes/oauth/start",
             json={"provider": "codex", "flow": "device"},
         )
-        assert start_device.status_code == 200
-        d_data = start_device.json()
-        assert d_data["user_code"] == "WDJB-MJHT"
-        assert d_data["verification_uri"] == "https://github.com/login/device"
+        assert start_device.status_code == 400
+        assert "Device flow is not supported" in start_device.json()["detail"]
+
+        # Start browser session for subsequent poll & cancel steps
+        mgmt.start_oauth.return_value = {
+            "state": "device_state_def",
+            "url": "https://auth.codex.example/authorize",
+            "expires_in": 600,
+        }
+        start_pending = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "codex"},
+        )
+        assert start_pending.status_code == 200
 
         # 3. Poll pending session
         mgmt.get_oauth_status.return_value = {"status": "wait"}
@@ -1346,36 +1355,32 @@ async def test_endpoint_test_real_timed_check_success_and_errors(test_env):
             assert create_resp.status_code == 200
             ep_id = create_resp.json()["id"]
 
+            test_env["supervisor"].list_proxy_models = AsyncMock(return_value=["local-model"])
+
             # 1. Success path
-            server_status = 200
             t_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
             assert t_resp.status_code == 200
             t_data = t_resp.json()
             assert t_data["status"] == "ok"
-            assert t_data["status_code"] == 200
             assert t_data["latency_ms"] >= 0.0
-            assert last_req_headers.get("authorization") == "Bearer secret-test-key-456"
+            assert t_data["models"] == ["local-model"]
 
-            # 2. HTTP Error path (502 Bad Gateway)
-            server_status = 502
+            # 2. Proxy error path (no models returned)
+            test_env["supervisor"].list_proxy_models = AsyncMock(return_value=[])
             t_err = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
             assert t_err.status_code == 200
             err_data = t_err.json()
             assert err_data["status"] == "error"
-            assert err_data["status_code"] == 502
-            assert "HTTP 502" in err_data["error"]
+            assert "No models returned by proxy" in err_data["error"]
             assert err_data["latency_ms"] >= 0.0
 
-            # 3. Unreachable path (close server)
-            server.close()
-            await server.wait_closed()
-            server = None
-
+            # 3. Supervisor exception path
+            test_env["supervisor"].list_proxy_models = AsyncMock(side_effect=RuntimeError("Proxy down"))
             t_dead = await client.post(f"/api/ai/routes/endpoints/{ep_id}/test")
             assert t_dead.status_code == 200
             dead_data = t_dead.json()
             assert dead_data["status"] == "error"
-            assert "Connection failed" in dead_data["error"]
+            assert "Proxy test failed" in dead_data["error"]
             assert "secret-test-key-456" not in str(dead_data)
     finally:
         if server:
@@ -1439,66 +1444,35 @@ async def test_endpoint_model_refresh_authenticated_and_supervisor_reload(test_e
     """
     import logging
     transport = httpx.ASGITransport(app=app)
-    received_auth = None
-
-    async def handle_refresh(reader, writer):
-        nonlocal received_auth
-        req_line = await reader.readline()
-        headers = {}
-        while True:
-            line = await reader.readline()
-            if line in (b"\r\n", b"\n", b""):
-                break
-            dec = line.decode("latin1", errors="ignore")
-            if ":" in dec:
-                k, v = dec.split(":", 1)
-                headers[k.strip().lower()] = v.strip()
-        received_auth = headers.get("authorization")
-
-        body = b'{"data": [{"id": "deepseek-ai/deepseek-r1"}, {"id": "qwen/qwen-2.5-72b"}]}'
-        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
-        writer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("latin1"))
-        writer.write(body)
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    server = await asyncio.start_server(handle_refresh, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    base_url = f"http://127.0.0.1:{port}"
+    base_url = "https://custom-ep.example.com/v1"
     secret_key = "secret-auth-key-super-confidential"
 
-    try:
-        with caplog.at_level(logging.DEBUG):
-            async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
-                create_resp = await client.post(
-                    "/api/ai/routes/endpoints",
-                    json={
-                        "display_label": "Auth Refresh EP",
-                        "base_url": base_url,
-                        "keys": [{"api_key": secret_key, "label": "Auth Key"}],
-                    },
-                )
-                ep_id = create_resp.json()["id"]
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+            create_resp = await client.post(
+                "/api/ai/routes/endpoints",
+                json={
+                    "display_label": "Auth Refresh EP",
+                    "base_url": base_url,
+                    "keys": [{"api_key": secret_key, "label": "Auth Key"}],
+                },
+            )
+            ep_id = create_resp.json()["id"]
 
-                # Refresh models
-                ref_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/models/refresh")
-                assert ref_resp.status_code == 200
-                models = ref_resp.json()["models"]
-                assert models == ["deepseek-ai/deepseek-r1", "qwen/qwen-2.5-72b"]
+            test_env["supervisor"].list_proxy_models = AsyncMock(return_value=["deepseek-ai/deepseek-r1", "qwen/qwen-2.5-72b"])
 
-                # Verify Bearer header was received
-                assert received_auth == f"Bearer {secret_key}"
+            # Refresh models
+            ref_resp = await client.post(f"/api/ai/routes/endpoints/{ep_id}/models/refresh")
+            assert ref_resp.status_code == 200
+            models = ref_resp.json()["models"]
+            assert models == ["deepseek-ai/deepseek-r1", "qwen/qwen-2.5-72b"]
 
-                # Verify supervisor reload was called
-                test_env["supervisor"].reload_custom_endpoints.assert_called()
+            # Verify supervisor reload was called
+            test_env["supervisor"].reload_custom_endpoints.assert_called()
 
-                # Verify zero secrets in logs or responses
-                assert secret_key not in caplog.text
-                assert secret_key not in str(ref_resp.json())
-    finally:
-        server.close()
-        await server.wait_closed()
+            # Verify zero secrets in logs or responses
+            assert secret_key not in caplog.text
+            assert secret_key not in str(ref_resp.json())
 
 
 @pytest.mark.asyncio
@@ -1643,3 +1617,831 @@ async def test_update_endpoint_503_when_vault_unavailable(test_env):
         routes = get_ep.json()["routes"]
         ep_summary = next(r for r in routes if r["id"] == ep_id)
         assert ep_summary["config"]["header_names"] == ["X-Init-Header"]
+
+
+# ===========================================================================
+# Task 2 Tests: Loopback OAuth Callback Listener & Browser-Only Enforcement
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_for_all_supported_providers_registers_loopback_callback(test_env):
+    """Verify start_oauth for all 8 supported providers derives loopback redirect,
+    registers exact host/port/path, and returns callback_mode='loopback'."""
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        for idx, prov in enumerate(OAUTH_PROVIDERS):
+            port = 52200 + idx
+            state = f"state_{prov}_{idx}"
+            redirect_uri = f"http://127.0.0.1:{port}/oauth-{prov}-callback"
+            mgmt.start_oauth.return_value = {
+                "state": state,
+                "url": f"https://auth.{prov}.example/authorize?client_id=cid&redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+                "expires_in": 600,
+            }
+
+            resp = await client.post(
+                "/api/ai/routes/oauth/start",
+                json={"provider": prov},
+            )
+            assert resp.status_code == 200, f"Failed for provider {prov}: {resp.text}"
+            data = resp.json()
+            assert data["state"] == state
+            assert data["provider"] == prov
+            assert data["callback_mode"] == "loopback"
+            assert data["callback_url"] == redirect_uri
+            assert "user_code" not in data or data["user_code"] is None
+
+            cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+            assert cb_server is not None
+            async with cb_server._lock:
+                assert state in cb_server._registrations
+                reg = cb_server._registrations[state]
+                assert reg.port == port
+                assert reg.path == f"/oauth-{prov}-callback"
+
+            await cb_server.unregister(state)
+
+
+@pytest.mark.asyncio
+async def test_oauth_loopback_simulated_browser_get_completes_session_and_unregisters(test_env):
+    """Verify a simulated browser GET to loopback callback completes the session,
+    submits state+code to supervisor, and unregisters listener."""
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    port = 52301
+    state = "loopback_test_state_123"
+    code = "loopback_auth_code_secret_xyz"
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-callback"
+
+    mgmt.start_oauth.return_value = {
+        "state": state,
+        "url": f"https://auth.antigravity.example/authorize?client_id=ag&redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+        "expires_in": 600,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        start_resp = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "antigravity"},
+        )
+        assert start_resp.status_code == 200
+        assert start_resp.json()["callback_mode"] == "loopback"
+
+        complete_oauth_file(test_env, "antigravity", "browser_user@example.com")
+
+        async with httpx.AsyncClient(trust_env=False) as browser_client:
+            browser_resp = await browser_client.get(
+                f"http://127.0.0.1:{port}/oauth-callback?state={state}&code={code}"
+            )
+            assert browser_resp.status_code == 200
+            assert "Authorization Successful" in browser_resp.text
+            assert code not in browser_resp.text
+
+        mgmt.submit_oauth_callback.assert_called_with({"state": state, "code": code})
+
+        poll_resp = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll_resp.status_code == 200
+        assert poll_resp.json()["status"] == "completed"
+
+        cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+        assert cb_server is not None
+        async with cb_server._lock:
+            assert state not in cb_server._registrations
+
+
+@pytest.mark.asyncio
+async def test_oauth_cancellation_unregisters_callback_listener(test_env):
+    """Verify cancelling an OAuth session unregisters its callback listener."""
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    port = 52302
+    state = "cancel_test_state_abc"
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-callback"
+
+    mgmt.start_oauth.return_value = {
+        "state": state,
+        "url": f"https://auth.codex.example/authorize?redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+        "expires_in": 600,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        await client.post("/api/ai/routes/oauth/start", json={"provider": "codex"})
+        cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+        assert cb_server is not None
+        async with cb_server._lock:
+            assert state in cb_server._registrations
+
+        cancel_resp = await client.post(
+            "/api/ai/routes/oauth/cancel",
+            json={"state": state},
+        )
+        assert cancel_resp.status_code == 200
+
+        async with cb_server._lock:
+            assert state not in cb_server._registrations
+
+
+@pytest.mark.asyncio
+async def test_oauth_expiry_unregisters_callback_listener(test_env):
+    """Verify session expiration unregisters its callback listener."""
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    port = 52303
+    state = "expiry_test_state_def"
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-callback"
+
+    mgmt.start_oauth.return_value = {
+        "state": state,
+        "url": f"https://auth.codex.example/authorize?redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+        "expires_in": 600,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        await client.post("/api/ai/routes/oauth/start", json={"provider": "codex"})
+        cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+        assert cb_server is not None
+        async with cb_server._lock:
+            assert state in cb_server._registrations
+
+        session = mgr._sessions[state]
+        session.expires_at = time.time() - 10.0
+
+        poll_resp = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll_resp.status_code == 200
+        assert poll_resp.json()["status"] == "expired"
+
+        async with cb_server._lock:
+            assert state not in cb_server._registrations
+
+
+@pytest.mark.asyncio
+async def test_oauth_cancel_all_sessions_unregisters_all(test_env):
+    """Verify cancel_all_sessions unregisters all pending callback listeners."""
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        for idx in (1, 2):
+            port = 52310 + idx
+            st = f"multi_state_{idx}"
+            r_uri = f"http://127.0.0.1:{port}/oauth-callback"
+            mgmt.start_oauth.return_value = {
+                "state": st,
+                "url": f"https://auth.example/auth?redirect_uri={urllib.parse.quote(r_uri)}&state={st}",
+                "expires_in": 600,
+            }
+            await client.post("/api/ai/routes/oauth/start", json={"provider": "claude"})
+
+        cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+        assert cb_server is not None
+        async with cb_server._lock:
+            assert len(cb_server._registrations) == 2
+
+        await mgr.cancel_all_sessions()
+
+        async with cb_server._lock:
+            assert len(cb_server._registrations) == 0
+
+
+@pytest.mark.asyncio
+async def test_oauth_app_shutdown_unregisters_and_shuts_down_callback_server(test_env):
+    """Verify shutdown unregisters all pending sessions and stops callback server."""
+    import urllib.parse
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    port = 52320
+    state = "shutdown_test_state"
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-callback"
+    mgmt.start_oauth.return_value = {
+        "state": state,
+        "url": f"https://auth.example/auth?redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+        "expires_in": 600,
+    }
+
+    await mgr.start_session("codex")
+    cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+    assert cb_server is not None
+    async with cb_server._lock:
+        assert state in cb_server._registrations
+        assert port in cb_server._servers
+
+    await mgr.shutdown()
+
+    async with cb_server._lock:
+        assert len(cb_server._registrations) == 0
+        assert len(cb_server._servers) == 0
+
+
+@pytest.mark.asyncio
+async def test_oauth_port_conflict_returns_503_callback_port_unavailable(test_env, caplog):
+    """Verify port conflict during listener startup returns HTTP 503 with stable code callback_port_unavailable
+    and asserts sensitive OAuth state is absent from all logs."""
+    import logging
+    import socket
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+
+    conflict_port = 52330
+    conflict_state = "secret_conflict_state_555"
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", conflict_port))
+    sock.listen(1)
+
+    try:
+        redirect_uri = f"http://127.0.0.1:{conflict_port}/oauth-callback"
+        mgmt.start_oauth.return_value = {
+            "state": conflict_state,
+            "url": f"https://auth.example/auth?redirect_uri={urllib.parse.quote(redirect_uri)}&state={conflict_state}",
+            "expires_in": 600,
+        }
+
+        with caplog.at_level(logging.DEBUG):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+                resp = await client.post(
+                    "/api/ai/routes/oauth/start",
+                    json={"provider": "codex"},
+                )
+                assert resp.status_code == 503
+                data = resp.json()
+                assert "callback_port_unavailable" in str(data)
+
+        # Assert sensitive state token is absent from logs
+        assert conflict_state not in caplog.text
+        assert "Port conflict on callback server" in caplog.text
+    finally:
+        sock.close()
+
+
+@pytest.mark.asyncio
+async def test_oauth_flow_device_rejected_with_400(test_env):
+    """Verify legacy flow=device requests are rejected with HTTP 400 Bad Request."""
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        resp = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "codex", "flow": "device"},
+        )
+        assert resp.status_code == 400
+        assert "Device flow is not supported" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_manual_mode_on_missing_malformed_or_non_loopback_redirect(test_env):
+    """Verify missing, malformed, or non-loopback redirect_uri selects callback_mode='manual' and callback_url=None."""
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        mgmt.start_oauth.return_value = {
+            "state": "manual_st_1",
+            "url": "https://auth.example/auth?redirect_uri=https%3A%2F%2Fremote.com%2Fcallback&state=manual_st_1",
+            "expires_in": 600,
+        }
+        r1 = await client.post("/api/ai/routes/oauth/start", json={"provider": "claude"})
+        assert r1.status_code == 200
+        assert r1.json()["callback_mode"] == "manual"
+        assert r1.json()["callback_url"] is None
+
+        mgmt.start_oauth.return_value = {
+            "state": "manual_st_2",
+            "url": "https://auth.example/auth?state=manual_st_2",
+            "expires_in": 600,
+        }
+        r2 = await client.post("/api/ai/routes/oauth/start", json={"provider": "claude"})
+        assert r2.status_code == 200
+        assert r2.json()["callback_mode"] == "manual"
+        assert r2.json()["callback_url"] is None
+
+        mgmt.start_oauth.return_value = {
+            "state": "manual_st_3",
+            "url": "https://auth.example/auth?redirect_uri=http%3A%2F%2Flocalhost%3A51121%2F..%2Fbad&state=manual_st_3",
+            "expires_in": 600,
+        }
+        r3 = await client.post("/api/ai/routes/oauth/start", json={"provider": "claude"})
+        assert r3.status_code == 200
+        assert r3.json()["callback_mode"] == "manual"
+        assert r3.json()["callback_url"] is None
+
+        cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+        if cb_server is not None:
+            async with cb_server._lock:
+                assert "manual_st_1" not in cb_server._registrations
+                assert "manual_st_2" not in cb_server._registrations
+                assert "manual_st_3" not in cb_server._registrations
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_json_accepts_and_forwards_redirect_url_and_code(test_env, caplog):
+    """Verify POST /api/ai/routes/oauth/callback accepts JSON with state, code, and redirect_url,
+    forwards safe parameters to supervisor, and never logs sensitive tokens/URLs."""
+    import logging
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    state = "manual_submit_state_456"
+    secret_code = "SECRET_CODE_MANUAL_777"
+    manual_redirect_url = f"http://localhost:51121/oauth-callback?state={state}&code={secret_code}"
+
+    session = PendingOAuthSession(
+        state=state,
+        provider="antigravity",
+        flow="browser",
+        replace_account_id=None,
+        created_at=time.time(),
+        expires_at=time.time() + 900.0,
+        status="pending",
+    )
+    mgr._sessions[state] = session
+    complete_oauth_file(test_env, "antigravity", "manual_cb_user@example.com", {"access_token": "SECRET_ACCESS_TOKEN_999"})
+
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+            resp = await client.post(
+                "/api/ai/routes/oauth/callback",
+                json={
+                    "state": state,
+                    "code": secret_code,
+                    "redirect_url": manual_redirect_url,
+                },
+            )
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "completed"
+
+    mgmt.submit_oauth_callback.assert_called_with({
+        "state": state,
+        "code": secret_code,
+        "redirect_url": manual_redirect_url,
+    })
+
+    log_text = caplog.text
+    assert secret_code not in log_text
+    assert "SECRET_ACCESS_TOKEN_999" not in log_text
+    assert manual_redirect_url not in log_text
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_submit_error_forwarded_and_logged_at_most_class_name(test_env, caplog):
+    """Verify callback submit errors from supervisor are forwarded rather than swallowed,
+    and log at most the exception class name at debug level."""
+    import logging
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    state = "submit_err_state_888"
+    session = PendingOAuthSession(
+        state=state,
+        provider="claude",
+        flow="browser",
+        replace_account_id=None,
+        created_at=time.time(),
+        expires_at=time.time() + 900.0,
+        status="pending",
+    )
+    mgr._sessions[state] = session
+
+    sensitive_err = "CRITICAL_INTERNAL_UPSTREAM_FAILURE_SECRET_DATA_xyz"
+    mgmt.submit_oauth_callback.side_effect = RuntimeError(sensitive_err)
+
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+            resp = await client.post(
+                "/api/ai/routes/oauth/callback",
+                json={"state": state, "code": "secret_cb_code"},
+            )
+            assert resp.status_code in (400, 500, 502, 503)
+
+    log_text = caplog.text
+    assert "RuntimeError" in log_text
+    assert sensitive_err not in log_text
+    assert "secret_cb_code" not in log_text
+
+
+@pytest.mark.asyncio
+async def test_oauth_unknown_provider_rejected_with_400(test_env):
+    """Verify unknown provider is rejected with 400 Bad Request (preserving allowlist contract)."""
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        resp = await client.post(
+            "/api/ai/routes/oauth/start",
+            json={"provider": "completely_unknown_llm"},
+        )
+        assert resp.status_code == 400
+        assert "not one of the approved OAuth providers" in resp.json()["detail"]
+
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_failure_logs_safe_type_only(test_env, caplog):
+    """Verify that exceptions during mgmt.start_oauth log only safe type information without raw secret text."""
+    import logging
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+
+    sensitive_str = "SENSITIVE_PROXY_START_TOKEN_SECRET_987654"
+    mgmt.start_oauth.side_effect = RuntimeError(f"Upstream auth failure: {sensitive_str}")
+
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+            resp = await client.post(
+                "/api/ai/routes/oauth/start",
+                json={"provider": "codex"},
+            )
+            assert resp.status_code in (500, 502, 503)
+
+    log_text = caplog.text
+    assert "RuntimeError" in log_text
+    assert sensitive_str not in log_text
+
+
+@pytest.mark.asyncio
+async def test_oauth_poll_pending_then_success_reconciles_cleanly(test_env):
+    """Critical controller finding: Verify that polling a session while upstream is pending
+    does NOT leave session.status in 'reconciling', so subsequent poll after upstream success
+    proceeds to check OAuth status and successfully reconciles the account."""
+    import time
+    from unittest.mock import AsyncMock
+    from app.services.oauth_session_manager import PendingOAuthSession
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    state = "pending_then_success_state_999"
+    session = PendingOAuthSession(
+        state=state,
+        provider="codex",
+        flow="browser",
+        replace_account_id=None,
+        created_at=time.time(),
+        expires_at=time.time() + 900.0,
+        status="pending",
+    )
+    mgr._sessions[state] = session
+
+    # 1. Upstream status is initially pending/wait
+    mgmt.get_oauth_status = AsyncMock(return_value={"status": "wait"})
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # First poll: upstream returns pending
+        poll1 = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll1.status_code == 200
+        assert poll1.json()["status"] == "pending"
+        assert mgmt.get_oauth_status.call_count == 1
+
+        # 2. Now user approves in browser; upstream reports success and writes auth credentials
+        complete_oauth_file(test_env, "codex", "pending_success_user@example.com", {"access_token": "tok_recovered_123"})
+
+        # Second poll: should check get_oauth_status, see success, and complete reconciliation
+        poll2 = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll2.status_code == 200
+        assert poll2.json()["status"] == "completed"
+        assert poll2.json()["masked_identity"] is not None
+        assert mgmt.get_oauth_status.call_count == 2
+
+
+
+@pytest.mark.asyncio
+async def test_oauth_cancellation_wins_over_inflight_success(test_env):
+    """Verify that if a session is cancelled while get_oauth_status is in-flight,
+    a subsequent 'ok' status does NOT transition the cancelled session to reconciling or completed."""
+    import asyncio
+    import time
+    from unittest.mock import AsyncMock
+    from app.services.oauth_session_manager import PendingOAuthSession
+
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    state = "race_cancel_state_111"
+    session = PendingOAuthSession(
+        state=state,
+        provider="codex",
+        flow="browser",
+        replace_account_id=None,
+        created_at=time.time(),
+        expires_at=time.time() + 900.0,
+        status="pending",
+    )
+    mgr._sessions[state] = session
+
+    complete_oauth_file(test_env, "codex", "cancelled_user@example.com", {"access_token": "tok_cancelled_never_used"})
+
+    in_flight_event = asyncio.Event()
+    release_event = asyncio.Event()
+
+    async def slow_get_status(_state):
+        in_flight_event.set()
+        await release_event.wait()
+        return {"status": "ok"}
+
+    mgmt.get_oauth_status = AsyncMock(side_effect=slow_get_status)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        poll_task = asyncio.create_task(client.get(f"/api/ai/routes/oauth/poll?state={state}"))
+
+        await in_flight_event.wait()
+
+        # Cancel the session while get_oauth_status is in-flight
+        cancel_resp = await client.post("/api/ai/routes/oauth/cancel", json={"state": state})
+        assert cancel_resp.status_code == 200
+        assert session.status == "cancelled"
+
+        # Now let slow_get_status complete
+        release_event.set()
+
+        poll_resp = await poll_task
+        assert poll_resp.status_code == 200
+        poll_data = poll_resp.json()
+
+        assert poll_data["status"] == "cancelled"
+        assert session.status == "cancelled"
+
+        repoll = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert repoll.status_code == 200
+        assert repoll.json()["status"] == "cancelled"
+        assert session.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_oauth_expiry_wins_over_inflight_success(test_env):
+    """Verify that if a session expires while get_oauth_status is in-flight,
+    a subsequent 'ok' status does NOT transition the expired session to reconciling or completed."""
+    import asyncio
+    import time
+    from unittest.mock import AsyncMock
+    from app.services.oauth_session_manager import PendingOAuthSession
+
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    state = "race_expire_state_222"
+    session = PendingOAuthSession(
+        state=state,
+        provider="codex",
+        flow="browser",
+        replace_account_id=None,
+        created_at=time.time(),
+        expires_at=time.time() + 900.0,
+        status="pending",
+    )
+    mgr._sessions[state] = session
+
+    complete_oauth_file(test_env, "codex", "expired_user@example.com", {"access_token": "tok_expired_never_used"})
+
+    in_flight_event = asyncio.Event()
+    release_event = asyncio.Event()
+
+    async def slow_get_status(_state):
+        in_flight_event.set()
+        await release_event.wait()
+        return {"status": "ok"}
+
+    mgmt.get_oauth_status = AsyncMock(side_effect=slow_get_status)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        poll_task = asyncio.create_task(client.get(f"/api/ai/routes/oauth/poll?state={state}"))
+
+        await in_flight_event.wait()
+
+        # Simulate expiry while get_oauth_status is running
+        session.expires_at = time.time() - 10.0
+
+        release_event.set()
+
+        poll_resp = await poll_task
+        assert poll_resp.status_code == 200
+        poll_data = poll_resp.json()
+
+        assert poll_data["status"] == "expired"
+        assert session.status == "expired"
+
+        repoll = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert repoll.status_code == 200
+        assert repoll.json()["status"] == "expired"
+        assert session.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_oauth_loopback_submit_callback_failure_marks_session_failed(test_env, caplog):
+    """Verify that when loopback on_code callback submission to supervisor fails,
+    the session is marked failed with a safe message, unregistered from the callback server,
+    logs only the exception class, and the callback server returns static 500 HTML_ERROR.
+    Subsequent browser retries return 400 (not false 200) and UI polling sees failed."""
+    import logging
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    port = 52440
+    state = "loopback_fail_state_333"
+    secret_code = "SECRET_AUTH_CODE_TO_NOT_LEAK_789"
+    secret_internal_leak = "INTERNAL_LEAKED_SECRET_STACK_TRACE_XYZ"
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-codex-callback"
+
+    mgmt.start_oauth.return_value = {
+        "state": state,
+        "url": f"https://auth.codex.example/authorize?redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+        "expires_in": 600,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        start_resp = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex"})
+        assert start_resp.status_code == 200
+
+        # Simulate supervisor submit_oauth_callback failure
+        mgmt.submit_oauth_callback.side_effect = RuntimeError(f"Database error: {secret_internal_leak}")
+
+        # Send browser redirect GET to the loopback callback server
+        cb_url = f"{redirect_uri}?state={state}&code={secret_code}"
+        with caplog.at_level(logging.DEBUG):
+            async with httpx.AsyncClient() as raw_client:
+                cb_resp = await raw_client.get(cb_url)
+
+        # 1. Callback server returns 500 Internal Server Error
+        assert cb_resp.status_code == 500
+        assert "Authorization Error" in cb_resp.text
+
+        # 2. Session is marked failed
+        session = mgr._sessions[state]
+        assert session.status == "failed"
+        assert session.error == "OAuth callback submission failed"
+
+        # 3. Callback listener was unregistered
+        cb_server = getattr(mgr, "callback_server", getattr(mgr, "_callback_server", None))
+        assert cb_server is not None
+        for _ in range(40):
+            async with cb_server._lock:
+                if state not in cb_server._registrations:
+                    break
+            await asyncio.sleep(0.05)
+        async with cb_server._lock:
+            assert state not in cb_server._registrations
+
+        # 4. A browser retry cannot falsely succeed (listener stopped or state no longer registered)
+        try:
+            async with httpx.AsyncClient() as raw_client:
+                retry_resp = await raw_client.get(cb_url)
+            assert retry_resp.status_code == 400
+        except httpx.ConnectError:
+            pass  # Listener closed when state was unregistered; connection refused as expected
+
+        # 5. UI polling sees failed with safe message
+        poll_resp = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll_resp.status_code == 200
+        poll_data = poll_resp.json()
+        assert poll_data["status"] == "failed"
+        assert poll_data["error"] == "OAuth callback submission failed"
+        assert secret_internal_leak not in str(poll_data)
+
+        # 6. Zero secret logging: only exception class name logged
+        log_text = caplog.text
+        assert "RuntimeError" in log_text
+        assert secret_internal_leak not in log_text
+        assert secret_code not in log_text
+
+
+@pytest.mark.asyncio
+async def test_oauth_loopback_on_code_when_supervisor_stopped(test_env, caplog):
+    """Verify that if supervisor is stopped when loopback callback arrives,
+    session is marked failed, callback is unregistered, and static 500 is returned."""
+    import logging
+    import urllib.parse
+    transport = httpx.ASGITransport(app=app)
+    mgmt = test_env["mgmt"]
+    mgr = test_env["oauth_mgr"]
+
+    port = 52441
+    state = "loopback_stopped_sup_state_444"
+    redirect_uri = f"http://127.0.0.1:{port}/oauth-codex-callback"
+
+    mgmt.start_oauth.return_value = {
+        "state": state,
+        "url": f"https://auth.codex.example/authorize?redirect_uri={urllib.parse.quote(redirect_uri)}&state={state}",
+        "expires_in": 600,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        start_resp = await client.post("/api/ai/routes/oauth/start", json={"provider": "codex"})
+        assert start_resp.status_code == 200
+
+        # Stop supervisor
+        test_env["supervisor"]._process = None
+
+        cb_url = f"{redirect_uri}?state={state}&code=test_code_xyz"
+        with caplog.at_level(logging.DEBUG):
+            async with httpx.AsyncClient() as raw_client:
+                cb_resp = await raw_client.get(cb_url)
+
+        assert cb_resp.status_code == 500
+        session = mgr._sessions[state]
+        assert session.status == "failed"
+        assert "Proxy supervisor is not running" in session.error
+
+        poll_resp = await client.get(f"/api/ai/routes/oauth/poll?state={state}")
+        assert poll_resp.status_code == 200
+        assert poll_resp.json()["status"] == "failed"
+
+        log_text = caplog.text
+        assert "RuntimeError" in log_text
+        assert "test_code_xyz" not in log_text
+
+
+# ===========================================================================
+# P7 Regression Test: Structural & Invariant Verification for list_routes
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_list_routes_structural_invariants_and_shape(test_env, monkeypatch):
+    """P7 Regression Test: verify list_routes produces exact expected schema shape,
+    exact keys per route, health fields, and correct model prefixing/ordering."""
+    from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS, get_direct_route
+    monkeypatch.setattr(settings, "ai_provider", "aistudio")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        resp = await client.get("/api/ai/routes")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Top-level keys
+        assert set(data.keys()) == {
+            "routes",
+            "active_route_id",
+            "proxy_status",
+            "vault_state",
+            "recovery_state",
+            "settings",
+        }
+
+        # Routes list invariants
+        routes = data["routes"]
+        assert len(routes) == len(OAUTH_PROVIDERS) + len(SUPPORTED_ROUTE_IDS)
+
+        # Ordering invariant: seeded DB routes first (OAuth in seed order), then direct providers
+        db_oauth_ids = [f"oauth:{p}" for p in OAUTH_PROVIDERS]
+        route_ids = [r["id"] for r in routes]
+        assert route_ids[:len(db_oauth_ids)] == db_oauth_ids
+        assert route_ids[len(db_oauth_ids):] == list(SUPPORTED_ROUTE_IDS)
+
+        # Required fields per route
+        expected_route_keys = {
+            "id",
+            "kind",
+            "provider",
+            "display_label",
+            "proxy_prefix",
+            "enabled",
+            "is_active",
+            "health",
+            "accounts",
+            "keys",
+            "config",
+            "models",
+            "recovery_state",
+        }
+        for r in routes:
+            assert set(r.keys()) == expected_route_keys
+            assert isinstance(r["health"], dict)
+            assert "healthy" in r["health"]
+            assert "status" in r["health"]
+            assert "proxy_status" in r["health"]
+            assert r["health"]["status"] in ("active", "configured", "unconfigured")
+
+            if r["kind"] == "oauth":
+                assert "account_count" in r["health"]
+                assert r["config"] == {}
+                assert r["keys"] == []
+            elif r["kind"] == "direct":
+                assert r["health"]["transport"] == "proxy"
+                assert r["accounts"] == []
+                assert r["keys"] == []
+                assert "is_configured" in r["config"]
+                assert r["config"]["transport"] == "proxy"
+

@@ -12,7 +12,7 @@
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { POST } from '@/app/api/py/[...path]/route';
+import { GET, POST } from '@/app/api/py/[...path]/route';
 
 const BOUNDARY = '----BLMUploadBoundary7f3a';
 
@@ -103,5 +103,155 @@ describe('POST /api/py/[...path] — multipart proxying', () => {
     await POST(request, { params: Promise.resolve({ path: ['ai', 'documents', 'attach'] }) });
 
     expect(fetchSpy.mock.calls[0][1].body).toBe(payload);
+  });
+});
+
+describe('Proxy request timeout budgets and 504 mapping', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  let timeoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    process.env.PYTHON_BACKEND_URL = 'http://127.0.0.1:4455';
+    fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete process.env.PYTHON_BACKEND_URL;
+  });
+
+  it('assigns 660s (660,000ms) timeout to ai/summarize', async () => {
+    const request = new NextRequest('http://localhost/api/py/ai/summarize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'sample document' }),
+    });
+
+    const res = await POST(request, {
+      params: Promise.resolve({ path: ['ai', 'summarize'] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(timeoutSpy).toHaveBeenLastCalledWith(660000);
+  });
+
+  it('assigns 660s (660,000ms) timeout to ai/alerts/summarize', async () => {
+    const request = new NextRequest('http://localhost/api/py/ai/alerts/summarize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ alerts: [] }),
+    });
+
+    const res = await POST(request, {
+      params: Promise.resolve({ path: ['ai', 'alerts', 'summarize'] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(timeoutSpy).toHaveBeenLastCalledWith(660000);
+  });
+
+  it('assigns 1800s (1,800,000ms) to ai/chat even without an SSE Accept header', async () => {
+    const request = new NextRequest('http://localhost/api/py/ai/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello' }),
+    });
+
+    await POST(request, {
+      params: Promise.resolve({ path: ['ai', 'chat'] }),
+    });
+
+    expect(timeoutSpy).toHaveBeenLastCalledWith(1800000);
+  });
+
+  it('assigns 1800s (1,800,000ms) to ai/chat when the client advertises SSE', async () => {
+    const request = new NextRequest('http://localhost/api/py/ai/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify({ message: 'hello' }),
+    });
+
+    await POST(request, {
+      params: Promise.resolve({ path: ['ai', 'chat'] }),
+    });
+
+    expect(timeoutSpy).toHaveBeenLastCalledWith(1800000);
+  });
+
+  it('keeps 60s (60,000ms) timeout for ordinary non-SSE JSON requests', async () => {
+    const requestGet = new NextRequest('http://localhost/api/py/circulars?dept=TRADING', {
+      method: 'GET',
+    });
+    await GET(requestGet, {
+      params: Promise.resolve({ path: ['circulars'] }),
+    });
+    expect(timeoutSpy).toHaveBeenLastCalledWith(60000);
+
+    const requestOther = new NextRequest('http://localhost/api/py/ai/summarize/extra', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await POST(requestOther, {
+      params: Promise.resolve({ path: ['ai', 'summarize', 'extra'] }),
+    });
+    expect(timeoutSpy).toHaveBeenLastCalledWith(60000);
+  });
+
+  it('keeps 600s (600,000ms) timeout for SSE stream requests', async () => {
+    const requestSse = new NextRequest('http://localhost/api/py/ai/routes/stream', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+      },
+      body: JSON.stringify({ message: 'stream' }),
+    });
+
+    await POST(requestSse, {
+      params: Promise.resolve({ path: ['ai', 'routes', 'stream'] }),
+    });
+    expect(timeoutSpy).toHaveBeenLastCalledWith(600000);
+  });
+
+  it('maps upstream timeout / abort errors to HTTP 504', async () => {
+    fetchSpy.mockRejectedValueOnce(
+      new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    );
+    const requestTimeout = new NextRequest('http://localhost/api/py/ai/summarize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'heavy document' }),
+    });
+    const resTimeout = await POST(requestTimeout, {
+      params: Promise.resolve({ path: ['ai', 'summarize'] }),
+    });
+    expect(resTimeout.status).toBe(504);
+    const jsonTimeout = await resTimeout.json();
+    expect(jsonTimeout).toEqual({ error: 'Python backend request timed out' });
+
+    fetchSpy.mockRejectedValueOnce(
+      new DOMException('This operation was aborted', 'AbortError'),
+    );
+    const requestAbort = new NextRequest('http://localhost/api/py/ai/summarize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'heavy document' }),
+    });
+    const resAbort = await POST(requestAbort, {
+      params: Promise.resolve({ path: ['ai', 'summarize'] }),
+    });
+    expect(resAbort.status).toBe(504);
+    const jsonAbort = await resAbort.json();
+    expect(jsonAbort).toEqual({ error: 'Python backend request timed out' });
   });
 });

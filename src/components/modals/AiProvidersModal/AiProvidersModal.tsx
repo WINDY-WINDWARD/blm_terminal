@@ -94,7 +94,7 @@ export function AiProvidersModal({ isOpen, onClose }: AiProvidersModalProps) {
             </div>
           )}
 
-          {isError && (
+          {isError && !data && (
             <div className="p-4 rounded-lg bg-rose-950/40 border border-rose-800 text-rose-200 flex flex-col gap-2 font-mono text-xs">
               <span className="font-bold uppercase tracking-wider text-rose-400">Failed to load provider routes</span>
               <p className="text-zinc-300">{error instanceof Error ? error.message : 'Unknown network error'}</p>

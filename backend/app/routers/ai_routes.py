@@ -10,7 +10,8 @@ from typing import Any
 import uuid
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +28,7 @@ from app.schemas.ai_provider import (
     EndpointKeyInput,
     EndpointKeyUpdate,
     ModelPreviewRequest,
+    OAuthCallbackRequest,
     OAuthCancelRequest,
     OAuthStartRequest,
     RouteSettingsUpdate,
@@ -41,7 +43,7 @@ from app.services.endpoint_validator import (
     validate_custom_endpoint_url,
 )
 from app.services.llm_provider import get_proxy_traces
-from app.services.oauth_session_manager import get_oauth_session_manager
+from app.services.oauth_session_manager import OAuthPortConflictError, get_oauth_session_manager
 from app.services.provider_vault import (
     ProviderVault,
     VaultState,
@@ -93,35 +95,161 @@ def _serialize_credential(cred: AIProviderCredential) -> CredentialSummary:
     )
 
 
-# ---------------------------------------------------------------------------
-# Route Listing and Status
-# ---------------------------------------------------------------------------
+def _route_health(
+    is_active: bool,
+    is_configured: bool,
+    proxy_status: dict[str, Any],
+    *,
+    is_healthy: bool,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Derive standardized health payload for a route summary."""
+    status_label = "active" if is_active else ("configured" if is_configured else "unconfigured")
+    health = {
+        "healthy": is_healthy,
+        "status": status_label,
+        "proxy_status": proxy_status.get("state", "stopped"),
+    }
+    if extra:
+        health.update(extra)
+    return health
 
-@router.get("", response_model=RoutesListResponse)
-@router.get("/", response_model=RoutesListResponse)
-async def list_routes(
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> RoutesListResponse:
-    """List all AI provider routes with redacted credential summaries and health status."""
-    active_route_id = await resolve_active_route_id(db)
 
-    # Vault state
-    vault = get_provider_vault()
-    await vault.get_state()
-    vault_state = vault.state.value
-    recovery_state: str | None = None
-    if not vault.is_available:
-        recovery_state = (
-            f"Provider vault is {vault_state}. OAuth and custom endpoints are operating in degraded mode; "
-            "direct providers remain fully usable."
-        )
+def _oauth_route_summary(
+    r: AIProviderRoute,
+    is_active: bool,
+    proxy_status: dict[str, Any],
+    vault: ProviderVault,
+    recovery_state: str | None,
+) -> RouteSummary:
+    """Build RouteSummary for an OAuth provider route."""
+    creds = r.credentials or []
+    active_creds = [c for c in creds if c.enabled]
+    accounts = [_serialize_credential(c) for c in creds]
+    models = [DEFAULT_ROUTE_MODELS.get(r.id, "default")]
+    is_healthy = bool(active_creds) and proxy_status.get("state") != "crashed" and vault.is_available
+    health = _route_health(
+        is_active=is_active,
+        is_configured=bool(active_creds),
+        proxy_status=proxy_status,
+        is_healthy=is_healthy,
+        extra={"account_count": len(accounts)},
+    )
+    return RouteSummary(
+        id=r.id,
+        kind="oauth",
+        provider=r.provider,
+        display_label=r.display_label,
+        proxy_prefix=r.proxy_prefix,
+        enabled=r.enabled,
+        is_active=is_active,
+        health=health,
+        accounts=accounts,
+        keys=[],
+        config={},
+        models=models,
+        recovery_state=recovery_state if not vault.is_available else None,
+    )
 
-    # Supervisor state
-    supervisor = get_proxy_supervisor()
-    proxy_status = supervisor.get_status()
 
-    # Query routing settings from SystemConfig
+def _parse_custom_config(config_json: str | None) -> tuple[dict[str, Any], list[str]]:
+    """Parse custom endpoint config_json into (config_summary, models)."""
+    cfg: dict[str, Any] = {}
+    if config_json:
+        try:
+            cfg = json.loads(config_json)
+        except Exception:
+            pass
+    summary = {
+        "base_url": cfg.get("base_url", ""),
+        "warning_flags": cfg.get("warning_flags", []),
+        "has_headers": bool(cfg.get("header_names", [])),
+        "header_names": cfg.get("header_names", []),
+    }
+    return summary, cfg.get("models") or ["default"]
+
+
+def _custom_route_summary(
+    r: AIProviderRoute,
+    is_active: bool,
+    proxy_status: dict[str, Any],
+    vault: ProviderVault,
+    recovery_state: str | None,
+) -> RouteSummary:
+    """Build RouteSummary for a custom endpoint route."""
+    creds = r.credentials or []
+    active_creds = [c for c in creds if c.enabled]
+    keys = [_serialize_credential(c) for c in creds]
+    config_summary, models = _parse_custom_config(r.config_json)
+    is_healthy = bool(active_creds) and proxy_status.get("state") != "crashed" and vault.is_available
+    health = _route_health(
+        is_active=is_active,
+        is_configured=bool(active_creds),
+        proxy_status=proxy_status,
+        is_healthy=is_healthy,
+        extra={"key_count": len(keys)},
+    )
+    return RouteSummary(
+        id=r.id,
+        kind="endpoint",
+        provider="custom",
+        display_label=r.display_label,
+        proxy_prefix=r.proxy_prefix,
+        enabled=r.enabled,
+        is_active=is_active,
+        health=health,
+        accounts=[],
+        keys=keys,
+        config=config_summary,
+        models=models,
+        recovery_state=recovery_state if not vault.is_available else None,
+    )
+
+
+async def _direct_route_summary(
+    route_id: str,
+    spec: Any,
+    is_active: bool,
+    proxy_status: dict[str, Any],
+    db: AsyncSession,
+) -> RouteSummary:
+    """Build RouteSummary for a supported direct route."""
+    from app.services.direct_proxy_routes import direct_proxy_prefix
+    from app.services.route_catalog import get_route_models
+
+    is_configured = False
+    try:
+        is_configured = await is_ai_provider_configured(route_id)
+    except Exception:
+        pass
+
+    models = (await get_route_models(route_id, db)) or list(spec.models)
+    health = _route_health(
+        is_active=is_active,
+        is_configured=is_configured,
+        proxy_status=proxy_status,
+        is_healthy=bool(is_configured and models and proxy_status.get("state") != "crashed"),
+        extra={"transport": "proxy"},
+    )
+    return RouteSummary(
+        id=route_id,
+        kind="direct",
+        provider=spec.provider,
+        display_label=spec.display_name,
+        proxy_prefix=direct_proxy_prefix(route_id),
+        enabled=True,
+        is_active=is_active,
+        health=health,
+        accounts=[],
+        keys=[],
+        config={"is_configured": is_configured, "transport": "proxy"},
+        models=models,
+        recovery_state=None,
+    )
+
+
+async def _load_routing_settings_summary(db: AsyncSession) -> dict[str, Any]:
+    """Query routing settings from SystemConfig with default fallback values."""
     settings_dict = {
         "strategy": "fill-first",
         "session_affinity": True,
@@ -165,142 +293,57 @@ async def list_routes(
                     pass
     except Exception as exc:
         logger.debug("Failed querying routing settings: %s", exc)
+    return settings_dict
 
-    # Query database routes
+
+# ---------------------------------------------------------------------------
+# Route Listing and Status
+# ---------------------------------------------------------------------------
+
+@router.get("", response_model=RoutesListResponse)
+@router.get("/", response_model=RoutesListResponse)
+async def list_routes(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RoutesListResponse:
+    """List all AI provider routes with redacted credential summaries and health status."""
+    from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS, get_direct_route
+
+    active_route_id = await resolve_active_route_id(db)
+    vault = get_provider_vault()
+    await vault.get_state()
+    vault_state = vault.state.value
+    recovery_state = (
+        f"Provider vault is {vault_state}. OAuth and custom endpoints are operating in degraded mode; "
+        "direct providers remain fully usable."
+        if not vault.is_available else None
+    )
+
+    proxy_status = get_proxy_supervisor().get_status()
+    settings_dict = await _load_routing_settings_summary(db)
+
     db_routes: list[AIProviderRoute] = []
     try:
         r_stmt = select(AIProviderRoute).options(selectinload(AIProviderRoute.credentials))
-        r_res = await db.execute(r_stmt)
-        db_routes = list(r_res.scalars().all())
+        db_routes = list((await db.execute(r_stmt)).scalars().all())
     except Exception as exc:
         logger.warning("Failed querying ai_provider_routes: %s", exc)
 
     routes_out: list[RouteSummary] = []
-    db_route_ids = {r.id for r in db_routes}
-
-    # 1. OAuth and custom endpoint routes from DB
     for r in db_routes:
         is_active = (r.id == active_route_id)
-        creds = r.credentials or []
-        active_creds = [c for c in creds if c.enabled]
-
         if r.kind == "oauth":
-            accounts = [_serialize_credential(c) for c in creds]
-            keys = []
-            models = [DEFAULT_ROUTE_MODELS.get(r.id, "default")]
-            is_healthy = bool(active_creds) and proxy_status.get("state") != "crashed" and vault.is_available
-            status_label = "active" if is_active else ("configured" if active_creds else "unconfigured")
-            health = {
-                "healthy": is_healthy,
-                "status": status_label,
-                "proxy_status": proxy_status.get("state", "stopped"),
-                "account_count": len(accounts),
-            }
-            routes_out.append(
-                RouteSummary(
-                    id=r.id,
-                    kind="oauth",
-                    provider=r.provider,
-                    display_label=r.display_label,
-                    proxy_prefix=r.proxy_prefix,
-                    enabled=r.enabled,
-                    is_active=is_active,
-                    health=health,
-                    accounts=accounts,
-                    keys=[],
-                    config={},
-                    models=models,
-                    recovery_state=recovery_state if not vault.is_available else None,
-                )
-            )
+            routes_out.append(_oauth_route_summary(r, is_active, proxy_status, vault, recovery_state))
         elif r.kind == "endpoint":
-            accounts = []
-            keys = [_serialize_credential(c) for c in creds]
-            cfg = {}
-            if r.config_json:
-                try:
-                    cfg = json.loads(r.config_json)
-                except Exception:
-                    pass
-            base_url = cfg.get("base_url", "")
-            warnings = cfg.get("warning_flags", [])
-            header_names = cfg.get("header_names", [])
-            models = cfg.get("models") or ["default"]
+            routes_out.append(_custom_route_summary(r, is_active, proxy_status, vault, recovery_state))
 
-            is_healthy = bool(active_creds) and proxy_status.get("state") != "crashed" and vault.is_available
-            status_label = "active" if is_active else ("configured" if active_creds else "unconfigured")
-            health = {
-                "healthy": is_healthy,
-                "status": status_label,
-                "proxy_status": proxy_status.get("state", "stopped"),
-                "key_count": len(keys),
-            }
-            config_summary = {
-                "base_url": base_url,
-                "warning_flags": warnings,
-                "has_headers": bool(header_names),
-                "header_names": header_names,
-            }
-            routes_out.append(
-                RouteSummary(
-                    id=r.id,
-                    kind="endpoint",
-                    provider="custom",
-                    display_label=r.display_label,
-                    proxy_prefix=r.proxy_prefix,
-                    enabled=r.enabled,
-                    is_active=is_active,
-                    health=health,
-                    accounts=[],
-                    keys=keys,
-                    config=config_summary,
-                    models=models,
-                    recovery_state=recovery_state if not vault.is_available else None,
-                )
-            )
-
-    # 2. Direct providers (guaranteed readable even on proxy or vault failure)
-    for p in DIRECT_PROVIDERS:
-        route_id = f"direct:{p}"
+    db_route_ids = {r.id for r in db_routes}
+    for route_id in SUPPORTED_ROUTE_IDS:
         if route_id in db_route_ids:
             continue
-        is_active = (route_id == active_route_id)
-        is_configured = False
-        try:
-            is_configured = await is_ai_provider_configured(route_id)
-        except Exception:
-            pass
-
-        label = p.replace("-", " ").title()
-        if p == "aistudio":
-            label = "Google AI Studio"
-        elif p == "openai":
-            label = "OpenAI Direct"
-        elif p == "anthropic":
-            label = "Anthropic Direct"
-
-        health = {
-            "healthy": is_configured,
-            "status": "active" if is_active else ("configured" if is_configured else "unconfigured"),
-        }
-        models = [DEFAULT_ROUTE_MODELS.get(route_id, "default")]
-        routes_out.append(
-            RouteSummary(
-                id=route_id,
-                kind="direct",
-                provider=p,
-                display_label=label,
-                proxy_prefix=None,
-                enabled=True,
-                is_active=is_active,
-                health=health,
-                accounts=[],
-                keys=[],
-                config={"is_configured": is_configured},
-                models=models,
-                recovery_state=None,
-            )
-        )
+        spec = get_direct_route(route_id)
+        if spec is not None and spec.supported:
+            routes_out.append(await _direct_route_summary(route_id, spec, route_id == active_route_id, proxy_status, db))
 
     return RoutesListResponse(
         routes=routes_out,
@@ -310,6 +353,41 @@ async def list_routes(
         recovery_state=recovery_state,
         settings=settings_dict,
     )
+
+
+class RouteModelItem(BaseModel):
+    id: str
+    label: str
+
+
+class RouteModelsEntry(BaseModel):
+    route_id: str
+    label: str
+    kind: str
+    provider: str
+    models: list[RouteModelItem]
+
+
+class RouteModelWarning(BaseModel):
+    route_id: str
+    code: str
+    message: str
+
+
+class RouteModelsResponse(BaseModel):
+    routes: list[RouteModelsEntry]
+    warnings: list[RouteModelWarning] = []
+
+
+@router.get("/models", response_model=RouteModelsResponse)
+async def get_routes_models(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RouteModelsResponse:
+    """Return aggregated model catalog across all configured routes with partial results and warnings."""
+    from app.services.route_catalog import get_all_route_catalogs
+    routes, warnings = await get_all_route_catalogs(session=db)
+    return RouteModelsResponse(routes=routes, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +418,11 @@ async def activate_route(
         if not r or not r.enabled:
             raise HTTPException(status_code=404, detail=f"Custom endpoint route '{clean_id}' not found or disabled.")
     elif clean_id.startswith("direct:"):
-        prov = clean_id.split(":", 1)[1]
-        if prov not in DIRECT_PROVIDERS:
-            raise HTTPException(status_code=400, detail=f"Invalid direct provider: {prov}")
+        from app.services.direct_proxy_routes import get_direct_route, is_supported_direct_route
+        spec = get_direct_route(clean_id)
+        if spec is None or not is_supported_direct_route(clean_id):
+            reason = (spec.unavailable_reason if spec else None) or f"Direct route '{clean_id}' is unsupported by the proxy."
+            raise HTTPException(status_code=400, detail=reason)
     else:
         raise HTTPException(
             status_code=400,
@@ -358,14 +438,13 @@ async def activate_route(
         db.add(SystemConfig(key="ai.provider", value=clean_id))
     await db.commit()
 
-    # If OAuth or endpoint, ensure proxy is ready
-    if clean_id.startswith("oauth:") or clean_id.startswith("endpoint:"):
-        supervisor = get_proxy_supervisor()
-        if not supervisor.is_running:
-            try:
-                await supervisor.ensure_started()
-            except Exception as exc:
-                logger.warning("Proxy supervisor start failed during route activation: %s", exc)
+    # Ensure proxy is ready for active route (oauth, endpoint, or supported direct)
+    supervisor = get_proxy_supervisor()
+    if not supervisor.is_running:
+        try:
+            await supervisor.ensure_started()
+        except Exception as exc:
+            logger.warning("Proxy supervisor start failed during route activation: %s", exc)
 
     return {"status": "activated", "active_route_id": clean_id}
 
@@ -421,18 +500,26 @@ async def start_oauth(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Start an OAuth authorization flow (device or browser)."""
+    """Start an OAuth authorization flow (browser only)."""
+    if body.flow == "device":
+        raise HTTPException(
+            status_code=400,
+            detail="Device flow is not supported; use browser OAuth.",
+        )
     mgr = get_oauth_session_manager()
     try:
         return await mgr.start_session(
             provider=body.provider,
-            flow=body.flow,
             replace_account_id=body.replace_account_id,
             db_session=db,
         )
+    except OAuthPortConflictError as pe:
+        raise HTTPException(status_code=503, detail="callback_port_unavailable") from pe
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve)) from ve
     except RuntimeError as re:
+        if "callback_port_unavailable" in str(re):
+            raise HTTPException(status_code=503, detail="callback_port_unavailable") from re
         raise HTTPException(status_code=503, detail=str(re)) from re
 
 
@@ -462,17 +549,36 @@ async def cancel_oauth(
 
 @router.post("/oauth/callback")
 async def oauth_callback(
-    state: str = Query(..., description="OAuth state"),
+    body: OAuthCallbackRequest | None = None,
+    state: str | None = Query(None, description="OAuth state"),
     code: str | None = Query(None, description="OAuth authorization code"),
+    redirect_url: str | None = Query(None, description="OAuth redirect URL"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Process incoming OAuth callback without logging query strings or tokens."""
+    req_state = (body.state if body else None) or state
+    if not req_state:
+        raise HTTPException(status_code=400, detail="Missing required 'state'")
+    req_code = (body.code if body else None) or code
+    req_redirect_url = (body.redirect_url if body else None) or redirect_url
+
     mgr = get_oauth_session_manager()
     try:
-        return await mgr.handle_callback(state=state, code=code, db_session=db)
+        return await mgr.handle_callback(
+            state=req_state,
+            code=req_code,
+            redirect_url=req_redirect_url,
+            db_session=db,
+        )
     except KeyError as ke:
-        raise HTTPException(status_code=404, detail=str(ke)) from ke
+        raise HTTPException(status_code=404, detail="OAuth session not found") from ke
+    except Exception as exc:
+        logger.debug("OAuth callback submission failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=502 if isinstance(exc, (httpx.HTTPError, RuntimeError)) else 400,
+            detail=f"OAuth callback submission failed: {type(exc).__name__}",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -709,7 +815,6 @@ async def reauth_account(
     try:
         return await mgr.start_session(
             provider=prov,
-            flow="browser",
             replace_account_id=account_id,
             db_session=db,
         )
@@ -756,9 +861,20 @@ async def reset_account_cooldown(
     return {"status": "ok", "account_id": account_id}
 
 
+async def _restart_proxy_after_account_removal(supervisor) -> None:
+    """Restart the sidecar after a credential is removed, off the request path."""
+    try:
+        await supervisor.restart()
+    except Exception as exc:
+        logger.warning(
+            "Failed restarting proxy after account removal (%s)", type(exc).__name__
+        )
+
+
 @router.delete("/accounts/{account_id}")
 async def remove_account(
     account_id: str,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -769,6 +885,7 @@ async def remove_account(
         raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found.")
 
     supervisor = get_proxy_supervisor()
+    proxy_synced = True
     if supervisor.is_running:
         name = cred.proxy_credential_name
         name = name if name.endswith(".json") else f"{name}.json"
@@ -776,7 +893,13 @@ async def remove_account(
             await supervisor.get_management_client().delete_credential(name)
             await supervisor.sync_now()
         except Exception as exc:
-            raise HTTPException(status_code=502, detail="Failed deleting credential from proxy") from exc
+            # The sidecar may be wedged or already gone. Local removal must still
+            # succeed; the restart below makes the process drop the credential.
+            proxy_synced = False
+            logger.warning(
+                "Failed deleting credential from proxy (%s); continuing with local removal",
+                type(exc).__name__,
+            )
         if supervisor._credential_keys is not None:
             supervisor._credential_keys.pop(name, None)
     vault = get_provider_vault()
@@ -790,7 +913,13 @@ async def remove_account(
     await db.delete(cred)
     await db.commit()
 
-    return {"status": "deleted", "account_id": account_id}
+    # 4. Restart the sidecar so it cannot keep serving the removed credential.
+    # Do it after responding: a full restart takes seconds and the deletion
+    # itself has already succeeded locally.
+    if supervisor.is_running:
+        background.add_task(_restart_proxy_after_account_removal, supervisor)
+
+    return {"status": "deleted", "account_id": account_id, "proxy_synced": proxy_synced}
 
 
 # ---------------------------------------------------------------------------
@@ -1274,30 +1403,16 @@ async def preview_endpoint_models(
     body: ModelPreviewRequest,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Preview models from a candidate endpoint URL (OpenAI-compatible /models)."""
+    """Validate endpoint URL locally without network call."""
     try:
         clean_url, _ = validate_custom_endpoint_url(body.base_url, body.headers)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve)) from ve
 
-    url = f"{clean_url}/models"
-    headers = {"Accept": "application/json"}
-    if body.headers:
-        headers.update(body.headers)
-    if body.api_key:
-        headers["Authorization"] = f"Bearer {body.api_key.strip()}"
-
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            models_data = data.get("data", []) if isinstance(data, dict) else []
-            models_list = [m.get("id") for m in models_data if isinstance(m, dict) and m.get("id")]
-            return {"models": models_list or ["default"]}
-    except Exception as exc:
-        logger.debug("Preview models failed for %s: %s", clean_url, exc)
-        return {"models": ["default"], "notice": "Could not query models live; default model fallback provided."}
+    return {
+        "models": [],
+        "notice": "preview is local; configure endpoint models explicitly or refresh after saving",
+    }
 
 
 @router.post("/endpoints/{endpoint_id}/models/refresh")
@@ -1306,7 +1421,7 @@ async def refresh_endpoint_models(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Refresh the stored model catalog for a saved custom endpoint."""
+    """Refresh the stored model catalog for a saved custom endpoint via proxy supervisor."""
     route_id = endpoint_id if endpoint_id.startswith("endpoint:") else f"endpoint:{endpoint_id}"
     res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == route_id))
     route = res.scalar_one_or_none()
@@ -1320,54 +1435,19 @@ async def refresh_endpoint_models(
         except Exception:
             pass
 
-    base_url = cfg.get("base_url") or ""
-    if not base_url:
-        return {"models": ["default"]}
-
-    vault = get_provider_vault()
-    await vault.get_state()
-    raw_headers = {}
-    if vault.is_available:
-        raw_headers = await vault.get_endpoint_headers(route_id) or {}
-    headers = dict(raw_headers)
-
-    # Attach enabled key from vault if Authorization header not supplied
-    has_auth = any(k.lower() == "authorization" for k in headers)
-    if not has_auth and vault.is_available:
-        res_keys = await db.execute(
-            select(AIProviderCredential).where(
-                AIProviderCredential.route_id == route_id,
-                AIProviderCredential.enabled == True,
-            )
-        )
-        for cred in res_keys.scalars().all():
-            if cred.vault_reference:
-                key_val = await vault.get_secret(cred.vault_reference)
-                if key_val:
-                    headers["Authorization"] = f"Bearer {key_val}"
-                    break
-
-    url = f"{base_url}/models"
+    prefix = route.proxy_prefix or compute_oauth_proxy_prefix(route_id)
+    supervisor = get_proxy_supervisor()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            models_data = data.get("data", []) if isinstance(data, dict) else []
-            models_list = [m.get("id") for m in models_data if isinstance(m, dict) and m.get("id")]
-            if models_list:
-                cfg["models"] = models_list
-                route.config_json = json.dumps(cfg)
-                await db.commit()
-                supervisor = get_proxy_supervisor()
-                if supervisor.is_running:
-                    try:
-                        await supervisor.reload_custom_endpoints()
-                    except Exception as exc:
-                        logger.warning("Failed to reload custom endpoints on supervisor: %s", exc)
-                return {"models": models_list}
+        await supervisor.reload_custom_endpoints()
     except Exception as exc:
-        logger.debug("Refresh models failed for endpoint %s: %s", route_id, exc)
+        logger.warning("Failed to reload custom endpoints on supervisor: %s", exc)
+
+    proxy_models = await supervisor.list_proxy_models(prefix)
+    if proxy_models:
+        cfg["models"] = proxy_models
+        route.config_json = json.dumps(cfg)
+        await db.commit()
+        return {"models": proxy_models}
 
     return {"models": cfg.get("models", ["default"])}
 
@@ -1378,7 +1458,7 @@ async def test_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Test connectivity to a saved custom endpoint via real timed request."""
+    """Test connectivity to a saved custom endpoint via proxy supervisor."""
     route_id = endpoint_id if endpoint_id.startswith("endpoint:") else f"endpoint:{endpoint_id}"
     res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == route_id))
     route = res.scalar_one_or_none()
@@ -1392,63 +1472,33 @@ async def test_endpoint(
         except Exception:
             pass
 
-    base_url = cfg.get("base_url") or ""
-    if not base_url:
-        return {
-            "status": "error",
-            "route_id": route_id,
-            "error": "No base_url configured for endpoint",
-            "latency_ms": 0.0,
-        }
-
-    vault = get_provider_vault()
-    await vault.get_state()
-    headers: dict[str, str] = {}
-    if vault.is_available:
-        stored_headers = await vault.get_endpoint_headers(route_id)
-        if isinstance(stored_headers, dict):
-            headers.update(stored_headers)
-
-    # Attach enabled key if Authorization header is not present
-    has_auth = any(k.lower() == "authorization" for k in headers)
-    if not has_auth and vault.is_available:
-        res_keys = await db.execute(
-            select(AIProviderCredential).where(
-                AIProviderCredential.route_id == route_id,
-                AIProviderCredential.enabled == True,
-            )
-        )
-        for cred in res_keys.scalars().all():
-            if cred.vault_reference:
-                raw_key = await vault.get_secret(cred.vault_reference)
-                if raw_key:
-                    headers["Authorization"] = f"Bearer {raw_key}"
-                    break
-
-    test_url = f"{base_url}/models"
+    prefix = route.proxy_prefix or compute_oauth_proxy_prefix(route_id)
     t0 = time.perf_counter()
+    supervisor = get_proxy_supervisor()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(test_url, headers=headers)
-            latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
-            if 200 <= resp.status_code < 300:
-                return {
-                    "status": "ok",
-                    "route_id": route_id,
-                    "status_code": resp.status_code,
-                    "latency_ms": latency_ms,
-                }
-            else:
-                return {
-                    "status": "error",
-                    "route_id": route_id,
-                    "status_code": resp.status_code,
-                    "error": f"Endpoint returned HTTP {resp.status_code}",
-                    "latency_ms": latency_ms,
-                }
+        await supervisor.reload_custom_endpoints()
+        proxy_models = await supervisor.list_proxy_models(prefix)
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
+        if proxy_models:
+            cfg["models"] = proxy_models
+            route.config_json = json.dumps(cfg)
+            await db.commit()
+            return {
+                "status": "ok",
+                "route_id": route_id,
+                "models": proxy_models,
+                "latency_ms": latency_ms,
+            }
+        else:
+            return {
+                "status": "error",
+                "route_id": route_id,
+                "error": "No models returned by proxy for endpoint",
+                "latency_ms": latency_ms,
+            }
     except Exception as exc:
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 1)
-        clean_err = f"Connection failed: {type(exc).__name__}"
+        clean_err = f"Proxy test failed: {type(exc).__name__}"
         return {
             "status": "error",
             "route_id": route_id,

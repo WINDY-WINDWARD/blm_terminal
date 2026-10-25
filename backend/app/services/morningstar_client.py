@@ -161,7 +161,7 @@ class MorningstarClient:
                 if response.status_code == 200:
                     html = response.text
             except Exception as e:
-                logger.warning(f"Failed to fetch token page via HTTP: {e}")
+                logger.warning("Failed to fetch token page via HTTP: %s", type(e).__name__)
 
         if not html:
             logger.warning("Failed to fetch Morningstar token page")
@@ -181,7 +181,7 @@ class MorningstarClient:
             token_value = access_token.get("content", "")
             if token_value:
                 tokens["access_token"] = token_value
-                logger.info(f"Found accessToken: {token_value[:20]}...")
+                logger.info("Found accessToken")
             else:
                 logger.warning("accessToken meta tag found but empty content")
         else:
@@ -190,7 +190,7 @@ class MorningstarClient:
             token_value = realtime_token.get("content", "")
             if token_value:
                 tokens["X-Api-Realtime-E"] = token_value
-                logger.info(f"Found realtimeToken: {token_value[:20]}...")
+                logger.info("Found realtimeToken")
             else:
                 logger.warning("realtimeToken meta tag found but empty content")
         else:
@@ -263,7 +263,7 @@ class MorningstarClient:
             logger.warning(f"No NSE ID found for {symbol} in autocomplete results")
             return None
         except Exception as e:
-            logger.error(f"Autocomplete search failed for {symbol}: {e}")
+            logger.error("Autocomplete search failed for %s: %s", symbol, type(e).__name__)
             return None
 
     async def _get_fair_value_impl(self, security_id: str) -> float | None:
@@ -292,10 +292,10 @@ class MorningstarClient:
 
         response = await client.get(url, params=params, headers=headers)
 
-        logger.debug(f"Fair value response status: {response.status_code}, body: {response.text[:500]}")
+        logger.debug("Fair value response status: %s", response.status_code)
 
         if response.status_code == 401:
-            logger.warning(f"401 response body: {response.text[:500]}")
+            logger.warning("Fair value response status 401: Unauthorized")
             logger.info("Token expired, refreshing...")
             await self._refresh_tokens()
             tokens = await self._ensure_tokens()
@@ -314,13 +314,13 @@ class MorningstarClient:
         try:
             data = response.json()
         except Exception as e:
-            logger.warning(f"Failed to parse fair value response for {security_id}: {e}, response: {response.text[:200]}")
+            logger.warning("Failed to parse fair value response for %s: %s", security_id, type(e).__name__)
             return None
 
         try:
             return data["chart"]["chartDatums"]["recent"]["latestFairValue"]
         except (KeyError, TypeError) as e:
-            logger.warning(f"Unexpected fair value response structure for {security_id}: {e}, data: {data}")
+            logger.warning("Unexpected fair value response structure for %s: %s", security_id, type(e).__name__)
             return None
 
     async def get_fair_value(self, security_id: str) -> float | None:
@@ -342,10 +342,10 @@ class MorningstarClient:
             logger.warning(f"Timeout fetching fair value for {security_id}")
             return None
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error fetching fair value for {security_id}: {e}")
+            logger.error("HTTP error fetching fair value for %s: %s", security_id, type(e).__name__)
             return None
         except Exception as e:
-            logger.error(f"Error fetching fair value for {security_id}: {e}")
+            logger.error("Error fetching fair value for %s: %s", security_id, type(e).__name__)
             return None
 
     async def get_fair_value_by_symbol(

@@ -7,6 +7,7 @@ import {
   advancedScrapingConsentAtom,
   authAtom,
   onboardingCompletedAtom,
+  showAiProvidersModalAtom,
   tutorialStatusAtom,
 } from '@/store/terminalStore';
 import {
@@ -14,7 +15,6 @@ import {
   checkAiStatus,
   checkBackendHealth,
   completeFirstBoot,
-  fetchChatModels,
   getEulaStatus,
   getFirstBootStatus,
   getSetupStatus,
@@ -24,13 +24,10 @@ import {
   setupFirstAdmin,
   type AiStatus,
   type HealthResult,
-  type ProviderModel,
 } from '@/lib/onboarding';
-import { AI_PROVIDERS, AI_PROVIDER_MAP } from '@/lib/aiProviders';
 import { ENGINE_WARM_LIMIT, useWarmupMessage } from '@/components/EngineWarmup';
-import { ModelCombobox } from '@/components/ModelCombobox';
-import { AiProviderInstructions } from '@/components/AiProviderInstructions';
-import { OAuthSessionDialog } from '@/components/modals/AiProvidersModal/OAuthSessionDialog';
+import { RouteModelSelect } from '@/components/ai/RouteModelSelect';
+import { useRouteModels } from '@/hooks/useRouteModels';
 
 type StepId = 'eula' | 'welcome' | 'backend' | 'admin' | 'consent' | 'ai' | 'models' | 'done';
 
@@ -66,6 +63,7 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
   const [, setTutorialStatus] = useAtom(tutorialStatusAtom);
   const [auth, setAuth] = useAtom(authAtom);
   const [consent, setConsent] = useAtom(advancedScrapingConsentAtom);
+  const [showAiProvidersModal, setShowAiProvidersModal] = useAtom(showAiProvidersModalAtom);
   const queryClient = useQueryClient();
 
   const [mounted, setMounted] = useState(false);
@@ -116,33 +114,26 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
   const [consentError, setConsentError] = useState('');
 
   // ai step
-  const [aiProvider, setAiProvider] = useState('aistudio');
-  const [aiKey, setAiKey] = useState('');
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
-  const [aiBusy, setAiBusy] = useState(false);
   const [aiMsg, setAiMsg] = useState('');
-  const keyDebounceRef = useRef<NodeJS.Timeout | null>(null);
   // Guards async continuations (debounced saves, OAuth polling) against
   // setting state after the modal unmounts.
   const isMountedRef = useRef(true);
+  const previousAiProvidersModalOpenRef = useRef(showAiProvidersModal);
   // background worker (AI picks) model selection
-  const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [hunterModel, setHunterModel] = useState('');
   const [verifierModel, setVerifierModel] = useState('');
-  const [oauthSession, setOauthSession] = useState<{ isOpen: boolean; provider: string; providerLabel: string } | null>(null);
 
   useEffect(() => {
     setMounted(true);
     return () => {
-      isMountedRef.current = false;      if (keyDebounceRef.current) {
-        clearTimeout(keyDebounceRef.current);
-        keyDebounceRef.current = null;
-      }
+      isMountedRef.current = false;
     };
   }, []);
 
   const step = STEPS[stepIdx].id;
+  const routeModelsQuery = useRouteModels({ enabled: step === 'models' });
+  const routeModels = routeModelsQuery.data?.routes ?? [];
 
   // Still in the warm-up window (no result yet, or failing for less than
   // ENGINE_WARM_LIMIT probes) — show lively loading copy instead of an error.
@@ -179,25 +170,23 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
         .then(setAiStatus)
         .catch(() => setAiStatus(null));
     }
-    // Entering the models step: pull the provider's live catalog (once the
-    // provider is set up) so the hunter/verifier pickers have options.
-    if (step === 'models' && providerModels.length === 0 && !modelsLoading) {
-      void (async () => {
-        try {
-          const st = aiStatus ?? (await checkAiStatus());
-          if (!isMountedRef.current) return;
-          if (st) setAiStatus(st);
-          if (st?.isConfigured && aiProvider !== 'codex') {
-            const key = aiProvider === 'gemini' ? '' : aiKey;
-            await loadProviderModels();
-          }
-        } catch {
-          // loadProviderModels already clears the list on failure.
-        }
-      })();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, mounted, completed]);
+
+  useEffect(() => {
+    if (previousAiProvidersModalOpenRef.current && !showAiProvidersModal) {
+      checkAiStatus()
+        .then((status) => {
+          if (!isMountedRef.current) return;
+          setAiStatus(status);
+          setAiMsg('');
+        })
+        .catch((err: unknown) => {
+          if (isMountedRef.current) setAiMsg(errText(err, 'Could not refresh AI status'));
+        });
+    }
+    previousAiProvidersModalOpenRef.current = showAiProvidersModal;
+  }, [showAiProvidersModal]);
 
   // Backend flag resolution (single path): the check can fire while the
   // backend is still cold (refused/timeout), so poll until the first
@@ -327,24 +316,6 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
   // the modal reappeared mid-session and the unrecorded accept trapped the
   // user in the tour forever. An accept made while unreachable re-flashes
   // on the next healthy boot instead of trapping the user here.
-  // Automatically remap stale worker models to first valid active-route model
-  useEffect(() => {
-    if (providerModels.length === 0) return;
-    const validIds = new Set(providerModels.map((m) => m.id).filter(Boolean));
-    if (validIds.size === 0) return;
-    const firstValid = providerModels.find((m) => m.id)?.id;
-    if (!firstValid) return;
-
-    if (!hunterModel || !validIds.has(hunterModel)) {
-      setHunterModel(firstValid);
-      void saveSystemConfig('ai.hunter_model', firstValid);
-    }
-    if (!verifierModel || !validIds.has(verifierModel)) {
-      setVerifierModel(firstValid);
-      void saveSystemConfig('ai.verifier_model', firstValid);
-    }
-  }, [providerModels, hunterModel, verifierModel]);
-
     if (!mounted) return null;
   if (completed && !(eulaStatus?.reachable === true && eulaStatus?.accepted === false)) return null;
 
@@ -442,31 +413,6 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
     }
   };
 
-  // Maps a provider id to its system_config API-key slot (null = no key needed).
-  // Labels/placeholders come from the shared aiProviders meta (same as Settings).
-  const providerKeySlot = (p: string): string | null =>
-    AI_PROVIDER_MAP[p]?.credentialDbKey ?? null;
-
-  const providerKeyLabel = (p: string): string =>
-    AI_PROVIDER_MAP[p]?.credentialLabel?.toUpperCase() ?? 'API KEY';
-
-  const providerKeyPlaceholder = (p: string): string =>
-    AI_PROVIDER_MAP[p]?.placeholder ?? 'sk-…';
-
-    // Load the route-qualified model catalog for the hunter/verifier pickers.
-  const loadProviderModels = async () => {
-    setModelsLoading(true);
-    try {
-      const models = await fetchChatModels();
-      if (isMountedRef.current) setProviderModels(models);
-    } catch {
-      if (isMountedRef.current) setProviderModels([]);
-    } finally {
-      if (isMountedRef.current) setModelsLoading(false);
-    }
-  };
-
-
   const handleWorkerModelChange = async (slot: 'ai.hunter_model' | 'ai.verifier_model', value: string) => {
     if (slot === 'ai.hunter_model') setHunterModel(value);
     else setVerifierModel(value);
@@ -480,59 +426,6 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
     } catch (err: unknown) {
       if (isMountedRef.current) setAiMsg(errText(err, 'Could not save worker model'));
     }
-  };
-
-  const handleProviderChange = (newProvider: string) => {    setAiProvider(newProvider);
-    setAiMsg('');
-    setAiBusy(false);
-    setAiKey('');
-    setProviderModels([]);
-    setHunterModel('');
-    setVerifierModel('');
-    if (newProvider === 'codex') {
-      // Codex connects via browser sign-in in Settings — there is no key
-      // field on this screen, so persist the choice immediately or it is lost.
-      setAiBusy(true);
-      saveSystemConfig('ai.provider', 'codex')
-        .then(() => checkAiStatus())
-        .then((st) => {
-          if (!isMountedRef.current) return;
-          setAiStatus(st);
-          setAiMsg('Codex selected — connect it in Settings → AI after setup.');
-        })
-        .catch((err: unknown) => { if (isMountedRef.current) setAiMsg(errText(err, 'Could not save provider')); })
-        .finally(() => { if (isMountedRef.current) setAiBusy(false); });
-    }
-  };
-
-  
-  const handleKeyChange = (val: string) => {
-    setAiKey(val);
-    setAiMsg('');
-    if (keyDebounceRef.current) clearTimeout(keyDebounceRef.current);
-    const trimmed = val.trim();
-    if (!trimmed) {
-      setAiStatus({ provider: aiProvider, isConfigured: false });
-      return;
-    }
-    setAiBusy(true);
-    keyDebounceRef.current = setTimeout(async () => {
-      try {
-        await saveSystemConfig('ai.provider', aiProvider);
-        const slot = providerKeySlot(aiProvider);
-        if (slot) await saveSystemConfig(slot, trimmed);
-        const st = await checkAiStatus();
-        if (!isMountedRef.current) return;
-        setAiStatus(st);
-        setAiMsg(st.isConfigured ? 'Connected successfully.' : '');
-        if (st.isConfigured) void loadProviderModels();
-        else setProviderModels([]);
-      } catch (err: unknown) {
-        if (isMountedRef.current) setAiMsg(errText(err, 'Could not save AI key'));
-      } finally {
-        if (isMountedRef.current) setAiBusy(false);
-      }
-    }, 400);
   };
 
   const finish = async () => {
@@ -904,70 +797,24 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">AI assistant (optional)</p>
             <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-[#d1d5db] border border-[#2d3139]">
-              Please note: the best results come from a paid subscription provider
-              or a pay-as-you-go API provider. Free models work well too, depending
-              on the provider and model — Google Pro has a good free tier and also comes free with Jio Sub and can be used with this app.
+              Connect an AI account or configure provider routes from the provider manager. You can also skip this step and add providers later.
             </div>
-            {aiStatus && (
-              <div
-                className={`p-2 text-xs border ${aiStatus.isConfigured ? 'bg-green-900/40 border-green-600 text-green-200' : 'bg-[#1a1d23] border-terminal-border text-terminal-muted'}`}
-              >
-                Status: {aiStatus.isConfigured ? 'connected' : 'not configured'}
-              </div>
-            )}
-            <Field label="PROVIDER">
-              <select
-                value={aiProvider}
-                onChange={(e) => handleProviderChange(e.target.value)}
-                className={`${inputCls} [&>option]:bg-terminal-bg`}
-              >
-                {AI_PROVIDERS.map((p) => (
-                  <option key={p.id} value={p.id}>{p.label}</option>
-                ))}
-              </select>
-            </Field>
-            {aiProvider === 'gemini' ? (
-              <div className="space-y-2 pt-1">
-                <p className="text-xs text-terminal-muted leading-relaxed">
-                  Use your existing Google subscription via the Google Antigravity proxy —
-                  no API key needed. Sign in with your Google account below.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setOauthSession({ isOpen: true, provider: 'antigravity', providerLabel: 'Google Pro (Gemini)' })}
-                  disabled={aiBusy}
-                  className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 disabled:opacity-50 transition-colors text-sm uppercase flex items-center justify-center gap-2 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
-                >
-                  {aiBusy ? 'Awaiting sign in…' : 'Login with Google (Gemini)'}
-                </button>
-              </div>
-            ) : aiProvider === 'codex' ? (
-              <div className="rounded bg-[#1a1d23] border border-terminal-border p-3 text-xs leading-relaxed text-terminal-muted">
-                Codex uses your ChatGPT Plus/Pro subscription via a browser sign-in.
-                Finish setup here, then connect it in the Settings widget (AI → Codex → Sign in with ChatGPT).
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <Field label={providerKeyLabel(aiProvider)}>
-                  <input
-                    type="password"
-                    value={aiKey}
-                    onChange={(e) => handleKeyChange(e.target.value)}
-                    className={inputCls}
-                    placeholder={providerKeyPlaceholder(aiProvider)}
-                    autoComplete="off"
-                  />
-                </Field>
-              </div>
-            )}
-            <AiProviderInstructions providerId={aiProvider} />
+            <div
+              className={`p-2 text-xs border ${aiStatus?.isConfigured ? 'bg-green-900/40 border-green-600 text-green-200' : 'bg-[#1a1d23] border-terminal-border text-terminal-muted'}`}
+              role="status"
+            >
+              Status: {aiStatus ? (aiStatus.isConfigured ? 'connected' : 'not configured') : 'checking'}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAiProvidersModal(true)}
+              className="w-full bg-terminal-amber text-terminal-bg font-bold py-2 px-4 hover:bg-yellow-500 transition-colors text-sm uppercase flex items-center justify-center gap-2 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+            >
+              OPEN PROVIDER MANAGER →
+            </button>
             {aiMsg && (
               <div
-                className={`p-2 border text-xs ${
-                  aiMsg.includes('success') || aiMsg.includes('connected') || aiMsg.includes('configured')
-                    ? 'bg-green-900/40 border-green-600 text-green-200'
-                    : 'bg-[#1a1d23] border-terminal-border text-terminal-muted'
-                }`}
+                className="p-2 border border-terminal-border bg-[#1a1d23] text-terminal-muted text-xs"
               >
                 {aiMsg}
               </div>
@@ -978,46 +825,32 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
         {step === 'models' && (
           <div className="space-y-3 text-sm">
             <p className="text-base text-white font-semibold">Background worker models (AI picks)</p>
-            {!aiStatus?.isConfigured || aiProvider === 'codex' ? (
-              <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-terminal-muted border border-[#2d3139]">
-                No provider connected yet — hunter and verifier will use the
-                provider defaults. You can set these later in the Settings widget.
-              </div>
-            ) : modelsLoading && providerModels.length === 0 ? (
+            {routeModelsQuery.isLoading && routeModels.length === 0 ? (
               <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-terminal-amber border border-[#2d3139] animate-pulse">
-                Loading models for {AI_PROVIDER_MAP[aiProvider]?.label ?? aiProvider}…
-              </div>
-            ) : providerModels.length === 0 ? (
-              <div className="rounded bg-[#1a1d23] p-3 text-xs leading-relaxed text-terminal-muted border border-[#2d3139]">
-                No models could be loaded — hunter and verifier will use the
-                provider defaults. You can set these later in the Settings widget.
+                Loading models from configured providers…
               </div>
             ) : (
               <div className="space-y-3">
-                <Field label="HUNTER MODEL">
-                  <ModelCombobox
-                    value={hunterModel}
-                    options={providerModels}
-                    onChange={(id) => void handleWorkerModelChange('ai.hunter_model', id)}
-                    placeholder="Select…"
-                    emptyText="No models match your search."
-                  />
-                </Field>
-                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
-                  Hunter scans the market for opportunities — pick a smarter, more capable model.
-                </p>
-                <Field label="VERIFIER MODEL">
-                  <ModelCombobox
-                    value={verifierModel}
-                    options={providerModels}
-                    onChange={(id) => void handleWorkerModelChange('ai.verifier_model', id)}
-                    placeholder="Select…"
-                    emptyText="No models match your search."
-                  />
-                </Field>
-                <p className="-mt-1 text-[11px] text-terminal-muted leading-relaxed">
-                  Verifier double-checks the hunter&apos;s picks — a faster, less capable model is fine.
-                </p>
+                <RouteModelSelect
+                  label="HUNTER MODEL"
+                  value={hunterModel}
+                  routes={routeModels}
+                  helperText="Hunter scans the market for opportunities — pick a smarter, more capable model."
+                  isLoading={routeModelsQuery.isLoading}
+                  loadError={routeModelsQuery.isError}
+                  onRetry={() => void routeModelsQuery.refetch()}
+                  onChange={(id) => void handleWorkerModelChange('ai.hunter_model', id)}
+                />
+                <RouteModelSelect
+                  label="VERIFIER MODEL"
+                  value={verifierModel}
+                  routes={routeModels}
+                  helperText="Verifier double-checks the hunter's picks — a faster, less capable model is fine."
+                  isLoading={routeModelsQuery.isLoading}
+                  loadError={routeModelsQuery.isError}
+                  onRetry={() => void routeModelsQuery.refetch()}
+                  onChange={(id) => void handleWorkerModelChange('ai.verifier_model', id)}
+                />
               </div>
             )}
           </div>
@@ -1030,7 +863,7 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
               <li>Backend: {health?.ok ? 'connected' : 'not verified'}.</li>
               <li>Signed in as {auth?.user.username ?? '—'}.</li>
               <li>Extraction: {consent === true ? 'enabled' : consent === false ? 'Safe Mode' : '—'}.</li>
-              <li>AI: {aiStatus?.isConfigured ? `connected (${aiStatus.provider})` : 'skipped — add a key or connect later in Settings'}.</li>
+              <li>AI: {aiStatus?.isConfigured ? `connected (${aiStatus.provider})` : 'skipped — configure providers later in the provider manager'}.</li>
               <li>Worker models: hunter {hunterModel || 'not set'}, verifier {verifierModel || 'not set'}.</li>
               <li>Trading (OpenAlgo): add later in the Settings widget.</li>
             </ul>
@@ -1083,23 +916,6 @@ export function FirstLaunchModal({ initialStep }: { initialStep?: StepId } = {})
           )}
         </div>
       </div>
-      {oauthSession && (
-        <OAuthSessionDialog
-          isOpen={oauthSession.isOpen}
-          provider={oauthSession.provider}
-          providerLabel={oauthSession.providerLabel}
-          flow={oauthSession.provider === 'codex' ? 'device' : 'browser'}
-          onClose={() => setOauthSession(null)}
-          onSuccess={() => {
-            setOauthSession(null);
-            checkAiStatus().then((st) => {
-              if (!isMountedRef.current) return;
-              setAiStatus(st);
-              if (st?.isConfigured) void loadProviderModels();
-            });
-          }}
-        />
-      )}
     </div>
   );
 }

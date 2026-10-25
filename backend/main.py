@@ -916,6 +916,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.debug("WarmBrowser: shutdown error (non-fatal): %s", exc)
 
+    try:
+        from app.services.oauth_session_manager import get_oauth_session_manager
+        await get_oauth_session_manager().shutdown()
+        logger.info("OAuthSessionManager: stopped on shutdown")
+    except Exception as exc:
+        logger.debug("OAuthSessionManager: shutdown error: %s", exc)
+
     from app.services.llm_provider import cleanup_shared_clients
     await cleanup_shared_clients()
 

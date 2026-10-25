@@ -25,9 +25,9 @@ def test_provenance_files_exist():
 
 
 def test_provenance_pinned_version_and_checksums():
-    """Ensure PROVENANCE.json contains pinned v8.0.35 release assets, archive hashes, and binary hashes."""
+    """Ensure PROVENANCE.json contains pinned v8.0.39 release assets, archive hashes, and binary hashes."""
     data = json.loads(PROVENANCE_JSON.read_text(encoding="utf-8"))
-    assert data["version"] == "v8.0.35"
+    assert data["version"] == "v8.0.39"
     assert data["license"] == "MIT"
     assert "router-for-me/CLIProxyAPI" in data["upstream_repository"]
 
@@ -38,22 +38,22 @@ def test_provenance_pinned_version_and_checksums():
 
     # Windows x64
     win = archs["windows_amd64"]
-    assert win["sha256"] == "175a79c47705408c4ee95ff78cafb50a0542a010d3fac333162f10f0b9dbea88"
-    assert win["binary_sha256"] == "e142a8bd7c425e3c28026ffd0bf4e9774668bd60ea4a4d52c5057bd4a884738d"
-    assert win["asset_name"] == "CLIProxyAPI_8.0.35_windows_amd64.zip"
+    assert win["sha256"] == "41ab6cdde60e9c190ded5f7fce27e5b3090a83b75895d7fbb879675f563936e0"
+    assert win["binary_sha256"] == "42574a2a028058ab0e7473e15b99cbb5e5370a46c70839c830758ee549b7a052"
+    assert win["asset_name"] == "CLIProxyAPI_8.0.39_windows_amd64.zip"
     assert win["target_binary_name"] == "cliproxyapi.exe"
 
     # macOS arm64
     mac_arm = archs["darwin_arm64"]
-    assert mac_arm["sha256"] == "b6903000ae78b541e5ba0bb2db45fc15dc23cab77fb51ed4b02e03ea18fe36a5"
-    assert mac_arm["binary_sha256"] == "2b327650d076752a025c590c463827ada7596bf8b5db610233996e12facf5ea8"
-    assert mac_arm["asset_name"] == "CLIProxyAPI_8.0.35_darwin_aarch64.tar.gz"
+    assert mac_arm["sha256"] == "1febf0f15bef7cc70630496a4f5b145d1faafedf2c8bf0ae4d5648f0972b24be"
+    assert mac_arm["binary_sha256"] == "510a1f974a5b409bd9ee016d6f9ebcf6eb0b0f2a562858543d15af0e8deb5275"
+    assert mac_arm["asset_name"] == "CLIProxyAPI_8.0.39_darwin_aarch64.tar.gz"
 
     # macOS x64
     mac_intel = archs["darwin_amd64"]
-    assert mac_intel["sha256"] == "c1335ddb5307d67684ec0531fac81e1148b68869179310ea0f4086109fbebe2b"
-    assert mac_intel["binary_sha256"] == "aaaff01623aa6e5db00a11175badd78f9a6b5e8cf6c8270195e6c4fa68dd30eb"
-    assert mac_intel["asset_name"] == "CLIProxyAPI_8.0.35_darwin_amd64.tar.gz"
+    assert mac_intel["sha256"] == "1cb6ab8893811b5838d59b22a11bf4c9332cdbc40e66de18edbd4c926f2635ea"
+    assert mac_intel["binary_sha256"] == "f1fef944619f05781f06d2286610291565a5924c10a1beda650774e473555bb2"
+    assert mac_intel["asset_name"] == "CLIProxyAPI_8.0.39_darwin_amd64.tar.gz"
 
     # Windows ARM64 rejected
     unsupported = data.get("unsupported_architectures", [])

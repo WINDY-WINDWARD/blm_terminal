@@ -190,8 +190,13 @@ def is_route_model_id(model_id: str | None) -> bool:
         return False
 
 
-def map_legacy_model_to_route(model_str: str | None, route_id: str) -> str:
-    """Map a legacy bare model string or stale route model to the target route."""
+def map_legacy_model_to_route(
+    model_str: str | None,
+    route_id: str,
+    *,
+    preserve_qualified: bool = False,
+) -> str:
+    """Qualify bare model IDs and optionally preserve explicit route IDs."""
     if not model_str or not model_str.strip():
         default_model = DEFAULT_ROUTE_MODELS.get(route_id, "gpt-4o-mini")
         return format_route_model_id(route_id, default_model)
@@ -199,7 +204,7 @@ def map_legacy_model_to_route(model_str: str | None, route_id: str) -> str:
     raw = model_str.strip()
     if is_route_model_id(raw):
         parsed_route, upstream = parse_route_model_id(raw)
-        if parsed_route == route_id:
+        if parsed_route == route_id or preserve_qualified:
             return raw
         # Remap upstream model to the requested route
         return format_route_model_id(route_id, upstream)
