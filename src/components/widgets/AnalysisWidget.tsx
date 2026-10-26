@@ -1557,83 +1557,36 @@ function sortTiles(pool: Category[], key: HeatSortKey, dir: 'asc' | 'desc'): Cat
   });
 }
 
-function squarify(weights: number[]): Array<[number, number, number, number]> {
-  const total = weights.reduce((a, b) => a + b, 0) || 1;
-  const items = weights.map((w) => (w / total) * 100 * 100);
-  const out: Array<[number, number, number, number]> = [];
-  let x = 0;
-  let y = 0;
-  let w = 100;
-  let h = 100;
-  let i = 0;
-
-  const worst = (row: number[], side: number): number => {
-    const sum = row.reduce((a, b) => a + b, 0);
-    if (sum === 0 || side === 0) return Infinity;
-    let m = 1;
-    for (const a of row) {
-      if (a === 0) continue;
-      const r = Math.max((side * side * a) / (sum * sum), (sum * sum) / (side * side * a));
-      if (r > m) m = r;
-    }
-    return m;
-  };
-
-  while (i < items.length) {
-    const horiz = w >= h;
-    const side = horiz ? w : h;
-    let row = [items[i]];
-    let j = i + 1;
-    while (j < items.length) {
-      const cand = row.concat([items[j]]);
-      if (worst(cand, side) > worst(row, side)) break;
-      row = cand;
-      j++;
-    }
-    const sum = row.reduce((a, b) => a + b, 0);
-    if (horiz) {
-      const hh = sum / w;
-      let cx = x;
-      for (const a of row) {
-        const ww = sum > 0 ? (a / sum) * w : 0;
-        out.push([cx, y, ww, hh]);
-        cx += ww;
-      }
-      y += hh;
-      h -= hh;
-    } else {
-      const ww = sum / h;
-      let cy = y;
-      for (const a of row) {
-        const hh = sum > 0 ? (a / sum) * h : 0;
-        out.push([x, cy, ww, hh]);
-        cy += hh;
-      }
-      x += ww;
-      w -= ww;
-    }
-    i = j;
-  }
-  return out;
-}
-
 // ─── Heatmap Drawer Component ────────────────────────────────────────────────
 
 interface HeatmapDrawerProps {
   category: Category;
   onClose: () => void;
-  wide: boolean;
-  mid: boolean;
   onOpenChart: (e: React.MouseEvent, symbol: string) => void;
   onOpenCompany: (e: React.MouseEvent, symbol: string) => void;
   onOpenWatchlist: (symbol: string, name: string) => void;
 }
 
+type DrawerSortKey = 'symbol' | 'ltp' | 'chg' | 'pe';
+
+// One template per pane width, used verbatim by the sticky header and every
+// row. Sharing the literal is what keeps each label over its own values.
+// The actions column is fixed and slightly wider than its three buttons need,
+// and the buttons are laid out with their own 3-column grid, so a long label
+// can never spill back over the P/E column.
+const DRAWER_ROW_COMPACT = 'grid grid-cols-[minmax(0,1fr)_58px_50px_44px_86px] gap-2 items-center';
+const DRAWER_ROW_WIDE = 'grid grid-cols-[minmax(0,1fr)_66px_56px_50px_198px] gap-2 items-center';
+
+const DRAWER_MIN_WIDTH = 300;
+const DRAWER_DEFAULT_MAX = 430;
+// Below this the action buttons lose their text labels and the pane switches
+// to the compact column template. 580 is the width at which the wide template
+// still leaves the symbol column enough room to read a company name.
+const DRAWER_LABEL_WIDTH = 580;
+
 function HeatmapDrawer({
   category,
   onClose,
-  wide,
-  mid,
   onOpenChart,
   onOpenCompany,
   onOpenWatchlist,
@@ -1645,6 +1598,49 @@ function HeatmapDrawer({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Drag-resizable pane. null means "auto": 94% of the overlay capped at 430px,
+  // so the drawer still behaves the old way until the user grabs the edge.
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  const [sortKey, setSortKey] = useState<DrawerSortKey | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = overlay.getBoundingClientRect();
+    const apply = (clientX: number) => {
+      const next = bounds.right - clientX;
+      setPaneWidth(Math.min(bounds.width, Math.max(DRAWER_MIN_WIDTH, next)));
+    };
+    apply(event.clientX);
+    const onMove = (e: PointerEvent) => apply(e.clientX);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
+  const handleSort = (key: DrawerSortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(key);
+    setSortDir(key === 'symbol' ? 'asc' : 'desc');
+  };
+
+  const sortIndicator = (key: DrawerSortKey) =>
+    sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
   const endpoint =
     category.category_type === 'industry'
@@ -1663,16 +1659,74 @@ function HeatmapDrawer({
 
   const netAdv = getNetAdv(category);
 
+  // Same column set/order as the watchlist, so the header always labels the
+  // cell underneath it.
+  const sortedStocks = useMemo(() => {
+    if (!sortKey) return stocks;
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const valueOf = (s: Stock): string | number => {
+      if (sortKey === 'symbol') return (s.company_name || s.symbol).toUpperCase();
+      if (sortKey === 'ltp') return s.curr_price ?? 0;
+      if (sortKey === 'chg') return s.per_change ?? 0;
+      return s.ttm_pe ?? 0;
+    };
+    return [...stocks].sort((a, b) => {
+      const va = valueOf(a);
+      const vb = valueOf(b);
+      if (typeof va === 'string' || typeof vb === 'string') {
+        return String(va).localeCompare(String(vb)) * dir;
+      }
+      return (Number(va) - Number(vb)) * dir;
+    });
+  }, [stocks, sortKey, sortDir]);
+
+  const narrowPane = (paneWidth ?? DRAWER_DEFAULT_MAX) < DRAWER_LABEL_WIDTH;
+  const rowGrid = narrowPane ? DRAWER_ROW_COMPACT : DRAWER_ROW_WIDE;
+
+  const headerCell = (key: DrawerSortKey, label: string, align: 'left' | 'right') => (
+    <button
+      type="button"
+      onClick={() => handleSort(key)}
+      aria-label={`Sort by ${label}`}
+      className={`whitespace-nowrap text-[9px] uppercase tracking-wider transition-colors hover:text-terminal-amber ${
+        align === 'right' ? 'text-right' : 'text-left'
+      } ${sortKey === key ? 'text-terminal-amber' : 'text-white/60'}`}
+    >
+      {label}
+      {sortIndicator(key)}
+    </button>
+  );
+
   return (
     <div
       data-testid="analysis-drawer"
+      ref={overlayRef}
       className="absolute inset-0 z-40 flex justify-end bg-black/70 backdrop-blur-xs font-mono"
       onClick={onClose}
     >
       <div
-        className="relative flex h-full w-[94%] max-w-[430px] flex-col border-l border-terminal-amber/40 bg-terminal-bg shadow-2xl overflow-hidden"
+        className={`relative flex h-full flex-col border-l border-terminal-amber/40 bg-terminal-bg shadow-2xl overflow-hidden ${
+          paneWidth === null ? 'w-[94%] max-w-[430px]' : 'max-w-full'
+        }`}
+        style={paneWidth === null ? undefined : { width: `${paneWidth}px` }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Resize handle: drag the left edge, double-click to reset */}
+        <div
+          data-testid="analysis-drawer-resize"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize constituent pane"
+          title="Drag to resize · double-click to reset"
+          onPointerDown={startResize}
+          onDoubleClick={() => setPaneWidth(null)}
+          className="group absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none"
+        >
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 left-0 w-px bg-terminal-gray transition-colors group-hover:w-0.5 group-hover:bg-terminal-amber"
+          />
+        </div>
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between gap-2 border-b border-terminal-gray p-2.5">
           <div className="min-w-0">
@@ -1774,13 +1828,12 @@ function HeatmapDrawer({
         {/* Constituents Table */}
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div
-            className={`sticky top-0 z-10 grid gap-2 border-b border-terminal-gray bg-black px-2.5 py-1 items-center ${
-              mid ? 'grid-cols-[minmax(0,1fr)_68px_54px_auto]' : 'grid-cols-[minmax(0,1fr)_62px_52px_auto]'
-            }`}
+            className={`sticky top-0 z-10 border-b border-terminal-gray bg-black px-2.5 py-1 ${rowGrid}`}
           >
-            <span className="text-[9px] uppercase tracking-wider text-white/60">Company</span>
-            <span className="text-right text-[9px] uppercase tracking-wider text-white/60">LTP</span>
-            <span className="text-right text-[9px] uppercase tracking-wider text-white/60">1D</span>
+            {headerCell('symbol', 'Symbol', 'left')}
+            {headerCell('ltp', 'LTP', 'right')}
+            {headerCell('chg', 'Chg%', 'right')}
+            {headerCell('pe', 'P/E', 'right')}
             <span className="text-right text-[9px] uppercase tracking-wider text-white/60">Actions</span>
           </div>
 
@@ -1789,42 +1842,45 @@ function HeatmapDrawer({
           ) : stocks.length === 0 ? (
             <div className="p-4 text-center text-[10px] text-white/40">No constituents available</div>
           ) : (
-            stocks.map((s) => (
+            sortedStocks.map((s) => (
               <div
                 key={s.id || s.symbol}
                 data-testid="analysis-row"
                 data-symbol={s.symbol}
                 onClick={(e) => onOpenCompany(e, s.symbol)}
-                className={`grid gap-2 border-b border-terminal-gray/30 px-2.5 py-1.5 cursor-pointer hover:bg-terminal-amber/[0.06] transition-colors items-center ${
-                  mid ? 'grid-cols-[minmax(0,1fr)_68px_54px_auto]' : 'grid-cols-[minmax(0,1fr)_62px_52px_auto]'
-                }`}
+                className={`border-b border-terminal-gray/30 px-2.5 py-1.5 cursor-pointer hover:bg-terminal-amber/[0.06] transition-colors ${rowGrid}`}
               >
                 <div className="min-w-0">
                   <div className="truncate text-[11px] text-white/90">{s.company_name || s.symbol}</div>
-                  <div className="text-[9px] tabular-nums text-white/50">
-                    {s.symbol} · {s.ttm_pe ? `${s.ttm_pe.toFixed(1)}x` : '—'}
-                  </div>
+                  <div className="text-[9px] tabular-nums text-white/50">{s.symbol}</div>
                 </div>
 
-                <span className="text-right text-[11px] tabular-nums text-white/80">
+                <span className="min-w-0 truncate text-right text-[11px] tabular-nums text-white/80">
                   ₹{s.curr_price ? s.curr_price.toFixed(2) : '—'}
                 </span>
 
-                <span className={`text-right text-[11px] font-bold tabular-nums ${toneClass(s.per_change)}`}>
+                <span
+                  className={`min-w-0 truncate text-right text-[11px] font-bold tabular-nums ${toneClass(s.per_change)}`}
+                >
                   {fmtPercent(s.per_change)}
                 </span>
 
-                {/* Actions */}
-                <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                <span className="min-w-0 truncate text-right text-[11px] tabular-nums text-white/60">
+                  {s.ttm_pe ? `${s.ttm_pe.toFixed(1)}x` : '—'}
+                </span>
+
+                {/* Actions: a fixed 3-column grid inside the fixed-width cell, so
+                    the buttons can never push back over the P/E column. */}
+                <div className="grid w-full grid-cols-3 gap-1" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
                     data-testid="analysis-act-chart"
                     aria-label={`Open chart for ${s.symbol}`}
                     onClick={(e) => onOpenChart(e, s.symbol)}
-                    className="inline-flex min-h-[22px] items-center gap-1 border border-terminal-gray bg-[#0a0a0a] px-1.5 py-0.5 text-[9px] font-bold leading-none text-white/75 rounded-sm hover:border-terminal-amber hover:text-terminal-amber hover:bg-terminal-amber/10 active:scale-95 transition-all"
+                    className="inline-flex min-h-[22px] min-w-0 items-center justify-center gap-1 border border-terminal-gray bg-[#0a0a0a] px-1 py-0.5 text-[9px] font-bold leading-none text-white/75 rounded-sm hover:border-terminal-amber hover:text-terminal-amber hover:bg-terminal-amber/10 active:scale-95 transition-all"
                   >
                     <span aria-hidden="true">⚡</span>
-                    {wide && <span>Chart</span>}
+                    {!narrowPane && <span className="truncate">Chart</span>}
                   </button>
 
                   <button
@@ -1832,10 +1888,10 @@ function HeatmapDrawer({
                     data-testid="analysis-act-company"
                     aria-label={`Open company page for ${s.symbol}`}
                     onClick={(e) => onOpenCompany(e, s.symbol)}
-                    className="inline-flex min-h-[22px] items-center gap-1 border border-terminal-gray bg-[#0a0a0a] px-1.5 py-0.5 text-[9px] font-bold leading-none text-white/75 rounded-sm hover:border-terminal-amber hover:text-terminal-amber hover:bg-terminal-amber/10 active:scale-95 transition-all"
+                    className="inline-flex min-h-[22px] min-w-0 items-center justify-center gap-1 border border-terminal-gray bg-[#0a0a0a] px-1 py-0.5 text-[9px] font-bold leading-none text-white/75 rounded-sm hover:border-terminal-amber hover:text-terminal-amber hover:bg-terminal-amber/10 active:scale-95 transition-all"
                   >
                     <span aria-hidden="true">🏢</span>
-                    {wide && <span>Company</span>}
+                    {!narrowPane && <span className="truncate">Company</span>}
                   </button>
 
                   <button
@@ -1846,17 +1902,19 @@ function HeatmapDrawer({
                       e.stopPropagation();
                       onOpenWatchlist(s.symbol, s.company_name || s.symbol);
                     }}
-                    className="inline-flex min-h-[22px] items-center gap-1 border border-terminal-gray bg-[#0a0a0a] px-1.5 py-0.5 text-[9px] font-bold leading-none text-white/75 rounded-sm hover:border-terminal-amber hover:text-terminal-amber hover:bg-terminal-amber/10 active:scale-95 transition-all"
+                    className="inline-flex min-h-[22px] min-w-0 items-center justify-center gap-1 border border-terminal-gray bg-[#0a0a0a] px-1 py-0.5 text-[9px] font-bold leading-none text-white/75 rounded-sm hover:border-terminal-amber hover:text-terminal-amber hover:bg-terminal-amber/10 active:scale-95 transition-all"
                   >
                     <span aria-hidden="true">★</span>
-                    {wide && <span>Watch</span>}
+                    {!narrowPane && <span className="truncate">Watch</span>}
                   </button>
                 </div>
               </div>
             ))
           )}
           <div className="px-2.5 py-2 text-[9px] uppercase tracking-wider text-white/35">
-            Showing top {stocks.length} by market cap
+            {sortedStocks.length} constituents
+            {sortKey ? ` · sorted by ${sortKey}` : ' · largest first'}
+            {' · click a header to sort'}
           </div>
         </div>
       </div>
@@ -1886,17 +1944,16 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
   const [drawerCategory, setDrawerCategory] = useState<Category | null>(null);
   const [watchlistTarget, setWatchlistTarget] = useState<{ symbol: string; name: string } | null>(null);
 
-  // Tile geometry is percentage-based horizontally but pixel-based vertically:
-  // the map is a flex child whose computed height is `auto`, so `height: X%`
-  // on absolutely positioned tiles falls back to content height and overlaps.
+  // Tiles are percentage-based horizontally (column width) but pixel-based
+  // vertically: the map is a flex child whose computed height is `auto`, so
+  // `height: X%` on absolutely positioned tiles falls back to content height
+  // and overlaps.
   const mapBoxRef = useRef<HTMLDivElement | null>(null);
-  const [mapHeight, setMapHeight] = useState(280);
   const [mapWidth, setMapWidth] = useState(680);
   useEffect(() => {
     const el = mapBoxRef.current;
     if (!el) return;
     const measure = () => {
-      setMapHeight(Math.max(160, el.clientHeight - 12));
       setMapWidth(Math.max(200, el.clientWidth - 12));
     };
     measure();
@@ -1904,6 +1961,12 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // A new scope / metric / ordering replaces the pool, so start reading at the
+  // top of the map instead of wherever the scroll position happened to be.
+  useEffect(() => {
+    mapBoxRef.current?.scrollTo({ top: 0 });
+  }, [scope, metricKey, sortKey, sortDir]);
 
   // Keyboard navigation: Escape closes drawer/modal
   useEffect(() => {
@@ -1967,39 +2030,25 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
     return sortTiles(baseCategories, sortKey, sortDir);
   }, [baseCategories, sortKey, sortDir]);
 
-  // Treemap tiles. Squarified areas are extremely skewed on real market-cap
-  // data, so drop the smallest tile whenever the layout would produce a
-  // sliver narrower than MIN_W or flatter than MIN_H, then re-run. Without
-  // this a 63-sector scope renders ~31 unreadable 10px strips.
-  const MIN_TILE_W = 48;
-  const MIN_TILE_H = 38;
-  const TILE_CAP = 40;
-  const { tilePool, rects } = useMemo(() => {
-    const weightOf = (c: Category) => Math.pow(Math.max(c.market_cap || 1, 1), 0.55);
-    let list = [...pool];
-    let geo = squarify(list.map(weightOf));
-    while (list.length > 8) {
-      let worstIndex = -1;
-      let worstArea = Infinity;
-      const crowded = list.length > TILE_CAP;
-      for (let i = 0; i < list.length; i++) {
-        const [, , w, h] = geo[i] || [0, 0, 0, 0];
-        const pxW = (w / 100) * mapWidth;
-        const pxH = (h / 100) * mapHeight;
-        const illegible = pxW < MIN_TILE_W || pxH < MIN_TILE_H;
-        if (!illegible && !crowded) continue;
-        const area = pxW * pxH;
-        if (area < worstArea) {
-          worstArea = area;
-          worstIndex = i;
-        }
-      }
-      if (worstIndex === -1) break;
-      list = list.filter((_, i) => i !== worstIndex);
-      geo = squarify(list.map(weightOf));
-    }
-    return { tilePool: list, rects: geo };
-  }, [pool, mapWidth, mapHeight]);
+  // Uniform heat grid. Every tile is the same size, so tiles can carry a
+  // summary (name, value, adv/dec) instead of the old market-cap-weighted
+  // treemap whose tail shrank below legibility and had to be dropped. Rows
+  // stack vertically inside the scroll container, so the whole pool stays
+  // reachable.
+  // Tiles are sized to hold a wrapped name: 132px wide keeps ~17 characters
+  // per line at 11px, and 100px tall leaves room for three name lines plus the
+  // value and breadth rows.
+  const UNIFORM_TILE_MIN_W = 132;
+  const UNIFORM_TILE_H = 100;
+  const { tiles, cols } = useMemo(() => {
+    const columns = Math.max(1, Math.floor(mapWidth / UNIFORM_TILE_MIN_W));
+    return {
+      cols: columns,
+      tiles: pool.map((cat, i) => ({ cat, row: Math.floor(i / columns), col: i % columns })),
+    };
+  }, [pool, mapWidth]);
+  const rowCount = Math.ceil(tiles.length / cols);
+  const tileW = 100 / cols;
 
   // Bucket counts (whole scope, so the legend describes the market rather than
   // only the tiles that survived the readability filter)
@@ -2150,9 +2199,9 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
             </button>
           </div>
           <span className="text-[9px] tabular-nums text-white/45">
-            {tilePool.length < baseCategories.length
-              ? `${tilePool.length} of ${baseCategories.length} · largest by mcap`
-              : `${tilePool.length} tiles`}
+            {rowCount > 1
+              ? `${tiles.length} tiles · ${cols} per row · scroll`
+              : `${tiles.length} tiles`}
           </span>
         </div>
 
@@ -2266,7 +2315,7 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
               Legend · {activeMetric.label}
             </span>
             <span className="text-[9px] text-white/45">
-              area = market cap · colour = {activeMetric.desc}
+              uniform tiles · colour = {activeMetric.desc}
               {period ? ` · value = ${HEAT_SORT_LABELS[period]}` : ''}
             </span>
           </div>
@@ -2340,21 +2389,15 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
         <div
           ref={mapBoxRef}
           data-testid="analysis-heat-map"
-          className="relative min-h-[210px] flex-1 p-1.5"
+          className="relative min-h-[210px] flex-1 overflow-y-auto overflow-x-hidden p-1.5"
           style={{ minHeight: '210px' }}
         >
-          <div className="relative w-full" style={{ height: `${mapHeight}px` }}>
-            {tilePool.map((c, i) => {
+          <div className="relative w-full" style={{ height: `${Math.max(1, rowCount) * UNIFORM_TILE_H}px` }}>
+            {tiles.map(({ cat: c, row, col }) => {
               const b = activeMetric.bucketOf(c);
               const s = HEAT_BUCKET_STYLE[b] || HEAT_BUCKET_STYLE[2];
-              const r = rects[i] || [0, 0, 0, 0];
-              const [x, y, w, h] = r;
-              const pxH = (h / 100) * mapHeight;
-              const compact = pxH < 34;
-              const mini = pxH < 26;
-              // A 2-line name plus the value row needs ~52px; below that the name
-              // is clamped to one line so it cannot push the value out of the tile.
-              const nameLines = pxH < 52 ? 1 : 2;
+              const leftPct = col * tileW;
+              const topPx = row * UNIFORM_TILE_H;
 
               // Dim logic
               let dim = false;
@@ -2386,7 +2429,7 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
 
               return (
                 <div
-                  key={c.slug}
+                  key={`${c.category_type}:${c.slug}`}
                   data-testid="analysis-heat-tile"
                   role="button"
                   tabIndex={0}
@@ -2398,43 +2441,38 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
                       setDrawerCategory(c);
                     }
                   }}
-                  className={`group absolute flex flex-col justify-between overflow-hidden border cursor-pointer transition-all hover:border-terminal-amber select-none ${
-                    mini ? 'p-[2px]' : compact ? 'p-1' : 'p-1.5'
-                  }`}
+                  className="group absolute flex flex-col gap-1 overflow-hidden border p-1.5 cursor-pointer transition-all hover:border-terminal-amber hover:z-10 select-none"
                   style={{
-                    left: `calc(${x.toFixed(3)}% + 1px)`,
-                    top: `${((y / 100) * mapHeight + 1).toFixed(1)}px`,
-                    width: `calc(${w.toFixed(3)}% - 2px)`,
-                    height: `${Math.max(3, pxH - 2).toFixed(1)}px`,
+                    left: `calc(${leftPct.toFixed(3)}% + 1px)`,
+                    top: `${(topPx + 1).toFixed(1)}px`,
+                    width: `calc(${tileW.toFixed(3)}% - 2px)`,
+                    height: `${UNIFORM_TILE_H - 2}px`,
                     backgroundColor: s.bg,
                     borderColor: s.bd,
                     color: s.fg,
                     opacity: dim ? 0.18 : 1,
                   }}
                 >
-                  {!compact && (
-                    <div
-                      className={`overflow-hidden font-bold leading-[1.15] ${compact ? 'text-[9px]' : 'text-[10px]'}`}
-                      style={{
-                        WebkitLineClamp: nameLines,
-                        display: '-webkit-box',
-                        WebkitBoxOrient: 'vertical',
-                      }}
-                    >
-                      {c.name}
-                    </div>
-                  )}
+                  {/* Summary: name, value, breadth — same size on every tile */}
+                  <span className="w-full min-w-0 flex-1 break-words text-[11px] font-bold leading-snug line-clamp-3">
+                    {c.name}
+                  </span>
                   <div className="flex w-full min-w-0 items-baseline justify-between gap-1">
-                    <span
-                      className={`min-w-0 truncate font-bold leading-none tabular-nums ${
-                        mini ? 'text-[9px]' : compact ? 'text-[10px]' : 'text-[13px]'
-                      }`}
-                    >
+                    <span className="min-w-0 truncate text-[13px] font-bold leading-none tabular-nums">
                       {primary}
                     </span>
-                    {!compact && (
-                      <span className="shrink-0 text-[9px] leading-none tabular-nums opacity-70">{sub}</span>
-                    )}
+                    <span className="shrink-0 text-[9px] leading-none tabular-nums opacity-70">{sub}</span>
+                  </div>
+                  <div className="flex w-full min-w-0 items-center justify-between gap-1 text-[8px] leading-none tabular-nums opacity-70">
+                    <span className="truncate">
+                      {c.advance || 0}A {c.decline || 0}D
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      <span>₹{fmtCrore(c.market_cap)}</span>
+                      <span className="uppercase tracking-wider opacity-80">
+                        {c.category_type === 'sector' ? 'sec' : 'ind'}
+                      </span>
+                    </span>
                   </div>
                 </div>
               );
@@ -2605,8 +2643,6 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
         <HeatmapDrawer
           category={drawerCategory}
           onClose={() => setDrawerCategory(null)}
-          wide={wide}
-          mid={mid}
           onOpenChart={handleOpenChart}
           onOpenCompany={handleOpenCompany}
           onOpenWatchlist={handleOpenWatchlist}
