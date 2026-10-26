@@ -274,6 +274,14 @@ describe('AiProvidersModal', () => {
       http.post('/api/py/ai/routes/:routeId/activate', ({ params }) => {
         return HttpResponse.json({ status: 'activated', active_route_id: params.routeId });
       }),
+      http.patch('/api/py/ai/routes/:routeId/enabled', async ({ params, request }) => {
+        const body = (await request.json()) as { enabled: boolean };
+        return HttpResponse.json({
+          status: body.enabled ? 'enabled' : 'disabled',
+          route_id: params.routeId,
+          active_route_id: 'direct:aistudio',
+        });
+      }),
       http.patch('/api/py/ai/routes/settings', async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json({ status: 'updated', updated_settings: body });
@@ -409,7 +417,8 @@ describe('AiProvidersModal', () => {
 
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
-    // Active route
+    // Active route (now titled DEFAULT ROUTE in TopSummary)
+    expect(screen.getByText('DEFAULT ROUTE')).toBeInTheDocument();
     expect(screen.getByTestId('active-route-display')).toHaveTextContent('Google AI Studio');
     expect(screen.getByText('direct:aistudio')).toBeInTheDocument();
 
@@ -530,6 +539,24 @@ describe('AiProvidersModal', () => {
     expect(weight).toHaveValue(1);
   });
 
+  it('allows activating/deactivating a keyless custom endpoint with a base_url', () => {
+    render(<CustomEndpointsTab routes={[mockEndpointRoute]} activeRouteId="" />);
+    const toggle = screen.getByTestId('route-active-toggle-endpoint:test');
+    expect(toggle).not.toHaveTextContent('NO ACCOUNTS');
+    expect(toggle.querySelector('button[aria-label="Deactivate provider"]')).toBeInTheDocument();
+  });
+
+  it('renders NO ACCOUNTS for an unconfigured custom endpoint without keys or base_url', () => {
+    const unconfiguredEndpoint: RouteSummary = {
+      ...mockEndpointRoute,
+      id: 'endpoint:empty',
+      config: {},
+    };
+    render(<CustomEndpointsTab routes={[unconfiguredEndpoint]} activeRouteId="" />);
+    const toggle = screen.getByTestId('route-active-toggle-endpoint:empty');
+    expect(toggle).toHaveTextContent('NO ACCOUNTS');
+  });
+
   it('handles sticky session toggle and calls update settings', async () => {
     const patchSpy = vi.fn();
     server.use(
@@ -600,11 +627,130 @@ describe('AiProvidersModal', () => {
     }
   });
 
-  it('permits activating a configured OAuth route', async () => {
-    const activateSpy = vi.fn();
+  it('permits toggling enabled state of a configured OAuth route', async () => {
+    let capturedBody: { enabled?: boolean } | null = null;
+    let capturedRouteId: string | null = null;
+    server.use(
+      http.get('/api/py/ai/routes', () => {
+        return HttpResponse.json({
+          ...baseMockRoutesResponse,
+          routes: baseMockRoutesResponse.routes.map((r) =>
+            r.id === 'oauth:codex' ? { ...r, enabled: false } : r,
+          ),
+        });
+      }),
+      http.patch('/api/py/ai/routes/:routeId/enabled', async ({ params, request }) => {
+        capturedRouteId = String(params.routeId);
+        capturedBody = (await request.json()) as { enabled?: boolean };
+        return HttpResponse.json({
+          status: 'enabled',
+          route_id: params.routeId,
+          active_route_id: 'direct:aistudio',
+        });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    const codexToggle = screen.getByTestId('route-active-toggle-codex');
+    const toggleBtn = codexToggle.querySelector('button[aria-label="Activate provider"]');
+    expect(toggleBtn).toBeInTheDocument();
+    expect(toggleBtn).toHaveTextContent(/INACTIVE/i);
+
+    fireEvent.click(toggleBtn!);
+
+    await waitFor(() => {
+      expect(capturedRouteId).toBe('oauth:codex');
+      expect(capturedBody).toEqual({ enabled: true });
+    });
+  });
+
+  it('permits deactivating an active OAuth route', async () => {
+    let capturedBody: { enabled?: boolean } | null = null;
+    let capturedRouteId: string | null = null;
+    server.use(
+      http.patch('/api/py/ai/routes/:routeId/enabled', async ({ params, request }) => {
+        capturedRouteId = String(params.routeId);
+        capturedBody = (await request.json()) as { enabled?: boolean };
+        return HttpResponse.json({
+          status: 'disabled',
+          route_id: params.routeId,
+          active_route_id: 'direct:aistudio',
+        });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    const codexToggle = screen.getByTestId('route-active-toggle-codex');
+    const toggleBtn = codexToggle.querySelector('button[aria-label="Deactivate provider"]');
+    expect(toggleBtn).toBeInTheDocument();
+    expect(toggleBtn).toHaveTextContent(/ACTIVE/i);
+
+    fireEvent.click(toggleBtn!);
+
+    await waitFor(() => {
+      expect(capturedRouteId).toBe('oauth:codex');
+      expect(capturedBody).toEqual({ enabled: false });
+    });
+  });
+
+  it('toggles a route off and back on in one flow', async () => {
+    let enabledState = true;
+    const bodies: Array<{ enabled: boolean }> = [];
+    server.use(
+      http.get('/api/py/ai/routes', () => {
+        return HttpResponse.json({
+          ...baseMockRoutesResponse,
+          routes: baseMockRoutesResponse.routes.map((r) =>
+            r.id === 'oauth:codex' ? { ...r, enabled: enabledState } : r,
+          ),
+        });
+      }),
+      http.patch('/api/py/ai/routes/:routeId/enabled', async ({ request }) => {
+        const body = (await request.json()) as { enabled: boolean };
+        bodies.push(body);
+        enabledState = body.enabled;
+        return HttpResponse.json({
+          status: body.enabled ? 'enabled' : 'disabled',
+          route_id: 'oauth:codex',
+          active_route_id: 'direct:aistudio',
+        });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    fireEvent.click(
+      screen
+        .getByTestId('route-active-toggle-codex')
+        .querySelector('button[aria-label="Deactivate provider"]')!,
+    );
+    await waitFor(() => expect(bodies).toEqual([{ enabled: false }]));
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId('route-active-toggle-codex')
+          .querySelector('button[aria-label="Activate provider"]'),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(
+      screen
+        .getByTestId('route-active-toggle-codex')
+        .querySelector('button[aria-label="Activate provider"]')!,
+    );
+    await waitFor(() => expect(bodies).toEqual([{ enabled: false }, { enabled: true }]));
+  });
+
+  it('sets an active non-default route as the default', async () => {
+    let activatedRouteId: string | null = null;
     server.use(
       http.post('/api/py/ai/routes/:routeId/activate', ({ params }) => {
-        activateSpy(params.routeId);
+        activatedRouteId = String(params.routeId);
         return HttpResponse.json({ status: 'activated', active_route_id: params.routeId });
       }),
     );
@@ -612,15 +758,26 @@ describe('AiProvidersModal', () => {
     render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
-    const codexGroup = screen.getByTestId('oauth-provider-group-codex');
-    const activateBtn = codexGroup.querySelector('button');
-    expect(activateBtn).toHaveTextContent(/ACTIVATE/i);
+    const makeDefault = screen
+      .getByTestId('route-active-toggle-codex')
+      .querySelector('button[aria-label="Set as default provider"]');
+    expect(makeDefault).toBeInTheDocument();
 
-    fireEvent.click(activateBtn!);
+    fireEvent.click(makeDefault!);
 
-    await waitFor(() => {
-      expect(activateSpy).toHaveBeenCalledWith('oauth:codex');
-    });
+    await waitFor(() => expect(activatedRouteId).toBe('oauth:codex'));
+  });
+
+  it('renders default chip for default route', async () => {
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    // Switch to DIRECT tab where active_route_id (direct:aistudio) is rendered
+    fireEvent.click(screen.getByRole('tab', { name: /DIRECT PROVIDERS/i }));
+
+    const defaultChip = await screen.findByTestId('default-chip');
+    expect(defaultChip).toBeInTheDocument();
+    expect(defaultChip).toHaveTextContent('DEFAULT');
   });
 
   // 4. Account Card States and Actions
@@ -751,7 +908,6 @@ describe('AiProvidersModal', () => {
     render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
-    const codexGroup = screen.getByTestId('oauth-provider-group-codex');
     const addAccountBtn = screen.getAllByText(/ADD ACCOUNT/i)[0];
 
     fireEvent.click(addAccountBtn);
@@ -954,7 +1110,6 @@ describe('AiProvidersModal', () => {
     render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
     await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
 
-    const codexGroup = screen.getByTestId('oauth-provider-group-codex');
     const addAccountBtn = screen.getAllByText(/ADD ACCOUNT/i)[0];
     fireEvent.click(addAccountBtn);
 

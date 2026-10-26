@@ -12,6 +12,7 @@ Centralizes:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import Sequence
 
@@ -95,6 +96,70 @@ def compute_oauth_proxy_prefix(route_id: str) -> str:
     """Compute stable proxy prefix: blm-<first 16 hex of sha256(route_id)>."""
     digest = hashlib.sha256(route_id.encode("utf-8")).hexdigest()[:16]
     return f"blm-{digest}"
+
+
+DISABLED_ROUTES_CONFIG_KEY = "ai.disabled_routes"
+
+
+async def get_disabled_direct_routes(session: AsyncSession) -> set[str]:
+    """Retrieve the set of disabled direct route IDs from SystemConfig."""
+    from app.models.system_config import SystemConfig
+
+    stmt = select(SystemConfig.value).where(SystemConfig.key == DISABLED_ROUTES_CONFIG_KEY)
+    res = await session.execute(stmt)
+    raw = res.scalar_one_or_none()
+    if not raw or not raw.strip():
+        return set()
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return {str(item).strip() for item in data if isinstance(item, str) and item.strip()}
+    except Exception as exc:
+        logger.warning("get_disabled_direct_routes: failed to parse %s (%s)", DISABLED_ROUTES_CONFIG_KEY, exc)
+
+    return set()
+
+
+async def set_direct_route_enabled(
+    session: AsyncSession, route_id: str, enabled: bool
+) -> None:
+    """Update direct route enabled state by modifying the JSON array in SystemConfig."""
+    from app.models.system_config import SystemConfig
+
+    disabled = await get_disabled_direct_routes(session)
+    if enabled:
+        disabled.discard(route_id)
+    else:
+        disabled.add(route_id)
+
+    stmt = select(SystemConfig).where(SystemConfig.key == DISABLED_ROUTES_CONFIG_KEY)
+    res = await session.execute(stmt)
+    row = res.scalar_one_or_none()
+
+    new_val = json.dumps(sorted(disabled))
+    if row is not None:
+        row.value = new_val
+    else:
+        session.add(SystemConfig(key=DISABLED_ROUTES_CONFIG_KEY, value=new_val))
+    await session.commit()
+
+
+async def is_route_enabled(session: AsyncSession, route_id: str) -> bool:
+    """Return whether a route is enabled.
+    
+    - direct: check against disabled direct routes in SystemConfig
+    - oauth / endpoint: check route row's enabled flag; missing row is False
+    """
+    clean_id = route_id.strip()
+    if clean_id.startswith("direct:"):
+        disabled = await get_disabled_direct_routes(session)
+        return clean_id not in disabled
+
+    stmt = select(AIProviderRoute.enabled).where(AIProviderRoute.id == clean_id)
+    res = await session.execute(stmt)
+    val = res.scalar_one_or_none()
+    return bool(val)
 
 
 def normalize_legacy_provider_id(raw_provider: str | None) -> str:

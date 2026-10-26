@@ -5,18 +5,15 @@ import {
   Activity,
   AlertCircle,
   AlertTriangle,
-  Check,
   CheckCircle2,
   Edit2,
   Globe,
   Key,
-  Layers,
   Loader2,
   Plus,
   RefreshCw,
   Server,
   Trash2,
-  Zap,
 } from 'lucide-react';
 import {
   useActivateRouteMutation,
@@ -25,11 +22,13 @@ import {
   useDeleteEndpointMutation,
   usePatchEndpointKeyMutation,
   useRefreshEndpointModelsMutation,
+  useSetRouteEnabledMutation,
   useTestAccountMutation,
   useTestEndpointMutation,
 } from '@/hooks/useAiRoutes';
 import { EndpointEditorModal } from './EndpointEditorModal';
-import type { CredentialSummary, RouteSummary } from '@/types/aiRoutes';
+import { RouteActiveToggle } from './RouteActiveToggle';
+import type { RouteSummary } from '@/types/aiRoutes';
 
 interface CustomEndpointsTabProps {
   routes: RouteSummary[];
@@ -40,6 +39,7 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
   const endpointRoutes = routes.filter((r) => r.kind === 'endpoint');
 
   const activateMutation = useActivateRouteMutation();
+  const setRouteEnabledMutation = useSetRouteEnabledMutation();
   const deleteEndpointMutation = useDeleteEndpointMutation();
   const refreshModelsMutation = useRefreshEndpointModelsMutation();
   const testEndpointMutation = useTestEndpointMutation();
@@ -245,19 +245,6 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-mono font-bold text-sm text-white">{route.display_label}</span>
-                        {isActive ? (
-                          <span
-                            data-testid={`active-badge-${route.id}`}
-                            className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-400 font-mono text-[10px] font-bold flex items-center gap-1"
-                          >
-                            <Zap className="w-3 h-3" />
-                            ACTIVE
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono text-[10px]">
-                            {route.keys.length > 0 ? 'Configured' : 'No Keys'}
-                          </span>
-                        )}
                       </div>
                       <span className="text-[11px] font-mono text-zinc-400 truncate block mt-0.5">
                         {route.config.base_url || route.id}
@@ -267,17 +254,23 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
 
                   {/* Actions Bar */}
                   <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-center">
-                    {!isActive && (
-                      <button
-                        type="button"
-                        onClick={() => activateMutation.mutate(route.id)}
-                        disabled={activateMutation.isPending}
-                        data-testid={`activate-endpoint-${route.id}`}
-                        className="px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-terminal-amber font-mono text-xs font-bold border border-terminal-amber/30 transition-colors cursor-pointer"
-                      >
-                        Activate
-                      </button>
-                    )}
+                    <RouteActiveToggle
+                      enabled={route.enabled}
+                      isDefault={isActive}
+                      configured={route.keys.length > 0 || Boolean(route.config.base_url?.trim())}
+                      isPending={
+                        setRouteEnabledMutation.isPending &&
+                        setRouteEnabledMutation.variables?.routeId === route.id
+                      }
+                      testId={`route-active-toggle-${route.id}`}
+                      onToggle={() =>
+                        setRouteEnabledMutation.mutate({
+                          routeId: route.id,
+                          enabled: !route.enabled,
+                        })
+                      }
+                      onMakeDefault={() => activateMutation.mutate(route.id)}
+                    />
                     <button
                       type="button"
                       onClick={() => handleTestEndpoint(route.id)}
@@ -313,7 +306,7 @@ export function CustomEndpointsTab({ routes, activeRouteId }: CustomEndpointsTab
                 {/* Confirm Delete Banner */}
                 {deletingRouteId === route.id && (
                   <div className="p-2.5 rounded bg-rose-950/40 border border-rose-800 text-rose-200 text-xs font-mono flex items-center justify-between gap-2">
-                    <span>Delete custom endpoint "{route.display_label}" and remove its stored keys?</span>
+                    <span>Delete custom endpoint &quot;{route.display_label}&quot; and remove its stored keys?</span>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"

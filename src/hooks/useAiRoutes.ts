@@ -45,6 +45,17 @@ export function useActivateRouteMutation() {
   });
 }
 
+export function useSetRouteEnabledMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: ({ routeId, enabled }: { routeId: string; enabled: boolean }) =>
+      aiRoutesClient.setRouteEnabled(routeId, enabled),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
 export function useUpdateRouteSettingsMutation() {
   const invalidate = useInvalidateAiCaches();
   return useMutation({

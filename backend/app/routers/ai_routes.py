@@ -31,6 +31,7 @@ from app.schemas.ai_provider import (
     OAuthCallbackRequest,
     OAuthCancelRequest,
     OAuthStartRequest,
+    RouteEnabledUpdate,
     RouteSettingsUpdate,
     RouteSummary,
     RoutesListResponse,
@@ -63,9 +64,12 @@ from app.services.route_registry import (
     OAUTH_PROVIDER_LABELS,
     compute_oauth_proxy_prefix,
     format_route_model_id,
+    get_disabled_direct_routes,
+    is_route_enabled,
     provider_to_route_id,
     resolve_active_route_id,
     seed_oauth_routes,
+    set_direct_route_enabled,
 )
 
 logger = logging.getLogger("blm.ai_routes")
@@ -75,6 +79,125 @@ router = APIRouter(
     tags=["ai-routes"],
     dependencies=[Depends(get_current_user)],
 )
+
+
+async def _route_is_usable(db: AsyncSession, route_id: str | None) -> bool:
+    """Check if a route is usable and enabled within the given session.
+
+    - oauth: row exists, enabled, at least one enabled credential
+    - endpoint: row exists, enabled, has a key or non-empty config (e.g. models or base_url)
+    - direct: supported, not disabled, and needs no key (zen-free) or has an API key
+    """
+    clean_id = (route_id or "").strip()
+    if not clean_id:
+        return False
+
+    if clean_id.startswith("oauth:"):
+        res = await db.execute(
+            select(AIProviderRoute)
+            .options(selectinload(AIProviderRoute.credentials))
+            .where(AIProviderRoute.id == clean_id)
+        )
+        r = res.scalar_one_or_none()
+        if not r or not r.enabled:
+            return False
+        return any(c.enabled for c in (r.credentials or []))
+
+    elif clean_id.startswith("endpoint:"):
+        res = await db.execute(
+            select(AIProviderRoute)
+            .options(selectinload(AIProviderRoute.credentials))
+            .where(AIProviderRoute.id == clean_id)
+        )
+        r = res.scalar_one_or_none()
+        if not r or not r.enabled:
+            return False
+        has_key = any(c.enabled for c in (r.credentials or []))
+        if has_key:
+            return True
+        cfg_str = r.config_json or ""
+        try:
+            cfg = json.loads(cfg_str)
+            return bool(cfg.get("base_url"))
+        except Exception:
+            return False
+
+    elif clean_id.startswith("direct:"):
+        from app.services.direct_proxy_routes import get_direct_route, is_supported_direct_route
+        if not is_supported_direct_route(clean_id):
+            return False
+        disabled = await get_disabled_direct_routes(db)
+        if clean_id in disabled:
+            return False
+
+        spec = get_direct_route(clean_id)
+        if spec is None:
+            return False
+
+        prov = spec.provider
+        from app.services.ai_config import ZEN_FREE, PROVIDER_DB_KEYS
+        if prov == ZEN_FREE:
+            return True
+
+        # Check API key from db session first, then settings
+        db_key = PROVIDER_DB_KEYS.get(prov, "ai.api_key")
+        res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == db_key))
+        val = res.scalar_one_or_none()
+        if val and val.strip() and val.strip() != "none":
+            return True
+
+        # Fallback to in-memory/env settings
+        from app.services.ai_config import get_dynamic_ai_api_key
+        try:
+            api_key = await get_dynamic_ai_api_key(prov)
+            return bool(api_key and api_key != "none")
+        except Exception:
+            return False
+
+    return False
+
+
+async def ensure_usable_active_route(db: AsyncSession) -> str | None:
+    """If the current default route is not usable, promote the first usable enabled route.
+
+    Only persists to SystemConfig when the value changes.
+    """
+    from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS
+
+    curr_res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == "ai.provider"))
+    curr_val = curr_res.scalar_one_or_none()
+    curr_route = provider_to_route_id(curr_val) if curr_val else await resolve_active_route_id(db)
+
+    if curr_route and await _route_is_usable(db, curr_route):
+        return curr_route
+
+    # Find the first usable enabled route
+    # Check seeded OAuth and endpoint routes first, in DB order
+    db_routes = list((await db.execute(select(AIProviderRoute).order_by(AIProviderRoute.id))).scalars().all())
+    for r in db_routes:
+        if r.enabled and await _route_is_usable(db, r.id):
+            # Promote this route
+            row = (await db.execute(select(SystemConfig).where(SystemConfig.key == "ai.provider"))).scalar_one_or_none()
+            if row is not None:
+                row.value = r.id
+            else:
+                db.add(SystemConfig(key="ai.provider", value=r.id))
+            await db.commit()
+            return r.id
+
+    # Check direct routes
+    disabled_direct = await get_disabled_direct_routes(db)
+    for d_id in SUPPORTED_ROUTE_IDS:
+        if d_id not in disabled_direct and await _route_is_usable(db, d_id):
+            row = (await db.execute(select(SystemConfig).where(SystemConfig.key == "ai.provider"))).scalar_one_or_none()
+            if row is not None:
+                row.value = d_id
+            else:
+                db.add(SystemConfig(key="ai.provider", value=d_id))
+            await db.commit()
+            return d_id
+
+    return curr_route
 
 
 def _serialize_credential(cred: AIProviderCredential) -> CredentialSummary:
@@ -212,6 +335,7 @@ async def _direct_route_summary(
     is_active: bool,
     proxy_status: dict[str, Any],
     db: AsyncSession,
+    is_enabled: bool = True,
 ) -> RouteSummary:
     """Build RouteSummary for a supported direct route."""
     from app.services.direct_proxy_routes import direct_proxy_prefix
@@ -223,7 +347,10 @@ async def _direct_route_summary(
     except Exception:
         pass
 
-    models = (await get_route_models(route_id, db)) or list(spec.models)
+    try:
+        models = (await get_route_models(route_id, db)) or list(spec.models)
+    except Exception:
+        models = list(spec.models)
     health = _route_health(
         is_active=is_active,
         is_configured=is_configured,
@@ -237,7 +364,7 @@ async def _direct_route_summary(
         provider=spec.provider,
         display_label=spec.display_name,
         proxy_prefix=direct_proxy_prefix(route_id),
-        enabled=True,
+        enabled=is_enabled,
         is_active=is_active,
         health=health,
         accounts=[],
@@ -309,6 +436,7 @@ async def list_routes(
     """List all AI provider routes with redacted credential summaries and health status."""
     from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS, get_direct_route
 
+    await ensure_usable_active_route(db)
     active_route_id = await resolve_active_route_id(db)
     vault = get_provider_vault()
     await vault.get_state()
@@ -337,13 +465,24 @@ async def list_routes(
         elif r.kind == "endpoint":
             routes_out.append(_custom_route_summary(r, is_active, proxy_status, vault, recovery_state))
 
+    disabled_direct = await get_disabled_direct_routes(db)
     db_route_ids = {r.id for r in db_routes}
     for route_id in SUPPORTED_ROUTE_IDS:
         if route_id in db_route_ids:
             continue
         spec = get_direct_route(route_id)
         if spec is not None and spec.supported:
-            routes_out.append(await _direct_route_summary(route_id, spec, route_id == active_route_id, proxy_status, db))
+            is_enabled = route_id not in disabled_direct
+            routes_out.append(
+                await _direct_route_summary(
+                    route_id,
+                    spec,
+                    route_id == active_route_id,
+                    proxy_status,
+                    db,
+                    is_enabled=is_enabled,
+                )
+            )
 
     return RoutesListResponse(
         routes=routes_out,
@@ -410,13 +549,13 @@ async def activate_route(
             raise HTTPException(status_code=400, detail=f"Invalid OAuth provider: {prov}")
         res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == clean_id))
         r = res.scalar_one_or_none()
-        if not r or not r.enabled:
-            raise HTTPException(status_code=404, detail=f"OAuth route '{clean_id}' is not configured or disabled.")
+        if not r:
+            raise HTTPException(status_code=404, detail=f"OAuth route '{clean_id}' is not configured.")
     elif clean_id.startswith("endpoint:"):
         res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == clean_id))
         r = res.scalar_one_or_none()
-        if not r or not r.enabled:
-            raise HTTPException(status_code=404, detail=f"Custom endpoint route '{clean_id}' not found or disabled.")
+        if not r:
+            raise HTTPException(status_code=404, detail=f"Custom endpoint route '{clean_id}' not found.")
     elif clean_id.startswith("direct:"):
         from app.services.direct_proxy_routes import get_direct_route, is_supported_direct_route
         spec = get_direct_route(clean_id)
@@ -427,6 +566,12 @@ async def activate_route(
         raise HTTPException(
             status_code=400,
             detail=f"Invalid route_id '{clean_id}'. Must start with 'oauth:', 'endpoint:', or 'direct:'.",
+        )
+
+    if not await is_route_enabled(db, clean_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Route '{clean_id}' is disabled and cannot be activated.",
         )
 
     # Update or insert ai.provider in SystemConfig
@@ -447,6 +592,103 @@ async def activate_route(
             logger.warning("Proxy supervisor start failed during route activation: %s", exc)
 
     return {"status": "activated", "active_route_id": clean_id}
+
+
+@router.patch("/{route_id}/enabled")
+async def update_route_enabled(
+    route_id: str,
+    body: RouteEnabledUpdate,
+    background: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Enable or disable an AI provider route, promoting or adjusting the default if needed."""
+    from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS, get_direct_route, is_supported_direct_route
+
+    clean_id = route_id.strip()
+    if clean_id.startswith("oauth:"):
+        prov = clean_id.split(":", 1)[1]
+        if prov not in OAUTH_PROVIDERS:
+            raise HTTPException(status_code=404, detail=f"OAuth provider '{prov}' not found.")
+        res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == clean_id))
+        r = res.scalar_one_or_none()
+        if not r:
+            raise HTTPException(status_code=404, detail=f"OAuth route '{clean_id}' not found.")
+        r.enabled = body.enabled
+        await db.commit()
+    elif clean_id.startswith("endpoint:"):
+        res = await db.execute(select(AIProviderRoute).where(AIProviderRoute.id == clean_id))
+        r = res.scalar_one_or_none()
+        if not r:
+            raise HTTPException(status_code=404, detail=f"Custom endpoint route '{clean_id}' not found.")
+        r.enabled = body.enabled
+        await db.commit()
+    elif clean_id.startswith("direct:"):
+        spec = get_direct_route(clean_id)
+        if spec is None or not is_supported_direct_route(clean_id):
+            raise HTTPException(status_code=404, detail=f"Direct route '{clean_id}' is unsupported.")
+        await set_direct_route_enabled(db, clean_id, body.enabled)
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Invalid route_id prefix '{clean_id}'. Must start with 'oauth:', 'endpoint:', or 'direct:'.",
+        )
+
+    # Reconcile active route / default route
+    cfg_res = await db.execute(select(SystemConfig).where(SystemConfig.key == "ai.provider"))
+    cfg_row = cfg_res.scalar_one_or_none()
+    curr_active = provider_to_route_id(cfg_row.value) if (cfg_row and cfg_row.value) else await resolve_active_route_id(db)
+
+    async def _find_first_usable_enabled() -> str | None:
+        db_routes = list((await db.execute(select(AIProviderRoute).order_by(AIProviderRoute.id))).scalars().all())
+        for r_entry in db_routes:
+            if r_entry.enabled and await _route_is_usable(db, r_entry.id):
+                return r_entry.id
+        disabled_direct = await get_disabled_direct_routes(db)
+        for d_id in SUPPORTED_ROUTE_IDS:
+            if d_id not in disabled_direct and await _route_is_usable(db, d_id):
+                return d_id
+        return None
+
+    if not body.enabled:
+        if curr_active == clean_id:
+            promoted = await _find_first_usable_enabled()
+            if promoted:
+                if cfg_row is not None:
+                    cfg_row.value = promoted
+                else:
+                    db.add(SystemConfig(key="ai.provider", value=promoted))
+                await db.commit()
+            else:
+                if cfg_row is not None:
+                    await db.delete(cfg_row)
+                    await db.commit()
+    else:
+        # Route was enabled
+        curr_usable = await _route_is_usable(db, curr_active)
+        if not curr_usable and await _route_is_usable(db, clean_id):
+            if cfg_row is not None:
+                cfg_row.value = clean_id
+            else:
+                db.add(SystemConfig(key="ai.provider", value=clean_id))
+            await db.commit()
+
+    # Re-fetch default after promotion/removal, normalised to a route id
+    new_cfg_res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == "ai.provider"))
+    new_val = new_cfg_res.scalar_one_or_none()
+    active_after = provider_to_route_id(new_val) if new_val and new_val.strip() else None
+
+    # Restart proxy off the request path
+    supervisor = get_proxy_supervisor()
+    if supervisor.is_running:
+        background.add_task(_restart_proxy_background, supervisor, "route enabled toggle")
+
+    status_str = "enabled" if body.enabled else "disabled"
+    return {
+        "status": status_str,
+        "route_id": clean_id,
+        "active_route_id": active_after,
+    }
 
 
 @router.patch("/settings")
@@ -861,14 +1103,17 @@ async def reset_account_cooldown(
     return {"status": "ok", "account_id": account_id}
 
 
-async def _restart_proxy_after_account_removal(supervisor) -> None:
-    """Restart the sidecar after a credential is removed, off the request path."""
+async def _restart_proxy_background(supervisor, reason: str = "configuration change") -> None:
+    """Restart the sidecar off the request path."""
     try:
         await supervisor.restart()
     except Exception as exc:
-        logger.warning(
-            "Failed restarting proxy after account removal (%s)", type(exc).__name__
-        )
+        logger.warning("Failed restarting proxy after %s (%s)", reason, type(exc).__name__)
+
+
+async def _restart_proxy_after_account_removal(supervisor) -> None:
+    """Restart the sidecar after a credential is removed, off the request path."""
+    await _restart_proxy_background(supervisor, reason="account removal")
 
 
 @router.delete("/accounts/{account_id}")

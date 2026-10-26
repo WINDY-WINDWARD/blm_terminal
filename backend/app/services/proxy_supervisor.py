@@ -973,10 +973,20 @@ class ProxySupervisor:
 
         # Materialize secrets
         from app.database import AsyncSessionLocal
-        from app.models.ai_provider import AIProviderCredential
+        from app.models.ai_provider import AIProviderCredential, AIProviderRoute
         from sqlalchemy import select
         async with AsyncSessionLocal() as session:
-            credentials = list((await session.execute(select(AIProviderCredential).where(AIProviderCredential.kind == "oauth"))).scalars().all())
+            # Only credentials whose parent route is enabled may reach the sidecar;
+            # a disabled OAuth provider must be inert, not merely hidden in the UI.
+            credential_stmt = (
+                select(AIProviderCredential)
+                .join(AIProviderRoute, AIProviderCredential.route_id == AIProviderRoute.id)
+                .where(
+                    AIProviderCredential.kind == "oauth",
+                    AIProviderRoute.enabled == True,  # noqa: E712
+                )
+            )
+            credentials = list((await session.execute(credential_stmt)).scalars().all())
             routing_settings = await load_routing_settings(session)
 
         from app.services.direct_proxy_routes import build_direct_proxy_entries

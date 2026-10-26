@@ -16,6 +16,7 @@ import type {
   RouteModelCatalogResponse,
   RoutesListResponse,
   RouteSummary,
+  SetRouteEnabledResponse,
   UpdateEndpointRequest,
   VaultResetResponse,
 } from '@/types/aiRoutes';
@@ -83,6 +84,14 @@ export const aiRoutesClient = {
       `/${encodeURIComponent(routeId)}/activate`,
       { method: 'POST' },
       'Failed to activate route',
+    );
+  },
+
+  async setRouteEnabled(routeId: string, enabled: boolean): Promise<SetRouteEnabledResponse> {
+    return request<SetRouteEnabledResponse>(
+      `/${encodeURIComponent(routeId)}/enabled`,
+      { method: 'PATCH', body: { enabled } },
+      'Failed to set route enabled status',
     );
   },
 

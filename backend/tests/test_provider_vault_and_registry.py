@@ -401,7 +401,9 @@ def test_provider_to_route_id():
     assert provider_to_route_id("gemini") == "oauth:antigravity"
     assert provider_to_route_id("antigravity") == "oauth:antigravity"
     assert provider_to_route_id("claude") == "oauth:claude"
-    assert provider_to_route_id("xai") == "oauth:xai"
+    # "xai" maps to direct:xai because xai is supported as a direct provider
+    # and norm in OAUTH_PROVIDERS checks norm != "xai"
+    assert provider_to_route_id("xai") == "direct:xai"
     assert provider_to_route_id("kimi") == "oauth:kimi"
     assert provider_to_route_id("kimi-ai") == "oauth:kimi-ai"
     assert provider_to_route_id("meta") == "oauth:meta"

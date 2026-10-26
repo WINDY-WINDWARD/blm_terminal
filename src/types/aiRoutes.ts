@@ -223,3 +223,14 @@ export interface EndpointTestResponse {
   latency_ms: number;
   error?: string;
 }
+
+export interface SetRouteEnabledRequest {
+  enabled: boolean;
+}
+
+export interface SetRouteEnabledResponse {
+  status: 'enabled' | 'disabled';
+  route_id: string;
+  active_route_id: string | null;
+}
+

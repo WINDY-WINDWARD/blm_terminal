@@ -310,6 +310,184 @@ async def test_route_activation_and_validation(test_env):
         bad3 = await client.post("/api/ai/routes/endpoint:00000000-0000-0000-0000-000000000000/activate")
         assert bad3.status_code == 404
 
+        # 4. Reject activating disabled routes with 409
+        disable_resp = await client.patch("/api/ai/routes/direct:openai/enabled", json={"enabled": False})
+        assert disable_resp.status_code == 200
+        assert disable_resp.json()["status"] == "disabled"
+
+        disabled_act = await client.post("/api/ai/routes/direct:openai/activate")
+        assert disabled_act.status_code == 409
+        assert "disabled and cannot be activated" in disabled_act.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_enabling_unusable_route_does_not_steal_default(test_env):
+    """Enabling a route that has no usable credentials/keys does not steal default route."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        # First activate direct:openai
+        act_resp = await client.post("/api/ai/routes/direct:openai/activate")
+        assert act_resp.status_code == 200
+
+        # oauth:claude has no accounts/credentials configured yet.
+        # Disable it first to make sure toggle occurs
+        d_resp = await client.patch("/api/ai/routes/oauth:claude/enabled", json={"enabled": False})
+        assert d_resp.status_code == 200
+
+        # Now re-enable oauth:claude. Since direct:openai is active and usable,
+        # and oauth:claude is NOT usable, active_route_id MUST remain direct:openai.
+        e_resp = await client.patch("/api/ai/routes/oauth:claude/enabled", json={"enabled": True})
+        assert e_resp.status_code == 200
+        assert e_resp.json()["status"] == "enabled"
+        assert e_resp.json()["active_route_id"] == "direct:openai"
+
+
+@pytest.mark.asyncio
+async def test_route_enabled_toggle_direct_round_trip(test_env, monkeypatch):
+    """Disabling a direct route persists, flips list_routes, and hides it from the catalog."""
+    from app.services import route_catalog
+
+    supervisor = test_env["supervisor"]
+    monkeypatch.setattr(supervisor, "list_proxy_models", AsyncMock(return_value=[]))
+    monkeypatch.setattr(route_catalog, "get_proxy_supervisor", lambda: supervisor)
+
+    async def _always_configured(route_id=None):  # noqa: ANN001 - test double
+        return True
+
+    monkeypatch.setattr(
+        route_catalog.ai_config_module, "is_ai_provider_configured", _always_configured
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        async with test_env["session_factory"]() as session:
+            enabled_catalog, _ = await route_catalog.get_all_route_catalogs(session=session)
+        assert "direct:groq" in {entry["route_id"] for entry in enabled_catalog}
+
+        off = await client.patch("/api/ai/routes/direct:groq/enabled", json={"enabled": False})
+        assert off.status_code == 200
+        off_body = off.json()
+        assert off_body["status"] == "disabled"
+        assert off_body["route_id"] == "direct:groq"
+        assert off_body["active_route_id"] != "direct:groq"
+
+        async with test_env["session_factory"]() as session:
+            stored = (await session.execute(
+                select(SystemConfig.value).where(SystemConfig.key == "ai.disabled_routes")
+            )).scalar_one_or_none()
+            assert stored is not None
+            assert "direct:groq" in json.loads(stored)
+            disabled_catalog, _ = await route_catalog.get_all_route_catalogs(session=session)
+            with pytest.raises(ValueError, match="unavailable"):
+                await route_catalog.get_route_models("direct:groq", session)
+
+        assert "direct:groq" not in {entry["route_id"] for entry in disabled_catalog}
+
+        listing = (await client.get("/api/ai/routes")).json()
+        groq_route = next(r for r in listing["routes"] if r["id"] == "direct:groq")
+        assert groq_route["enabled"] is False
+
+        on = await client.patch("/api/ai/routes/direct:groq/enabled", json={"enabled": True})
+        assert on.status_code == 200
+        assert on.json()["status"] == "enabled"
+
+        async with test_env["session_factory"]() as session:
+            stored = (await session.execute(
+                select(SystemConfig.value).where(SystemConfig.key == "ai.disabled_routes")
+            )).scalar_one_or_none()
+            assert not stored or "direct:groq" not in json.loads(stored)
+
+        listing = (await client.get("/api/ai/routes")).json()
+        groq_route = next(r for r in listing["routes"] if r["id"] == "direct:groq")
+        assert groq_route["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_disabling_active_route_releases_default(test_env):
+    """Disabling the active default route must not leave it as the default."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        act = await client.post("/api/ai/routes/direct:groq/activate")
+        assert act.status_code == 200
+        assert act.json()["active_route_id"] == "direct:groq"
+
+        off = await client.patch("/api/ai/routes/direct:groq/enabled", json={"enabled": False})
+        assert off.status_code == 200
+        assert off.json()["active_route_id"] != "direct:groq"
+
+        async with test_env["session_factory"]() as session:
+            stored = (await session.execute(
+                select(SystemConfig.value).where(SystemConfig.key == "ai.provider")
+            )).scalar_one_or_none()
+        assert not stored or stored.strip() != "direct:groq"
+
+
+@pytest.mark.asyncio
+async def test_route_enabled_toggle_endpoint_round_trip(test_env, monkeypatch):
+    """Disabling a custom endpoint removes it from the catalog and list_routes."""
+    from app.services import route_catalog
+
+    supervisor = test_env["supervisor"]
+    monkeypatch.setattr(supervisor, "list_proxy_models", AsyncMock(return_value=[]))
+    monkeypatch.setattr(route_catalog, "get_proxy_supervisor", lambda: supervisor)
+
+    async def _always_configured(route_id=None):  # noqa: ANN001 - test double
+        return True
+
+    monkeypatch.setattr(
+        route_catalog.ai_config_module, "is_ai_provider_configured", _always_configured
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        create = await client.post(
+            "/api/ai/routes/endpoints",
+            json={
+                "display_label": "Toggle Endpoint",
+                "base_url": "https://api.toggle.test/v1",
+                "models": ["toggle-model-a"],
+                "keys": [{"api_key": "sk-toggle-endpoint-12345", "priority": 1, "weight": 1}],
+            },
+        )
+        assert create.status_code == 200
+        route_id = create.json()["id"]
+
+        catalog = (await client.get("/api/ai/routes/models")).json()
+        assert route_id in {entry["route_id"] for entry in catalog["routes"]}
+
+        off = await client.patch(f"/api/ai/routes/{route_id}/enabled", json={"enabled": False})
+        assert off.status_code == 200
+        assert off.json()["status"] == "disabled"
+
+        catalog = (await client.get("/api/ai/routes/models")).json()
+        assert route_id not in {entry["route_id"] for entry in catalog["routes"]}
+
+        listing = (await client.get("/api/ai/routes")).json()
+        endpoint_route = next(r for r in listing["routes"] if r["id"] == route_id)
+        assert endpoint_route["enabled"] is False
+
+        on = await client.patch(f"/api/ai/routes/{route_id}/enabled", json={"enabled": True})
+        assert on.status_code == 200
+        assert on.json()["status"] == "enabled"
+
+        catalog = (await client.get("/api/ai/routes/models")).json()
+        assert route_id in {entry["route_id"] for entry in catalog["routes"]}
+
+
+@pytest.mark.asyncio
+async def test_route_enabled_toggle_rejects_unknown_routes(test_env):
+    """Unknown prefixes, providers, endpoints, and unsupported direct routes return 404."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=test_env["headers"]) as client:
+        for route_id in (
+            "bogus:route",
+            "oauth:not-a-provider",
+            "endpoint:00000000-0000-0000-0000-000000000000",
+            "direct:copilot",
+        ):
+            resp = await client.patch(f"/api/ai/routes/{route_id}/enabled", json={"enabled": False})
+            assert resp.status_code == 404, route_id
+
 
 @pytest.mark.asyncio
 async def test_route_settings_update(test_env):
