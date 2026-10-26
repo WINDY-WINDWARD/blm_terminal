@@ -217,6 +217,7 @@ async def add_watchlist_item(
                 "watchlist_id": new_item.watchlist_id,
                 "symbol": new_item.symbol,
                 "exchange": new_item.exchange,
+                "created_at": new_item.created_at,
             }
 
     item_dict = await enqueue_write_async(PRIO_UI_ACTION, _add_item_sync)
@@ -385,6 +386,7 @@ async def add_default_watchlist_item(
                 "watchlist_id": new_item.watchlist_id,
                 "symbol": new_item.symbol,
                 "exchange": new_item.exchange,
+                "created_at": new_item.created_at,
             }
 
     item_dict = await enqueue_write_async(PRIO_UI_ACTION, _add_legacy_sync)

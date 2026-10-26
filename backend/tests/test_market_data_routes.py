@@ -254,3 +254,90 @@ def test_symbol_data_route_binds_repeated_query_params(monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert captured == [["RELIANCE", "TCS"]], captured
+
+
+def test_market_categories_serialization_shape():
+    """MarketCategoryOut must include return_1d, return_1w, return_1m, return_6m as nullable floats."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.database import get_db
+    from app.models.marketcategory import MarketCategory
+    from app.routers import markets as markets_router_module
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    mock_cat = MarketCategory(
+        category_type="sector",
+        slug="banks",
+        name="Banks",
+        url=None,
+        market_cap=12345.6,
+        pe=15.2,
+        advance=10,
+        decline=5,
+        sentiment="Bullish",
+        earnings_yoy=12.5,
+        return_1d=0.75,
+        return_1w=1.25,
+        return_1m=None,
+        return_6m=-3.4,
+        last_updated=now,
+        created_at=now,
+    )
+
+    app = FastAPI()
+    app.include_router(markets_router_module.router, prefix="/api")
+
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_cat]
+    mock_db.execute.return_value = mock_result
+
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    client = TestClient(app)
+    resp = client.get("/api/markets/sectors")
+    assert resp.status_code == 200, resp.text
+    items = resp.json()
+    assert len(items) == 1
+    item = items[0]
+    assert item["slug"] == "banks"
+    assert item["return_1d"] == 0.75
+    assert item["return_1w"] == 1.25
+    assert item["return_1m"] is None
+    assert "return_1m" in item
+    assert item["return_6m"] == -3.4
+
+    # Also test industries route where returns are completely unknown (all None)
+    mock_cat_empty = MarketCategory(
+        category_type="industry",
+        slug="bank-private",
+        name="Bank - Private",
+        url=None,
+        market_cap=None,
+        pe=None,
+        advance=0,
+        decline=0,
+        sentiment=None,
+        earnings_yoy=None,
+        return_1d=None,
+        return_1w=None,
+        return_1m=None,
+        return_6m=None,
+        last_updated=now,
+        created_at=now,
+    )
+    mock_result.scalars.return_value.all.return_value = [mock_cat_empty]
+    resp_ind = client.get("/api/markets/industries")
+    assert resp_ind.status_code == 200, resp_ind.text
+    items_ind = resp_ind.json()
+    assert len(items_ind) == 1
+    item_ind = items_ind[0]
+    assert item_ind["slug"] == "bank-private"
+    assert "return_1d" in item_ind and item_ind["return_1d"] is None
+    assert "return_1w" in item_ind and item_ind["return_1w"] is None
+    assert "return_1m" in item_ind and item_ind["return_1m"] is None
+    assert "return_6m" in item_ind and item_ind["return_6m"] is None
+

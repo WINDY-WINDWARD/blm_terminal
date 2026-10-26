@@ -67,6 +67,28 @@ def _breadth_sentiment(advance: int, decline: int) -> str | None:
     return "Neutral"
 
 
+def _cap_weighted_return(pairs: list[tuple[float | None, float | None]]) -> float | None:
+    valid_returns: list[float] = []
+    weighted_sum = 0.0
+    mcap_sum = 0.0
+
+    for ret, mcap in pairs:
+        if ret is None:
+            continue
+        valid_returns.append(ret)
+        if mcap is not None and mcap > 0:
+            weighted_sum += mcap * ret
+            mcap_sum += mcap
+
+    if not valid_returns:
+        return None
+
+    if mcap_sum > 0:
+        return weighted_sum / mcap_sum
+
+    return sum(valid_returns) / len(valid_returns)
+
+
 async def _refresh_market_data_local_async() -> None:
     """Build market_categories + market_category_stocks purely from local DB."""
     from app.database import AsyncSessionLocal
@@ -90,12 +112,29 @@ async def _refresh_market_data_local_async() -> None:
         # Per-stock % change: precomputed 1d returns (percent units)
         score_rows = (
             await session.execute(
-                select(TickerScore.symbol, TickerScore.return_1d)
+                select(
+                    TickerScore.symbol,
+                    TickerScore.return_1d,
+                    TickerScore.return_1w,
+                    TickerScore.return_1m,
+                    TickerScore.return_6m,
+                )
             )
         ).all()
         change_by_symbol: dict[str, float] = {
-            sym: ret for sym, ret in score_rows if ret is not None
+            sym: ret for sym, ret, _w, _m, _6m in score_rows if ret is not None
         }
+        period_returns: dict[str, dict[str, float]] = {}
+        for sym, _1d, ret_1w, ret_1m, ret_6m in score_rows:
+            periods: dict[str, float] = {}
+            if ret_1w is not None:
+                periods["1w"] = ret_1w
+            if ret_1m is not None:
+                periods["1m"] = ret_1m
+            if ret_6m is not None:
+                periods["6m"] = ret_6m
+            if periods:
+                period_returns[sym] = periods
 
         # Previously stored fundamentals (written by the fundamentals
         # backfill worker). These must be preserved — the rows below are
@@ -199,6 +238,10 @@ async def _refresh_market_data_local_async() -> None:
             mcap_seen = False
             pe_vals: list[float] = []
             yoy_vals: list[float] = []
+            pairs_1d: list[tuple[float | None, float | None]] = []
+            pairs_1w: list[tuple[float | None, float | None]] = []
+            pairs_1m: list[tuple[float | None, float | None]] = []
+            pairs_6m: list[tuple[float | None, float | None]] = []
             for m in members:
                 chg = change_by_symbol.get(m.symbol)
                 if chg is not None:
@@ -217,6 +260,11 @@ async def _refresh_market_data_local_async() -> None:
                 yoy = _member_np_yoy(m.symbol)
                 if yoy is not None:
                     yoy_vals.append(yoy)
+                pairs_1d.append((chg, mcap))
+                rets = period_returns.get(m.symbol, {})
+                pairs_1w.append((rets.get("1w"), mcap))
+                pairs_1m.append((rets.get("1m"), mcap))
+                pairs_6m.append((rets.get("6m"), mcap))
             return {
                 "market_cap": mcap_total if mcap_seen else None,
                 "pe": (sum(pe_vals) / len(pe_vals)) if pe_vals else None,
@@ -224,6 +272,10 @@ async def _refresh_market_data_local_async() -> None:
                 "decline": decline,
                 "sentiment": _breadth_sentiment(advance, decline),
                 "earnings_yoy": (sum(yoy_vals) / len(yoy_vals)) if yoy_vals else None,
+                "return_1d": _cap_weighted_return(pairs_1d),
+                "return_1w": _cap_weighted_return(pairs_1w),
+                "return_1m": _cap_weighted_return(pairs_1m),
+                "return_6m": _cap_weighted_return(pairs_6m),
             }
 
         # Build category rows
@@ -300,6 +352,10 @@ async def _refresh_market_data_local_async() -> None:
                     "decline": data.get("decline"),
                     "sentiment": data.get("sentiment"),
                     "earnings_yoy": data.get("earnings_yoy"),
+                    "return_1d": data.get("return_1d"),
+                    "return_1w": data.get("return_1w"),
+                    "return_1m": data.get("return_1m"),
+                    "return_6m": data.get("return_6m"),
                     "last_updated": now,
                 })
             # Distinct raw names can slug-collide (UNIQUE(category_type,

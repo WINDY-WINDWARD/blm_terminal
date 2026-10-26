@@ -20,6 +20,10 @@ class MarketCategoryOut(BaseModel):
     decline: int | None
     sentiment: str | None
     earnings_yoy: float | None
+    return_1d: float | None = None
+    return_1w: float | None = None
+    return_1m: float | None = None
+    return_6m: float | None = None
     last_updated: datetime
     created_at: datetime
 

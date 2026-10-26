@@ -237,3 +237,73 @@ class TestMigrationDedupe:
         ).fetchall()
         assert rows == [("RELIANCE", "new"), ("TCS", "only")]
         conn.close()
+
+
+class TestCapWeightedReturn:
+    def test_two_unequal_cap_members(self):
+        from app.services.data_sync.market_local import _cap_weighted_return
+
+        r_a, mcap_a = 5.0, 100.0
+        r_b, mcap_b = 15.0, 300.0
+        pairs = [(r_a, mcap_a), (r_b, mcap_b)]
+        res = _cap_weighted_return(pairs)
+        expected = (mcap_a * r_a + mcap_b * r_b) / (mcap_a + mcap_b)
+        plain_mean = (r_a + r_b) / 2.0
+
+        assert res == pytest.approx(expected)
+        assert res != pytest.approx(plain_mean)
+
+    def test_one_member_with_none_return(self):
+        from app.services.data_sync.market_local import _cap_weighted_return
+
+        pairs = [(None, 500.0), (10.0, 200.0), (20.0, 300.0)]
+        res = _cap_weighted_return(pairs)
+        expected = (200.0 * 10.0 + 300.0 * 20.0) / (200.0 + 300.0)
+        assert res == pytest.approx(expected)
+
+    def test_all_returns_none(self):
+        from app.services.data_sync.market_local import _cap_weighted_return
+
+        pairs = [(None, 100.0), (None, None), (None, 0.0)]
+        res = _cap_weighted_return(pairs)
+        assert res is None
+
+    def test_scores_present_but_every_market_cap_missing_or_zero(self):
+        from app.services.data_sync.market_local import _cap_weighted_return
+
+        pairs = [(4.0, None), (6.0, 0.0), (8.0, -10.0)]
+        res = _cap_weighted_return(pairs)
+        expected_equal_weight = (4.0 + 6.0 + 8.0) / 3.0
+        assert res == pytest.approx(expected_equal_weight)
+
+    def test_category_horizons_including_1d(self):
+        from app.services.data_sync.market_local import _cap_weighted_return
+
+        mcap_a, mcap_b = 100.0, 300.0
+        pairs_1d = [(2.0, mcap_a), (4.0, mcap_b)]
+        pairs_1w = [(5.0, mcap_a), (15.0, mcap_b)]
+        pairs_1m = [(10.0, mcap_a), (20.0, mcap_b)]
+        pairs_6m = [(20.0, mcap_a), (30.0, mcap_b)]
+
+        assert _cap_weighted_return(pairs_1d) == pytest.approx(
+            (mcap_a * 2.0 + mcap_b * 4.0) / (mcap_a + mcap_b)
+        )
+        assert _cap_weighted_return(pairs_1w) == pytest.approx(
+            (mcap_a * 5.0 + mcap_b * 15.0) / (mcap_a + mcap_b)
+        )
+        assert _cap_weighted_return(pairs_1m) == pytest.approx(
+            (mcap_a * 10.0 + mcap_b * 20.0) / (mcap_a + mcap_b)
+        )
+        assert _cap_weighted_return(pairs_6m) == pytest.approx(
+            (mcap_a * 20.0 + mcap_b * 30.0) / (mcap_a + mcap_b)
+        )
+
+    def test_category_member_with_no_1d_change_returns_none(self):
+        from app.services.data_sync.market_local import _cap_weighted_return
+
+        pairs_1d = [(None, 500.0)]
+        res = _cap_weighted_return(pairs_1d)
+        assert res is None
+        assert res != 0
+
+
