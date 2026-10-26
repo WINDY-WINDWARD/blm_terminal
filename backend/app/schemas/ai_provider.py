@@ -61,6 +61,10 @@ class UpdateEndpointRequest(BaseModel):
     enabled: bool | None = None
 
 
+class RouteEnabledUpdate(BaseModel):
+    enabled: bool
+
+
 class AccountPatchRequest(BaseModel):
     priority: int | None = None
     weight: int | None = None

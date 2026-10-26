@@ -4,14 +4,10 @@ import React, { useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  CheckCircle2,
   Cpu,
   Layers,
   Lock,
-  RefreshCw,
   Server,
-  ShieldAlert,
-  ShieldCheck,
   ToggleLeft,
   ToggleRight,
   Zap,
@@ -88,10 +84,10 @@ export function TopSummary({ data }: TopSummaryProps) {
 
       {/* Primary Summary Bento Matrix Strip */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5">
-        {/* 1. Active Route */}
+        {/* 1. Default Route */}
         <div className="flex flex-col gap-1 p-2 rounded bg-[#09090b] border border-zinc-800/80">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase text-zinc-400 font-bold tracking-wider">ACTIVE ROUTE</span>
+            <span className="text-[10px] uppercase text-zinc-400 font-bold tracking-wider">DEFAULT ROUTE</span>
             <Zap className="w-3.5 h-3.5 text-terminal-amber" />
           </div>
           <div

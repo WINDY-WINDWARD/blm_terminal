@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from unittest.mock import AsyncMock
+
 import pytest
 import yaml
 
@@ -54,6 +56,7 @@ async def test_build_entries_maps_sections_and_omits_default_model_lists(monkeyp
         return KEYS.get(provider, "")
 
     monkeypatch.setattr(ai_config, "get_dynamic_ai_api_key", fake_key)
+    monkeypatch.setattr("app.services.direct_proxy_routes.get_disabled_direct_routes", AsyncMock(return_value=set()))
 
     entries = await build_direct_proxy_entries()
     by_name = {entry["name"]: entry for entry in entries}
@@ -88,8 +91,36 @@ async def test_missing_key_route_is_skipped(monkeypatch):
         return "" if provider == "go" else KEYS.get(provider, "")
 
     monkeypatch.setattr(ai_config, "get_dynamic_ai_api_key", fake_key)
+    monkeypatch.setattr("app.services.direct_proxy_routes.get_disabled_direct_routes", AsyncMock(return_value=set()))
     names = {entry["name"] for entry in await build_direct_proxy_entries()}
     assert "go" not in names
+
+
+@pytest.mark.asyncio
+async def test_disabled_direct_routes_are_excluded(monkeypatch):
+    async def fake_key(provider: str) -> str:
+        return KEYS.get(provider, "")
+
+    monkeypatch.setattr(ai_config, "get_dynamic_ai_api_key", fake_key)
+    monkeypatch.setattr(
+        "app.services.direct_proxy_routes.get_disabled_direct_routes",
+        AsyncMock(return_value={"direct:openai", "direct:groq"}),
+    )
+    entries = await build_direct_proxy_entries()
+    names = {entry["name"] for entry in entries}
+    assert "openai" not in names
+    assert "groq" not in names
+    assert "aistudio" in names
+
+
+@pytest.mark.asyncio
+async def test_build_direct_proxy_entries_raises_on_db_failure(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.direct_proxy_routes.get_disabled_direct_routes",
+        AsyncMock(side_effect=RuntimeError("db error")),
+    )
+    with pytest.raises(RuntimeError, match="db error"):
+        await build_direct_proxy_entries()
 
 
 def test_generate_config_merges_direct_and_custom_entries():

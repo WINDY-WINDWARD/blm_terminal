@@ -10,15 +10,14 @@ import {
   Eye,
   EyeOff,
   Key,
-  Layers,
   Loader2,
   RefreshCw,
   ShieldCheck,
-  Zap,
 } from 'lucide-react';
-import { useActivateRouteMutation, useInvalidateAiCaches } from '@/hooks/useAiRoutes';
+import { useActivateRouteMutation, useInvalidateAiCaches, useSetRouteEnabledMutation } from '@/hooks/useAiRoutes';
 import { AI_PROVIDERS, type AiProviderMeta } from '@/lib/aiProviders';
 import { AiProviderInstructions } from '@/components/AiProviderInstructions';
+import { RouteActiveToggle } from './RouteActiveToggle';
 import type { RouteSummary } from '@/types/aiRoutes';
 
 interface DirectProvidersTabProps {
@@ -28,6 +27,7 @@ interface DirectProvidersTabProps {
 
 export function DirectProvidersTab({ routes, activeRouteId }: DirectProvidersTabProps) {
   const activateRouteMutation = useActivateRouteMutation();
+  const setRouteEnabledMutation = useSetRouteEnabledMutation();
   const invalidateAiCaches = useInvalidateAiCaches();
 
   // Filter to API-key based direct providers
@@ -200,7 +200,8 @@ export function DirectProvidersTab({ routes, activeRouteId }: DirectProvidersTab
           {directProviders.map((p) => {
             const isSelected = p.id === selectedProviderId;
             const r = routeMap.get(p.id) || routeMap.get(`direct:${p.id}`);
-            const isActive = activeRouteId === `direct:${p.id}` || activeRouteId === p.id;
+            const isDefault = activeRouteId === `direct:${p.id}` || activeRouteId === p.id;
+            const isEnabled = r?.enabled ?? true;
             const isConfigured = Boolean(r?.config?.is_configured);
 
             return (
@@ -221,12 +222,18 @@ export function DirectProvidersTab({ routes, activeRouteId }: DirectProvidersTab
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {isActive ? (
+                  {isDefault ? (
                     <span
                       data-testid={`active-badge-${p.id}`}
-                      className="px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-400 font-mono text-[9px] font-bold"
+                      className="px-1.5 py-0.5 rounded bg-zinc-800/80 border border-zinc-700 text-zinc-300 font-mono text-[9px] font-bold uppercase"
                     >
-                      ACTIVE
+                      DEFAULT
+                    </span>
+                  ) : !isEnabled ? (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-zinc-800/50 border border-zinc-800 text-zinc-500 font-mono text-[9px] font-bold"
+                    >
+                      INACTIVE
                     </span>
                   ) : isConfigured ? (
                     <span
@@ -252,21 +259,6 @@ export function DirectProvidersTab({ routes, activeRouteId }: DirectProvidersTab
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
                     <h3 className="font-mono font-bold text-sm text-white">{selectedMeta.label}</h3>
-                    {isSelectedActive ? (
-                      <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-400 font-mono text-[10px] font-bold flex items-center gap-1">
-                        <Zap className="w-3 h-3" />
-                        ACTIVE ROUTE
-                      </span>
-                    ) : isSelectedConfigured ? (
-                      <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono text-[10px] flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                        Configured
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded bg-zinc-900 text-zinc-500 font-mono text-[10px]">
-                        Not Configured
-                      </span>
-                    )}
                   </div>
                   <span className="text-[11px] font-mono text-zinc-400">
                     Route ID: <code className="text-zinc-300">direct:{selectedMeta.id}</code> · Slot:{' '}
@@ -274,17 +266,26 @@ export function DirectProvidersTab({ routes, activeRouteId }: DirectProvidersTab
                   </span>
                 </div>
 
-                {!isSelectedActive && (
-                  <button
-                    type="button"
-                    onClick={() => handleActivate(selectedMeta.id)}
-                    disabled={activateRouteMutation.isPending}
-                    data-testid={`activate-direct-route-btn`}
-                    className="px-3.5 py-1.5 rounded bg-terminal-amber hover:bg-amber-400 text-black font-mono text-xs font-bold transition-colors cursor-pointer shrink-0"
-                  >
-                    Set as Active Route
-                  </button>
-                )}
+                <RouteActiveToggle
+                  enabled={selectedRoute?.enabled ?? true}
+                  isDefault={isSelectedActive}
+                  configured={isSelectedConfigured}
+                  isPending={
+                    setRouteEnabledMutation.isPending &&
+                    (setRouteEnabledMutation.variables?.routeId === `direct:${selectedMeta.id}` ||
+                      setRouteEnabledMutation.variables?.routeId === selectedRoute?.id)
+                  }
+                  testId="direct-route-active-toggle"
+                  onToggle={() => {
+                    const routeId = selectedRoute?.id || `direct:${selectedMeta.id}`;
+                    const currentEnabled = selectedRoute?.enabled ?? true;
+                    setRouteEnabledMutation.mutate({
+                      routeId,
+                      enabled: !currentEnabled,
+                    });
+                  }}
+                  onMakeDefault={() => handleActivate(selectedMeta.id)}
+                />
               </div>
 
               {/* Instructions Callout */}

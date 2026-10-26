@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.database import Base
 from app.models.ai_provider import AIProviderCredential, AIProviderRoute
+from app.models.system_config import SystemConfig  # noqa: F401  (catalog reads ai.disabled_routes)
 from app.services.route_catalog import (
     _build_model_warning,
     _fetch_live_models,

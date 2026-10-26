@@ -21,7 +21,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.services.route_registry import compute_oauth_proxy_prefix
+from app.services.route_registry import compute_oauth_proxy_prefix, get_disabled_direct_routes
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ def is_supported_direct_route(route_id: str) -> bool:
     return bool(spec and spec.supported)
 
 
-async def build_direct_proxy_entries() -> list[dict[str, Any]]:
+async def build_direct_proxy_entries(session: Any = None) -> list[dict[str, Any]]:
     """Build CLIProxyAPI config entries for every configured direct provider.
 
     Keys are read from the existing settings/SystemConfig sources and only exist in
@@ -224,8 +224,19 @@ async def build_direct_proxy_entries() -> list[dict[str, Any]]:
     """
     from app.services.ai_config import get_dynamic_ai_api_key
 
+    disabled_routes: set[str] = set()
+    if session is not None:
+        disabled_routes = await get_disabled_direct_routes(session)
+    else:
+        from app.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db_session:
+            disabled_routes = await get_disabled_direct_routes(db_session)
+
     entries: list[dict[str, Any]] = []
     for route_id in SUPPORTED_ROUTE_IDS:
+        if route_id in disabled_routes:
+            continue
         spec = DIRECT_ROUTES[route_id]
         try:
             api_key = await get_dynamic_ai_api_key(spec.provider)

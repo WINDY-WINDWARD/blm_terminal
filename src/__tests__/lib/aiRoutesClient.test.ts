@@ -59,6 +59,29 @@ describe('aiRoutesClient', () => {
     });
   });
 
+  it('setRouteEnabled calls PATCH /api/py/ai/routes/:routeId/enabled with credentials and json body', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      createJsonResponse(200, {
+        status: 'disabled',
+        route_id: 'oauth:codex',
+        active_route_id: null,
+      }),
+    );
+
+    const res = await aiRoutesClient.setRouteEnabled('oauth:codex', false);
+    expect(res).toEqual({
+      status: 'disabled',
+      route_id: 'oauth:codex',
+      active_route_id: null,
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/py/ai/routes/oauth%3Acodex/enabled', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ enabled: false }),
+    });
+  });
+
   it('updateRouteSettings calls PATCH /api/py/ai/routes/settings with json body and credentials', async () => {
     vi.mocked(fetch).mockResolvedValue(createJsonResponse(200, { status: 'updated' }));
 

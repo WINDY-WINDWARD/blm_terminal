@@ -310,6 +310,21 @@ async def get_route_models(route_id: str, session=None, *, live_timeout: float =
             get_direct_route,
             is_supported_direct_route,
         )
+        from app.services.route_registry import get_disabled_direct_routes
+
+        if session is not None:
+            disabled_direct = await get_disabled_direct_routes(session)
+        else:
+            try:
+                from app.database import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as database:
+                    disabled_direct = await get_disabled_direct_routes(database)
+            except Exception:
+                disabled_direct = set()
+
+        if route_id in disabled_direct:
+            raise ValueError("Selected provider route is unavailable")
 
         if not is_supported_direct_route(route_id):
             return []
@@ -497,9 +512,12 @@ async def get_all_route_catalogs(
         direct_proxy_prefix,
         get_direct_route,
     )
+    from app.services.route_registry import get_disabled_direct_routes
+
+    disabled_direct = await get_disabled_direct_routes(session)
 
     for route_id in SUPPORTED_ROUTE_IDS:
-        if route_id in db_route_ids:
+        if route_id in db_route_ids or route_id in disabled_direct:
             continue
 
         spec = get_direct_route(route_id)
