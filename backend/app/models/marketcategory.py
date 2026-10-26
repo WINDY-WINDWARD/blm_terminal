@@ -32,6 +32,10 @@ class MarketCategory(Base):
     decline: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sentiment: Mapped[str | None] = mapped_column(String(32), nullable=True)
     earnings_yoy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_1d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_1w: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_1m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    return_6m: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_updated: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), nullable=False
     )
