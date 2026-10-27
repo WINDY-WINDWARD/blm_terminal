@@ -152,14 +152,19 @@ Write-Host ">>> Verifying published assets..." -ForegroundColor Yellow
 $ErrorActionPreference = "Continue"
 $AssetNames = gh release view $TagName --repo $GithubRepo --json assets --jq ".assets[].name" 2>&1
 $ErrorActionPreference = "Stop"
+# GitHub rewrites spaces in asset names to dots ("BLM Terminal Setup X.exe"
+# becomes "BLM.Terminal.Setup.X.exe"), so compare on the normalised form. The
+# landing portal maps the dotted name back when it serves latest.yml's path.
+function ConvertTo-AssetKey([string]$Name) { return ($Name -replace '\s', '.') }
+
 $ExpectedNames = @(
     "BLM Terminal Setup $Version.exe",
     "BLM Terminal Setup $Version.exe.blockmap",
     "latest.yml",
     "ota-manifest.json",
     "ota-manifest.sig"
-)
-$PublishedNames = @($AssetNames | Where-Object { $_ -and $_ -notmatch '^\s*$' })
+) | ForEach-Object { ConvertTo-AssetKey $_ }
+$PublishedNames = @($AssetNames | Where-Object { $_ -and $_ -notmatch '^\s*$' } | ForEach-Object { ConvertTo-AssetKey $_ })
 foreach ($name in $ExpectedNames) {
     if ($PublishedNames -notcontains $name) {
         Write-Error "Published release is missing asset: $name"
