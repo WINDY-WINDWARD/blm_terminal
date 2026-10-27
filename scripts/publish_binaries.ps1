@@ -40,11 +40,14 @@ if (-not (Test-Path $DistDesktopDir)) {
     exit 1
 }
 
-# 6. Find artifacts to upload (.exe, latest.yml, .blockmap, .json, .sig)
 # 5. Find artifacts to upload (.exe, latest.yml, .blockmap)
+#
+# Only electron-builder's own latest.yml is release metadata. A blanket
+# ".yml" filter also swept up builder-debug.yml, which shipped v2026.10.9 with
+# a sixth, meaningless asset (every earlier release had exactly five).
 $Artifacts = Get-ChildItem -Path $DistDesktopDir -File | Where-Object {
     ($_.Extension -eq ".exe" -and $_.Name -like "*$Version*") -or
-    $_.Extension -eq ".yml" -or
+    $_.Name -eq "latest.yml" -or
     ($_.Extension -eq ".blockmap" -and $_.Name -like "*$Version*")
 }
 
@@ -88,3 +91,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ">>> Successfully published artifacts to GitHub Releases!" -ForegroundColor Green
+
+# 7. The OTA manifest is NOT uploaded by this script: it must be signed after
+# the build produced above (signing a pre-build manifest signs the wrong
+# installer). Remind the operator instead of silently shipping five assets.
+$OtaManifest = Join-Path $DistDesktopDir "ota-manifest.json"
+$OtaSignature = Join-Path $DistDesktopDir "ota-manifest.sig"
+if ((Test-Path $OtaManifest) -and (Test-Path $OtaSignature)) {
+    Write-Host ">>> Reminder: upload the signed OTA manifest for ${Version}:" -ForegroundColor Yellow
+    Write-Host "    gh release upload $TagName `"$OtaManifest`" `"$OtaSignature`" --repo $GithubRepo --clobber" -ForegroundColor Yellow
+} else {
+    Write-Host ">>> WARNING: ota-manifest.json / ota-manifest.sig are missing from $DistDesktopDir." -ForegroundColor Red
+    Write-Host "    Sign the manifest for $Version and upload it, otherwise OTA clients cannot verify this release." -ForegroundColor Red
+}

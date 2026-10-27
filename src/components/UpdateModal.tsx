@@ -8,6 +8,11 @@ interface UpdateInfo {
   releaseNotes?: string;
 }
 
+// electron-updater emits download-progress roughly once a second while bytes
+// move. Silence for this long means the transfer died (proxy drop, DNS flap,
+// disk full) and the bar would otherwise sit at the last percentage forever.
+const STALL_TIMEOUT_MS = 90_000;
+
 export function UpdateModal() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -37,6 +42,10 @@ export function UpdateModal() {
         setDownloading(false);
         setUpdateReady(true);
         setErrorMessage(null);
+        setDownloadProgress(100);
+        // Installation always needs one explicit click, so surface the modal
+        // again if the user hid it while the download was still running.
+        setDismissed(false);
       } else if (msg.status === 'error') {
         setDownloading(false);
         setUpdateReady(false);
@@ -44,6 +53,18 @@ export function UpdateModal() {
       }
     });
   }, []);
+
+  // Stall guard: clear the downloading state when progress stops arriving so
+  // the modal can never trap the user on a dead progress bar.
+  useEffect(() => {
+    if (!downloading) return;
+    const timer = setTimeout(() => {
+      setDownloading(false);
+      setUpdateReady(false);
+      setErrorMessage('Download stalled — no progress for 90 seconds. Retry, or install the update manually from the release page.');
+    }, STALL_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [downloading, downloadProgress]);
 
   if (!updateAvailable || dismissed) {
     return null;
@@ -55,11 +76,21 @@ export function UpdateModal() {
       setDownloadProgress(0);
       setErrorMessage(null);
       setUpdateReady(false);
-      window.electronAPI.downloadUpdate().catch((err: unknown) => {
-        setDownloading(false);
-        setUpdateReady(false);
-        setErrorMessage(err instanceof Error ? err.message : String(err));
-      });
+      // A resolved downloadUpdate() promise is success on its own. Relying on
+      // the 'downloaded' IPC message alone is what stranded this modal at 0%.
+      window.electronAPI
+        .downloadUpdate()
+        .then(() => {
+          setDownloadProgress(100);
+          setDownloading(false);
+          setUpdateReady(true);
+          setErrorMessage(null);
+        })
+        .catch((err: unknown) => {
+          setDownloading(false);
+          setUpdateReady(false);
+          setErrorMessage(err instanceof Error ? err.message : String(err));
+        });
     }
   };
 
@@ -127,11 +158,10 @@ export function UpdateModal() {
             <>
               <button
                 type="button"
-                disabled={downloading}
                 onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs text-terminal-muted hover:text-white border border-terminal-border hover:border-terminal-muted transition-colors disabled:opacity-40"
+                className="px-3 py-1.5 text-xs text-terminal-muted hover:text-white border border-terminal-border hover:border-terminal-muted transition-colors"
               >
-                Remind Me Later
+                {downloading ? 'Hide' : 'Remind Me Later'}
               </button>
               <button
                 type="button"

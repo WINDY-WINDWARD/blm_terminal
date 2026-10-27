@@ -982,8 +982,20 @@ async function startApp() {
       sendStatusToWindow('error', err?.message || String(err));
     });
     autoUpdater.on('download-progress', (progressObj) => sendStatusToWindow('progress', progressObj));
+
+    // `update-downloaded` is the only signal that a package is fully staged.
+    // c2026302 turned this handler into a log-only observer (to gate on OTA
+    // manifest verification), 58d58254 then deleted that verifier, and the
+    // renderer was never told again: UpdateModal stayed on "Downloading
+    // package... 0%" with both buttons disabled, a modal nobody could dismiss.
+    // Forward the event unconditionally and remember the payload so
+    // install-update has something to install.
+    let updateDownloadedNotified = false;
     autoUpdater.on('update-downloaded', (info) => {
-      log(`[autoUpdater] update binary downloaded to cache: ${info?.version || 'unknown'}; awaiting manifest verification`);
+      log(`[autoUpdater] update binary downloaded to cache: ${info?.version || 'unknown'}`);
+      lastVerifiedUpdate = info ?? lastVerifiedUpdate;
+      updateDownloadedNotified = true;
+      sendStatusToWindow('downloaded', info);
     });
 
     ipcMain.handle('get-app-version', () => app.getVersion());
@@ -1033,9 +1045,19 @@ async function startApp() {
     });
     ipcMain.handle('download-update', async () => {
       log('IPC download-update triggered');
+      updateDownloadedNotified = false;
       try {
         const r = await autoUpdater.downloadUpdate();
         lastVerifiedUpdate = r;
+        // A cache hit resolves without ever emitting download-progress, and a
+        // resolved promise is itself proof the package is staged. Announce
+        // completion so the renderer can leave the downloading state even if
+        // it missed (or raced) the event above. The renderer is idempotent.
+        if (!updateDownloadedNotified) {
+          sendStatusToWindow('progress', { percent: 100 });
+          sendStatusToWindow('downloaded', r);
+          updateDownloadedNotified = true;
+        }
         return { ok: true };
       } catch (err) {
         log(`IPC download-update error: ${err?.message || err}`);
