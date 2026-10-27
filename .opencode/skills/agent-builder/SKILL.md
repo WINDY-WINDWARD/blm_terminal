@@ -1,6 +1,7 @@
 ---
-name: agentic-loop-minimax-zen
-description: Use this skill whenever building a self-looping AI agent powered by MiniMax models (M2.1, M2.5, M2.7) accessed through OpenCode Zen. Triggers include: "tool-calling agent with MiniMax", "agentic loop on Zen", "MiniMax function calling", "OpenCode Zen agent", "MiniMax M2 tool use", or any request to build an autonomous agent that queries APIs and loops until satisfied using MiniMax via the OpenCode gateway. Covers the OpenAI-compatible wire format used by Zen, MiniMax-specific <think> tag and reasoning chain handling, finish_reason: "tool_calls" loop logic, parallel tool execution, error recovery, streaming with reasoning_split, stateful multi-turn conversation history, safe loop termination, prompt caching, verbosity management, and OpenCode Zen-specific gotchas. Also covers official MiniMax inference parameters, prompt engineering best practices, and real-world performance characteristics.
+name: agent-builder
+description: >-
+  Use this skill whenever building a self-looping AI agent powered by MiniMax models (M2.1, M2.5, M2.7) accessed through OpenCode Zen. Triggers include: "tool-calling agent with MiniMax", "agentic loop on Zen", "MiniMax function calling", "OpenCode Zen agent", "MiniMax M2 tool use", or any request to build an autonomous agent that queries APIs and loops until satisfied using MiniMax via the OpenCode gateway. Covers the OpenAI-compatible wire format used by Zen, MiniMax-specific <think> tag and reasoning chain handling, finish_reason: "tool_calls" loop logic, parallel tool execution, error recovery, streaming with reasoning_split, stateful multi-turn conversation history, safe loop termination, prompt caching, verbosity management, and OpenCode Zen-specific gotchas. Also covers official MiniMax inference parameters, prompt engineering best practices, and real-world performance characteristics.
 ---
 
 # Self-Looping Agent with MiniMax via OpenCode Zen

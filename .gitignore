@@ -97,3 +97,6 @@ worktrees/
 vendor/cliproxyapi/runtime/cliproxyapi*
 # Encrypted provider secrets written beside the dev DB; never commit
 provider_vault.enc
+
+# graphify knowledge graph output (local only)
+graphify-out/

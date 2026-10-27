@@ -1,3 +1,8 @@
+---
+name: desktop-release
+description: Procedures for bumping, building, signing, verifying, and publishing official BLM Terminal desktop releases to GitHub Releases. Use for version bumps, release builds, OTA manifest signing, artifact checks, and publish:binaries/publish:desktop.
+---
+
 # Skill: BLM Desktop Release & Publishing Agent
 
 **Description**: Procedures, cryptographic verification, and operational instructions for bumping, compiling, signing, and publishing official BLM Terminal desktop releases to GitHub Releases.
@@ -12,14 +17,16 @@
    - Before building, remove all prior `.exe`, `.blockmap`, `latest.yml`, and `ota-manifest.*` files from `dist-desktop/`.
    - Never leave an older version's installer in `dist-desktop/`, as signing the wrong installer will break client OTA updates.
 
-3. **Mandatory Cryptographic Verification**:
+3. **Mandatory Manual Verification**:
    - Every published release requires:
      1. `BLM Terminal Setup <version>.exe`
      2. `BLM Terminal Setup <version>.exe.blockmap`
      3. `latest.yml`
      4. `ota-manifest.json` (signed version payload matching the installer)
      5. `ota-manifest.sig` (detached Ed25519 signature generated with offline private key)
-   - ALWAYS run `npm run verify:release` before uploading. If verification fails, stop immediately.
+   - `npm run verify:release` is currently a **no-op stub** (`echo 'No verification script configured'`).
+     It proves nothing. Verify the manifest, signature, and installer hash manually before uploading, and
+     state exactly which checks you performed. If a real verifier is added later, update this directive.
 
 4. **Environment & Network Clearance**:
    - Ensure local proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `GIT_HTTP_PROXY`, `GIT_HTTPS_PROXY`) are unset before running `gh` or `electron-builder` to avoid routing through dummy/discard ports.
@@ -39,8 +46,10 @@ $ver = $pkg.version
 $exe = (Get-ChildItem dist-desktop -Filter "*$ver*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1).FullName
 node ..\blmlanding\scripts\sign-ota-manifest.js $ver $exe ..\blmlanding\ota-key-offline-DO-NOT-COMMIT.json dist-desktop\ota-manifest
 
-# 4. Verify cryptographic and hash integrity
-npm run verify:release
+# 4. Verify hash and signature manually (verify:release is a no-op stub)
+#    - confirm ota-manifest.json version/hash matches the .exe
+#    - confirm ota-manifest.sig verifies with the bundled public key
+#    - confirm latest.yml names the same version and installer
 
 # 5. Publish to GitHub Releases (WINDY-WINDWARD/blmterminal-binaries)
 npm run publish:binaries

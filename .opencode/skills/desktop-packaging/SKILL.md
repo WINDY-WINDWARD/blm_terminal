@@ -1,3 +1,8 @@
+---
+name: desktop-packaging
+description: Procedures for compiling, packaging, testing, and locally installing the BLM Terminal desktop application. Use for build:desktop, build:desktop:fast, pack:desktop, PyInstaller backend builds, installer smoke tests, and clean-state recovery.
+---
+
 # Skill: BLM Desktop Build & Packaging
 
 **Description**: Procedures and guidelines for compiling, packaging, testing, and locally installing the BLM Terminal desktop application from source code.

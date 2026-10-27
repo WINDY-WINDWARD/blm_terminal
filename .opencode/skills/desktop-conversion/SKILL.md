@@ -1,3 +1,8 @@
+---
+name: desktop-conversion
+description: Strict technical guidelines for converting BLM Terminal into a multi-window Electron desktop application. Use when changing electron/main.js, the custom Next.js server, desktop-only routes, pop-out window state serialization, or backend sidecar wiring.
+---
+
 # Skill: BLM Desktop Conversion
 **Description**: Strict technical guidelines for converting the BLM Terminal to a multi-window Electron desktop application.
 

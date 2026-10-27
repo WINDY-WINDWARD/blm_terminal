@@ -29,7 +29,7 @@ Backend: **FastAPI** (`backend/`) serves NSE data via `/api/py/[...path]` proxy;
 - **Skill Usage:** 
   - Use the `desktop-conversion` skill for strict guidelines on building Electron features and avoiding hacky workarounds (like standalone Next.js exports).
   - Use the `desktop-packaging` skill (`.opencode/skills/desktop-packaging/SKILL.md`) for compiling from source, generating NSIS installers, performing local silent installations, and managing release artifacts.
-  - Use the `desktop-release` skill (`.opencode/skills/desktop-release/SKILL.md`) and the **Release Agent** (`.github/agents/release-agent.md`) for automated version bumps, clean sequential builds, cryptographic OTA signing, pre-flight verification, and publishing official binary releases to GitHub.
+  - Use the `desktop-release` skill (`.opencode/skills/desktop-release/SKILL.md`) and the **Release Agent** (`.github/agents/release-agent.md`) for automated version bumps, clean sequential builds, cryptographic OTA signing, pre-flight artifact checks, and publishing official binary releases to GitHub. Note: `npm run verify:release` is currently a no-op stub — verify artifacts manually.
 
 ---
 
@@ -58,7 +58,7 @@ npm run build:desktop # complete build (Next.js + Backend + Electron Builder)
 npm run build:desktop:fast # fast LOCAL build (parallel + skip unchanged); never for releases
 npm run pack:desktop  # local dir packaging via electron-builder
   npm run release       # bump version (YYYY.M.B) + create release commit and git tag
-  npm run verify:release # verify installer hash and cryptographic signature against OTA manifest
+  npm run verify:release # NO-OP STUB: prints "No verification script configured". Verify artifacts manually.
   npm run publish:binaries # build, sign, verify, and publish release assets to GitHub Releases
 ```
 
