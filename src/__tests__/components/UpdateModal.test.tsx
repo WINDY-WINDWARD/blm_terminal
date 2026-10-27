@@ -93,6 +93,19 @@ describe('UpdateModal', () => {
     expect(screen.getByText('v2026.10.10')).toBeInTheDocument();
   });
 
+  it('stays quiet when a background check fails even if a version is already known', async () => {
+    // The version is persisted across launches, so it says nothing about who
+    // triggered this check. A stale version must not resurrect the dialog.
+    const { emit } = installElectronMock();
+    render(<UpdateModal />);
+
+    emit(broadcast({ phase: 'error', error: 'net::ERR_INTERNET_DISCONNECTED', trigger: 'auto', version: '2026.10.10' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('UPDATE FAILED')).not.toBeInTheDocument();
+    });
+  });
+
   it('stays quiet when a background check fails', async () => {
     // The launch-time check runs on every start: an offline laptop must not get
     // a blocking "UPDATE FAILED" dialog it never asked for.

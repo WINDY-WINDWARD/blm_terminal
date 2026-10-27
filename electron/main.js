@@ -1091,16 +1091,11 @@ async function startApp() {
       // lock on the installed sidecar. Neither step may abort the hand-off —
       // the user has already committed to installing, so a cleanup failure is
       // logged and the installer still runs.
-      try {
-        await cleanupProcessesAsync();
-      } catch (err) {
-        log(`Cleanup before install failed (continuing): ${err?.message || err}`);
-      }
-      try {
-        await killOrphanedSidecars();
-      } catch (err) {
-        log(`Sidecar sweep before install failed (continuing): ${err?.message || err}`);
-      }
+      // Nothing is shut down here on purpose: the `before-quit` handler stops the
+      // backend (which stops its CLIProxyAPI sidecar on the way out) and then
+      // quits, so teardown only runs once the hand-off is known to have happened.
+      // Stopping the backend up front left the app alive with no data service
+      // whenever the installer failed to launch.
 
       // electron-updater can only install an update it downloaded in THIS
       // process: its installer path comes from in-memory state set during the
@@ -1110,18 +1105,22 @@ async function startApp() {
       // In that case run the verified installer ourselves.
       if (!autoUpdater.installerPath) {
         log('No in-process update handle — launching the verified installer directly');
+        // Launch through the shell, not spawn(). ShellExecute honours the NSIS
+        // manifest's requested elevation, so a per-machine install under Program
+        // Files raises UAC. spawn() fails with EACCES (740) in that case and
+        // reports it as an async 'error' event -- outside any try/catch, which
+        // takes the whole main process down.
+        let launchError = '';
         try {
-          const installer = spawn(prepared.installerPath, ['--updated'], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-          installer.unref();
+          launchError = await shell.openPath(prepared.installerPath);
         } catch (err) {
-          log(`Could not launch the installer: ${err?.message || err}`);
-          isQuitting = false;
+          launchError = err?.message || String(err);
+        }
+        if (launchError) {
+          // The app is still fully functional: teardown never ran.
+          log(`Could not launch the installer: ${launchError}`);
           updater.dismissPendingInstall();
-          throw err;
+          throw new Error(launchError);
         }
         isQuitting = true;
         setTimeout(() => app.quit(), 100);

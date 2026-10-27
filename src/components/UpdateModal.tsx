@@ -74,10 +74,10 @@ export function UpdateModal() {
   }, [busy]);
 
   // A background check that fails (laptop offline, portal hiccup) must not throw
-  // a blocking dialog over someone who never asked to update. Only a failure the
-  // user triggered, or a failure while an update was already in flight, is worth
-  // interrupting them for.
-  const showFailure = phase === 'error' && (trigger === 'manual' || version !== null);
+  // a blocking dialog over someone who never asked to update. `version` is not a
+  // proxy for intent: it is persisted across launches and survives any earlier
+  // successful check, so it would keep this dialog firing on an offline start.
+  const showFailure = phase === 'error' && trigger === 'manual';
   const visible = phase === 'available' || phase === 'downloading' || phase === 'downloaded' || showFailure;
   if (!visible || dismissed) return null;
 
