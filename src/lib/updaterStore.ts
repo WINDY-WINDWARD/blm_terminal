@@ -32,6 +32,8 @@ export interface UpdaterState {
   /** A previous update was staged but never applied. */
   pendingInstall: { version: string; at: number | null } | null;
   canInstall: boolean;
+  /** Who asked for the last check: background checks stay quiet when they fail. */
+  trigger: 'auto' | 'manual';
   updatedAt: number;
 }
 
@@ -46,6 +48,7 @@ const INITIAL: UpdaterState = {
   verification: 'unknown',
   pendingInstall: null,
   canInstall: false,
+  trigger: 'auto',
   updatedAt: 0,
 };
 
@@ -69,6 +72,7 @@ function sameState(a: UpdaterState, b: UpdaterState) {
     && a.verified === b.verified
     && a.verification === b.verification
     && a.canInstall === b.canInstall
+    && a.trigger === b.trigger
     && a.pendingInstall?.version === b.pendingInstall?.version
   );
 }

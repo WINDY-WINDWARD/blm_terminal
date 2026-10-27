@@ -1085,22 +1085,61 @@ async function startApp() {
       // (declined UAC, locked file, killed installer) is surfaced on the next
       // boot instead of looking like a silent success.
       updater.recordPendingInstall(prepared.version, prepared.installerPath);
-      isQuitting = true;
+
       // Graceful shutdown first: the backend stops its CLIProxyAPI sidecar on
       // the way out. Force-killing python orphans it, and an orphan holds a
-      // lock on the installed sidecar.
-      await cleanupProcessesAsync();
-      await killOrphanedSidecars();
+      // lock on the installed sidecar. Neither step may abort the hand-off —
+      // the user has already committed to installing, so a cleanup failure is
+      // logged and the installer still runs.
+      try {
+        await cleanupProcessesAsync();
+      } catch (err) {
+        log(`Cleanup before install failed (continuing): ${err?.message || err}`);
+      }
+      try {
+        await killOrphanedSidecars();
+      } catch (err) {
+        log(`Sidecar sweep before install failed (continuing): ${err?.message || err}`);
+      }
+
+      // electron-updater can only install an update it downloaded in THIS
+      // process: its installer path comes from in-memory state set during the
+      // download. After a restart the updater state is hydrated from disk, so
+      // quitAndInstall() reports "No update filepath provided" and returns
+      // false while the app keeps running with its backend already stopped.
+      // In that case run the verified installer ourselves.
+      if (!autoUpdater.installerPath) {
+        log('No in-process update handle — launching the verified installer directly');
+        try {
+          const installer = spawn(prepared.installerPath, ['--updated'], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          installer.unref();
+        } catch (err) {
+          log(`Could not launch the installer: ${err?.message || err}`);
+          isQuitting = false;
+          updater.dismissPendingInstall();
+          throw err;
+        }
+        isQuitting = true;
+        setTimeout(() => app.quit(), 100);
+        return { ok: true };
+      }
+
+      isQuitting = true;
       // isSilent=false: per-machine installs under Program Files need the NSIS
       // UI, because a declined UAC prompt is otherwise an invisible no-op.
       // isForceRunAfter=true: relaunch when the installer finishes.
       autoUpdater.quitAndInstall(false, true);
+      return { ok: true };
     });
 
     if (!isDev) {
       setTimeout(() => {
         log('Running launch auto-check for updates...');
-        updater.check().catch((err) => {
+        updater.check({ trigger: 'auto' }).catch((err) => {
           log(`Launch auto-check failed: ${err?.message || err}`);
         });
       }, 7000);

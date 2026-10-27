@@ -19,7 +19,7 @@ const openReleases = () => {
 
 export function UpdateModal() {
   const {
-    phase, version, percent, error, verification, pendingInstall, canInstall,
+    phase, version, percent, error, verification, pendingInstall, canInstall, trigger,
   } = useUpdaterState();
   const [dismissed, setDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -29,6 +29,15 @@ export function UpdateModal() {
   useEffect(() => {
     setDismissed(false);
   }, [phase, version]);
+
+  // The dialog never traps focus: Escape always closes it, whatever the phase.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDismissed(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const handleDownload = useCallback(async () => {
     setBusy(true);
@@ -52,11 +61,24 @@ export function UpdateModal() {
     }
   }, []);
 
-  const handleInstall = useCallback(() => {
-    void installUpdate();
-  }, []);
+  const handleInstall = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await installUpdate();
+    } finally {
+      // The window is usually torn down by the installer; resetting keeps the
+      // button usable when the hand-off fails instead of stranding it disabled.
+      setBusy(false);
+    }
+  }, [busy]);
 
-  const visible = phase === 'available' || phase === 'downloading' || phase === 'downloaded' || phase === 'error';
+  // A background check that fails (laptop offline, portal hiccup) must not throw
+  // a blocking dialog over someone who never asked to update. Only a failure the
+  // user triggered, or a failure while an update was already in flight, is worth
+  // interrupting them for.
+  const showFailure = phase === 'error' && (trigger === 'manual' || version !== null);
+  const visible = phase === 'available' || phase === 'downloading' || phase === 'downloaded' || showFailure;
   if (!visible || dismissed) return null;
 
   const ready = phase === 'downloaded';
@@ -74,7 +96,12 @@ export function UpdateModal() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md bg-terminal-panel border border-terminal-border shadow-2xl p-5 font-mono">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Application update"
+        className="w-full max-w-md bg-terminal-panel border border-terminal-border shadow-2xl p-5 font-mono"
+      >
         <div className="flex items-center justify-between border-b border-terminal-border pb-2 mb-3">
           <div className="flex items-center gap-2">
             <span
@@ -184,7 +211,7 @@ export function UpdateModal() {
             {ready ? (
               <button
                 type="button"
-                disabled={!canInstall || blocked}
+                disabled={!canInstall || blocked || busy}
                 onClick={handleInstall}
                 className="px-4 py-1.5 text-xs font-bold bg-terminal-green text-black hover:brightness-110 transition-colors disabled:opacity-50"
               >

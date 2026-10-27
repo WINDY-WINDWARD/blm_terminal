@@ -40,6 +40,7 @@ function emptyState() {
     verification: 'unknown',
     pendingInstall: null,
     canInstall: false,
+    trigger: 'auto',
     updatedAt: Date.now(),
   };
 }
@@ -75,6 +76,7 @@ class UpdaterController {
     this._completing = null;
     this._wired = false;
     this._disposed = false;
+    this._lastPersisted = { phase: this.state.phase, percent: 0 };
   }
 
   // ── state ────────────────────────────────────────────────────────────────
@@ -84,8 +86,15 @@ class UpdaterController {
   }
 
   _set(patch) {
+    const phaseChanged = patch.phase !== undefined && patch.phase !== this.state.phase;
     this.state = { ...this.state, ...patch, updatedAt: this.now() };
-    this._persist();
+    // A 363 MB download emits a progress event per chunk. Writing the state
+    // file on each one is pure I/O churn, so only phase changes and 10% steps
+    // are persisted; the in-memory state and the broadcast stay exact.
+    if (phaseChanged || Math.abs(this.state.percent - this._lastPersisted.percent) >= 10) {
+      this._persist();
+      this._lastPersisted = { phase: this.state.phase, percent: this.state.percent };
+    }
     this.broadcast({ status: this.state.phase, data: this.getState() });
   }
 
@@ -101,6 +110,7 @@ class UpdaterController {
       installerPath: this.state.installerPath,
       verified: this.state.verified,
       verification: this.state.verification,
+      trigger: this.state.trigger,
     };
     try {
       fs.mkdirSync(path.dirname(this.stateFile), { recursive: true });
@@ -126,10 +136,19 @@ class UpdaterController {
       version: typeof persisted.version === 'string' ? persisted.version : null,
       checkedAt: typeof persisted.checkedAt === 'number' ? persisted.checkedAt : null,
       verification: typeof persisted.verification === 'string' ? persisted.verification : 'unknown',
+      trigger: typeof persisted.trigger === 'string' ? persisted.trigger : 'auto',
     };
     if (persisted.phase === PHASES.DOWNLOADED) {
       const installer = persisted.installerPath;
-      if (installer && fs.existsSync(installer) && persisted.verified === true) {
+      // A staged update for a version that is already running means the update
+      // installed and the state file outlived it. Never offer it again: the
+      // modal would ask the user to "install" the build they are using.
+      const alreadyInstalled = typeof persisted.version === 'string'
+        && cmpVer(persisted.version, this.app.getVersion()) <= 0;
+      if (alreadyInstalled) {
+        this.log(`[updater] dropping stale staged update for ${persisted.version} (running ${this.app.getVersion()})`);
+        Object.assign(patch, { phase: PHASES.IDLE, percent: 0, installerPath: null, verified: false });
+      } else if (installer && fs.existsSync(installer) && persisted.verified === true) {
         // Keep the staged state so a restart does not force a re-download.
         Object.assign(patch, {
           phase: PHASES.DOWNLOADED,
@@ -292,10 +311,14 @@ class UpdaterController {
 
   // ── actions ──────────────────────────────────────────────────────────────
 
-  async check() {
+  async check({ trigger = 'manual' } = {}) {
     if (this._disposed) return this.getState();
+    // Remember who asked, so a background failure stays quiet while an
+    // explicit "Check for updates" failure is reported to the user.
+    this._set({ trigger });
     const result = await this.autoUpdater.checkForUpdates();
-    return result ? this.getState() : this.getState();
+    void result;
+    return this.getState();
   }
 
   async download() {
@@ -310,7 +333,14 @@ class UpdaterController {
       return this.getState();
     }
 
-    this._set({ phase: PHASES.DOWNLOADING, percent: 0, error: null, verified: false, installerPath: null });
+    this._set({
+      phase: PHASES.DOWNLOADING,
+      percent: 0,
+      error: null,
+      verified: false,
+      installerPath: null,
+      trigger: 'manual',
+    });
     this._startWatchdog();
     try {
       const paths = await this.autoUpdater.downloadUpdate();
@@ -398,12 +428,13 @@ class UpdaterController {
       this._set({ phase: PHASES.AVAILABLE, verified: false, installerPath: null, error: null });
       throw new Error('The staged installer is missing. Download the update again.');
     }
-    if (this.verifier) {
-      const verdict = await this.verifier.verifyInstaller(this.state.installerPath, this.state.version);
-      if (!verdict.ok) {
-        this._set({ phase: PHASES.ERROR, verified: false, error: `Update failed verification: ${verdict.error}` });
-        throw new Error(verdict.error);
-      }
+    if (!this.verifier) {
+      throw new Error('Update verification is unavailable in this build, so the update cannot be installed.');
+    }
+    const verdict = await this.verifier.verifyInstaller(this.state.installerPath, this.state.version);
+    if (!verdict.ok) {
+      this._set({ phase: PHASES.ERROR, verified: false, error: `Update failed verification: ${verdict.error}` });
+      throw new Error(verdict.error);
     }
     return { installerPath: this.state.installerPath, version: this.state.version };
   }

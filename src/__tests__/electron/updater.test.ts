@@ -24,17 +24,19 @@ type State = {
   verification: string;
   pendingInstall: { version: string; at: number | null } | null;
   canInstall: boolean;
+  trigger: 'auto' | 'manual';
 };
 
 const { createUpdaterController, PHASES } = require('../../../electron/updater.js') as {
   createUpdaterController: (opts: Record<string, unknown>) => {
     init: () => Promise<State>;
     getState: () => State;
-    check: () => Promise<State>;
+    check: (opts?: { trigger?: 'auto' | 'manual' }) => Promise<State>;
     download: () => Promise<State>;
     prepareInstall: () => Promise<{ installerPath: string; version: string | null }>;
     reconcilePendingInstall: () => { version: string } | null;
     dismissPendingInstall: () => void;
+    verifier: unknown;
     dispose: () => void;
   };
   PHASES: Record<string, string>;
@@ -146,6 +148,36 @@ describe('UpdaterController init', () => {
     expect(state.phase).toBe(PHASES.DOWNLOADED);
     expect(state.canInstall).toBe(true);
   });
+
+  it('drops a staged update that is already installed', async () => {
+    // A successful install leaves both the state file and the cached installer
+    // behind, so the next launch must not offer to install the running version.
+    fs.writeFileSync(
+      path.join(tmpDir, 'updater-state.json'),
+      JSON.stringify({
+        phase: 'downloaded', version: '2026.10.9', percent: 100, verified: true, installerPath: installer,
+      }),
+    );
+    const h = makeHarness({ currentVersion: '2026.10.9' });
+    const state = await h.controller.init();
+    expect(state.phase).toBe(PHASES.IDLE);
+    expect(state.installerPath).toBeNull();
+    expect(state.verified).toBe(false);
+    expect(state.canInstall).toBe(false);
+  });
+
+  it('keeps a staged installer that is newer than the running version', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'updater-state.json'),
+      JSON.stringify({
+        phase: 'downloaded', version: '2026.10.11', percent: 100, verified: true, installerPath: installer,
+      }),
+    );
+    const h = makeHarness({ currentVersion: '2026.10.9' });
+    const state = await h.controller.init();
+    expect(state.phase).toBe(PHASES.DOWNLOADED);
+    expect(state.version).toBe('2026.10.11');
+  });
 });
 
 describe('UpdaterController events', () => {
@@ -155,6 +187,20 @@ describe('UpdaterController events', () => {
     h.autoUpdater.emit('update-available', { version: '2026.10.10' });
     expect(h.controller.getState().phase).toBe(PHASES.AVAILABLE);
     expect(h.controller.getState().version).toBe('2026.10.10');
+  });
+
+  it('records whether the check was automatic or user-initiated', async () => {
+    const h = makeHarness();
+    await h.controller.init();
+
+    await h.controller.check({ trigger: 'auto' });
+    expect(h.controller.getState().trigger).toBe('auto');
+
+    await h.controller.check();
+    expect(h.controller.getState().trigger).toBe('manual');
+
+    await h.controller.download();
+    expect(h.controller.getState().trigger).toBe('manual');
   });
 
   it('does not downgrade a downloaded update on a repeat announcement', async () => {
@@ -275,6 +321,17 @@ describe('UpdaterController install guard', () => {
     const staged = await h.controller.prepareInstall();
     expect(staged.installerPath).toBe(installer);
     expect(staged.version).toBe('2026.10.10');
+  });
+
+  it('refuses to install when no verifier is available', async () => {
+    const h = makeHarness();
+    await h.controller.init();
+    await h.controller.download();
+
+    // Fail closed: a build without a verifier must not hand off an installer it
+    // cannot re-check, even if the state says the update was verified earlier.
+    h.controller.verifier = null;
+    await expect(h.controller.prepareInstall()).rejects.toThrow(/verification is unavailable/i);
   });
 });
 

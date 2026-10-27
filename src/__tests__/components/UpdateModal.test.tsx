@@ -27,6 +27,7 @@ const idleState = (patch: Partial<UpdaterStateSnapshot> = {}): UpdaterStateSnaps
   verification: 'ok',
   pendingInstall: null,
   canInstall: false,
+  trigger: 'auto',
   updatedAt: Date.now(),
   ...patch,
 });
@@ -92,6 +93,31 @@ describe('UpdateModal', () => {
     expect(screen.getByText('v2026.10.10')).toBeInTheDocument();
   });
 
+  it('stays quiet when a background check fails', async () => {
+    // The launch-time check runs on every start: an offline laptop must not get
+    // a blocking "UPDATE FAILED" dialog it never asked for.
+    const { emit } = installElectronMock();
+    render(<UpdateModal />);
+
+    emit(broadcast({ phase: 'error', error: 'net::ERR_INTERNET_DISCONNECTED', trigger: 'auto', version: null }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('UPDATE FAILED')).not.toBeInTheDocument();
+    });
+  });
+
+  it('surfaces a failure the user asked for', async () => {
+    const { emit } = installElectronMock();
+    render(<UpdateModal />);
+
+    emit(broadcast({ phase: 'error', error: 'download stalled', trigger: 'manual', version: '2026.10.10' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('UPDATE FAILED')).toBeInTheDocument();
+    });
+    expect(screen.getByText('download stalled')).toBeInTheDocument();
+  });
+
   it('hydrates a staged update after a restart', async () => {
     // The installer was downloaded in a previous session: main replays it via
     // get-updater-state, and the modal must offer the install immediately.
@@ -144,6 +170,8 @@ describe('UpdateModal', () => {
 
     emit(broadcast({
       phase: 'error',
+      version: '2026.10.10',
+      trigger: 'manual',
       error: 'Download stalled — no progress for 120 seconds.',
     }));
 

@@ -9,6 +9,7 @@ export interface UpdaterStateSnapshot {
   verification: 'unknown' | 'ok' | 'unavailable';
   pendingInstall: { version: string; at: number | null } | null;
   canInstall: boolean;
+  trigger: 'auto' | 'manual';
   updatedAt: number;
 }
 
