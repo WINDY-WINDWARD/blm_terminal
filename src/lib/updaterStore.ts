@@ -179,7 +179,9 @@ export async function installUpdate() {
   try {
     await window.electronAPI.installUpdate();
   } catch (err) {
-    applyUpdaterState({ phase: 'error', error: describeError(err) });
+    // A launch the user asked for must never hide: force the manual trigger so
+    // the dialog still shows the failure after an auto-found update.
+    applyUpdaterState({ phase: 'error', error: describeError(err), trigger: 'manual' });
   }
 }
 

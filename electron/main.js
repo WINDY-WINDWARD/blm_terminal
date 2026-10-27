@@ -241,6 +241,14 @@ if (!gotTheLock) {
     isQuitting = true;
     isCleanedUp = true;
     await cleanupProcessesAsync();
+    // A backend that missed the graceful shutdown can leave its cliproxyapi.exe
+    // child behind. That orphan keeps a lock on the installed binary, and the
+    // NSIS upgrade then silently keeps the stale sidecar.
+    try {
+      await killOrphanedSidecars();
+    } catch (err) {
+      log(`[shutdown] sidecar sweep failed: ${err?.message || err}`);
+    }
     app.quit();
   });
 }
@@ -1072,6 +1080,10 @@ async function startApp() {
       }
     });
     ipcMain.handle('install-update', async () => {
+      // The user is acting on an update a background check may have found.
+      // From here on a failure has to be reported to them, not swallowed by
+      // the "background checks stay quiet" rule.
+      updater.markManual();
       let prepared;
       try {
         prepared = await updater.prepareInstall();
@@ -1086,11 +1098,6 @@ async function startApp() {
       // boot instead of looking like a silent success.
       updater.recordPendingInstall(prepared.version, prepared.installerPath);
 
-      // Graceful shutdown first: the backend stops its CLIProxyAPI sidecar on
-      // the way out. Force-killing python orphans it, and an orphan holds a
-      // lock on the installed sidecar. Neither step may abort the hand-off —
-      // the user has already committed to installing, so a cleanup failure is
-      // logged and the installer still runs.
       // Nothing is shut down here on purpose: the `before-quit` handler stops the
       // backend (which stops its CLIProxyAPI sidecar on the way out) and then
       // quits, so teardown only runs once the hand-off is known to have happened.

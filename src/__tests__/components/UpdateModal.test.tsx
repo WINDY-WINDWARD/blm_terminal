@@ -93,6 +93,29 @@ describe('UpdateModal', () => {
     expect(screen.getByText('v2026.10.10')).toBeInTheDocument();
   });
 
+  it('reports a failed install even when a background check found the update', async () => {
+    // The update arrived from the launch auto-check, so the state still says
+    // trigger: 'auto'. Clicking Install is a user action; its failure must
+    // still be visible instead of vanishing with the dialog.
+    const { emit } = installElectronMock({
+      installUpdate: vi.fn(async () => {
+        throw new Error('Elevation was cancelled');
+      }),
+    });
+    render(<UpdateModal />);
+
+    emit(broadcast({ phase: 'downloaded', trigger: 'auto', version: '2026.10.10', percent: 100, verified: true, canInstall: true }));
+    await screen.findByText('UPDATE READY TO INSTALL');
+
+    const install = await screen.findByRole('button', { name: /Install & Restart/i });
+    await act(async () => {
+      install.click();
+    });
+
+    expect(await screen.findByText('UPDATE FAILED')).toBeInTheDocument();
+    expect(screen.getByText(/Elevation was cancelled/)).toBeInTheDocument();
+  });
+
   it('stays quiet when a background check fails even if a version is already known', async () => {
     // The version is persisted across launches, so it says nothing about who
     // triggered this check. A stale version must not resurrect the dialog.

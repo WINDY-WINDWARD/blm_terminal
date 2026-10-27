@@ -32,6 +32,7 @@ const { createUpdaterController, PHASES } = require('../../../electron/updater.j
     init: () => Promise<State>;
     getState: () => State;
     check: (opts?: { trigger?: 'auto' | 'manual' }) => Promise<State>;
+  markManual: () => State;
     download: () => Promise<State>;
     prepareInstall: () => Promise<{ installerPath: string; version: string | null }>;
     reconcilePendingInstall: () => { version: string } | null;
@@ -164,6 +165,16 @@ describe('UpdaterController init', () => {
     expect(state.installerPath).toBeNull();
     expect(state.verified).toBe(false);
     expect(state.canInstall).toBe(false);
+  });
+
+  it('promotes the trigger to manual once the user acts on a background find', async () => {
+    const h = makeHarness();
+    await h.controller.init();
+    await h.controller.check({ trigger: 'auto' });
+    expect(h.controller.getState().trigger).toBe('auto');
+
+    h.controller.markManual();
+    expect(h.controller.getState().trigger).toBe('manual');
   });
 
   it('keeps a staged installer that is newer than the running version', async () => {

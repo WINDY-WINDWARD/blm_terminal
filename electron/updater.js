@@ -321,6 +321,17 @@ class UpdaterController {
     return this.getState();
   }
 
+  /**
+   * The user took over: they clicked install on an update that a background
+   * check found. Anything that fails from here on is their business, so the
+   * trigger must stop being 'auto' or the failure would be swallowed.
+   */
+  markManual() {
+    if (this.state.trigger === 'manual') return this.getState();
+    this._set({ trigger: 'manual' });
+    return this.getState();
+  }
+
   async download() {
     if (this.state.verification === 'unavailable') {
       throw new Error('Update verification is unavailable in this build, so the update cannot be installed.');
