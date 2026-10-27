@@ -77,41 +77,35 @@ This creates:
 - `dist-desktop/ota-manifest.sig`
 
 ### Step 5: Automated Cryptographic Verification
-Run the pre-flight verification gate:
+Run the pre-flight gate:
 ```powershell
 npm run verify:release
 ```
-Confirm all 5 checks pass:
-1. Installer executable exists and contains version string.
-2. `latest.yml` points to current version and installer.
-3. `ota-manifest.json` version and file list match the installer.
-4. Cryptographic signature matches baked public key in `licenseConfig.js`.
-5. `verifyDownloaded` from `electron/license/ota.js` confirms SHA-256 match.
+It verifies, and exits non-zero on any failure:
+1. The `ota-manifest.sig` Ed25519 signature over the exact manifest bytes, using
+   `OTA_PUBLIC_KEYS` in `electron/ota.js` (the same module the shipped client uses).
+2. `ota-manifest.json` version/name/size/sha256 against the actual installer.
+3. `latest.yml` version, filename, size and sha512 against the actual installer.
+4. That `dist-desktop/` contains no stale `BLM Terminal Setup <other-version>.exe`.
+5. That libsodium loads in this runtime (`selfTest`), so the gate cannot pass on a build the
+   client could not verify with.
 
-### Step 6: Publish Release Binaries
-Upload the verified release to GitHub Releases:
-```powershell
-npm run publish:binaries
-```
-Or execute directly via GitHub CLI:
-```powershell
-$TagName = "v$ver"
-$Artifacts = Get-ChildItem -Path dist-desktop -File | Where-Object {
-    ($_.Extension -eq ".exe" -and $_.Name -like "*$ver*") -or
-    $_.Extension -eq ".yml" -or
-    ($_.Extension -eq ".blockmap" -and $_.Name -like "*$ver*") -or
-    $_.Name -eq "ota-manifest.json" -or
-    $_.Name -eq "ota-manifest.sig"
-}
-gh release create $TagName ($Artifacts | ForEach-Object { $_.FullName }) --repo WINDY-WINDWARD/blmterminal-binaries --title "BLM Terminal $ver" --notes "Release version $ver"
-```
-
-### Step 7: Push Git Commit & Tag
-Push the release branch and the specific release tag to origin:
+### Step 6: Push Git Commit & Tag
+Push **before** publishing — `gh release create` otherwise creates the remote tag on the remote
+default branch, so the published tag points at the wrong commit:
 ```powershell
 git push origin HEAD
 git push origin refs/tags/v$ver
 ```
+
+### Step 7: Publish Release Binaries
+```powershell
+npm run publish:binaries
+```
+The script re-runs the verification gate, confirms the tag is pushed, launches
+`dist-desktop\win-unpacked\BLM Terminal.exe --verify-ota` (proves libsodium works inside the asar),
+then uploads exactly five assets to `WINDY-WINDWARD/blm_terminal`. Finish with
+`npm run verify:release:live` once the portal cache expires (~5 minutes).
 
 ---
 
@@ -119,10 +113,10 @@ git push origin refs/tags/v$ver
 
 | Symptom | Root Cause | Remediation |
 |---|---|---|
-| `downloaded file not in manifest` on client | Manifest signed an older/stale installer left in `dist-desktop` | Re-sign the exact `<version>` installer and re-upload `ota-manifest.json` and `ota-manifest.sig` with `--clobber`. |
+| `manifest signature does not match any trusted key` on client or gate | Manifest signed by a key the app does not trust, or the manifest bytes were edited after signing | Re-sign the exact `<version>` installer with the offline key and re-upload `ota-manifest.json` + `ota-manifest.sig` with `--clobber`. Never hand-edit a signed manifest. |
+| `Automatic updates are disabled in this build` | `electron/ota.js` could not load libsodium in the packaged app (asar/packaging regression) | Run `npm run pack:desktop` then `dist-desktop\win-unpacked\BLM Terminal.exe --verify-ota` and inspect the exit code. Do not publish until it passes. |
 | `connect ECONNREFUSED 127.0.0.1:9` | Shell inherited sandbox discard proxy | Run `Remove-Item env:*PROXY*` before executing `gh` or `electron-builder`. |
 | `spawn EPERM` during electron-builder | Node cannot spawn outside tools | Point `ELECTRON_BUILDER_CACHE`, `ELECTRON_BUILDER_7ZIP_PATH`, and `ELECTRON_BUILDER_NSIS_DIR` to workspace locations or run with escalation. |
 | Tag push rejected: `already exists` | Pushing `--tags` attempts to push stale tags | Push specifically with `git push origin refs/tags/v<version>`. |
-| Update modal shows green and red banners | IPC event race | Fixed in `main.js` and `UpdateModal.tsx` — ensure `downloaded` event only fires after manifest verification completes. |
-- **Binary Publishing**: Publish release assets to the main repository (`WINDY-WINDWARD/blm_terminal`) using GitHub CLI (`gh release create/upload`).
-gh release create $TagName ($Artifacts | ForEach-Object { $_.FullName }) --repo WINDY-WINDWARD/blm_terminal --title "BLM Terminal $ver" --notes "Release version $ver"
+| Update modal stuck at `Downloading 0%` | Historic: `update-downloaded` was logged but never forwarded to the renderer | Fixed for good in v2026.10.10 — state is owned by `electron/updater.js`, persisted, and hydratable. Users on ≤2026.10.9 still carry the bug and need one manual install. |
+- **Binary Publishing**: `npm run publish:binaries` publishes to the main repository (`WINDY-WINDWARD/blm_terminal`). Do not hand-roll `gh release create`; the script enforces the gate, the tag check, and the exact five-asset set.

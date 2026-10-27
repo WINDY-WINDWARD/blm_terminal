@@ -25,8 +25,10 @@ declare global {
       getAppVersion: () => Promise<string>;
       checkForUpdates: () => Promise<unknown>;
       downloadUpdate: () => Promise<unknown>;
-      installUpdate: () => Promise<void>;
-      onUpdaterMessage: (callback: (msg: { status: string; data?: unknown }) => void) => void;
+      installUpdate: () => Promise<unknown>;
+      getUpdaterState?: () => Promise<unknown>;
+      dismissPendingInstall?: () => Promise<unknown>;
+      onUpdaterMessage: (callback: (msg: { status: string; data?: unknown }) => void) => (() => void) | void;
       getStoredItem?: (key: string) => Promise<unknown>;
       setStoredItem?: (key: string, value: unknown) => Promise<boolean>;
       removeStoredItem?: (key: string) => Promise<boolean>;

@@ -23,8 +23,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onUpdaterMessage: (callback) => {
-    ipcRenderer.on('updater-message', (_event, message) => callback(message));
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on('updater-message', listener);
+    // Return an unsubscribe so React effects can clean up; without it every
+    // remount stacked another listener on the same channel.
+    return () => ipcRenderer.removeListener('updater-message', listener);
   },
+  getUpdaterState: () => ipcRenderer.invoke('get-updater-state'),
+  dismissPendingInstall: () => ipcRenderer.invoke('dismiss-pending-install'),
   getStoredItem: (key) => ipcRenderer.invoke('storage-get', key),
   setStoredItem: (key, value) => ipcRenderer.invoke('storage-set', key, value),
   removeStoredItem: (key) => ipcRenderer.invoke('storage-remove', key),

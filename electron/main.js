@@ -2,8 +2,16 @@ const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, screen, cli
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
-const { spawn, fork } = require('child_process');
+const { spawn, fork, execFile } = require('child_process');
 const net = require('net');
+const { createUpdaterController } = require('./updater');
+const { createOtaVerifier } = require('./ota');
+const { runOtaVerifyCli } = require('./ota-cli');
+
+// Must match `publish.url` in electron-builder.json — that is where
+// latest.yml, the installer and ota-manifest.* are served from. Override with
+// BLM_OTA_FEED when testing against a local portal.
+const OTA_FEED_URL = process.env.BLM_OTA_FEED || 'https://blmterminal.windytech.org';
 
 // ── File-based logger (writes to %APPDATA%/blm_terminal/logs/electron.log) ──
 const logDir = path.join(app.getPath('userData'), 'logs');
@@ -181,8 +189,10 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('responsive', () => log(`[${tag}] responsive`));
 });
 
-// Ensure single instance
-const gotTheLock = app.requestSingleInstanceLock();
+// Ensure single instance. `--verify-ota` is a headless release gate that must
+// work even while the app is open, so it skips the lock entirely.
+const otaVerifyIndex = process.argv.findIndex((a) => a === '--verify-ota' || a.startsWith('--verify-ota='));
+const gotTheLock = otaVerifyIndex !== -1 ? true : app.requestSingleInstanceLock();
 if (!gotTheLock) {
   log('Another instance already running — quitting.');
   app.quit();
@@ -198,6 +208,18 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    if (otaVerifyIndex !== -1) {
+      const inline = process.argv[otaVerifyIndex].split('=')[1];
+      const feedUrl = inline || process.argv[otaVerifyIndex + 1] || OTA_FEED_URL;
+      log(`--verify-ota mode: feed=${feedUrl}`);
+      runOtaVerifyCli({ feedUrl, isPackaged: app.isPackaged, log })
+        .then((result) => app.exit(result.code))
+        .catch((err) => {
+          log(`OTA VERIFY FAILED: ${err?.message || err}`);
+          app.exit(3);
+        });
+      return;
+    }
     log('app.whenReady resolved — calling startApp()');
     startApp();
   });
@@ -316,6 +338,35 @@ function cleanupProcesses() {
   }
 }
 
+// The CLIProxyAPI sidecar is spawned by the Python backend, so force-killing
+// python orphans it. An orphan holds a lock on the installed cliproxyapi.exe,
+// and NSIS then silently keeps the previous sidecar (2026-09-22 lesson). Sweep
+// only sidecars living inside the BLM Terminal tree — a user's own
+// cliproxyapi.exe is none of our business.
+function killOrphanedSidecars() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve();
+      return;
+    }
+    const script = [
+      "Get-CimInstance Win32_Process -Filter \"Name='cliproxyapi.exe'\"",
+      "| Where-Object { $_.ExecutablePath -like '*BLM Terminal*' }",
+      "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    ].join(' ');
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { windowsHide: true, timeout: 15000 },
+      (err) => {
+        if (err) log(`Sidecar sweep failed (non-fatal): ${err.message}`);
+        else log('Sidecar sweep complete.');
+        resolve();
+      }
+    );
+  });
+}
+
 function findFreePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer((sock) => {
@@ -336,8 +387,6 @@ async function startApp() {
   try {
     const isDev = !app.isPackaged;
     log(`startApp() called — isDev=${isDev}`);
-
-    let lastVerifiedUpdate = null;
 
     // Show splash window immediately while servers boot, so the user never
     // stares at an empty screen during boot.
@@ -967,38 +1016,96 @@ async function startApp() {
       }
     }
 
-    // Auto Updater Setup
-    function sendStatusToWindow(status, data) {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('updater-message', { status, data });
-      }
+    // ── Auto updater ────────────────────────────────────────────────────
+    // State is authoritative in electron/updater.js: persisted across launches,
+    // broadcast to every window, queryable via get-updater-state. Installer
+    // verification lives in electron/ota.js and fails closed — an update that
+    // cannot be verified is never offered for install.
+    const updater = createUpdaterController({
+      autoUpdater,
+      app,
+      log,
+      broadcast: (message) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) continue;
+          try {
+            win.webContents.send('updater-message', message);
+          } catch (err) {
+            log(`[updater] broadcast failed for a window: ${err?.message || err}`);
+          }
+        }
+      },
+      verifier: createOtaVerifier({ feedUrl: OTA_FEED_URL, isPackaged: app.isPackaged, log }),
+      stateFile: path.join(stateDir, 'updater-state.json'),
+      pendingInstallFile: path.join(stateDir, 'pending-install.json'),
+    });
+    const updaterState = await updater.init();
+    log(`[updater] initial state: phase=${updaterState.phase} verification=${updaterState.verification}`);
+    if (updaterState.pendingInstall) {
+      log(`[updater] the update to ${updaterState.pendingInstall.version} did not apply last time`);
     }
 
-    autoUpdater.on('checking-for-update', () => sendStatusToWindow('checking'));
-    autoUpdater.on('update-available', (info) => sendStatusToWindow('available', info));
-    autoUpdater.on('update-not-available', (info) => sendStatusToWindow('not-available', info));
-    autoUpdater.on('error', (err) => {
-      log(`[autoUpdater Event Error]: ${err?.stack || err?.message || err}`);
-      sendStatusToWindow('error', err?.message || String(err));
-    });
-    autoUpdater.on('download-progress', (progressObj) => sendStatusToWindow('progress', progressObj));
-
-    // `update-downloaded` is the only signal that a package is fully staged.
-    // c2026302 turned this handler into a log-only observer (to gate on OTA
-    // manifest verification), 58d58254 then deleted that verifier, and the
-    // renderer was never told again: UpdateModal stayed on "Downloading
-    // package... 0%" with both buttons disabled, a modal nobody could dismiss.
-    // Forward the event unconditionally and remember the payload so
-    // install-update has something to install.
-    let updateDownloadedNotified = false;
-    autoUpdater.on('update-downloaded', (info) => {
-      log(`[autoUpdater] update binary downloaded to cache: ${info?.version || 'unknown'}`);
-      lastVerifiedUpdate = info ?? lastVerifiedUpdate;
-      updateDownloadedNotified = true;
-      sendStatusToWindow('downloaded', info);
-    });
-
     ipcMain.handle('get-app-version', () => app.getVersion());
+    ipcMain.handle('get-updater-state', () => updater.getState());
+    ipcMain.handle('dismiss-pending-install', () => {
+      updater.dismissPendingInstall();
+      return updater.getState();
+    });
+    ipcMain.handle('check-for-updates', async () => {
+      log('IPC check-for-updates triggered');
+      try {
+        await updater.check();
+        return updater.getState();
+      } catch (err) {
+        log(`IPC check-for-updates error: ${err?.message || err}`);
+        throw err;
+      }
+    });
+    ipcMain.handle('download-update', async () => {
+      log('IPC download-update triggered');
+      try {
+        const state = await updater.download();
+        return { ok: true, state };
+      } catch (err) {
+        log(`IPC download-update error: ${err?.message || err}`);
+        throw err;
+      }
+    });
+    ipcMain.handle('install-update', async () => {
+      let prepared;
+      try {
+        prepared = await updater.prepareInstall();
+        log(`Install approved: ${prepared.version} (${prepared.installerPath})`);
+      } catch (err) {
+        log(`Install refused: ${err?.message || err}`);
+        autoUpdater.autoInstallOnAppQuit = false;
+        throw err;
+      }
+      // Written before the hand-off so a hand-off that never completes
+      // (declined UAC, locked file, killed installer) is surfaced on the next
+      // boot instead of looking like a silent success.
+      updater.recordPendingInstall(prepared.version, prepared.installerPath);
+      isQuitting = true;
+      // Graceful shutdown first: the backend stops its CLIProxyAPI sidecar on
+      // the way out. Force-killing python orphans it, and an orphan holds a
+      // lock on the installed sidecar.
+      await cleanupProcessesAsync();
+      await killOrphanedSidecars();
+      // isSilent=false: per-machine installs under Program Files need the NSIS
+      // UI, because a declined UAC prompt is otherwise an invisible no-op.
+      // isForceRunAfter=true: relaunch when the installer finishes.
+      autoUpdater.quitAndInstall(false, true);
+    });
+
+    if (!isDev) {
+      setTimeout(() => {
+        log('Running launch auto-check for updates...');
+        updater.check().catch((err) => {
+          log(`Launch auto-check failed: ${err?.message || err}`);
+        });
+      }, 7000);
+    }
+
     ipcMain.handle('storage-get', (_event, key) => terminalStorageData[key] ?? null);
     ipcMain.handle('storage-set', (_event, key, value) => {
       terminalStorageData[key] = value;
@@ -1034,60 +1141,6 @@ async function startApp() {
       createReaderWindow(url);
       return { ok: true };
     });
-    ipcMain.handle('check-for-updates', async () => {
-      log('IPC check-for-updates triggered');
-      try {
-        return await autoUpdater.checkForUpdates();
-      } catch (err) {
-        log(`IPC check-for-updates error: ${err?.message || err}`);
-        throw err;
-      }
-    });
-    ipcMain.handle('download-update', async () => {
-      log('IPC download-update triggered');
-      updateDownloadedNotified = false;
-      try {
-        const r = await autoUpdater.downloadUpdate();
-        lastVerifiedUpdate = r;
-        // A cache hit resolves without ever emitting download-progress, and a
-        // resolved promise is itself proof the package is staged. Announce
-        // completion so the renderer can leave the downloading state even if
-        // it missed (or raced) the event above. The renderer is idempotent.
-        if (!updateDownloadedNotified) {
-          sendStatusToWindow('progress', { percent: 100 });
-          sendStatusToWindow('downloaded', r);
-          updateDownloadedNotified = true;
-        }
-        return { ok: true };
-      } catch (err) {
-        log(`IPC download-update error: ${err?.message || err}`);
-        throw err;
-      }
-    });
-    ipcMain.handle('install-update', async () => {
-      try {
-        if (!lastVerifiedUpdate) {
-          throw new Error('no verified update pending: download first');
-        }
-        log('Installing update via quitAndInstall');
-      } catch (err) {
-        log(`Install refused: ${err?.message || err}`);
-        autoUpdater.autoInstallOnAppQuit = false;
-        throw err;
-      }
-      isQuitting = true;
-      cleanupProcesses();
-      autoUpdater.quitAndInstall(true, true);
-    });
-
-    if (!isDev) {
-      setTimeout(() => {
-        log('Running launch auto-check for updates...');
-        autoUpdater.checkForUpdates().catch((err) => {
-          log(`Launch auto-check failed: ${err?.message || err}`);
-        });
-      }, 7000);
-    }
 
   } catch (error) {
     log(`App failed to start: ${error?.stack || error?.message || error}`);

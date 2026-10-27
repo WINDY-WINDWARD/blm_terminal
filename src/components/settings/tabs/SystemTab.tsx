@@ -12,6 +12,8 @@ export interface SystemTabProps {
   updaterStatus: string;
   updaterProgress: { percent: number } | null;
   updateReady: boolean;
+  verification: 'unknown' | 'ok' | 'unavailable';
+  pendingInstall: { version: string; at: number | null } | null;
   onCheckForUpdates: () => void;
   onInstallUpdate: () => void;
   appVersion: string;
@@ -25,6 +27,8 @@ export function SystemTab({
   updaterStatus,
   updaterProgress,
   updateReady,
+  verification,
+  pendingInstall,
   onCheckForUpdates,
   onInstallUpdate,
   appVersion,
@@ -92,11 +96,21 @@ export function SystemTab({
                     {updaterStatus === 'available' && 'Update available! Prompt shown.'}
                     {updaterStatus === 'not-available' && 'App is up to date'}
                     {updaterStatus === 'error' && 'Update check failed'}
-                    {updaterStatus === 'progress' && updaterProgress && `Downloading: ${Math.round(updaterProgress.percent)}%`}
+                    {updaterStatus === 'downloading' && updaterProgress && `Downloading: ${Math.round(updaterProgress.percent)}%`}
                     {updaterStatus === 'downloaded' && 'Update downloaded & ready'}
                   </span>
                 )}
               </div>
+              {verification === 'unavailable' && (
+                <span className="text-[9px] text-terminal-red">
+                  OTA verification is unavailable in this build — automatic updates are disabled. Install from the releases page.
+                </span>
+              )}
+              {pendingInstall && (
+                <span className="text-[9px] text-terminal-amber">
+                  Update to v{pendingInstall.version} did not install. Run the installer manually.
+                </span>
+              )}
               {updateReady && (
                 <button
                   type="button"

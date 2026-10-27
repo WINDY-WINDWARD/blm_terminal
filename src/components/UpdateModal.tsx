@@ -1,195 +1,206 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  RELEASES_PAGE_URL,
+  checkForUpdates,
+  dismissPendingInstall,
+  downloadUpdate,
+  getUpdaterStateSnapshot,
+  installUpdate,
+  useUpdaterState,
+} from '@/lib/updaterStore';
 
-interface UpdateInfo {
-  version?: string;
-  releaseDate?: string;
-  releaseNotes?: string;
-}
-
-// electron-updater emits download-progress roughly once a second while bytes
-// move. Silence for this long means the transfer died (proxy drop, DNS flap,
-// disk full) and the bar would otherwise sit at the last percentage forever.
-const STALL_TIMEOUT_MS = 90_000;
+const openReleases = () => {
+  if (typeof window !== 'undefined' && window.electronAPI) {
+    void window.electronAPI.openExternal?.(RELEASES_PAGE_URL);
+  }
+};
 
 export function UpdateModal() {
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [downloading, setDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<number>(0);
-  const [updateReady, setUpdateReady] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const {
+    phase, version, percent, error, verification, pendingInstall, canInstall,
+  } = useUpdaterState();
   const [dismissed, setDismissed] = useState(false);
+  const [busy, setBusy] = useState(false);
 
+  // Re-surface on every phase change: installing always needs one explicit
+  // click, so a modal hidden mid-download must come back when it finishes.
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.electronAPI) return;
+    setDismissed(false);
+  }, [phase, version]);
 
-    window.electronAPI.onUpdaterMessage((msg) => {
-      if (msg.status === 'available' && msg.data) {
-        setUpdateInfo(msg.data as UpdateInfo);
-        setUpdateAvailable(true);
-        setErrorMessage(null);
-        setDismissed(false);
-      } else if (msg.status === 'progress' && msg.data) {
-        const progress = msg.data as { percent?: number };
-        setDownloading(true);
-        setErrorMessage(null);
-        if (progress.percent !== undefined) {
-          setDownloadProgress(Math.round(progress.percent));
-        }
-      } else if (msg.status === 'downloaded') {
-        setDownloading(false);
-        setUpdateReady(true);
-        setErrorMessage(null);
-        setDownloadProgress(100);
-        // Installation always needs one explicit click, so surface the modal
-        // again if the user hid it while the download was still running.
-        setDismissed(false);
-      } else if (msg.status === 'error') {
-        setDownloading(false);
-        setUpdateReady(false);
-        setErrorMessage(typeof msg.data === 'string' ? msg.data : 'Download failed');
-      }
-    });
+  const handleDownload = useCallback(async () => {
+    setBusy(true);
+    try {
+      await downloadUpdate();
+    } finally {
+      setBusy(false);
+    }
   }, []);
 
-  // Stall guard: clear the downloading state when progress stops arriving so
-  // the modal can never trap the user on a dead progress bar.
-  useEffect(() => {
-    if (!downloading) return;
-    const timer = setTimeout(() => {
-      setDownloading(false);
-      setUpdateReady(false);
-      setErrorMessage('Download stalled — no progress for 90 seconds. Retry, or install the update manually from the release page.');
-    }, STALL_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [downloading, downloadProgress]);
-
-  if (!updateAvailable || dismissed) {
-    return null;
-  }
-
-  const handleUpdateNow = () => {
-    if (window.electronAPI) {
-      setDownloading(true);
-      setDownloadProgress(0);
-      setErrorMessage(null);
-      setUpdateReady(false);
-      // A resolved downloadUpdate() promise is success on its own. Relying on
-      // the 'downloaded' IPC message alone is what stranded this modal at 0%.
-      window.electronAPI
-        .downloadUpdate()
-        .then(() => {
-          setDownloadProgress(100);
-          setDownloading(false);
-          setUpdateReady(true);
-          setErrorMessage(null);
-        })
-        .catch((err: unknown) => {
-          setDownloading(false);
-          setUpdateReady(false);
-          setErrorMessage(err instanceof Error ? err.message : String(err));
-        });
+  // A failed check and a failed download need different retries, so try the
+  // cheap one first and only download once main reports an update available.
+  const handleRetry = useCallback(async () => {
+    setBusy(true);
+    try {
+      await checkForUpdates();
+      const { phase: nextPhase } = getUpdaterStateSnapshot();
+      if (nextPhase === 'available') await downloadUpdate();
+    } finally {
+      setBusy(false);
     }
-  };
+  }, []);
 
-  const handleInstallAndRestart = () => {
-    if (window.electronAPI) {
-      window.electronAPI.installUpdate().catch((err: unknown) => {
-        setErrorMessage(err instanceof Error ? err.message : String(err));
-      });
-    }
-  };
+  const handleInstall = useCallback(() => {
+    void installUpdate();
+  }, []);
+
+  const visible = phase === 'available' || phase === 'downloading' || phase === 'downloaded' || phase === 'error';
+  if (!visible || dismissed) return null;
+
+  const ready = phase === 'downloaded';
+  const downloading = phase === 'downloading';
+  const failed = phase === 'error';
+  const blocked = verification === 'unavailable';
+
+  const headline = ready
+    ? 'UPDATE READY TO INSTALL'
+    : downloading
+      ? 'DOWNLOADING UPDATE'
+      : failed
+        ? 'UPDATE FAILED'
+        : 'NEW VERSION AVAILABLE';
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
       <div className="w-full max-w-md bg-terminal-panel border border-terminal-border shadow-2xl p-5 font-mono">
         <div className="flex items-center justify-between border-b border-terminal-border pb-2 mb-3">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-terminal-amber animate-ping" />
-            <span className="text-terminal-amber font-bold text-xs tracking-wider">
-              {updateReady && !errorMessage ? 'UPDATE READY TO INSTALL' : 'NEW VERSION AVAILABLE'}
+            <span
+              className={`w-2 h-2 rounded-full ${
+                failed ? 'bg-terminal-red' : ready ? 'bg-terminal-green' : 'bg-terminal-amber animate-ping'
+              }`}
+            />
+            <span
+              className={`font-bold text-xs tracking-wider ${
+                failed ? 'text-terminal-red' : ready ? 'text-terminal-green' : 'text-terminal-amber'
+              }`}
+            >
+              {headline}
             </span>
           </div>
-          <span className="text-terminal-muted text-[10px]">
-            {updateInfo?.version ? `v${updateInfo.version}` : ''}
-          </span>
+          <span className="text-terminal-muted text-[10px]">{version ? `v${version}` : ''}</span>
         </div>
 
         <div className="py-2 text-xs text-terminal-text space-y-2">
-          {(!updateReady || errorMessage) ? (
-            <p className="text-white/80">
-              A new update for <span className="text-terminal-amber font-bold">BLM Terminal</span> is available. Would you like to update now or continue working?
-            </p>
-          ) : (
-            <div className="bg-emerald-950/40 border border-emerald-500/40 p-3 text-emerald-200">
-              <p className="font-bold mb-1">Update downloaded successfully!</p>
-              <p className="text-[11px] text-emerald-300/80">
-                Clicking restart will cleanly close the backend, apply the new version, and relaunch the application.
+          {blocked && (
+            <div className="bg-red-950/60 border border-red-500/60 p-2.5 text-red-200 text-[11px]">
+              <p className="font-bold mb-1">Automatic updates are disabled in this build.</p>
+              <p className="text-red-300/80">
+                The update signature cannot be verified on this machine, so no update will be
+                installed automatically. Please install the new version manually from the release
+                page.
               </p>
             </div>
           )}
 
-          {errorMessage && (
-            <div className="bg-red-950/60 border border-red-500/60 p-2.5 text-red-200 text-[11px]">
-              <span className="font-bold">Error: </span>{errorMessage}
+          {!blocked && pendingInstall && (
+            <div className="bg-amber-950/40 border border-terminal-amber/40 p-2.5 text-amber-200 text-[11px]">
+              <p className="font-bold mb-1">
+                The update to v{pendingInstall.version} did not install.
+              </p>
+              <p className="text-amber-200/80">
+                The installer never finished — a declined permission prompt or a locked file will do
+                that. Download the update again, or install it manually from the release page.
+              </p>
+              <button
+                type="button"
+                onClick={() => void dismissPendingInstall()}
+                className="mt-1 text-amber-300 underline underline-offset-2"
+              >
+                Dismiss
+              </button>
             </div>
+          )}
+
+          {ready ? (
+            <div className="bg-emerald-950/40 border border-emerald-500/40 p-3 text-emerald-200">
+              <p className="font-bold mb-1">Update downloaded and verified.</p>
+              <p className="text-[11px] text-emerald-300/80">
+                Installing closes the backend, applies the new version and relaunches the app. A
+                Windows permission prompt may appear.
+              </p>
+            </div>
+          ) : failed ? (
+            <div className="bg-red-950/60 border border-red-500/60 p-2.5 text-red-200 text-[11px]">
+              <span className="font-bold">Error: </span>
+              {error || 'The update could not be completed.'}
+            </div>
+          ) : (
+            <p className="text-white/80">
+              A new update for <span className="text-terminal-amber font-bold">BLM Terminal</span>{' '}
+              is available. Update now, or keep working and do it later.
+            </p>
           )}
 
           {downloading && (
             <div className="mt-3 space-y-1">
               <div className="flex justify-between text-[10px] text-terminal-muted">
                 <span>Downloading package...</span>
-                <span>{downloadProgress}%</span>
+                <span>{percent}%</span>
               </div>
               <div className="w-full h-1.5 bg-terminal-bg border border-terminal-border overflow-hidden">
                 <div
                   className="h-full bg-terminal-amber transition-[width,background-color] duration-150"
-                  style={{ width: `${downloadProgress}%` }}
+                  style={{ width: `${percent}%` }}
                 />
               </div>
+              <p className="text-[10px] text-terminal-muted">
+                You can hide this window — the download continues in the background.
+              </p>
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-terminal-border">
-          {(!updateReady || errorMessage) ? (
-            <>
+        <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-terminal-border">
+          <button
+            type="button"
+            onClick={openReleases}
+            className="text-[10px] text-terminal-muted hover:text-terminal-amber underline underline-offset-2"
+          >
+            Download manually
+          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setDismissed(true)}
+              className="px-3 py-1.5 text-xs text-terminal-muted hover:text-white border border-terminal-border hover:border-terminal-muted transition-colors"
+            >
+              {ready ? 'Restart Later' : downloading ? 'Hide' : 'Remind Me Later'}
+            </button>
+
+            {ready ? (
               <button
                 type="button"
-                onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs text-terminal-muted hover:text-white border border-terminal-border hover:border-terminal-muted transition-colors"
-              >
-                {downloading ? 'Hide' : 'Remind Me Later'}
-              </button>
-              <button
-                type="button"
-                disabled={downloading}
-                onClick={handleUpdateNow}
-                className="px-4 py-1.5 text-xs font-bold bg-terminal-amber text-terminal-bg hover:bg-yellow-500 transition-colors disabled:opacity-50 flex items-center gap-1.5"
-              >
-                {downloading ? 'Downloading...' : errorMessage ? 'Retry Download' : 'Update Now'}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs text-terminal-muted hover:text-white border border-terminal-border transition-colors"
-              >
-                Restart Later
-              </button>
-              <button
-                type="button"
-                onClick={handleInstallAndRestart}
-                className="px-4 py-1.5 text-xs font-bold bg-emerald-500 text-black hover:bg-emerald-400 transition-colors"
+                disabled={!canInstall || blocked}
+                onClick={handleInstall}
+                className="px-4 py-1.5 text-xs font-bold bg-terminal-green text-black hover:brightness-110 transition-colors disabled:opacity-50"
               >
                 Install &amp; Restart
               </button>
-            </>
-          )}
+            ) : (
+              <button
+                type="button"
+                disabled={downloading || busy || blocked}
+                onClick={failed ? handleRetry : handleDownload}
+                className="px-4 py-1.5 text-xs font-bold bg-terminal-amber text-terminal-bg hover:brightness-110 transition-colors disabled:opacity-50"
+              >
+                {downloading ? 'Downloading...' : failed ? 'Try Again' : busy ? 'Starting...' : 'Update Now'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

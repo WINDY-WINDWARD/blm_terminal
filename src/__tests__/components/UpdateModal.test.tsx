@@ -1,27 +1,50 @@
 import React from 'react';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  describe, it, expect, beforeEach, afterEach, vi,
+} from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { UpdateModal } from '@/components/UpdateModal';
-import type { ElectronAPI } from '@/types/electron';
-
-type UpdaterMessage = { status: string; data?: unknown };
+import { resetUpdaterStoreForTests } from '@/lib/updaterStore';
+import type { ElectronAPI, UpdaterStateSnapshot } from '@/types/electron';
 
 /**
  * Regression coverage for the 2026.10.9 update stall: the main process stopped
- * forwarding `update-downloaded`, so this modal stayed on "Downloading... 0%"
- * with both buttons disabled and no way out. The component must reach the
- * "ready to install" state from either signal, and must never trap the user.
+ * forwarding `update-downloaded`, the modal sat on "Downloading... 0%" with both
+ * buttons disabled, and the window could not even be dismissed.
+ *
+ * The modal now renders whatever authoritative state main broadcasts, so these
+ * cases drive it the same way main does: a broadcast, or the IPC return value.
  */
+
+const idleState = (patch: Partial<UpdaterStateSnapshot> = {}): UpdaterStateSnapshot => ({
+  phase: 'idle',
+  version: null,
+  percent: 0,
+  error: null,
+  checkedAt: null,
+  installerPath: null,
+  verified: false,
+  verification: 'ok',
+  pendingInstall: null,
+  canInstall: false,
+  updatedAt: Date.now(),
+  ...patch,
+});
+
 function installElectronMock(overrides: Partial<ElectronAPI> = {}) {
-  let emit: ((msg: UpdaterMessage) => void) | null = null;
+  let emit: ((msg: { status: string; data?: unknown }) => void) | null = null;
   const api: ElectronAPI = {
     getAppVersion: vi.fn(async () => '2026.10.9'),
-    checkForUpdates: vi.fn(async () => undefined),
-    // Default: a download that never settles (the pathological case).
-    downloadUpdate: vi.fn(() => new Promise<void>(() => {})),
-    installUpdate: vi.fn(async () => undefined),
-    onUpdaterMessage: vi.fn((callback: (msg: UpdaterMessage) => void) => {
+    getUpdaterState: vi.fn(async () => idleState()),
+    checkForUpdates: vi.fn(async () => idleState()),
+    downloadUpdate: vi.fn(async () => ({ ok: true, state: idleState() })),
+    installUpdate: vi.fn(async () => ({ ok: true })),
+    dismissPendingInstall: vi.fn(async () => idleState()),
+    onUpdaterMessage: vi.fn((callback: (msg: { status: string; data?: unknown }) => void) => {
       emit = callback;
+      return () => {
+        emit = null;
+      };
     }),
     quitApp: vi.fn(),
     openExternal: vi.fn(async () => ({ ok: true })),
@@ -32,130 +55,158 @@ function installElectronMock(overrides: Partial<ElectronAPI> = {}) {
 
   return {
     api,
-    emit: (msg: UpdaterMessage) => act(() => emit?.(msg)),
+    emit: (msg: { status: string; data?: unknown }) => act(() => emit?.(msg)),
   };
 }
 
-function announceUpdate(emit: (msg: UpdaterMessage) => void) {
-  emit({ status: 'available', data: { version: '2026.10.9' } });
-}
+const broadcast = (patch: Partial<UpdaterStateSnapshot>) => ({
+  status: patch.phase || 'idle',
+  data: idleState(patch),
+});
 
 describe('UpdateModal', () => {
   beforeEach(() => {
-    vi.useRealTimers();
+    resetUpdaterStoreForTests();
   });
 
   afterEach(() => {
     delete window.electronAPI;
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    resetUpdaterStoreForTests();
   });
 
-  it('stays hidden until an update is available', () => {
+  it('stays hidden while idle', () => {
     installElectronMock();
     render(<UpdateModal />);
     expect(screen.queryByText('NEW VERSION AVAILABLE')).not.toBeInTheDocument();
   });
 
-  it('shows the available version', () => {
+  it('shows the available version from a broadcast', async () => {
     const { emit } = installElectronMock();
     render(<UpdateModal />);
-    announceUpdate(emit);
+    emit(broadcast({ phase: 'available', version: '2026.10.10' }));
 
-    expect(screen.getByText('NEW VERSION AVAILABLE')).toBeInTheDocument();
-    expect(screen.getByText('v2026.10.9')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('NEW VERSION AVAILABLE')).toBeInTheDocument();
+    });
+    expect(screen.getByText('v2026.10.10')).toBeInTheDocument();
+  });
+
+  it('hydrates a staged update after a restart', async () => {
+    // The installer was downloaded in a previous session: main replays it via
+    // get-updater-state, and the modal must offer the install immediately.
+    installElectronMock({
+      getUpdaterState: vi.fn(async () => idleState({
+        phase: 'downloaded',
+        version: '2026.10.10',
+        percent: 100,
+        canInstall: true,
+        verified: true,
+      })),
+    });
+    render(<UpdateModal />);
+
+    await waitFor(() => {
+      expect(screen.getByText('UPDATE READY TO INSTALL')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Install & Restart/i })).not.toBeDisabled();
   });
 
   it('reaches the ready state when main forwards the downloaded event', async () => {
     const { api, emit } = installElectronMock();
     render(<UpdateModal />);
-    announceUpdate(emit);
+    emit(broadcast({ phase: 'available', version: '2026.10.10' }));
 
     await act(async () => {
       screen.getByRole('button', { name: 'Update Now' }).click();
     });
     expect(api.downloadUpdate).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('Downloading...')).toBeInTheDocument();
 
-    emit({ status: 'downloaded', data: { version: '2026.10.9' } });
+    emit(broadcast({ phase: 'downloading', version: '2026.10.10', percent: 0 }));
+    await waitFor(() => {
+      expect(screen.getByText('Downloading...')).toBeInTheDocument();
+    });
 
+    emit(broadcast({
+      phase: 'downloaded', version: '2026.10.10', percent: 100, canInstall: true, verified: true,
+    }));
     await waitFor(() => {
       expect(screen.getByText('UPDATE READY TO INSTALL')).toBeInTheDocument();
     });
-    expect(screen.getByRole('button', { name: /Install & Restart/i })).toBeInTheDocument();
   });
 
-  it('reaches the ready state from a resolved download even without the event', async () => {
-    // Cache hits resolve without ever emitting download-progress or
-    // update-downloaded; the resolved promise alone must be enough.
-    const { emit } = installElectronMock({ downloadUpdate: vi.fn(async () => undefined) });
+  it('shows a stall reported by main as a retryable error', async () => {
+    // The watchdog lives in the main process now; the modal only renders the
+    // resulting error phase instead of running its own timer.
+    const { api, emit } = installElectronMock();
     render(<UpdateModal />);
-    announceUpdate(emit);
+    emit(broadcast({ phase: 'available', version: '2026.10.10' }));
+
+    emit(broadcast({
+      phase: 'error',
+      error: 'Download stalled — no progress for 120 seconds.',
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('UPDATE FAILED')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Download stalled/i)).toBeInTheDocument();
 
     await act(async () => {
-      screen.getByRole('button', { name: 'Update Now' }).click();
+      screen.getByRole('button', { name: 'Try Again' }).click();
     });
-
-    await waitFor(() => {
-      expect(screen.getByText('UPDATE READY TO INSTALL')).toBeInTheDocument();
-    });
+    expect(api.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
-  it('can be dismissed while a download is running', async () => {
+  it('can be dismissed while a download is running and re-surfaces when ready', async () => {
     const { emit } = installElectronMock();
     render(<UpdateModal />);
-    announceUpdate(emit);
-
-    await act(async () => {
-      screen.getByRole('button', { name: 'Update Now' }).click();
-    });
+    emit(broadcast({ phase: 'available', version: '2026.10.10' }));
+    emit(broadcast({ phase: 'downloading', version: '2026.10.10', percent: 12 }));
 
     const hide = screen.getByRole('button', { name: 'Hide' });
     expect(hide).not.toBeDisabled();
-
     await act(async () => {
       hide.click();
     });
     expect(screen.queryByText('Downloading package...')).not.toBeInTheDocument();
-  });
 
-  it('re-surfaces when the download completes after being hidden', async () => {
-    const { emit } = installElectronMock();
-    render(<UpdateModal />);
-    announceUpdate(emit);
-
-    await act(async () => {
-      screen.getByRole('button', { name: 'Update Now' }).click();
-    });
-    await act(async () => {
-      screen.getByRole('button', { name: 'Hide' }).click();
-    });
-    expect(screen.queryByText('Downloading package...')).not.toBeInTheDocument();
-
-    emit({ status: 'downloaded', data: { version: '2026.10.9' } });
-
+    emit(broadcast({
+      phase: 'downloaded', version: '2026.10.10', percent: 100, canInstall: true, verified: true,
+    }));
     await waitFor(() => {
       expect(screen.getByText('UPDATE READY TO INSTALL')).toBeInTheDocument();
     });
   });
 
-  it('reports a stall instead of an endless progress bar', async () => {
-    vi.useFakeTimers();
+  it('blocks installing when the build cannot verify signatures', async () => {
     const { emit } = installElectronMock();
     render(<UpdateModal />);
+    emit(broadcast({ phase: 'available', version: '2026.10.10', verification: 'unavailable' }));
 
-    act(() => announceUpdate(emit));
-    act(() => {
-      screen.getByRole('button', { name: 'Update Now' }).click();
+    await waitFor(() => {
+      expect(screen.getByText(/Automatic updates are disabled in this build/i)).toBeInTheDocument();
     });
-    expect(screen.getByText('Downloading...')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update Now' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Download manually' })).not.toBeDisabled();
+  });
 
-    act(() => {
-      vi.advanceTimersByTime(90_000);
+  it('surfaces a previous install that never applied', async () => {
+    const { api, emit } = installElectronMock();
+    render(<UpdateModal />);
+    emit(broadcast({
+      phase: 'available',
+      version: '2026.10.10',
+      pendingInstall: { version: '2026.10.9', at: Date.now() },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/The update to v2026\.10\.9 did not install/i)).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Download stalled/i)).toBeInTheDocument();
-    expect(screen.queryByText('Downloading package...')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry Download' })).not.toBeDisabled();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Dismiss' }).click();
+    });
+    expect(api.dismissPendingInstall).toHaveBeenCalledTimes(1);
   });
 });

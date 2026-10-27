@@ -75,6 +75,8 @@ export function buildTabPropsBundle(params: {
   updaterStatus: string;
   updaterProgress: { percent: number } | null;
   updateReady: boolean;
+  verification: 'unknown' | 'ok' | 'unavailable';
+  pendingInstall: { version: string; at: number | null } | null;
   handleCheckForUpdates: () => void;
   handleInstallUpdate: () => void;
   appVersion: string;
@@ -161,6 +163,8 @@ export function buildTabPropsBundle(params: {
       updaterStatus: params.updaterStatus,
       updaterProgress: params.updaterProgress,
       updateReady: params.updateReady,
+      verification: params.verification,
+      pendingInstall: params.pendingInstall,
       onCheckForUpdates: params.handleCheckForUpdates,
       onInstallUpdate: params.handleInstallUpdate,
       appVersion: params.appVersion,

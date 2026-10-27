@@ -109,8 +109,15 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
     handleUpdateConsent,
   } = useBrowserProvisioning({ scrapingConsent, setScrapingConsent });
 
-  const { updaterStatus, updaterProgress, updateReady, handleCheckForUpdates, handleInstallUpdate } =
-    useDesktopUpdater();
+  const {
+    updaterStatus,
+    updaterProgress,
+    updateReady,
+    verification,
+    pendingInstall,
+    handleCheckForUpdates,
+    handleInstallUpdate,
+  } = useDesktopUpdater();
 
   const {
     routeModelsQuery,
@@ -195,6 +202,8 @@ export function SettingsModal({ isOpen: controlledIsOpen, onClose: controlledOnC
     updaterStatus,
     updaterProgress,
     updateReady,
+    verification,
+    pendingInstall,
     handleCheckForUpdates,
     handleInstallUpdate,
     appVersion,
