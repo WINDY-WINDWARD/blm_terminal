@@ -1,31 +1,77 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { PersonaId, StarterPrompt } from '@/types/aiWidgetTypes';
 import { PERSONAS } from '@/types/aiWidgetTypes';
+import type { CustomPrompt } from '@/types/aiWorkflowTypes';
+import { formatIst, formatRelative } from '@/lib/aiWorkflowTime';
+import { AiStarterSection } from '@/components/widgets/AiStarterSection';
+import { AiStarterCard } from '@/components/widgets/AiStarterCard';
+import { AiPromptComposer } from '@/components/widgets/AiPromptComposer';
+import { AiPromptEditPanel } from '@/components/widgets/AiPromptEditPanel';
 
 export interface EmptyChatStateProps {
   sessionMode: 'research' | 'script';
   symbol: string;
   exchange: string;
-  starterPrompts: StarterPrompt[];
+  systemPrompts: StarterPrompt[];
   isStreaming: boolean;
   onLaunchPrompt: (prompt: string) => void;
+  userPrompts: CustomPrompt[];
+  promptsLoading: boolean;
+  promptsTotal: number;
+  promptsPage: number;
+  promptsHasMore: boolean;
+  onCreatePrompt: (description: string) => void;
+  onEditPrompt: (p: CustomPrompt) => void;
+  onDeletePrompt: (p: CustomPrompt) => void;
+  onDuplicateSystemPrompt: (p: StarterPrompt) => void;
+  armedWorkflows?: number;
+  nextRunAt?: string | null;
+  onPageChange?: (page: number) => void;
 }
 
 export function EmptyChatState({
   sessionMode,
   symbol,
   exchange,
-  starterPrompts,
+  systemPrompts,
   isStreaming,
   onLaunchPrompt,
+  userPrompts,
+  promptsLoading,
+  promptsTotal,
+  promptsPage,
+  onCreatePrompt,
+  onEditPrompt,
+  onDeletePrompt,
+  onDuplicateSystemPrompt,
+  armedWorkflows,
+  nextRunAt,
+  onPageChange,
 }: EmptyChatStateProps) {
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [editingPrompt, setEditingPrompt] = useState<CustomPrompt | null>(null);
+
+  const totalPages = Math.max(1, Math.ceil(promptsTotal / 4));
+  let startPage = Math.max(0, promptsPage - 2);
+  const endPage = Math.min(totalPages - 1, startPage + 4);
+  if (endPage - startPage < 4) {
+    startPage = Math.max(0, endPage - 4);
+  }
+  const pages: number[] = [];
+  for (let i = startPage; i <= endPage; i++) {
+    pages.push(i);
+  }
+
+  const startItem = promptsTotal === 0 ? 0 : promptsPage * 4 + 1;
+  const endItem = Math.min((promptsPage + 1) * 4, promptsTotal);
+
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-2 max-w-3xl mx-auto w-full my-auto @3xl:p-4">
-      {/* Hero Bento Card */}
-      <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-3 mb-3 shadow-xl @3xl:p-4">
+      {/* Compact Hero Card */}
+      <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-3 shadow-xl">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <span
@@ -50,42 +96,148 @@ export function EmptyChatState({
         <p className="text-xs text-zinc-300 leading-relaxed font-mono">
           {sessionMode === 'script'
             ? 'Generate, optimize, and backtest custom technical indicators and chart overlays. Accept generated scripts to instantly mount them onto your chart panels.'
-            : `Institutional-grade equity analysis powered by real-time NSE tick data, multi-model intrinsic valuation engines, corporate filings, and global macro spillovers.`}
+            : 'Institutional-grade equity analysis powered by real-time NSE tick data, multi-model intrinsic valuation engines, corporate filings, and global macro spillovers.'}
         </p>
+        {Boolean(armedWorkflows) && (
+          <p className="text-[10px] font-mono text-zinc-500 mt-2">
+            {armedWorkflows} {armedWorkflows === 1 ? 'workflow' : 'workflows'} armed
+            {nextRunAt ? (
+              <>
+                {' • Next run: '}
+                <span>{formatIst(nextRunAt)}</span>
+                {formatRelative(nextRunAt) ? (
+                  <span className="text-zinc-600"> ({formatRelative(nextRunAt)})</span>
+                ) : null}
+              </>
+            ) : null}
+          </p>
+        )}
       </div>
 
-      {/* 2x2 Bento Starter Prompts Grid */}
-      <div className="w-full grid grid-cols-1 @md:grid-cols-2 gap-2.5">
-        {starterPrompts.map((p, idx) => (
-          <button
-            key={idx}
-            onClick={() => onLaunchPrompt(p.prompt)}
-            disabled={isStreaming}
-            className="group flex flex-col justify-between p-3 rounded-lg bg-[#0c0c0f] border border-[#27272a] hover:border-amber-400/60 hover:bg-[#121217] transition-all text-left shadow-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      <div className="flex flex-col gap-4 w-full mt-4">
+        {/* SYSTEM PROMPTS section */}
+        <AiStarterSection label="SYSTEM PROMPTS" count={4}>
+          {systemPrompts.map((p, idx) => (
+            <AiStarterCard
+              key={idx}
+              tag={p.tag}
+              title={p.title}
+              desc={p.desc}
+              kind="system"
+              accent={sessionMode === 'script' ? 'emerald' : 'amber'}
+              disabled={isStreaming}
+              onLaunch={() => onLaunchPrompt(p.prompt)}
+              onDuplicate={() => onDuplicateSystemPrompt(p)}
+            />
+          ))}
+        </AiStarterSection>
+
+        {/* MY PROMPTS section */}
+        <div className="flex flex-col gap-2 w-full">
+          <AiStarterSection
+            label="MY PROMPTS"
+            count={promptsTotal}
+            action={
+              <button
+                type="button"
+                onClick={() => setComposerOpen(true)}
+                className="text-[10px] font-mono text-zinc-400 hover:text-terminal-amber transition-colors cursor-pointer"
+              >
+                + New
+              </button>
+            }
           >
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span
-                  className={cn(
-                    'text-[9px] font-mono font-bold uppercase tracking-wider',
-                    sessionMode === 'script' ? 'text-emerald-400' : 'text-terminal-amber',
-                  )}
-                >
-                  {p.tag}
-                </span>
-                <span className="text-[10px] text-zinc-500 group-hover:text-terminal-amber font-mono transition-colors">
-                  ↵ Launch
-                </span>
-              </div>
-              <h4 className="text-xs font-bold text-white group-hover:text-terminal-amber transition-colors font-mono mb-1">
-                {p.title}
-              </h4>
-              <p className="text-[11px] text-zinc-400 leading-relaxed group-hover:text-zinc-300 transition-colors font-mono">
-                {p.desc}
-              </p>
+            <div className="col-span-full">
+              <AiPromptComposer
+                open={composerOpen}
+                disabled={isStreaming}
+                onOpenChange={setComposerOpen}
+                onSubmit={(description) => {
+                  onCreatePrompt(description);
+                  setComposerOpen(false);
+                }}
+              />
             </div>
-          </button>
-        ))}
+            {editingPrompt && (
+              <AiPromptEditPanel
+                key={editingPrompt.id}
+                prompt={editingPrompt}
+                onSave={(next) => {
+                  onEditPrompt(next);
+                  setEditingPrompt(null);
+                }}
+                onCancel={() => setEditingPrompt(null)}
+              />
+            )}
+            {promptsLoading ? (
+              <>
+                <div className="h-[62px] rounded-lg bg-[#0c0c0f] border border-[#27272a] animate-pulse" />
+                <div className="h-[62px] rounded-lg bg-[#0c0c0f] border border-[#27272a] animate-pulse" />
+                <div className="h-[62px] rounded-lg bg-[#0c0c0f] border border-[#27272a] animate-pulse" />
+              </>
+            ) : (
+              userPrompts.map((p) => (
+                <AiStarterCard
+                  key={p.id}
+                  tag={p.tag}
+                  title={p.title}
+                  desc={p.description}
+                  kind="user"
+                  accent={sessionMode === 'script' ? 'emerald' : 'amber'}
+                  disabled={isStreaming}
+                  onLaunch={() => onLaunchPrompt(p.prompt)}
+                  onEdit={() => setEditingPrompt(p)}
+                  onDelete={() => onDeletePrompt(p)}
+                />
+              ))
+            )}
+          </AiStarterSection>
+
+          {promptsTotal > 4 && (
+            <div className="flex items-center justify-between pt-1 w-full">
+              <span className="text-[10px] font-mono text-zinc-500">
+                Showing {startItem}–{endItem} of {promptsTotal}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={promptsPage === 0}
+                  onClick={() => onPageChange?.(promptsPage - 1)}
+                  className="w-6 h-6 rounded text-[10px] font-mono border border-[#27272a] text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Previous page"
+                >
+                  ‹
+                </button>
+                {pages.map((p) => {
+                  const isCurrent = p === promptsPage;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => onPageChange?.(p)}
+                      className={cn(
+                        'w-6 h-6 rounded text-[10px] font-mono border border-[#27272a] text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer',
+                        isCurrent &&
+                          'bg-terminal-amber text-black font-bold border-terminal-amber hover:bg-terminal-amber hover:text-black',
+                      )}
+                    >
+                      {p + 1}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  disabled={promptsPage >= totalPages - 1}
+                  onClick={() => onPageChange?.(promptsPage + 1)}
+                  className="w-6 h-6 rounded text-[10px] font-mono border border-[#27272a] text-zinc-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Next page"
+                >
+                  ›
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

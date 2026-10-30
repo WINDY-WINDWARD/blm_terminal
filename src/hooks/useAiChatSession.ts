@@ -2,12 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { unstable_batchedUpdates } from 'react-dom';
-import type { UseQueryResult } from '@tanstack/react-query';
 import {
   emptySessionState,
   NEW_CHAT_KEY,
   sanitizeAiErrorMessage,
-  type AttachedDocument,
   type ChatMessage,
   type ModelOption,
   type PersonaId,
@@ -17,6 +15,7 @@ import {
   type StreamEvent,
   type AiMode,
 } from '@/types/aiWidgetTypes';
+import type { WorkflowCardPayload, PromptCardPayload } from '@/types/aiWorkflowTypes';
 import { getStashedCards, migrateStash, pruneStashedSession, reattachStashedCards, stashCard } from '@/lib/scripts/cardStash';
 import type { RouteModelCatalogResponse } from '@/types/aiRoutes';
 
@@ -49,6 +48,7 @@ export interface UseAiChatSessionReturn {
   startNewChat: (mode?: AiMode) => void;
   loadSession: (id: number) => Promise<void>;
   deleteSession: (id: number) => Promise<void>;
+  launchPrompt: (prompt: string, mode?: AiMode) => void;
 }
 
 export function useAiChatSession({
@@ -91,8 +91,9 @@ export function useAiChatSession({
 
   const ongoingAbortsRef = useRef<Set<AbortController>>(new Set());
   useEffect(() => {
+    const aborts = ongoingAbortsRef.current;
     return () => {
-      for (const ctrl of ongoingAbortsRef.current) {
+      for (const ctrl of aborts) {
         ctrl.abort();
       }
     };
@@ -240,6 +241,8 @@ export function useAiChatSession({
       let assistantContent = '';
       let assistantToolCalls: string[] = [];
       let assistantCard: ScriptCard | undefined;
+      let assistantWorkflowCard: WorkflowCardPayload | undefined;
+      let assistantPromptCard: PromptCardPayload | undefined;
 
       const writeStreamState = (patch: Partial<SessionState>) => {
         setSessionMap((prev) => {
@@ -351,6 +354,8 @@ export function useAiChatSession({
                     content: assistantContent,
                     toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
                     ...(assistantCard ? { card: assistantCard } : {}),
+                    ...(assistantWorkflowCard ? { workflowCard: assistantWorkflowCard } : {}),
+                    ...(assistantPromptCard ? { promptCard: assistantPromptCard } : {}),
                   },
                 ],
               });
@@ -364,6 +369,8 @@ export function useAiChatSession({
                     content: assistantContent,
                     toolCalls: [...assistantToolCalls],
                     ...(assistantCard ? { card: assistantCard } : {}),
+                    ...(assistantWorkflowCard ? { workflowCard: assistantWorkflowCard } : {}),
+                    ...(assistantPromptCard ? { promptCard: assistantPromptCard } : {}),
                   },
                 ],
               });
@@ -384,6 +391,40 @@ export function useAiChatSession({
                     content: assistantContent,
                     toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
                     card,
+                    ...(assistantWorkflowCard ? { workflowCard: assistantWorkflowCard } : {}),
+                    ...(assistantPromptCard ? { promptCard: assistantPromptCard } : {}),
+                  },
+                ],
+              });
+            } else if (event.type === 'workflow_card') {
+              const card: WorkflowCardPayload = { ...event };
+              assistantWorkflowCard = card;
+              writeStreamState({
+                messages: [
+                  ...historyWithUser,
+                  {
+                    role: 'assistant',
+                    content: assistantContent,
+                    toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                    ...(assistantCard ? { card: assistantCard } : {}),
+                    workflowCard: card,
+                    ...(assistantPromptCard ? { promptCard: assistantPromptCard } : {}),
+                  },
+                ],
+              });
+            } else if (event.type === 'prompt_card') {
+              const card: PromptCardPayload = { ...event };
+              assistantPromptCard = card;
+              writeStreamState({
+                messages: [
+                  ...historyWithUser,
+                  {
+                    role: 'assistant',
+                    content: assistantContent,
+                    toolCalls: assistantToolCalls.length ? [...assistantToolCalls] : undefined,
+                    ...(assistantCard ? { card: assistantCard } : {}),
+                    ...(assistantWorkflowCard ? { workflowCard: assistantWorkflowCard } : {}),
+                    promptCard: card,
                   },
                 ],
               });
@@ -452,6 +493,30 @@ export function useAiChatSession({
     [activeKey, sessionMap, defaultModel, symbol, exchange, patchSession, refetchSessions, activePersona, availableModels, catalogData, hasSentRef, setSessionMap, setActiveKey, inputRef],
   );
 
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
+
+  const launchPrompt = useCallback(
+    (prompt: string, mode?: AiMode) => {
+      const sessionMode = mode ?? 'research';
+      setSessionMap((prev) => {
+        const next = new Map(prev);
+        const fresh = emptySessionState(defaultModel, sessionMode);
+        fresh.input = prompt;
+        next.set(NEW_CHAT_KEY, fresh);
+        return next;
+      });
+      setActiveKey(NEW_CHAT_KEY);
+      setActivePersona(null);
+      setTimeout(() => {
+        void sendMessageRef.current(prompt);
+      }, 0);
+    },
+    [defaultModel, setSessionMap, setActiveKey, setActivePersona],
+  );
+
   const handleStop = useCallback(() => {
     currentSession.abortController?.abort();
   }, [currentSession]);
@@ -476,5 +541,6 @@ export function useAiChatSession({
     startNewChat,
     loadSession,
     deleteSession,
+    launchPrompt,
   };
 }

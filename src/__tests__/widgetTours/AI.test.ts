@@ -7,6 +7,7 @@ import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
   'ai-toolbar',
+  'ai-workflows',
   'ai-mode-toggle',
   'ai-personas',
   'ai-input',
@@ -30,12 +31,12 @@ describe('AI Widget Tour and Documentation', () => {
     readFileSync(path.resolve(__dirname, '../../components/widgets/AiInputBar.tsx'), 'utf-8'),
   ].join('\n');
 
-  it('has 4 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(aiTour.steps).toHaveLength(4);
+  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(aiTour.steps).toHaveLength(5);
 
     const ids = aiTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(4);
+    expect(uniqueIds.size).toBe(5);
 
     for (const step of aiTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);

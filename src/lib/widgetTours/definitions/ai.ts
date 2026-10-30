@@ -11,6 +11,12 @@ export const aiTour: WidgetTourDefinition = {
       body: 'Manage sessions, choose models, view streaming status, and check the CTX stock badge. The CTX badge grounds model responses.',
     },
     {
+      id: 'ai-workflows',
+      anchor: 'ai-workflows',
+      title: 'Scheduled Workflows',
+      body: 'Create recurring briefings and saved prompts from chat. Workflows run on schedule or catch up on launch, and results land in the INBOX tab.',
+    },
+    {
       id: 'ai-mode-toggle',
       anchor: 'ai-mode-toggle',
       title: 'Research & Script Modes',

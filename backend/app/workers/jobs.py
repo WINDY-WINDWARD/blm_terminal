@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 def register_all_jobs() -> None:
     """Register all background jobs with the job registry."""
     from app.workers.ai_picks_worker import run_loop_1_and_2, run_loop_3
+    from app.workers.workflow_scheduler import run_sweep_once
 
     jobs = [
         # --- Data warehouse (startup / daily) ---
@@ -279,6 +280,15 @@ def register_all_jobs() -> None:
             category="analytics",
             cron_expression="0 17 * * *",
             callable=run_loop_3,
+            is_async=True,
+        ),
+        JobDefinition(
+            job_key="job.ai_workflows_scheduler",
+            name="ai_workflows_scheduler",
+            description="Run due scheduled AI workflows and catch up missed slots",
+            category="analytics",
+            cron_expression="*/1 * * * *",
+            callable=run_sweep_once,
             is_async=True,
         ),
     ]

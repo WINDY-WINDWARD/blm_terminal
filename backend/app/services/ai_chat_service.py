@@ -998,6 +998,115 @@ BLM_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_workflow",
+            "description": "Create and schedule an automated AI workflow task. Call this tool when the user asks to schedule a briefing, report, or recurring task (e.g. 'schedule a briefing at 10', 'daily morning report', etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Workflow name."},
+                    "prompt": {"type": "string", "description": "The prompt instructions to run when this workflow triggers."},
+                    "schedule_type": {
+                        "type": "string",
+                        "enum": ["daily", "weekdays", "weekly", "hourly", "once", "custom"],
+                        "description": "Schedule recurrence type.",
+                    },
+                    "time_of_day": {"type": "string", "description": "Time in HH:MM format (e.g. '10:00' or '09:30')."},
+                    "days_of_week": {
+                        "description": "Days of week for weekly schedule (0=Sunday, 1=Monday... or comma-separated numbers).",
+                        "type": "string",
+                    },
+                    "cron": {"type": "string", "description": "5-part cron expression (required when schedule_type is 'custom')."},
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of stock symbols attached to this workflow.",
+                    },
+                    "catch_up_enabled": {"type": "boolean", "description": "Run missed schedule slots upon reconnect (default true)."},
+                    "allow_write_tools": {"type": "boolean", "description": "Allow write tools in workflow execution (default false)."},
+                },
+                "required": ["name", "prompt", "schedule_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_workflows",
+            "description": "Manage existing scheduled AI workflows: list workflows, pause, resume, delete, trigger an immediate run, or propose updates to schedule/prompt.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "pause", "resume", "delete", "run", "update"],
+                        "description": "Action to perform on workflows.",
+                    },
+                    "workflow_id": {"type": "integer", "description": "Target workflow ID (required for pause, resume, delete, run, update)."},
+                    "name": {"type": "string", "description": "Updated workflow name (for update)."},
+                    "prompt": {"type": "string", "description": "Updated prompt instructions (for update)."},
+                    "schedule_type": {
+                        "type": "string",
+                        "enum": ["daily", "weekdays", "weekly", "hourly", "once", "custom"],
+                        "description": "Updated schedule recurrence type (for update).",
+                    },
+                    "time_of_day": {"type": "string", "description": "Updated time in HH:MM format (for update)."},
+                    "days_of_week": {"type": "string", "description": "Updated days of week for weekly schedule (for update)."},
+                    "cron": {"type": "string", "description": "Updated 5-part cron expression (for update)."},
+                    "catch_up_enabled": {"type": "boolean", "description": "Updated catch-up setting (for update)."},
+                    "allow_write_tools": {"type": "boolean", "description": "Updated write tools permission (for update)."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_custom_prompt",
+            "description": "Create a reusable custom prompt template for AI workflows and chat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Title of the prompt template."},
+                    "tag": {"type": "string", "description": "Short category tag (e.g. 'briefing', 'valuation', 'ideas')."},
+                    "description": {"type": "string", "description": "Brief description of what this prompt accomplishes."},
+                    "prompt": {"type": "string", "description": "Full prompt template text."},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["research", "script"],
+                        "description": "Terminal AI mode this prompt is for (default: research).",
+                    },
+                },
+                "required": ["title", "tag", "description", "prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_custom_prompts",
+            "description": "Manage reusable custom prompt templates: list all custom prompts, delete a prompt, or propose updates to an existing prompt.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "delete", "update"],
+                        "description": "Action to perform on custom prompts.",
+                    },
+                    "prompt_id": {"type": "integer", "description": "Target custom prompt ID (required for delete and update)."},
+                    "title": {"type": "string", "description": "Updated prompt title (for update)."},
+                    "tag": {"type": "string", "description": "Updated category tag (for update)."},
+                    "description": {"type": "string", "description": "Updated description (for update)."},
+                    "prompt": {"type": "string", "description": "Updated prompt text (for update)."},
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -1079,6 +1188,12 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         create_script,
         revise_script,
     )
+    from app.services.workflow_ai_tools import (
+        create_workflow,
+        manage_workflows,
+        create_custom_prompt,
+        manage_custom_prompts,
+    )
 
     dispatch: dict[str, Any] = {
         "add_watchlist_item": add_watchlist_item,
@@ -1135,6 +1250,10 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
         "search_pdf": search_pdf,
         "read_pdf_pages": read_pdf_pages,
         "get_pdf_outline": get_pdf_outline,
+        "create_workflow": create_workflow,
+        "manage_workflows": manage_workflows,
+        "create_custom_prompt": create_custom_prompt,
+        "manage_custom_prompts": manage_custom_prompts,
     }
 
     fn = dispatch.get(name)
@@ -1307,12 +1426,19 @@ async def _run_tools_parallel(
         else:
             try:
                 result = await asyncio.wait_for(_execute_tool(tool_name, args), timeout=120.0)
-                # Script mutations carry a UI card: pop it out of the LLM
-                # payload and emit it as its own SSE event (Accept/Discard).
-                if tool_name in ("create_script", "revise_script") and isinstance(result, dict):
-                    card = result.pop("script_card", None)
+                card_map = {
+                    "create_script": "script_card",
+                    "revise_script": "script_card",
+                    "create_workflow": "workflow_card",
+                    "manage_workflows": "workflow_card",
+                    "create_custom_prompt": "prompt_card",
+                    "manage_custom_prompts": "prompt_card",
+                }
+                card_key = card_map.get(tool_name)
+                if card_key and isinstance(result, dict):
+                    card = result.pop(card_key, None)
                     if isinstance(card, dict):
-                        extra_event = json.dumps({"type": "script_card", **card})
+                        extra_event = json.dumps({"type": card_key, **card})
                 content_str = _truncate_tool_result(result)
             except asyncio.TimeoutError:
                 content_str = json.dumps({"error": f"{tool_name} timed out after 120s"})

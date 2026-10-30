@@ -58,6 +58,7 @@ from app.routers import (
     auth_router,
     users_router,
 )
+from app.routers.ai_workflows import router as ai_workflows_router
 from app.workers.lifecycle import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
@@ -1062,6 +1063,7 @@ async def launch_token_guard(request: Request, call_next) -> Response:  # type: 
 # ---------------------------------------------------------------------------
 
 app.include_router(ai_chat_router, prefix="/api")
+app.include_router(ai_workflows_router, prefix="/api")
 app.include_router(ai_routes_router, prefix="/api")
 app.include_router(ai_routes_router)
 app.include_router(ai_picks_router, prefix="/api")

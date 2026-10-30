@@ -4,7 +4,7 @@ export const aiDoc: WidgetDoc = {
   command: 'AI',
   title: 'AI Chat',
   summary:
-    'Conversational research assistant and quantitative script generator with live NSE tool access and indicator handoff.',
+    'Conversational research assistant and quantitative script generator with live NSE tool access, scheduled workflows, saved launch prompts, and indicator handoff.',
   kind: 'panel',
   order: 150,
   screenshot: {
@@ -22,11 +22,16 @@ export const aiDoc: WidgetDoc = {
       heading: 'Controls',
       items: [
         '☰ Sessions: opens the drawer with chat history and document library management.',
+        '⏱ Workflows: opens the right drawer with scheduled workflows and the run inbox. The badge shows unread runs.',
         'Model selector: selects the language model for the current conversation.',
         'CTX badge: displays the active symbol and exchange context. Check this badge before asking questions.',
         'Research / Script mode switch: toggles between question answering and indicator code generation.',
         '+ New button: creates a new scratch session in the active mode.',
         'Starter prompt cards: click any preset card in an empty session to launch common valuation or script requests.',
+        'System prompt cards: four built-in prompts. Click Launch to run one. Click Duplicate to copy it into My Prompts and edit the copy.',
+        'My prompt cards: your saved prompts, four per page. Use the ‹ › buttons to page. Click Launch to run one. Hover a card to edit or delete it.',
+        '+ New prompt: describe what you want. The AI writes a structured prompt card and saves it to My Prompts.',
+        'Workflow card buttons: Run now starts the workflow, Open shows the schedule, Edit changes the prompt, and Undo deletes it.',
         'Analyst persona chips: select Value, Earnings, F&O, or Macro Analyst to guide reasoning frameworks.',
         'Attachment clip (📎): attaches PDF or CSV files for document-grounded analysis.',
         'Prompt input: text area for queries or script specs. Press Enter to send, Shift+Enter for newline.',
@@ -64,7 +69,19 @@ export const aiDoc: WidgetDoc = {
         },
         {
           name: 'STARTER CARDS',
-          desc: 'Four initial prompt suggestions displayed when a conversation has no messages yet.',
+          desc: 'Two prompt sections appear when a conversation has no messages: four read-only system prompts, and your saved prompts with four cards per page.',
+        },
+        {
+          name: 'WORKFLOWS DRAWER',
+          desc: 'Right drawer with two tabs. SCHEDULED lists workflows with status, next run, and catch-up window. INBOX lists finished runs with the trigger type.',
+        },
+        {
+          name: 'WORKFLOW CARD',
+          desc: 'Chat card shown after the AI creates or edits a workflow. It shows the schedule, symbols, and the next run time.',
+        },
+        {
+          name: 'RUN BANNER',
+          desc: 'Strip above the messages when you open a workflow run. It shows the workflow name and how the run started: schedule, catch-up, or manual.',
         },
         {
           name: 'SCRIPT CARD',
@@ -83,12 +100,12 @@ export const aiDoc: WidgetDoc = {
     {
       heading: 'Data freshness and limits',
       body:
-        'Market data tools query live quotes, fundamentals, deals, and corporate filings on request. The widget saves sessions and attached documents in local SQLite storage. LLM output can be wrong, so verify before trading. Never trade on unverified generative metrics.',
+        'Market data tools query live quotes, fundamentals, deals, and corporate filings on request. The widget saves sessions, attached documents, and workflow runs in local SQLite storage. Scheduled runs use read-only tools unless you enable Allow actions on the workflow. A missed run starts on the next app launch inside the catch-up window. LLM output can be wrong, so verify before trading. Never trade on unverified generative metrics.',
     },
     {
       heading: 'Guided tour',
       body:
-        'The guided tour covers four key areas: 1) Command Toolbar & Context, 2) Research & Script Modes, 3) Analyst Personas, and 4) Prompt Input & File Uploads. To replay the tour, open DOCS in another panel, keep this AI panel open, then click REPLAY TOUR.',
+        'The guided tour covers five key areas: 1) Command Toolbar & Context, 2) Scheduled Workflows, 3) Research & Script Modes, 4) Analyst Personas, and 5) Prompt Input & File Uploads. To replay the tour, open DOCS in another panel, keep this AI panel open, then click REPLAY TOUR.',
     },
   ],
 };

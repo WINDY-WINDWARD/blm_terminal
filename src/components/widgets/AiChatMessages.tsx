@@ -1,7 +1,10 @@
 'use client';
 
 import React from 'react';
-import type { AttachedDocument, ScriptCard } from '@/types/aiWidgetTypes';
+import type { AttachedDocument, ChatMessage, ScriptCard } from '@/types/aiWidgetTypes';
+import type { WorkflowCardPayload, PromptCardPayload } from '@/types/aiWorkflowTypes';
+import { AiWorkflowCardView } from './AiWorkflowCardView';
+import { AiPromptCardView } from './AiPromptCardView';
 import { cn } from '@/lib/utils';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -159,23 +162,34 @@ export function MarkdownContent({ content }: { content: string }) {
 }
 
 export interface MessageBubbleProps {
-  msg: {
-    role: 'user' | 'assistant';
-    content: string;
-    toolCalls?: string[];
-    isError?: boolean;
-    card?: ScriptCard;
-    attachments?: number[];
-  };
+  msg: ChatMessage;
   documents?: AttachedDocument[];
   isLastAssistant?: boolean;
   toolsDone?: boolean;
   onRetry?: () => void;
   onAcceptCard?: (card: ScriptCard) => void;
   onDiscardCard?: (card: ScriptCard) => void;
+  onWorkflowCardAction?: (
+    action: 'run' | 'open' | 'undo' | 'apply' | 'discard' | 'edit',
+    card: WorkflowCardPayload,
+  ) => void;
+  onPromptCardAction?: (
+    action: 'launch' | 'edit' | 'undo' | 'apply' | 'discard',
+    card: PromptCardPayload,
+  ) => void;
 }
 
-export function MessageBubble({ msg, documents = [], isLastAssistant, toolsDone, onRetry, onAcceptCard, onDiscardCard }: MessageBubbleProps) {
+export function MessageBubble({
+  msg,
+  documents = [],
+  isLastAssistant,
+  toolsDone,
+  onRetry,
+  onAcceptCard,
+  onDiscardCard,
+  onWorkflowCardAction,
+  onPromptCardAction,
+}: MessageBubbleProps) {
   const isUser = msg.role === 'user';
   const toolCalls = msg.toolCalls ?? [];
   const hasError = !isUser && msg.isError;
@@ -244,6 +258,12 @@ export function MessageBubble({ msg, documents = [], isLastAssistant, toolsDone,
         )}
         {msg.card && !msg.card.dismissed && onAcceptCard && onDiscardCard && (
           <ScriptCardView card={msg.card} onAccept={onAcceptCard} onDiscard={onDiscardCard} />
+        )}
+        {msg.workflowCard && !msg.workflowCard.dismissed && onWorkflowCardAction && (
+          <AiWorkflowCardView card={msg.workflowCard} onAction={onWorkflowCardAction} />
+        )}
+        {msg.promptCard && !msg.promptCard.dismissed && onPromptCardAction && (
+          <AiPromptCardView card={msg.promptCard} onAction={onPromptCardAction} />
         )}
       </div>
       <div className="flex items-center gap-2 px-1 text-[10px] text-zinc-400 font-mono">
