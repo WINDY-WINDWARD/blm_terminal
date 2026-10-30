@@ -324,7 +324,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
         </div>
 
         {/* Body */}
-        <div className="px-3 py-1 text-[11px] leading-relaxed text-terminal-gray overflow-y-auto flex-1 select-text">
+        <div className="px-3 py-1 text-[11px] leading-relaxed text-zinc-200 overflow-y-auto flex-1 select-text">
           {currentStep.body}
         </div>
 
@@ -343,7 +343,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
               <button
                 type="button"
                 onClick={handleSkip}
-                className="px-2 py-0.5 text-[10px] font-bold uppercase text-white/40 hover:text-white transition-colors"
+                className="px-2 py-0.5 text-[10px] font-bold uppercase text-white/60 hover:text-white transition-colors"
               >
                 Skip
               </button>
@@ -356,7 +356,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
               </button>
             </div>
           </div>
-          <p className="text-[9px] leading-tight text-white/30 text-center">
+          <p className="text-[9px] leading-tight text-white/55 text-center">
             Replay from DOCS: keep both panels open, then click REPLAY TOUR.
           </p>
         </div>

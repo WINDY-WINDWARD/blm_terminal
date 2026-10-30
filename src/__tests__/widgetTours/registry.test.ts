@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { WIDGET_TOUR_COMMANDS, WIDGET_TOURS } from '@/lib/widgetTours';
 import { DOCS_INDEX, WIDGET_DOCS } from '@/lib/widgetDocs';
@@ -67,6 +69,19 @@ describe('Widget Tours Registry', () => {
       expect(doc.screenshot?.src).toBe(`/docs/widgets/${cmd}.png`);
       expect(doc.screenshot?.alt).toBeTruthy();
       expect(doc.screenshot?.caption).toBeTruthy();
+    }
+  });
+
+  it('never paints text with terminal-gray, which is the #333 border colour', () => {
+    // terminal-gray is 1.6:1 against the terminal background, so it is unreadable as text.
+    const files = [
+      'src/components/widgetTour/WidgetTourOverlay.tsx',
+      'src/components/widgets/DocsWidget.tsx',
+    ];
+
+    for (const file of files) {
+      const source = readFileSync(path.join(process.cwd(), file), 'utf8');
+      expect(source, `${file} must not use text-terminal-gray`).not.toContain('text-terminal-gray');
     }
   });
 });

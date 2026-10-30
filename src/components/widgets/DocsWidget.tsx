@@ -117,7 +117,7 @@ function DocView({
       {doc.screenshot && (
         <div data-widget-tour="docs-screenshot" className="mb-4">
           {imgError ? (
-            <div className="border border-terminal-gray/40 p-4 text-center text-xs text-terminal-gray/60 uppercase">
+            <div className="border border-terminal-gray/40 p-4 text-center text-xs text-zinc-300 uppercase">
               SCREENSHOT NOT CAPTURED YET
             </div>
           ) : (
@@ -131,7 +131,7 @@ function DocView({
                 unoptimized
                 onError={() => setImgError(true)}
               />
-              <p className="text-[10px] text-terminal-gray/60 mt-1 italic">
+              <p className="text-[10px] text-zinc-400 mt-1 italic">
                 {doc.screenshot.caption}
               </p>
             </div>
@@ -153,7 +153,7 @@ function DocView({
             className="max-w-full max-h-[85%] object-contain border border-terminal-gray/40"
             unoptimized
           />
-          <p className="text-xs text-terminal-gray/80 mt-2">{doc.screenshot.caption}</p>
+          <p className="text-xs text-zinc-300 mt-2">{doc.screenshot.caption}</p>
         </div>
       )}
 
@@ -213,7 +213,7 @@ function IndexView({
                   className={`text-[9px] px-1 py-0.2 rounded border uppercase font-mono ${
                     isSeen
                       ? 'border-green-500/50 text-green-400 bg-green-950/20'
-                      : 'border-terminal-gray/50 text-terminal-gray/70 bg-terminal-gray/10'
+                      : 'border-zinc-600 text-zinc-300 bg-zinc-800/40'
                   }`}
                 >
                   {isSeen ? 'SEEN' : 'NOT RUN'}
@@ -296,7 +296,7 @@ export function DocsWidget() {
         >
           ▸ APP TOUR
         </button>
-        <span className="text-terminal-gray/40 text-[10px]">/</span>
+        <span className="text-zinc-500 text-[10px]">/</span>
         {doc ? (
           <>
             <button
@@ -309,7 +309,7 @@ export function DocsWidget() {
             >
               ← INDEX
             </button>
-            <span className="text-terminal-gray/40 text-[10px]">/</span>
+            <span className="text-zinc-500 text-[10px]">/</span>
             <span className="text-terminal-amber text-[10px] font-mono font-bold">
               {doc.command}
             </span>
