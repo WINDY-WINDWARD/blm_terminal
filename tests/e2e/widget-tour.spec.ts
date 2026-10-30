@@ -93,7 +93,8 @@ async function mockNotifications(page: Page) {
   });
 }
 
-async function mockAnalysis(page: Page) {
+async function mockAnalysis(page: Page, options: { delaySectorsMs?: number } = {}) {
+  const delay = options.delaySectorsMs ?? 0;
   const sector = {
     category_type: 'sector',
     slug: 'it',
@@ -132,6 +133,7 @@ async function mockAnalysis(page: Page) {
     await route.fulfill({ status: 200, json: [stock] });
   });
   await page.route('**/api/py/markets/sectors', async (route) => {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     await route.fulfill({ status: 200, json: [sector] });
   });
   await page.route('**/api/py/markets/industries', async (route) => {
@@ -142,20 +144,25 @@ async function mockAnalysis(page: Page) {
 async function overlapArea(page: Page, anchor: string): Promise<number> {
   const anchorBox = await page.locator(`[data-widget-tour="${anchor}"]`).first().boundingBox();
   const popoverBox = await page.locator('[data-tour-popover]').boundingBox();
-  if (!anchorBox || !popoverBox) return Number.MAX_SAFE_INTEGER;
+  if (!anchorBox || !popoverBox) {
+    return Number.MAX_SAFE_INTEGER;
+  }
   const overlapX =
     Math.min(anchorBox.x + anchorBox.width, popoverBox.x + popoverBox.width) -
     Math.max(anchorBox.x, popoverBox.x);
   const overlapY =
     Math.min(anchorBox.y + anchorBox.height, popoverBox.y + popoverBox.height) -
     Math.max(anchorBox.y, popoverBox.y);
-  return Math.max(0, overlapX) * Math.max(0, overlapY);
+  const area = Math.max(0, overlapX) * Math.max(0, overlapY);
+  if (area > 0) {
+  }
+  return area;
 }
 
-async function expectPopoverClearsAnchor(page: Page, anchor: string) {
+async function expectPopoverClearsAnchor(page: Page, anchor: string, timeout = 4_000) {
   // The popover is placed one frame after the step text changes.
   await expect(page.locator('[data-tour-popover]')).toBeVisible();
-  await expect.poll(() => overlapArea(page, anchor), { timeout: 4_000 }).toBeLessThan(1);
+  await expect.poll(() => overlapArea(page, anchor), { timeout }).toBeLessThan(1);
 }
 
 async function boot(
@@ -298,8 +305,9 @@ test('NOTIF tour opens the heatmap, returns to the stream, and never covers its 
   await expectPopoverClearsAnchor(page, 'notif-read-filter');
 
   await overlay.getByRole('button', { name: 'NEXT' }).click();
-  await expect(overlay).toContainText('STEP 7 OF 7');
-  await expectPopoverClearsAnchor(page, 'notif-alert-card');
+  // The alert card only exists when the feed has rows. This spec mocks no
+  // watchlist, so the optional card step must retire instead of stalling.
+  await expect(overlay).toHaveCount(0, { timeout: 15_000 });
 });
 
 test('SCAN tour highlights the heatmap grid it switches to', async ({ page }) => {
@@ -374,4 +382,26 @@ test('ANALYSIS tour visits Sectors and Heatmap, never covers its target, and res
 
   await overlay.getByRole('button', { name: 'FINISH' }).click();
   await expect(activeTab).toContainText('Summary');
+});
+
+test('a slow widget holds its step and highlights the anchor when it finally renders', async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await mockAnalysis(page, { delaySectorsMs: 8000 });
+  await boot(page, { panels: { 'panel-1': 'ANALYSIS' }, unseen: ['ANALYSIS'] });
+  const overlay = page.locator(`${PANEL_1} ${OVERLAY}`);
+
+  await expect(overlay).toContainText('STEP 1 OF 8', { timeout: 20_000 });
+  await expectPopoverClearsAnchor(page, 'analysis-tabs');
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+
+  // Step 2 needs the sector basket. The tour must hold the step, explain the
+  // wait, then place the highlight on the KPI band without a manual nudge.
+  await expect(overlay).toContainText('STEP 2 OF 8');
+  await expect(page.locator('[data-tour-waiting="true"]')).toBeVisible({ timeout: 6_000 });
+  await expect(overlay).toContainText('WAITING FOR ANALYSIS');
+  await expectPopoverClearsAnchor(page, 'analysis-kpis', 15_000);
+  await expect(overlay).toContainText('STEP 2 OF 8');
+  await expect(page.locator('[data-tour-waiting="true"]')).toHaveCount(0);
 });

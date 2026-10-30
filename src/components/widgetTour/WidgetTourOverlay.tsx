@@ -28,6 +28,7 @@ interface PopoverPos {
 }
 
 const ANCHOR_TIMEOUT_MS = 2000;
+const MAX_ANCHOR_WAIT_MS = 15000;
 const ACTION_SETTLE_MS = 60;
 const MIN_POPOVER_WIDTH = 200;
 const MAX_POPOVER_WIDTH = 320;
@@ -77,10 +78,12 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
   const targetElRef = useRef<HTMLElement | null>(null);
   const restoreRef = useRef<HTMLElement[]>([]);
   const popoverHeightRef = useRef(180);
+  const actionsDoneRef = useRef(false);
 
   const [targetBox, setTargetBox] = useState<TargetBox | null>(null);
   const [popoverPos, setPopoverPos] = useState<PopoverPos | null>(null);
   const [isAnchorFound, setIsAnchorFound] = useState(false);
+  const [isWaitingForAnchor, setIsWaitingForAnchor] = useState(false);
   const [popoverHeight, setPopoverHeight] = useState(180);
 
   const isActive = activeTour !== null && activeTour.panelId === panelId;
@@ -207,9 +210,11 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
 
     let cancelled = false;
     setIsAnchorFound(false);
+    setIsWaitingForAnchor(false);
     setTargetBox(null);
     setPopoverPos(null);
     targetElRef.current = null;
+    actionsDoneRef.current = false;
 
     const run = async () => {
       const panelEl = getPanel(panelId);
@@ -223,8 +228,11 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
         await wait(ACTION_SETTLE_MS);
       }
 
+      actionsDoneRef.current = true;
+
       const startedAt = performance.now();
       let targetEl: HTMLElement | null = null;
+      let announcedWait = false;
       while (!cancelled) {
         const candidate = panelEl.querySelector<HTMLElement>(
           `[data-widget-tour="${currentStep.anchor}"]`,
@@ -236,7 +244,15 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
             break;
           }
         }
-        if (performance.now() - startedAt > ANCHOR_TIMEOUT_MS) break;
+        const elapsed = performance.now() - startedAt;
+        // An optional step depends on data. Give it one deadline, then let the
+        // caller move on instead of making the reader wait out the long timeout.
+        if (currentStep.optional && elapsed > ANCHOR_TIMEOUT_MS) break;
+        if (!announcedWait && elapsed > ANCHOR_TIMEOUT_MS) {
+          announcedWait = true;
+          setIsWaitingForAnchor(true);
+        }
+        if (elapsed > MAX_ANCHOR_WAIT_MS) break;
         await nextFrame();
         await wait(40);
       }
@@ -244,11 +260,17 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
       if (cancelled) return;
 
       if (!targetEl) {
-        if (stepIndex < steps.length - 1) {
-          setStepIndex(stepIndex + 1);
-        } else {
-          setActiveTour(null);
+        if (currentStep.optional) {
+          if (stepIndex < steps.length - 1) {
+            setStepIndex(stepIndex + 1);
+          } else {
+            setActiveTour(null);
+          }
+          return;
         }
+        // Keep the tour alive and keep watching. A late render still gets its
+        // highlight, and the popover explains the wait instead of floating.
+        setIsWaitingForAnchor(true);
         return;
       }
 
@@ -263,6 +285,43 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
       cancelled = true;
     };
   }, [isActive, currentStep, panelId, positionStep, stepIndex, steps.length, setActiveTour]);
+
+  // A slow widget can mount its anchor after the wait above expires. Watch the
+  // panel and place the step the moment the target exists.
+  useEffect(() => {
+    if (!isActive || !currentStep) return;
+
+    const panelEl = getPanel(panelId);
+    if (!panelEl) return;
+
+    let disposed = false;
+
+    const tryPlace = () => {
+      if (disposed || targetElRef.current || !actionsDoneRef.current) return;
+      const el = panelEl.querySelector<HTMLElement>(`[data-widget-tour="${currentStep.anchor}"]`);
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 && rect.height <= 0) return;
+
+      targetElRef.current = el;
+      void positionStep(el, currentStep, true).then(() => {
+        if (disposed) return;
+        setIsWaitingForAnchor(false);
+        setIsAnchorFound(true);
+      });
+    };
+
+    const observer = new MutationObserver(tryPlace);
+    observer.observe(panelEl, { childList: true, subtree: true, characterData: true });
+    const timer = window.setInterval(tryPlace, 500);
+    tryPlace();
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.clearInterval(timer);
+    };
+  }, [isActive, currentStep, panelId, positionStep]);
 
   // Follow panel and target size changes without moving the page under the user.
   useEffect(() => {
@@ -422,6 +481,13 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
                 width: `${popoverPos.width}px`,
                 maxHeight: `${popoverPos.maxHeight}px`,
               }
+            : isWaitingForAnchor
+            ? {
+                left: '8px',
+                right: '8px',
+                bottom: '8px',
+                maxHeight: '45%',
+              }
             : {
                 top: '50%',
                 left: '50%',
@@ -431,6 +497,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
                 visibility: 'hidden',
               }
         }
+        data-tour-waiting={isWaitingForAnchor ? 'true' : undefined}
       >
         {/* Header */}
         <div className="px-3 py-1.5 border-b border-terminal-border/60 bg-terminal-card/80 flex items-center justify-between shrink-0">
@@ -453,6 +520,12 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
         <div className="px-3 pt-2 pb-1 font-bold text-xs text-white uppercase tracking-wide shrink-0">
           {currentStep.title}
         </div>
+
+        {isWaitingForAnchor && (
+          <div className="px-3 pb-1 text-[10px] text-terminal-amber animate-pulse shrink-0">
+            WAITING FOR {activeTour?.command} TO FINISH LOADING…
+          </div>
+        )}
 
         {/* Body */}
         <div className="px-3 py-1 text-[11px] leading-relaxed text-zinc-200 overflow-y-auto flex-1 select-text">
@@ -481,7 +554,8 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
               <button
                 type="button"
                 onClick={handleNext}
-                className="px-2.5 py-0.5 text-[10px] font-bold uppercase bg-terminal-amber text-black hover:bg-terminal-amber/90 transition-colors"
+                disabled={isWaitingForAnchor}
+                className="px-2.5 py-0.5 text-[10px] font-bold uppercase bg-terminal-amber text-black hover:bg-terminal-amber/90 transition-colors disabled:opacity-30 disabled:pointer-events-none"
               >
                 {isLastStep ? 'Finish' : 'Next'}
               </button>

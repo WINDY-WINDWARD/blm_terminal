@@ -1399,10 +1399,12 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                     return (
                       <div
                         key={n.id}
-                        data-widget-tour={tourId === 'scan' ? 'scan-alert-card' : 'notif-alert-card'}
                         className="p-3 bg-[#121216] border border-[#27272a] hover:border-zinc-500 rounded-md transition-all"
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div
+                          data-widget-tour={tourId === 'scan' ? 'scan-alert-card' : 'notif-alert-card'}
+                          className="flex flex-wrap items-center justify-between gap-2 mb-2"
+                        >
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-bold text-amber-400 tracking-wide">
                               {n.symbol}
