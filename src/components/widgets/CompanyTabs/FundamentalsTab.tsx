@@ -226,16 +226,19 @@ function BentoCard({
   title,
   badge,
   justify = 'start',
+  tourAnchor,
 }: {
   children: React.ReactNode;
   className?: string;
   title?: string;
   badge?: React.ReactNode;
   justify?: 'start' | 'between';
+  tourAnchor?: string;
 }) {
   const justifyClass = justify === 'between' ? 'justify-between' : 'justify-start';
   return (
     <div
+      data-widget-tour={tourAnchor}
       className={`bg-[#09090b] border border-[#27272a] rounded p-3 flex flex-col ${justifyClass} transition-colors duration-200 hover:bg-zinc-900/80 ${className}`}
     >
       {(title || badge) && (
@@ -452,7 +455,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
 
       {/* Bento Grid Body */}
       <div className="flex-1 overflow-y-auto p-2.5">
-        <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-2.5 max-w-full">
+        <div data-widget-tour="company-ratios" className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-2.5 max-w-full">
 
           {/* ── Row 2-4: Core Financial Metrics (Bento Cards) ──────────────── */}
 
@@ -768,6 +771,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
           {/* Intrinsic Valuation Matrix (col-span-2) */}
           <BentoCard
             title="Intrinsic Valuation Matrix"
+            tourAnchor="company-valuation"
             justify="start"
             className="col-span-1 @md:col-span-2 @4xl:col-span-2"
             badge={

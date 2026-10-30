@@ -23,22 +23,29 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add iinvest fields to news_articles."""
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing = {c["name"] for c in inspector.get_columns("news_articles")}
+    existing_indexes = {i["name"] for i in inspector.get_indexes("news_articles")}
     with op.batch_alter_table("news_articles", schema=None) as batch_op:
-        batch_op.add_column(
-            sa.Column("iinvest_story_id", sa.String(length=64), nullable=True)
-        )
-        batch_op.add_column(
-            sa.Column(
-                "iinvest_published_at",
-                sa.DateTime(timezone=False),
-                nullable=True,
+        if "iinvest_story_id" not in existing:
+            batch_op.add_column(
+                sa.Column("iinvest_story_id", sa.String(length=64), nullable=True)
             )
-        )
-        batch_op.create_index(
-            batch_op.f("ix_news_articles_iinvest_story_id"),
-            ["iinvest_story_id"],
-            unique=True,
-        )
+        if "iinvest_published_at" not in existing:
+            batch_op.add_column(
+                sa.Column(
+                    "iinvest_published_at",
+                    sa.DateTime(timezone=False),
+                    nullable=True,
+                )
+            )
+        if "ix_news_articles_iinvest_story_id" not in existing_indexes:
+            batch_op.create_index(
+                batch_op.f("ix_news_articles_iinvest_story_id"),
+                ["iinvest_story_id"],
+                unique=True,
+            )
 
 
 def downgrade() -> None:

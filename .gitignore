@@ -11,6 +11,7 @@
 !.yarn/versions
 
 # testing
+/test-results/
 /coverage
 
 # pytest scratch state (sandboxed runs cannot use the OS temp dir)

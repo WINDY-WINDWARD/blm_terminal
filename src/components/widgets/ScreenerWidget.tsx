@@ -501,7 +501,10 @@ export function ScreenerWidget() {
     <div className="h-full w-full flex flex-col text-xs font-mono">
 
       {/* Header */}
-      <div className="flex items-center justify-between px-2 py-1.5 border-b border-white/10 shrink-0">
+      <div
+        data-widget-tour="screener-actions"
+        className="flex items-center justify-between px-2 py-1.5 border-b border-white/10 shrink-0"
+      >
         <div className="flex items-center gap-2">
           <span className="text-terminal-amber font-bold text-[10px] uppercase tracking-wider">
             Screener
@@ -535,10 +538,16 @@ export function ScreenerWidget() {
       </div>
 
       {/* Interval Tabs */}
-      <div className="flex border-b border-white/10 shrink-0">
+      <div
+        data-widget-tour="screener-intervals"
+        className="flex border-b border-white/10 shrink-0"
+      >
         {INTERVAL_TABS.map((tab) => (
           <button
             key={tab.key}
+            role="tab"
+            aria-selected={activeInterval === tab.key}
+            data-widget-tour-click={`interval-${tab.key}`}
             onClick={() => setActiveInterval(tab.key)}
             className={`flex-1 py-1 text-[10px] uppercase tracking-wider transition-colors ${
               activeInterval === tab.key
@@ -552,7 +561,10 @@ export function ScreenerWidget() {
       </div>
 
       {/* TQL Query Bar */}
-      <div className="shrink-0 border-b border-white/10 px-2 py-1.5">
+      <div
+        data-widget-tour="screener-query"
+        className="shrink-0 border-b border-white/10 px-2 py-1.5"
+      >
         <TqlInput
           value={tqlInput}
           onChange={setTqlInput}
@@ -582,7 +594,10 @@ export function ScreenerWidget() {
       </div>
 
       {/* Results table — horizontal scroll */}
-      <div className="flex-1 overflow-auto">
+      <div
+        data-widget-tour="screener-table"
+        className="flex-1 overflow-auto"
+      >
         {sortedResults.length === 0 ? (
           <div className="h-full flex items-center justify-center text-white/30 text-[10px]">
             {isLoading

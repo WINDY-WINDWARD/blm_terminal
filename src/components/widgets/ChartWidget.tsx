@@ -1184,7 +1184,11 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
           className="w-14 bg-black border border-terminal-gray text-terminal-amber px-1 py-0.5 uppercase text-center"
         />
         <span className="text-white/60">:</span>
-        <div ref={searchContainerRef} className="flex-1 relative">
+        <div
+          ref={searchContainerRef}
+          className="flex-1 relative"
+          data-widget-tour="chart-symbol-search"
+        >
           <input
             type="text"
             value={inputSymbol}
@@ -1220,7 +1224,7 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
           GO
         </button>
 
-            <div className="flex gap-0.5 ml-1">
+            <div className="flex gap-0.5 ml-1" data-widget-tour="chart-timeframe-bar">
               {ALL_INTERVALS.map((iv) => {
                 const isActive = interval === iv;
                 return (
@@ -1240,7 +1244,7 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
               })}
             </div>
 
-            <div className="ml-1">
+            <div className="ml-1" data-widget-tour="chart-indicators-menu">
               <ChartIndicatorMenu
                 interval={interval}
                 active={indicators}
@@ -1248,7 +1252,7 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
               />
             </div>
 
-            <div className="ml-1">
+            <div className="ml-1" data-widget-tour="chart-scripts-menu">
               <ChartScriptsMenu
                 panelId={panelId}
                 slots={scriptSlots}
@@ -1285,6 +1289,7 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
           }}
           className="px-1.5 py-0.5 text-[10px] border border-terminal-gray text-white/70 hover:text-terminal-amber hover:border-terminal-amber bg-black ml-0.5"
           title="Recenter chart"
+          data-widget-tour="chart-recenter-control"
         >
           ⊡
         </button>

@@ -344,7 +344,7 @@ export function PortfolioWidget() {
       {/* Body */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left: Selection */}
-        <div className="w-52 shrink-0 border-r border-terminal-gray flex flex-col overflow-hidden">
+        <div data-widget-tour="portfolio-selection" className="w-52 shrink-0 border-r border-terminal-gray flex flex-col overflow-hidden">
           {/* Watchlist selector */}
           <div className="px-2 py-1 border-b border-terminal-gray/30">
             <select
@@ -452,7 +452,7 @@ export function PortfolioWidget() {
           </div>
 
           {/* Controls */}
-          <div className="border-t border-terminal-gray/30 px-2 py-1.5 space-y-1.5">
+          <div data-widget-tour="portfolio-parameters" className="border-t border-terminal-gray/30 px-2 py-1.5 space-y-1.5">
             <div className="flex items-center gap-1.5">
               <span className="text-[9px] text-white/40 w-14">Period</span>
               <select
@@ -506,7 +506,7 @@ export function PortfolioWidget() {
           ) : (
             <div className="flex flex-col gap-3">
               {/* Portfolio Stats */}
-              <div className="flex gap-4">
+              <div data-widget-tour="portfolio-metrics" className="flex gap-4">
                 <div className="flex flex-col">
                   <span className="text-[9px] text-white/40 uppercase tracking-wider">Expected Return</span>
                   <span className="text-terminal-amber font-bold text-sm">{(result.expected_annual_return * 100).toFixed(1)}%</span>
@@ -526,7 +526,7 @@ export function PortfolioWidget() {
               </div>
 
               {/* Weights */}
-              <div>
+              <div data-widget-tour="portfolio-results">
                 <div className="text-[9px] text-white/40 uppercase tracking-wider mb-1.5">
                   Optimal Weights
                 </div>

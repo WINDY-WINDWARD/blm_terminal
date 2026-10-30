@@ -138,7 +138,7 @@ export function AdminWidget() {
 
   return (
     <div className="flex flex-col h-full bg-terminal-bg text-terminal-amber font-mono overflow-hidden">
-      <div className="p-2 border-b border-terminal-gray">
+      <div className="p-2 border-b border-terminal-gray" data-widget-tour="admin-header">
         <h2 className="text-sm font-bold uppercase tracking-wider">User Management</h2>
       </div>
 
@@ -150,7 +150,7 @@ export function AdminWidget() {
         )}
 
         {/* Create User Form */}
-        <div className="bg-terminal-panel p-4 border border-terminal-gray/30">
+        <div className="bg-terminal-panel p-4 border border-terminal-gray/30" data-widget-tour="admin-create">
           <h3 className="text-xs text-terminal-muted mb-4 uppercase">Create New User</h3>
           <form onSubmit={handleCreateUser} className="space-y-3">
             <div className="flex flex-col gap-1">
@@ -196,7 +196,7 @@ export function AdminWidget() {
         </div>
 
         {/* User List */}
-        <div>
+        <div data-widget-tour="admin-users">
           <h3 className="text-xs text-terminal-muted mb-2 uppercase">Existing Users</h3>
           {loading ? (
             <div className="text-xs text-terminal-muted">Loading...</div>

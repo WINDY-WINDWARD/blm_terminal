@@ -433,7 +433,10 @@ function BreakoutTable({ rows, onRowClick, volumeMap, mode }: BreakoutTableProps
             <th className="pb-2 font-bold text-right">Clearance Status</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#27272a]/50">
+        <tbody
+          data-widget-tour="breakouts-rows"
+          className="divide-y divide-[#27272a]/50"
+        >
           {sortedRows.map((row) => {
             const volMeta = getVolumeShockerMeta(row, volumeMap);
             const clearance = computeClearanceStatus(row, mode);
@@ -949,12 +952,18 @@ export function BreakoutsWidget() {
             Breakout &amp; Velocity Radar
           </span>
 
-          <div className="flex flex-wrap items-center gap-1 bg-[#121216] p-1 rounded border border-[#27272a]">
+          <div
+            data-widget-tour="breakouts-tabs"
+            className="flex flex-wrap items-center gap-1 bg-[#121216] p-1 rounded border border-[#27272a]"
+          >
             {tabs.map((tab) => {
               const isActive = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
+                  role="tab"
+                  aria-selected={isActive}
+                  data-widget-tour-click={`tab-${tab.id}`}
                   onClick={() => setActiveTab(tab.id)}
                   className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer inline-flex items-center gap-1.5 ${
                     isActive
@@ -995,7 +1004,10 @@ export function BreakoutsWidget() {
       {/* Main Content Area */}
       <div className="flex-1 overflow-auto p-3 min-h-0">
         {activeTab === 'matrix' ? (
-          <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-3">
+          <div
+            data-widget-tour="breakouts-matrix"
+            className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-3"
+          >
             {/* =============================================================== */}
             {/* 1. 52-WEEK HIGH BREAKOUT RADAR (col-span-2)                     */}
             {/* =============================================================== */}
@@ -1103,7 +1115,10 @@ export function BreakoutsWidget() {
             {/* =============================================================== */}
             {/* 3. VOLUME SHOCKERS & DELIVERY SPIKES (col-span-2)               */}
             {/* =============================================================== */}
-            <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between">
+            <div
+              data-widget-tour="breakouts-volume"
+              className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-md p-3.5 transition-colors shadow-md flex flex-col justify-between"
+            >
               <div>
                 <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a]/70">
                   <div className="flex items-center gap-2">
