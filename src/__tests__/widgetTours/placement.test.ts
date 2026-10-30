@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { computePlacement, computeScrollDelta } from '@/lib/widgetTours/placement';
+﻿import { describe, expect, it } from 'vitest';
+import { computePlacement, computeScrollDelta, intersectRects, spotlightRect } from '@/lib/widgetTours/placement';
 import type { TourPlacement, TourRect } from '@/lib/widgetTours/placement';
 
 function rect(top: number, left: number, width: number, height: number): TourRect {
@@ -139,5 +139,65 @@ describe('computeScrollDelta', () => {
   it('scrolls horizontally for wide tables', () => {
     const delta = computeScrollDelta(rect(20, 900, 300, 40), rect(8, 8, 600, 400));
     expect(delta.dx).toBe(592);
+  });
+});
+
+describe('docked fallback bounds', () => {
+  it('keeps the band inside a panel shorter than the minimum popover height', () => {
+    const placement = computePlacement({
+      target: rect(10, 10, 50, 20),
+      panelWidth: 300,
+      panelHeight: 100,
+      popoverWidth: 200,
+      popoverHeight: 180,
+    });
+
+    expect(placement.dock).not.toBe('none');
+    expect(placement.top).toBeGreaterThanOrEqual(0);
+    expect(placement.top + placement.maxHeight).toBeLessThanOrEqual(100);
+  });
+
+  it('keeps the band inside a 60 px panel', () => {
+    const placement = computePlacement({
+      target: rect(40, 10, 50, 10),
+      panelWidth: 240,
+      panelHeight: 60,
+      popoverWidth: 200,
+      popoverHeight: 400,
+    });
+
+    expect(placement.top).toBeGreaterThanOrEqual(0);
+    expect(placement.top + placement.maxHeight).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('intersectRects', () => {
+  it('returns null for disjoint rects and the shared area otherwise', () => {
+    expect(intersectRects(rect(0, 0, 10, 10), rect(20, 20, 5, 5))).toBeNull();
+    expect(intersectRects(rect(0, 0, 10, 10), rect(5, 5, 10, 10))).toEqual({
+      top: 5,
+      left: 5,
+      width: 5,
+      height: 5,
+    });
+  });
+});
+
+describe('spotlightRect', () => {
+  const panel = rect(0, 0, 800, 400);
+
+  it('clips the highlight to the readable band', () => {
+    const spot = spotlightRect(rect(0, 0, 800, 400), panel, rect(0, 0, 800, 250));
+    expect(spot).toEqual({ top: 0, left: 0, width: 800, height: 250 });
+  });
+
+  it('collapses instead of painting under the popover when the band misses the target', () => {
+    const spot = spotlightRect(rect(300, 0, 200, 60), panel, rect(0, 0, 800, 100));
+    expect(spot.height).toBe(0);
+  });
+
+  it('collapses when the target is outside the panel', () => {
+    const spot = spotlightRect(rect(500, 0, 200, 60), panel, rect(0, 0, 800, 100));
+    expect(spot.height).toBe(0);
   });
 });

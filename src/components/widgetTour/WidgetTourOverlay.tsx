@@ -486,7 +486,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
       data-tour-dock={popoverPos?.dock ?? 'none'}
     >
       {/* Dimmed backdrop or cutout */}
-      {isAnchorFound && targetBox ? (
+      {isAnchorFound && targetBox && targetBox.width > 0 && targetBox.height > 0 ? (
         <div
           className="absolute border border-terminal-amber pointer-events-none transition-all duration-150"
           style={{

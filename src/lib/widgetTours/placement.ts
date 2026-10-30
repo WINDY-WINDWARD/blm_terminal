@@ -134,9 +134,10 @@ function safeFor(candidate: Candidate, panelWidth: number, panelHeight: number):
 function docked(input: TourPlacementInput): TourPlacement {
   const { target, panelWidth, panelHeight, popoverHeight } = input;
   const width = Math.max(0, panelWidth - 2 * EDGE);
-  const maxHeight = Math.min(popoverHeight, Math.max(MIN_POPOVER_HEIGHT, panelHeight - 2 * EDGE));
+  // Never force a minimum here: a floor larger than the panel pushes the band outside it.
+  const maxHeight = Math.min(popoverHeight, Math.max(24, panelHeight - 2 * EDGE));
   const dockAtTop = target.top + target.height / 2 > panelHeight / 2;
-  const top = dockAtTop ? EDGE : panelHeight - maxHeight - EDGE;
+  const top = dockAtTop ? EDGE : Math.max(EDGE, panelHeight - maxHeight - EDGE);
 
   return {
     top,
@@ -234,10 +235,12 @@ export function intersectRects(a: TourRect, b: TourRect): TourRect | null {
  */
 export function spotlightRect(target: TourRect, panel: TourRect, safe: TourRect): TourRect {
   const inPanel = intersectRects(target, panel);
-  if (!inPanel) return target;
+  if (!inPanel) return { ...target, height: 0 };
 
   const inSafe = intersectRects(inPanel, safe);
-  if (inSafe && inSafe.height >= 12 && inSafe.width >= 12) return inSafe;
+  if (inSafe) return inSafe;
 
-  return inPanel;
+  // No readable band overlaps the target: collapse the cutout so the mask never
+  // paints around a hole that sits underneath the popover.
+  return { top: inPanel.top, left: inPanel.left, width: inPanel.width, height: 0 };
 }

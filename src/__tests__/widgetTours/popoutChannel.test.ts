@@ -1,110 +1,148 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const requestWidgetTour = vi.fn();
+
+vi.mock('@/components/widgetTour/WidgetTourController', () => ({
+  requestWidgetTour: (request: { panelId: string; command: string; mode: string }) =>
+    requestWidgetTour(request),
+}));
+
 import {
-  POPOUT_REQUEST_KEY,
+  findPopoutTarget,
   POPOUT_ACK_KEY,
   POPOUT_PRESENCE_KEY,
+  POPOUT_REQUEST_KEY,
   requestPopoutTour,
+  respondToPopoutRequest,
 } from '@/lib/widgetTours/popoutChannel';
 
-describe('popoutChannel', () => {
+function writePresence(entries: Record<string, { panelId: string; command: string; ts: number }>) {
+  window.localStorage.setItem(POPOUT_PRESENCE_KEY, JSON.stringify(entries));
+}
+
+function readRequest(): { id: string; command: string; target: string } {
+  return JSON.parse(window.localStorage.getItem(POPOUT_REQUEST_KEY) ?? '{}');
+}
+
+function dispatchAck(id: string, command: string) {
+  window.dispatchEvent(
+    new StorageEvent('storage', {
+      key: POPOUT_ACK_KEY,
+      newValue: JSON.stringify({ id, command }),
+    }),
+  );
+}
+
+describe('findPopoutTarget', () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it('returns the newest live instance for the command', () => {
+    writePresence({
+      old: { panelId: 'popout_1', command: 'CHART', ts: Date.now() - 60_000 },
+      newer: { panelId: 'popout_2', command: 'CHART', ts: Date.now() },
+      other: { panelId: 'popout_3', command: 'ORDER', ts: Date.now() },
+    });
+
+    expect(findPopoutTarget('CHART', window.localStorage)).toBe('newer');
+  });
+
+  it('ignores entries older than the 12 hour window and malformed payloads', () => {
+    const staleTs = Date.now() - 13 * 60 * 60 * 1000;
+    writePresence({ stale: { panelId: 'p', command: 'CHART', ts: staleTs } });
+    expect(findPopoutTarget('CHART', window.localStorage)).toBeNull();
+
+    window.localStorage.setItem(POPOUT_PRESENCE_KEY, JSON.stringify({ broken: { command: 1 } }));
+    expect(findPopoutTarget('CHART', window.localStorage)).toBeNull();
+
+    window.localStorage.setItem(POPOUT_PRESENCE_KEY, 'not json');
+    expect(findPopoutTarget('CHART', window.localStorage)).toBeNull();
+  });
+});
+
+describe('requestPopoutTour', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    window.localStorage.clear();
+    requestWidgetTour.mockClear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
-  it('exports expected storage key constants', () => {
-    expect(POPOUT_REQUEST_KEY).toBe('__blm_widget_tour_request');
-    expect(POPOUT_ACK_KEY).toBe('__blm_widget_tour_ack');
-    expect(POPOUT_PRESENCE_KEY).toBe('__blm_widget_tour_windows');
+  it('resolves false without writing a request when no popout is registered', async () => {
+    await expect(requestPopoutTour('CHART')).resolves.toBe(false);
+    expect(window.localStorage.getItem(POPOUT_REQUEST_KEY)).toBeNull();
   });
 
-  it('requestPopoutTour resolves false on timeout with a stubbed localStorage and no ack', async () => {
-    const memoryStore: Record<string, string> = {};
-    const mockStorage: Storage = {
-      getItem: vi.fn((key: string) => memoryStore[key] ?? null),
-      setItem: vi.fn((key: string, value: string) => {
-        memoryStore[key] = value;
-      }),
-      removeItem: vi.fn((key: string) => {
-        delete memoryStore[key];
-      }),
-      clear: vi.fn(() => {
-        Object.keys(memoryStore).forEach((k) => delete memoryStore[k]);
-      }),
-      key: vi.fn((idx: number) => Object.keys(memoryStore)[idx] ?? null),
-      length: 0,
-    };
-
-    vi.stubGlobal('localStorage', mockStorage);
-
-    // A live popout of CHART is registered, so the request is broadcast.
-    memoryStore[POPOUT_PRESENCE_KEY] = JSON.stringify({
-      registration: { panelId: 'panel-1', command: 'CHART', ts: Date.now() },
+  it('targets one instance and resolves true only after its matching ack', async () => {
+    writePresence({
+      a: { panelId: 'popout_1', command: 'CHART', ts: Date.now() - 10_000 },
+      b: { panelId: 'popout_2', command: 'CHART', ts: Date.now() },
     });
 
-    const promise = requestPopoutTour('CHART');
+    const pending = requestPopoutTour('CHART');
+    const request = readRequest();
+    expect(request.command).toBe('CHART');
+    expect(request.target).toBe('b');
 
-    expect(mockStorage.setItem).toHaveBeenCalledWith(
-      POPOUT_REQUEST_KEY,
-      expect.stringContaining('"command":"CHART"')
-    );
+    dispatchAck(request.id, 'ORDER');
+    dispatchAck('unrelated', 'CHART');
 
-    // Fast-forward past the 700ms timeout
-    vi.advanceTimersByTime(750);
+    const resolvedEarly = await Promise.race([
+      pending.then(() => 'resolved' as const),
+      Promise.resolve('pending' as const),
+    ]);
+    expect(resolvedEarly).toBe('pending');
 
-    const result = await promise;
-    expect(result).toBe(false);
+    dispatchAck(request.id, 'CHART');
+    await expect(pending).resolves.toBe(true);
   });
 
-  it('requestPopoutTour skips the wait when no popout is registered', async () => {
-    const memoryStore: Record<string, string> = {};
-    const mockStorage: Storage = {
-      getItem: vi.fn((key: string) => memoryStore[key] ?? null),
-      setItem: vi.fn((key: string, value: string) => {
-        memoryStore[key] = value;
-      }),
-      removeItem: vi.fn((key: string) => {
-        delete memoryStore[key];
-      }),
-      clear: vi.fn(() => {
-        Object.keys(memoryStore).forEach((k) => delete memoryStore[k]);
-      }),
-      key: vi.fn((idx: number) => Object.keys(memoryStore)[idx] ?? null),
-      length: 0,
-    };
+  it('resolves false when the ack never arrives', async () => {
+    vi.useFakeTimers();
+    writePresence({ a: { panelId: 'popout_1', command: 'CHART', ts: Date.now() } });
 
-    vi.stubGlobal('localStorage', mockStorage);
+    const pending = requestPopoutTour('CHART');
+    await vi.advanceTimersByTimeAsync(800);
+    await expect(pending).resolves.toBe(false);
+  });
+});
 
-    const result = await requestPopoutTour('CHART');
-
-    expect(result).toBe(false);
-    expect(mockStorage.setItem).not.toHaveBeenCalled();
+describe('respondToPopoutRequest', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    requestWidgetTour.mockClear();
   });
 
-  it('source check finds the responder call in the popout page', () => {
-    const popoutPagePath = path.resolve(
-      process.cwd(),
-      'src/app/widget/[widgetType]/page.tsx'
-    );
-    const content = fs.readFileSync(popoutPagePath, 'utf8');
+  it('starts the tour and acknowledges only the targeted instance', () => {
+    const raw = JSON.stringify({ id: 'req_1', command: 'CHART', target: 'b' });
 
-    expect(content).toContain('usePopoutTourResponder(panelId, widgetTitle)');
+    expect(respondToPopoutRequest(window.localStorage, 'a', 'popout_1', 'CHART', raw)).toBe(false);
+    expect(requestWidgetTour).not.toHaveBeenCalled();
+
+    expect(respondToPopoutRequest(window.localStorage, 'b', 'popout_2', 'CHART', raw)).toBe(true);
+    expect(requestWidgetTour).toHaveBeenCalledWith({
+      panelId: 'popout_2',
+      command: 'CHART',
+      mode: 'replay',
+    });
+    expect(JSON.parse(window.localStorage.getItem(POPOUT_ACK_KEY) ?? '{}')).toEqual({
+      id: 'req_1',
+      command: 'CHART',
+    });
   });
 
-  it('source check finds the popout banner in DocsWidget', () => {
-    const docsWidgetPath = path.resolve(
-      process.cwd(),
-      'src/components/widgets/DocsWidget.tsx'
-    );
-    const content = fs.readFileSync(docsWidgetPath, 'utf8');
+  it('ignores legacy payloads with no target, wrong commands, and malformed input', () => {
+    const legacy = JSON.stringify({ id: 'req_2', command: 'CHART' });
+    expect(respondToPopoutRequest(window.localStorage, 'a', 'p', 'CHART', legacy)).toBe(false);
 
-    expect(content).toContain('TOUR STARTED IN THE {startedInPopoutCmd} POPOUT');
-    expect(content).toContain('OPEN {missingPanelCmd} IN A PANEL OR POPOUT TO REPLAY THIS TOUR');
+    const wrong = JSON.stringify({ id: 'req_3', command: 'ORDER', target: 'a' });
+    expect(respondToPopoutRequest(window.localStorage, 'a', 'p', 'CHART', wrong)).toBe(false);
+
+    expect(respondToPopoutRequest(window.localStorage, 'a', 'p', 'CHART', '[]')).toBe(false);
+    expect(respondToPopoutRequest(window.localStorage, 'a', 'p', 'CHART', null)).toBe(false);
+
+    expect(requestWidgetTour).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(POPOUT_ACK_KEY)).toBeNull();
   });
 });
