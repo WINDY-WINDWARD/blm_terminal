@@ -122,8 +122,16 @@ export function WidgetTourController({
       setActiveTour(null);
     }
 
-    if (newItems.length > 0) {
-      setQueue((q) => [...q, ...newItems]);
+    const isQueuedForThisPanel = (request: WidgetTourRequest) =>
+      request.mode === 'replay' ||
+      (activePanels[request.panelId] ?? '').toUpperCase() === request.command;
+    const staleCount = queue.filter((request) => !isQueuedForThisPanel(request)).length;
+
+    if (newItems.length > 0 || staleCount > 0) {
+      setQueue((current) => [
+        ...current.filter(isQueuedForThisPanel),
+        ...newItems,
+      ]);
     }
   }, [surface, panelCount, activePanels, queue, activeTour, setQueue, setActiveTour]);
 

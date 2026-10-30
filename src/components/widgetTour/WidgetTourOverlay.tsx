@@ -171,6 +171,17 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
     }
   }, [isActive, stepIndex]);
 
+  // Return focus to the element that had it before the tour started
+  useEffect(() => {
+    if (!isActive) return;
+    const previous = document.activeElement as HTMLElement | null;
+    return () => {
+      if (previous && previous.isConnected) {
+        previous.focus();
+      }
+    };
+  }, [isActive]);
+
   // Keyboard navigation and Tab trap
   useEffect(() => {
     if (!isActive || steps.length === 0) return;
