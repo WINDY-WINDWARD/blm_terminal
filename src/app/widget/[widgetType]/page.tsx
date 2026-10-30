@@ -12,6 +12,7 @@ import { TradingViewImportModal } from '@/components/modals/TradingViewImportMod
 import { SettingsModal } from '@/components/modals/SettingsModal';
 import { WidgetTourController } from '@/components/widgetTour/WidgetTourController';
 import { WidgetTourOverlay } from '@/components/widgetTour/WidgetTourOverlay';
+import { usePopoutTourResponder } from '@/lib/widgetTours/popoutChannel';
 
 export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetType: string }> }) {
   const unwrappedParams = use(params);
@@ -42,6 +43,8 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
     () => `popout_direct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
   );
   const panelId = searchParams.get('popoutPanelId') || searchParams.get('originPanelId') || fallbackPanelId;
+
+  usePopoutTourResponder(panelId, widgetTitle);
 
   // Rehydrate Jotai state from URL on mount. The global symbol is only
   // set when this popout has no chart override of its own — otherwise a

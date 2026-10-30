@@ -79,6 +79,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
   const restoreRef = useRef<HTMLElement[]>([]);
   const popoverHeightRef = useRef(180);
   const actionsDoneRef = useRef(false);
+  const positioningRef = useRef(false);
 
   const [targetBox, setTargetBox] = useState<TargetBox | null>(null);
   const [popoverPos, setPopoverPos] = useState<PopoverPos | null>(null);
@@ -103,58 +104,68 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
 
   const positionStep = useCallback(
     async (targetEl: HTMLElement, step: WidgetTourStep, scroll: boolean) => {
-      const overlayEl = overlayRef.current;
-      if (!overlayEl) return;
+      if (positioningRef.current) return;
+      positioningRef.current = true;
+      try {
+        const overlayEl = overlayRef.current;
+        if (!overlayEl) return;
 
-      const panelRect = overlayEl.getBoundingClientRect();
-      const panel: TourRect = { top: 0, left: 0, width: panelRect.width, height: panelRect.height };
-      const toRect = (rect: DOMRect): TourRect => ({
-        top: rect.top - panelRect.top,
-        left: rect.left - panelRect.left,
-        width: rect.width,
-        height: rect.height,
-      });
-
-      const popoverWidth = Math.max(
-        MIN_POPOVER_WIDTH,
-        Math.min(MAX_POPOVER_WIDTH, panelRect.width - 16),
-      );
-
-      const measure = () =>
-        computePlacement({
-          target: toRect(targetEl.getBoundingClientRect()),
-          panelWidth: panelRect.width,
-          panelHeight: panelRect.height,
-          popoverWidth,
-          popoverHeight: popoverHeightRef.current,
-          preference: step.placement,
+        const panelRect = overlayEl.getBoundingClientRect();
+        const panel: TourRect = { top: 0, left: 0, width: panelRect.width, height: panelRect.height };
+        const toRect = (rect: DOMRect): TourRect => ({
+          top: rect.top - panelRect.top,
+          left: rect.left - panelRect.left,
+          width: rect.width,
+          height: rect.height,
         });
 
-      let placement = measure();
+        const popoverWidth = Math.max(
+          MIN_POPOVER_WIDTH,
+          Math.min(MAX_POPOVER_WIDTH, panelRect.width - 16),
+        );
+        const popoverHeight = Math.min(
+          popoverRef.current?.scrollHeight ?? popoverHeightRef.current,
+          panelRect.height - 32,
+        );
 
-      if (scroll) {
-        const panelEl = getPanel(panelId);
-        const scroller = panelEl ? findScroller(targetEl, panelEl) : null;
-        if (scroller) {
-          const { dx, dy } = computeScrollDelta(toRect(targetEl.getBoundingClientRect()), placement.safe);
-          if (dx !== 0 || dy !== 0) {
-            scroller.scrollBy({ left: dx, top: dy, behavior: 'auto' });
-            await nextFrame();
-            await nextFrame();
-            placement = measure();
+        const measure = () =>
+          computePlacement({
+            target: toRect(targetEl.getBoundingClientRect()),
+            panelWidth: panelRect.width,
+            panelHeight: panelRect.height,
+            popoverWidth,
+            popoverHeight,
+            preference: step.placement,
+          });
+
+        let placement = measure();
+
+        if (scroll) {
+          const panelEl = getPanel(panelId);
+          const scroller = panelEl ? findScroller(targetEl, panelEl) : null;
+          if (scroller) {
+            const { dx, dy } = computeScrollDelta(toRect(targetEl.getBoundingClientRect()), placement.safe);
+            if (dx !== 0 || dy !== 0) {
+              scroller.scrollBy({ left: dx, top: dy, behavior: 'auto' });
+              await nextFrame();
+              await nextFrame();
+              placement = measure();
+            }
           }
         }
-      }
 
-      const target = spotlightRect(toRect(targetEl.getBoundingClientRect()), panel, placement.safe);
-      setTargetBox(target);
-      setPopoverPos({
-        top: placement.top,
-        left: placement.left,
-        width: placement.width,
-        maxHeight: placement.maxHeight,
-        dock: placement.dock,
-      });
+        const target = spotlightRect(toRect(targetEl.getBoundingClientRect()), panel, placement.safe);
+        setTargetBox(target);
+        setPopoverPos({
+          top: placement.top,
+          left: placement.left,
+          width: placement.width,
+          maxHeight: placement.maxHeight,
+          dock: placement.dock,
+        });
+      } finally {
+        positioningRef.current = false;
+      }
     },
     [panelId],
   );
@@ -327,30 +338,56 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
   useEffect(() => {
     if (!isActive || !currentStep) return;
 
+    let prevWidth = 0;
+    let prevHeight = 0;
+    let rafId: number | null = null;
+
     const overlayEl = overlayRef.current;
+    if (overlayEl) {
+      const rect = overlayEl.getBoundingClientRect();
+      prevWidth = rect.width;
+      prevHeight = rect.height;
+    }
+
     const resizeObserver = new ResizeObserver(() => {
-      const targetEl = targetElRef.current;
-      if (targetEl) void positionStep(targetEl, currentStep, false);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const currentOverlay = overlayRef.current;
+        if (currentOverlay) {
+          const rect = currentOverlay.getBoundingClientRect();
+          if (
+            Math.abs(rect.width - prevWidth) < 2 &&
+            Math.abs(rect.height - prevHeight) < 2
+          ) {
+            return;
+          }
+          prevWidth = rect.width;
+          prevHeight = rect.height;
+        }
+        const targetEl = targetElRef.current;
+        if (targetEl) void positionStep(targetEl, currentStep, false);
+      });
     });
 
     if (overlayEl) resizeObserver.observe(overlayEl);
     const targetEl = targetElRef.current;
     if (targetEl) resizeObserver.observe(targetEl);
 
-    return () => resizeObserver.disconnect();
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+    };
   }, [isActive, currentStep, positionStep]);
 
   // Measure the real popover height so the placement uses accurate space.
   useEffect(() => {
     const el = popoverRef.current;
     if (!el) return;
-    const measured = el.offsetHeight;
+    const measured = el.scrollHeight;
     if (measured > 0 && Math.abs(measured - popoverHeightRef.current) > 4) {
       setPopoverHeight(measured);
-      const targetEl = targetElRef.current;
-      if (targetEl && currentStep) void positionStep(targetEl, currentStep, false);
     }
-  });
+  }, [isActive, isAnchorFound, currentStep]);
 
   // Focus popover on step change
   useEffect(() => {

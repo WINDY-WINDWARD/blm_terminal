@@ -262,10 +262,72 @@ test('DOCS shows an open hint when the widget is not in a panel', async ({ page 
   await page.locator(`${PANEL_1} button:has-text("CHART")`).first().click();
   await page.locator(`${PANEL_1} button:has-text("REPLAY TOUR")`).click();
 
-  await expect(page.locator(PANEL_1)).toContainText('OPEN CHART IN A PANEL TO REPLAY THIS TOUR', {
-    timeout: 10_000,
-  });
+  await expect(page.locator(PANEL_1)).toContainText(
+    'OPEN CHART IN A PANEL OR POPOUT TO REPLAY THIS TOUR',
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(page.locator(OVERLAY)).toHaveCount(0);
+});
+
+test('DOCS starts a tour in a popped-out window', async ({ page }) => {
+  await mockBackend(page);
+  await boot(page, { panels: { 'panel-1': 'DOCS' } });
+
+  const popout = await page.context().newPage();
+  try {
+    await mockBackend(popout);
+    await popout.goto('/widget/CHART?popoutPanelId=panel-1');
+    await expect(popout.locator('[data-tour-panel-id]')).toBeVisible({ timeout: 20_000 });
+
+    await expect(page.locator(PANEL_1)).toContainText('Widget Reference', { timeout: 20_000 });
+    const chartRow = page
+      .locator(`${PANEL_1} div.group`)
+      .filter({ has: page.locator('button', { hasText: 'CHART' }) });
+    await chartRow.getByRole('button', { name: 'TOUR' }).click();
+
+    await Promise.all([
+      expect(popout.locator(OVERLAY)).toContainText('STEP 1 OF 5', { timeout: 10_000 }),
+      expect(page.locator(PANEL_1)).toContainText('TOUR STARTED IN THE CHART POPOUT', {
+        timeout: 10_000,
+      }),
+    ]);
+  } finally {
+    await popout.close();
+  }
+});
+
+test('PORTFOLIO tour popover placement remains stable over time', async ({ page }) => {
+  await mockBackend(page);
+  await boot(page, { panels: { 'panel-1': 'PORTFOLIO' }, unseen: ['PORTFOLIO'] });
+
+  const overlay = page.locator(`${PANEL_1} ${OVERLAY}`);
+  await expect(overlay).toContainText('STEP 1 OF 4', { timeout: 20_000 });
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 2 OF 4');
+  await expectPopoverClearsAnchor(page, 'portfolio-parameters');
+
+  const popover = page.locator(`${PANEL_1} [data-tour-popover]`);
+  const samples: Array<{ top: number; left: number; dock: string | null }> = [];
+
+  for (let i = 0; i < 5; i += 1) {
+    const box = await popover.boundingBox();
+    expect(box).not.toBeNull();
+    const dock = await overlay.getAttribute('data-tour-dock');
+    samples.push({ top: box!.y, left: box!.x, dock });
+    if (i < 4) {
+      await page.waitForTimeout(150);
+    }
+  }
+
+  expect(samples).toHaveLength(5);
+  for (let i = 1; i < samples.length; i += 1) {
+    expect(samples[i].top).toBe(samples[0].top);
+    expect(samples[i].left).toBe(samples[0].left);
+    expect(samples[i].dock).toBe(samples[0].dock);
+  }
 });
 
 test('NOTIF tour opens the heatmap, returns to the stream, and never covers its target', async ({

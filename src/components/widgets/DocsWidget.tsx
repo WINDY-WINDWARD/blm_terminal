@@ -13,6 +13,7 @@ import { DOCS_INDEX, WIDGET_DOCS, type DocField, type WidgetDoc } from '@/lib/wi
 import { resolveWidgetPanel } from '@/lib/widgetTours/resolvePanel';
 import { requestWidgetTour } from '@/components/widgetTour/WidgetTourController';
 import { useWidgetTourSeen } from '@/lib/widgetTours/seen';
+import { requestPopoutTour } from '@/lib/widgetTours/popoutChannel';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -249,6 +250,7 @@ export function DocsWidget() {
   const startAppTour = useSetAtom(tutorialStatusAtom);
   const [manualCmd, setManualCmd] = useState<string | null>(null);
   const [missingPanelCmd, setMissingPanelCmd] = useState<string | null>(null);
+  const [startedInPopoutCmd, setStartedInPopoutCmd] = useState<string | null>(null);
 
   // Determine which widget to document:
   // 1. If user clicked a doc entry from the index, show that.
@@ -260,7 +262,17 @@ export function DocsWidget() {
   const displayCmd = manualCmd ?? (isDocsItself ? null : focusedCmd);
   const doc = displayCmd ? WIDGET_DOCS[displayCmd] : null;
 
-  const handleReplayTour = (command: string) => {
+  const handleReplayTour = async (command: string) => {
+    const started = await requestPopoutTour(command);
+    if (started) {
+      setStartedInPopoutCmd(command);
+      setMissingPanelCmd(null);
+      setTimeout(() => {
+        setStartedInPopoutCmd((prev) => (prev === command ? null : prev));
+      }, 2000);
+      return;
+    }
+
     const targetPanelId = resolveWidgetPanel(command, activePanels, panelCount, focusedPanel);
     if (!targetPanelId) {
       setMissingPanelCmd(command);
@@ -273,10 +285,24 @@ export function DocsWidget() {
 
   return (
     <div className="h-full flex flex-col bg-terminal-bg text-terminal-amber relative">
+      {/* Started in popout banner */}
+      {startedInPopoutCmd && (
+        <div className="px-3 py-1 bg-emerald-950/80 border-b border-emerald-600/60 text-emerald-200 text-xs flex items-center justify-between shrink-0">
+          <span>TOUR STARTED IN THE {startedInPopoutCmd} POPOUT</span>
+          <button
+            type="button"
+            onClick={() => setStartedInPopoutCmd(null)}
+            className="text-emerald-300 hover:text-white font-bold ml-2 px-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Missing panel banner */}
       {missingPanelCmd && (
         <div className="px-3 py-1 bg-red-950/80 border-b border-red-600/60 text-red-200 text-xs flex items-center justify-between shrink-0">
-          <span>OPEN {missingPanelCmd} IN A PANEL TO REPLAY THIS TOUR</span>
+          <span>OPEN {missingPanelCmd} IN A PANEL OR POPOUT TO REPLAY THIS TOUR</span>
           <button
             type="button"
             onClick={() => setMissingPanelCmd(null)}
