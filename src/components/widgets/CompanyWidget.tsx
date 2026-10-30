@@ -34,7 +34,7 @@ export function CompanyWidget({ panelId, symbolOverride }: { panelId?: string; s
   return (
     <div className="h-full w-full flex flex-col bg-[#0a0a0a] overflow-hidden">
       {/* Tab Bar */}
-      <div className="flex overflow-x-auto border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111]">
+      <div data-widget-tour="company-tabs" className="flex overflow-x-auto border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111]">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -56,11 +56,19 @@ export function CompanyWidget({ panelId, symbolOverride }: { panelId?: string; s
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto relative bg-[#0a0a0a]">
         <div key={activeTab} className="absolute inset-0 animate-in fade-in duration-300">
-          {activeTab === 'fundamentals' && <FundamentalsTab symbol={symbol} />}
+          {activeTab === 'fundamentals' && (
+            <div data-widget-tour="company-fundamentals" className="h-full w-full">
+              <FundamentalsTab symbol={symbol} />
+            </div>
+          )}
           {activeTab === 'deals' && <DealsTab symbol={symbol} />}
           {activeTab === 'news' && <CompanyNewsTab symbol={symbol} />}
           {activeTab === 'alerts' && <AlertsTab symbol={symbol} />}
-          {activeTab === 'corporate' && <CorporateTab symbol={symbol} />}
+          {activeTab === 'corporate' && (
+            <div data-widget-tour="company-corporate" className="h-full w-full">
+              <CorporateTab symbol={symbol} />
+            </div>
+          )}
         </div>
       </div>
     </div>

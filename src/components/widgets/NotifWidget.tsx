@@ -625,7 +625,10 @@ function SubFilterBar({
     selectedForTab.some((t) => STREAK_TRIGGER_TYPES.has(t));
 
   return (
-    <div className="flex-shrink-0 px-3 py-1.5 border-b border-[#27272a] bg-[#0c0c0f] flex flex-wrap items-center gap-1.5 min-h-[32px]">
+    <div
+      data-widget-tour="notif-subfilters"
+      className="flex-shrink-0 px-3 py-1.5 border-b border-[#27272a] bg-[#0c0c0f] flex flex-wrap items-center gap-1.5 min-h-[32px]"
+    >
       <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-400 mr-1">
         SUB-FILTERS:
       </span>
@@ -1063,8 +1066,11 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
     <div className="h-full w-full flex flex-col font-mono text-xs overflow-hidden bg-[#09090b] text-white">
       {/* ─── Top View Switcher Toolbar ────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-3 py-2 border-b border-[#27272a] bg-[#09090b] flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5">
+        <div
+          data-widget-tour="notif-scope-selector"
+          className="flex flex-wrap items-center gap-2"
+        >
+          <div className="flex items-center gap-1.5" data-widget-tour="scan-scope">
             <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-amber-400/10 border border-amber-400/30 text-amber-400 font-black text-xs">
               ◈
             </span>
@@ -1099,7 +1105,11 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
           </select>
         </div>
 
-        <div className="flex items-center bg-[#121216] p-1 rounded-md border border-[#27272a] gap-1" role="tablist">
+        <div
+          data-widget-tour="notif-view-mode"
+          className="flex items-center bg-[#121216] p-1 rounded-md border border-[#27272a] gap-1"
+          role="tablist"
+        >
           <button
             type="button"
             role="tab"
@@ -1118,6 +1128,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
           <button
             type="button"
             role="tab"
+            data-widget-tour="scan-heatmap-toggle"
             aria-selected={activeView === 'heatmap'}
             onClick={() => setActiveView('heatmap')}
             className={`px-3 py-1 rounded text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
@@ -1160,7 +1171,10 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
         {activeView === 'stream' ? (
           <div id="alerts-concept-2" className="grid grid-cols-1 @4xl:grid-cols-[minmax(220px,0.85fr)_minmax(0,3fr)] gap-3 max-w-full">
             {/* LEFT FILTER COLUMN (col-span-1) */}
-            <div className="order-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-2.5 @3xl:p-3.5 flex flex-col gap-2.5 @3xl:gap-3.5 shadow-xl transition-colors @4xl:order-1">
+            <div
+              data-widget-tour="notif-category-matrix"
+              className="order-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-600 rounded-lg p-2.5 @3xl:p-3.5 flex flex-col gap-2.5 @3xl:gap-3.5 shadow-xl transition-colors @4xl:order-1"
+            >
               <div className="pb-2.5 border-b border-[#27272a]">
                 <div className="flex items-center justify-between">
                   <span className="text-amber-400 font-bold text-xs uppercase tracking-wider font-mono">
@@ -1217,7 +1231,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                 <div className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider">
                   SIGNAL CATEGORIES
                 </div>
-                <div className="grid max-h-28 grid-cols-2 gap-1 overflow-y-auto @2xl:grid-cols-3 @4xl:max-h-none @4xl:grid-cols-1">
+                <div className="grid max-h-28 grid-cols-2 gap-1 overflow-y-auto @2xl:grid-cols-3 @4xl:max-h-none @4xl:grid-cols-1" data-widget-tour="scan-filters">
                   {(
                     [
                       { id: 'all', label: 'ALL TRIGGERS', icon: '⚡' },
@@ -1380,6 +1394,7 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                     return (
                       <div
                         key={n.id}
+                        data-widget-tour="notif-alert-card"
                         className="p-3 bg-[#121216] border border-[#27272a] hover:border-zinc-500 rounded-md transition-all"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -1481,7 +1496,10 @@ export function NotifWidget({ defaultWatchlist }: { defaultWatchlist?: number | 
                         )}
 
                         {/* Card Actions: Tactile Independent Chart and Company Popouts */}
-                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#27272a]/60">
+                        <div
+                          data-widget-tour="scan-popout-actions"
+                          className="flex items-center justify-between gap-2 pt-2 border-t border-[#27272a]/60"
+                        >
                           <div className="flex items-center gap-2">
                             <button
                               type="button"

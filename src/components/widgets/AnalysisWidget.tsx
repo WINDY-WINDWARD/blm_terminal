@@ -640,7 +640,7 @@ function SummaryPane({ sectors, onJumpToCategory, wide, mid }: SummaryPaneProps)
       className="h-full overflow-y-auto p-2 font-mono text-xs flex flex-col gap-2"
     >
       {/* Bento band: 3 KPIs */}
-      <div className={`grid gap-2 ${wide ? 'grid-cols-4' : 'grid-cols-2'}`}>
+      <div data-widget-tour="analysis-kpis" className={`grid gap-2 ${wide ? 'grid-cols-4' : 'grid-cols-2'}`}>
         {/* Breadth KPI hero */}
         <div
           data-testid="analysis-kpi-breadth"
@@ -1144,7 +1144,7 @@ function SplitCockpitPane({
       </div>
 
       {/* Right detail cockpit */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+      <div data-widget-tour="analysis-cockpit" className="flex min-w-0 flex-1 flex-col overflow-y-auto">
         {/* Header */}
         <div className="flex shrink-0 items-start justify-between gap-2 border-b border-terminal-gray px-2.5 py-2">
           <div className="min-w-0">
@@ -1305,7 +1305,7 @@ function SplitCockpitPane({
                 </span>
 
                 {/* Actions */}
-                <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                <div data-widget-tour="analysis-actions" className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
                     data-testid="analysis-act-chart"
@@ -2389,6 +2389,7 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
         <div
           ref={mapBoxRef}
           data-testid="analysis-heat-map"
+          data-widget-tour="analysis-heatmap"
           className="relative min-h-[210px] flex-1 overflow-y-auto overflow-x-hidden p-1.5"
           style={{ minHeight: '210px' }}
         >
@@ -2752,6 +2753,7 @@ export function AnalysisWidget() {
       <div
         role="tablist"
         aria-label="Analysis Tabs"
+        data-widget-tour="analysis-tabs"
         className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-terminal-gray px-2"
       >
         <div className="flex items-center gap-3">

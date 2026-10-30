@@ -525,7 +525,7 @@ export function AnnouncementsWidget() {
   return (
     <div className="h-full flex flex-col bg-terminal-bg font-mono">
       {/* Row 1: Tabs + Refresh */}
-      <div className="flex items-center border-b border-terminal-gray/30 shrink-0">
+      <div data-widget-tour="annc-tabs" className="flex items-center border-b border-terminal-gray/30 shrink-0">
         {SUBJECT_TABS.map((tab) => (
           <TabButton
             key={tab}
@@ -564,7 +564,7 @@ export function AnnouncementsWidget() {
       </div>
 
       {/* Row 2: Search bar (full width) */}
-      <div className="px-2 py-1 border-b border-terminal-gray/30">
+      <div data-widget-tour="annc-search" className="px-2 py-1 border-b border-terminal-gray/30">
         <div className="relative flex items-center">
           <svg
             className="w-3 h-3 text-white/40 shrink-0"
@@ -599,7 +599,7 @@ export function AnnouncementsWidget() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div data-widget-tour="annc-filing-open" className="flex-1 overflow-y-auto">
         {isError && (
           <div className="p-4 text-center">
             <p className="text-terminal-red text-xs mb-2">Failed to load announcements</p>
@@ -620,7 +620,7 @@ export function AnnouncementsWidget() {
         {/* RESULTS tab: show upcoming event calendar + RSS announced   */}
         {/* ---------------------------------------------------------- */}
         {!isError && activeTab === 'RESULTS' && (
-          <div>
+          <div data-widget-tour="annc-results-split">
             {/* UPCOMING RESULTS (event calendar) */}
             <SectionHeader label="Upcoming" count={calendarResultsItems.length} />
             {calendarLoading && calendarResultsItems.length === 0 && (

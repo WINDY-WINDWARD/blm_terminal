@@ -52,6 +52,7 @@ from app.routers import (
     portfolio_router,
     watchlist_router,
     layout_router,
+    widget_tours_router,
     scripts_router,
     jobs_router,
     auth_router,
@@ -1085,6 +1086,7 @@ app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(layout_router, prefix="/api")
+app.include_router(widget_tours_router, prefix="/api")
 app.include_router(scripts_router, prefix="/api")
 app.include_router(valuation_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")

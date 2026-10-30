@@ -331,7 +331,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
 
           {/* Conditional Toggle between Live and Paper */}
           {openAlgoAvailable && (
-            <div className="flex rounded bg-[#121216] p-0.5 border border-[#27272a] ml-1">
+            <div data-widget-tour="pos-mode-toggle" className="flex rounded bg-[#121216] p-0.5 border border-[#27272a] ml-1">
               <button
                 type="button"
                 onClick={() => setViewMode('live')}
@@ -413,7 +413,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
 
         {/* ─── TOP KPI CARDS (Total P&L, Realized P&L, Unrealized P&L) ─────────── */}
-        <div className="grid grid-cols-1 @md:grid-cols-3 gap-3">
+        <div data-widget-tour="pos-kpi-deck" className="grid grid-cols-1 @md:grid-cols-3 gap-3">
           {/* Card 1: Total P&L */}
           <div className="bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 shadow-md">
             <div className="flex items-center justify-between mb-1">
@@ -533,7 +533,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
           </div>
 
           {/* Table Container */}
-          <div className="overflow-x-auto custom-scroll flex-1">
+          <div data-widget-tour="pos-matrix-table" className="overflow-x-auto custom-scroll flex-1">
             {/* ─── LIVE OPENALGO POSITIONS TABLE ─────────────────────────────────── */}
             {effectiveMode === 'live' && (
               <>
@@ -616,6 +616,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                             <td className="hidden @4xl:table-cell py-2.5 px-2.5 text-center">
                               <button
                                 type="button"
+                                data-widget-tour="pos-square-off-action"
                                 onClick={() => setConfirmSquareOffPosition(row)}
                                 className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 transition-all"
                               >
@@ -782,6 +783,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                               <div className="inline-flex items-center gap-1.5">
                                 <button
                                   type="button"
+                                  data-widget-tour="pos-add-leg-action"
                                   onClick={() => openManageModal(trade, 'add')}
                                   className="px-2 py-0.5 rounded text-[11px] font-bold bg-[#14141a] border border-[#27272a] text-terminal-amber hover:border-terminal-amber transition-all"
                                   title="Add leg / average position"
@@ -791,6 +793,7 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
                                 {!isClosed && (
                                   <button
                                     type="button"
+                                    data-widget-tour="pos-square-off-action"
                                     onClick={() => openManageModal(trade, 'sell')}
                                     className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 transition-all"
                                     title="Sell / close position"

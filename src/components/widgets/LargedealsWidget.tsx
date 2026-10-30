@@ -246,7 +246,7 @@ export function LargedealsWidget() {
 
       {/* ─── Bento Tabs & Filters Toolbar ───────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-2 shrink-0 bg-[#0c0c0f] border border-[#27272a] p-1.5 rounded-lg">
-        <div className="flex items-center gap-1" role="tablist">
+        <div data-widget-tour="largedeals-tabs" className="flex items-center gap-1" role="tablist">
           {(
             [
               { id: 'bulk', label: 'BULK DEALS', count: bulkDeals.length },
@@ -282,7 +282,7 @@ export function LargedealsWidget() {
         </div>
 
         {activeTab !== 'fii' && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div data-widget-tour="largedeals-filters" className="flex flex-wrap items-center gap-2">
             <input
               type="text"
               value={searchQuery}
@@ -335,7 +335,7 @@ export function LargedealsWidget() {
 
       {/* ─── 4 Bento KPI Cards (Hidden on FII/DII tab) ─── */}
       {activeTab !== 'fii' && (
-      <div className="grid grid-cols-2 @4xl:grid-cols-4 gap-2.5 shrink-0">
+      <div data-widget-tour="largedeals-kpis" className="grid grid-cols-2 @4xl:grid-cols-4 gap-2.5 shrink-0">
         {/* Card 1: Total Turnover */}
         <div className="bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 flex flex-col justify-between shadow">
           <div className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider mb-1">
@@ -393,7 +393,7 @@ export function LargedealsWidget() {
       )}
 
       {/* ─── Bento Content Area ─────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto bg-[#0c0c0f] border border-[#27272a] rounded-lg min-h-0">
+      <div data-widget-tour="largedeals-table" className="flex-1 overflow-auto bg-[#0c0c0f] border border-[#27272a] rounded-lg min-h-0">
         {activeTab === 'fii' ? (
           /* FII / DII Radar View */
           fiiLoading ? (

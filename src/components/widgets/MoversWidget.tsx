@@ -649,7 +649,7 @@ export function MoversWidget() {
       {/* Timeframe & Category Selector Toolbar */}
       <div className="bg-[#0c0c0f] border-b border-[#27272a] px-3 py-2.5 flex flex-wrap items-center justify-between gap-2.5 flex-shrink-0">
         {/* Category Selector Pills bound to moversCategoryAtom */}
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div data-widget-tour="movers-universe-bar" className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-terminal-amber mr-1">
             UNIVERSE:
           </span>
@@ -676,6 +676,7 @@ export function MoversWidget() {
         {/* Quick Filter */}
         <div className="flex items-center gap-2">
           <input
+            data-widget-tour="movers-filter-input"
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -704,7 +705,12 @@ export function MoversWidget() {
 
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">VIEW:</span>
-              <div role="tablist" aria-label="Movers views" className="flex items-center gap-1 rounded-md border border-[#27272a] bg-[#121216] p-1">
+              <div
+                role="tablist"
+                aria-label="Movers views"
+                data-widget-tour="movers-view-tabs"
+                className="flex items-center gap-1 rounded-md border border-[#27272a] bg-[#121216] p-1"
+              >
                 {(['matrix', 'gainers', 'losers'] as MoverView[]).map((view) => (
                   <button
                     key={view}
@@ -749,7 +755,10 @@ export function MoversWidget() {
 
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
             <table data-testid="movers-matrix-table" className="w-full border-collapse text-left font-mono tabular-nums">
-              <thead className="sticky top-0 z-10 border-b border-[#27272a] bg-[#121216] text-[10px] uppercase tracking-wider text-zinc-400">
+              <thead
+                data-widget-tour="movers-matrix-columns"
+                className="sticky top-0 z-10 border-b border-[#27272a] bg-[#121216] text-[10px] uppercase tracking-wider text-zinc-400"
+              >
                 <tr>
                   {visibleColumns.map((column) => {
                     const isSorted = sortState.key === column;
@@ -830,7 +839,10 @@ export function MoversWidget() {
               </tbody>
             </table>
           </div>
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[#27272a] px-2.5 py-2 text-zinc-300 sm:px-3">
+          <div
+            data-widget-tour="movers-pagination-controls"
+            className="flex shrink-0 items-center justify-between gap-2 border-t border-[#27272a] px-2.5 py-2 text-zinc-300 sm:px-3"
+          >
             <span className="font-mono text-[11px] tabular-nums" aria-live="polite">
               PAGE {currentPage + 1} OF {pageCount} · {orderedRows.length} ROWS
             </span>
