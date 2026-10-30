@@ -124,13 +124,18 @@ function TabButton({
   active,
   onClick,
   label,
+  tourId,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
+  tourId: string;
 }) {
   return (
     <button
+      role="tab"
+      aria-selected={active}
+      data-widget-tour-click={`tab-${tourId}`}
       onClick={onClick}
       className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 ${
         active
@@ -530,6 +535,7 @@ export function AnnouncementsWidget() {
           <TabButton
             key={tab}
             active={activeTab === tab}
+            tourId={tab.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}
             onClick={() => {
               setActiveTab(tab);
               setSearch('');

@@ -123,7 +123,7 @@ export const orderDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers 5 key areas: 1) Instrument Setup, 2) Order Types and Lots, 3) Order Execution Deck, 4) Account Margins & Risk, and 5) Audit Trail and Order Book. To replay the tour, open DOCS in another panel, keep this ORDER panel open, then click REPLAY TOUR.',
+      body: 'The guided tour has 6 steps: 1) instrument setup, 2) order type with LIMIT selected, 3) product and leverage, 4) account margins and risk, 5) the execution buttons, and 6) the order book. It selects no product and never presses BUY or SELL. To replay the tour, open DOCS in another panel, keep this ORDER panel open, then click REPLAY TOUR.',
     },
   ],
 };

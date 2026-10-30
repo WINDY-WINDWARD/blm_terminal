@@ -545,6 +545,9 @@ export function ScreenerWidget() {
         {INTERVAL_TABS.map((tab) => (
           <button
             key={tab.key}
+            role="tab"
+            aria-selected={activeInterval === tab.key}
+            data-widget-tour-click={`interval-${tab.key}`}
             onClick={() => setActiveInterval(tab.key)}
             className={`flex-1 py-1 text-[10px] uppercase tracking-wider transition-colors ${
               activeInterval === tab.key

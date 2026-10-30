@@ -455,7 +455,7 @@ export function FundamentalsTab({ symbol }: { symbol: string }) {
 
       {/* Bento Grid Body */}
       <div className="flex-1 overflow-y-auto p-2.5">
-        <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-2.5 max-w-full">
+        <div data-widget-tour="company-ratios" className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-4 gap-2.5 max-w-full">
 
           {/* ── Row 2-4: Core Financial Metrics (Bento Cards) ──────────────── */}
 

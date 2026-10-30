@@ -8,8 +8,11 @@ import type { DocField } from '@/lib/widgetDocs/types';
 const EXPECTED_ANCHORS = [
   'analysis-tabs',
   'analysis-kpis',
-  'analysis-cockpit',
+  'analysis-rail',
+  'analysis-stats',
   'analysis-actions',
+  'analysis-heat-controls',
+  'analysis-heat-legend',
   'analysis-heatmap',
 ];
 
@@ -22,17 +25,18 @@ const EXPECTED_HEADINGS = [
 ];
 
 const KEBAB_CASE_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const CLICK_SELECTOR_REGEX = /data-widget-tour-click="([a-z0-9-]+)"/;
 
 describe('ANALYSIS Widget Tour and Documentation', () => {
   const analysisSourcePath = path.resolve(__dirname, '../../components/widgets/AnalysisWidget.tsx');
   const analysisSource = readFileSync(analysisSourcePath, 'utf-8');
 
-  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(analysisTour.steps).toHaveLength(5);
+  it('has 8 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(analysisTour.steps).toHaveLength(8);
 
     const ids = analysisTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(5);
+    expect(uniqueIds.size).toBe(8);
 
     for (const step of analysisTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);
@@ -51,6 +55,24 @@ describe('ANALYSIS Widget Tour and Documentation', () => {
     for (const anchor of EXPECTED_ANCHORS) {
       expect(analysisSource).toContain(`data-widget-tour="${anchor}"`);
     }
+  });
+
+  it('only clicks tab controls that carry a matching data-widget-tour-click attribute', () => {
+    const clicks = analysisTour.steps.flatMap((step) => step.actions ?? []);
+    expect(clicks.length).toBeGreaterThan(0);
+
+    for (const action of clicks) {
+      const match = CLICK_SELECTOR_REGEX.exec(action.selector);
+      expect(match).not.toBeNull();
+      expect(analysisSource).toContain(`data-widget-tour-click="${match?.[1]}"`);
+    }
+  });
+
+  it('switches to Sectors before the rail and to Heatmap before the heat controls', () => {
+    const stepFor = (id: string) => analysisTour.steps.find((step) => step.id === id);
+    expect(stepFor('analysis-rail')?.actions?.[0].selector).toContain('tab-sectors');
+    expect(stepFor('analysis-heat-controls')?.actions?.[0].selector).toContain('tab-heatmap');
+    expect(analysisTour.steps[0].actions?.[0].selector).toContain('tab-summary');
   });
 
   it('conforms to analysisDoc metadata and screenshot structure', () => {

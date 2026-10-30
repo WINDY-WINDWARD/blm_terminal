@@ -112,7 +112,7 @@ export const breakoutsDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers four key areas: 1) Radar View Tabs, 2) Four-Card Matrix Grid, 3) Volume Shockers Radar, and 4) Breakout Table Rows. To replay the tour, open DOCS in another panel, keep this BREAKOUTS panel open, then click REPLAY TOUR.',
+      body: 'The guided tour has five steps and changes tabs as it goes: 1) Radar View Tabs, 2) the 52-week high table, 3) the four-card matrix, 4) the Volume Shockers table, and 5) the Repeated Breakouts table. It returns to the tab that was open before the tour started. To replay the tour, open DOCS in another panel, keep this BREAKOUTS panel open, then click REPLAY TOUR.',
     },
   ],
 };

@@ -7,6 +7,7 @@ import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
   'pos-mode-toggle',
+  'pos-paper-tabs',
   'pos-kpi-deck',
   'pos-matrix-table',
   'pos-add-leg-action',
@@ -27,12 +28,12 @@ describe('POS Widget Tour and Documentation', () => {
   const posSourcePath = path.resolve(__dirname, '../../components/widgets/PosWidget.tsx');
   const posSource = readFileSync(posSourcePath, 'utf-8');
 
-  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(posTour.steps).toHaveLength(5);
+  it('has 6 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(posTour.steps).toHaveLength(6);
 
     const ids = posTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(5);
+    expect(uniqueIds.size).toBe(6);
 
     for (const step of posTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);

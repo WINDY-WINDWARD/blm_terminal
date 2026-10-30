@@ -94,7 +94,7 @@ export const notifDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers 5 key areas: 1) Watchlist & Date Scope, 2) Live Stream & Heatmap Views, 3) Filter & Severity Matrix, 4) Trigger Sub-Filters, and 5) Alert Stream Cards. You can replay this tour from DOCS with both panels open.',
+      body: 'The tour has 7 steps and switches views as it goes: 1) Watchlist and Date Scope, 2) Stream and Heatmap tabs, 3) it opens INDUSTRY HEATMAP to show the sector banner, 4) it returns to LIVE ALERTS, 5) Signal Categories, 6) Read Status, 7) an Alert Card with its severity fields. The tour restores the view you were on when it ends. Replay it from DOCS with both panels open.',
     },
   ],
 };

@@ -5,28 +5,31 @@ export const screenerTour: WidgetTourDefinition = {
   title: 'Stock Screener (TQL)',
   steps: [
     {
-      id: 'screener-actions',
-      anchor: 'screener-actions',
-      title: 'Header Actions',
-      body: 'Use the action bar to review TQL syntax, export filtered results to CSV, clear filters, or refresh the cache.',
-    },
-    {
       id: 'screener-intervals',
       anchor: 'screener-intervals',
       title: 'Interval Selection',
-      body: 'Switch between Daily, 1h, Weekly, and Monthly intervals. Unprefixed indicators calculate over the active timeframe.',
+      body: 'Daily, 1h, Weekly, and Monthly change the candles that indicators use. The tour opens Weekly, then returns to Daily.',
+      actions: [{ selector: '[data-widget-tour-click="interval-W"]' }],
     },
     {
       id: 'screener-query',
       anchor: 'screener-query',
       title: 'TQL Query Input',
-      body: 'Type filter expressions with automatic syntax suggestions for fields, operators, and sectors. Press Enter or click Run to scan the stock universe.',
+      body: 'Type filter expressions with autocomplete for fields, operators, and sectors. Press Run to scan the universe. Unprefixed indicators use the active interval.',
+      actions: [{ selector: '[data-widget-tour-click="interval-1d"]' }],
+    },
+    {
+      id: 'screener-actions',
+      anchor: 'screener-actions',
+      title: 'Header Actions',
+      body: 'TQL opens the syntax reference. CSV exports the current result set. Clear resets the query. Refresh reruns the same query.',
     },
     {
       id: 'screener-table',
       anchor: 'screener-table',
-      title: 'Screener Results Table',
-      body: 'Inspect indicator columns, review valuation gaps against Morningstar fair value, and click a row to set the active symbol. Replay this tour from DOCS with both panels open.',
+      title: 'Results Table',
+      body: 'Columns follow the indicators in your query. Read 52H % and 52L % as distance from the yearly range. Click a row to set the active symbol. Replay this tour from DOCS with both panels open.',
+      optional: true,
     },
   ],
 };

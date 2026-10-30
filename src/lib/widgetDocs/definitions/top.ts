@@ -100,7 +100,7 @@ export const topDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers 5 key areas: 1) Market Universe, 2) View Modes, 3) Momentum and Alignment, 4) Filter Ticker, and 5) Pagination Controls. To replay the tour, open DOCS in another panel, keep this TOP panel open, then click REPLAY TOUR.',
+      body: 'The tour has 5 steps and switches the view as it explains it: 1) the universe bar, 2) the view tabs, where it opens the gainers list, 3) the matrix columns, which it returns to, 4) the ticker filter, and 5) pagination. It restores the view that was active before the tour. To replay it, open DOCS in another panel, keep the TOP panel open, then click REPLAY TOUR.',
     },
   ],
 };

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+﻿import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { orderTour } from '@/lib/widgetTours/definitions/order';
@@ -8,8 +8,9 @@ import type { DocField } from '@/lib/widgetDocs/types';
 const EXPECTED_ANCHORS = [
   'order-instrument-setup',
   'order-type-lot-selector',
-  'order-execution-buttons',
+  'order-product-selector',
   'order-risk-kpi-deck',
+  'order-execution-buttons',
   'order-book-table',
 ];
 
@@ -27,12 +28,12 @@ describe('ORDER Widget Tour and Documentation', () => {
   const orderSourcePath = path.resolve(__dirname, '../../components/widgets/OrderWidget.tsx');
   const orderSource = readFileSync(orderSourcePath, 'utf-8');
 
-  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(orderTour.steps).toHaveLength(5);
+  it('has 6 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(orderTour.steps).toHaveLength(6);
 
     const ids = orderTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(5);
+    expect(uniqueIds.size).toBe(6);
 
     for (const step of orderTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);

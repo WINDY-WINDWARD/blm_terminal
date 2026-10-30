@@ -260,6 +260,7 @@ export function LargedealsWidget() {
               type="button"
               role="tab"
               aria-selected={activeTab === t.id}
+              data-widget-tour-click={`tab-${t.id}`}
               onClick={() => setActiveTab(t.id)}
               className={`px-2.5 py-1 rounded text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === t.id

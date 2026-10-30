@@ -105,7 +105,7 @@ export const largedealsDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The tour covers four areas: 1) Deal Categories, 2) Filter the Feed, 3) Read the Flow, and 4) Inspect a Trade. To replay the tour, open DOCS in another panel, keep this LARGEDEALS panel open, then click REPLAY TOUR.',
+      body: 'The tour covers five areas and switches tabs as it goes: 1) Deal Categories, 2) the FII / DII Radar, 3) the flow KPIs, 4) the deal filters, and 5) the deal table. It returns to the tab that was open before the tour started. To replay the tour, open DOCS in another panel, keep this LARGEDEALS panel open, then click REPLAY TOUR.',
     },
   ],
 };

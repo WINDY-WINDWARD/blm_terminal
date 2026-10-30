@@ -197,6 +197,7 @@ function IndexView({
             >
               <button
                 type="button"
+                data-widget-tour-click={`doc-${doc.command.toLowerCase()}`}
                 onClick={() => onSelect(doc.command)}
                 className="flex items-start gap-3 text-left flex-1 min-w-0"
               >
@@ -301,6 +302,7 @@ export function DocsWidget() {
           <>
             <button
               type="button"
+              data-widget-tour-click="back-to-index"
               onClick={() => {
                 setManualCmd(null);
                 setMissingPanelCmd(null);

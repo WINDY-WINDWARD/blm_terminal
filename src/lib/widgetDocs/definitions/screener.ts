@@ -114,7 +114,7 @@ export const screenerDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers four key areas: 1) Header Actions, 2) Interval Selection, 3) TQL Query Input, and 4) Screener Results Table. To replay the tour, open DOCS in another panel, keep this SCREENER panel open, then click REPLAY TOUR.',
+      body: 'The guided tour has four steps and switches the interval as it goes: 1) the interval tabs, opened on Weekly, 2) the TQL query bar, back on Daily, 3) the header actions such as CSV export, and 4) the results table. It returns to the interval that was open before the tour started. To replay the tour, open DOCS in another panel, keep this SCREENER panel open, then click REPLAY TOUR.',
     },
   ],
 };

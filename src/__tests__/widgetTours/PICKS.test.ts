@@ -9,7 +9,7 @@ const EXPECTED_ANCHORS = [
   'picks-tabs',
   'picks-triggers',
   'picks-card',
-  'picks-modal',
+  'picks-details',
 ];
 
 const EXPECTED_HEADINGS = [

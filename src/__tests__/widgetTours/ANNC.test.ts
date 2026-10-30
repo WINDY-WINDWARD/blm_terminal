@@ -8,6 +8,7 @@ import type { DocField } from '@/lib/widgetDocs/types';
 const EXPECTED_ANCHORS = [
   'annc-tabs',
   'annc-results-split',
+  'annc-tabs',
   'annc-search',
   'annc-filing-open',
 ];
@@ -26,12 +27,12 @@ describe('ANNC Widget Tour and Documentation', () => {
   const anncSourcePath = path.resolve(__dirname, '../../components/widgets/AnnouncementsWidget.tsx');
   const anncSource = readFileSync(anncSourcePath, 'utf-8');
 
-  it('has 4 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(anncTour.steps).toHaveLength(4);
+  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(anncTour.steps).toHaveLength(5);
 
     const ids = anncTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(4);
+    expect(uniqueIds.size).toBe(5);
 
     for (const step of anncTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);

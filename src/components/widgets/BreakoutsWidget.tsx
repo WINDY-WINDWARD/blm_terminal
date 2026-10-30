@@ -961,6 +961,9 @@ export function BreakoutsWidget() {
               return (
                 <button
                   key={tab.id}
+                  role="tab"
+                  aria-selected={isActive}
+                  data-widget-tour-click={`tab-${tab.id}`}
                   onClick={() => setActiveTab(tab.id)}
                   className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer inline-flex items-center gap-1.5 ${
                     isActive

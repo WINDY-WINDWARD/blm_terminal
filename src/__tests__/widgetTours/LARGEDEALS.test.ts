@@ -7,8 +7,9 @@ import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
   'largedeals-tabs',
-  'largedeals-filters',
+  'largedeals-table',
   'largedeals-kpis',
+  'largedeals-filters',
   'largedeals-table',
 ];
 
@@ -26,11 +27,11 @@ describe('LARGEDEALS Widget Tour and Documentation', () => {
   const widgetSourcePath = path.resolve(__dirname, '../../components/widgets/LargedealsWidget.tsx');
   const widgetSource = readFileSync(widgetSourcePath, 'utf-8');
 
-  it('has 4 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(largedealsTour.steps).toHaveLength(4);
+  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(largedealsTour.steps).toHaveLength(5);
 
     const ids = largedealsTour.steps.map((step) => step.id);
-    expect(new Set(ids).size).toBe(4);
+    expect(new Set(ids).size).toBe(5);
 
     for (const step of largedealsTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);

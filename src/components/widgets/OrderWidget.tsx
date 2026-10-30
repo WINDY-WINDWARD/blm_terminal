@@ -427,6 +427,8 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                           key={t.key}
                           type="button"
                           onClick={() => setOrderType(t.key)}
+                          data-widget-tour-click={`type-${t.key.toLowerCase()}`}
+                          data-tour-active={isActive}
                           className={`py-1 text-[10px] font-mono font-bold rounded transition-all text-center border ${
                             isActive
                               ? 'bg-terminal-amber text-black border-terminal-amber shadow-sm'
@@ -441,7 +443,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                 </div>
 
                 {/* Product Pills (MIS, CNC, NRML) */}
-                <div className="bg-[#121216] border border-[#27272a] rounded p-1.5">
+                <div className="bg-[#121216] border border-[#27272a] rounded p-1.5" data-widget-tour="order-product-selector">
                   <span className="text-[10px] font-mono text-zinc-300 uppercase tracking-wider block mb-1 font-bold">
                     PRODUCT
                   </span>
@@ -460,6 +462,8 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                           type="button"
                           title={p.desc}
                           onClick={() => setProduct(p.key)}
+                          data-widget-tour-click={`product-${p.key.toLowerCase()}`}
+                          data-tour-active={isActive}
                           className={`py-1 text-[10px] font-mono font-bold rounded transition-all text-center border ${
                             isActive
                               ? 'bg-terminal-amber text-black border-terminal-amber shadow-sm'

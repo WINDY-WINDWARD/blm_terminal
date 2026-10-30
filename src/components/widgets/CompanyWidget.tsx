@@ -34,10 +34,13 @@ export function CompanyWidget({ panelId, symbolOverride }: { panelId?: string; s
   return (
     <div className="h-full w-full flex flex-col bg-[#0a0a0a] overflow-hidden">
       {/* Tab Bar */}
-      <div data-widget-tour="company-tabs" className="flex overflow-x-auto border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111]">
+      <div data-widget-tour="company-tabs" role="tablist" aria-label="Company Tabs" className="flex overflow-x-auto border-b border-terminal-gray/30 p-1 gap-1 shrink-0 bg-[#111]">
         {tabs.map((tab) => (
           <button
             key={tab.id}
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            data-widget-tour-click={`tab-${tab.id}`}
             onClick={() => setActiveTab(tab.id)}
             className={`shrink-0 px-2.5 py-1 text-[11px] font-mono transition-all duration-300 ease-out border @3xl:px-3 @3xl:text-xs ${
               activeTab === tab.id

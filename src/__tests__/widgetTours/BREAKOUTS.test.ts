@@ -7,6 +7,7 @@ import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
   'breakouts-tabs',
+  'breakouts-rows',
   'breakouts-matrix',
   'breakouts-volume',
   'breakouts-rows',
@@ -26,12 +27,12 @@ describe('BREAKOUTS Widget Tour and Documentation', () => {
   const breakoutsSourcePath = path.resolve(__dirname, '../../components/widgets/BreakoutsWidget.tsx');
   const breakoutsSource = readFileSync(breakoutsSourcePath, 'utf-8');
 
-  it('has 4 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(breakoutsTour.steps).toHaveLength(4);
+  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(breakoutsTour.steps).toHaveLength(5);
 
     const ids = breakoutsTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(4);
+    expect(uniqueIds.size).toBe(5);
 
     for (const step of breakoutsTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);

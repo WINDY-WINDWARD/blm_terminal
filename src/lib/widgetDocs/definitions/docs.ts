@@ -68,7 +68,7 @@ export const docsDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The DOCS tour has 4 steps: 1) the widget reference index, 2) the per-widget page, 3) the screenshot and zoom, 4) the REPLAY TOUR control. To replay it, keep this DOCS panel open and click TOUR on the DOCS row in the index, or click ▸ REPLAY TOUR while this page is open.',
+      body: 'The DOCS tour has 4 steps: 1) the widget reference index, 2) the CHART page it opens, 3) the screenshot and zoom, 4) the REPLAY TOUR control. It returns to the index when it ends. To replay it, keep this DOCS panel open and click TOUR on the DOCS row in the index, or click ▸ REPLAY TOUR while this page is open.',
     },
   ],
 };

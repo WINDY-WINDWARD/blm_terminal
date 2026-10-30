@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+﻿import { expect, test, type Page } from '@playwright/test';
 
 const PANEL_1 = '[data-tour-panel-id="panel-1"]';
 const PANEL_2 = '[data-tour-panel-id="panel-2"]';
@@ -53,6 +53,109 @@ async function mockBackend(page: Page) {
     }
     await route.fulfill({ status: 200, json: { seen } });
   });
+}
+
+async function mockNotifications(page: Page) {
+  await page.route('**/api/py/markets/stocks-categories', async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        RELIANCE: { industry: 'Oil & Gas', sector: 'Energy' },
+        TCS: { industry: 'IT Services', sector: 'IT' },
+      },
+    });
+  });
+  await page.route('**/api/py/notifications**', async (route) => {
+    if (route.request().url().includes('industry-summary')) {
+      await route.fulfill({
+        status: 200,
+        json: {
+          industries: [{ industry: 'IT Services', sector: 'IT', alertCount: 2, symbols: ['TCS', 'INFY'] }],
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: [
+        {
+          id: 1,
+          symbol: 'RELIANCE',
+          exchange: 'NSE',
+          trigger_type: 'volume_breakout',
+          message: 'Volume 3.4x vs 20D SMA',
+          triggered_at: Date.now(),
+          triggered_date: '2026-10-30',
+          read: false,
+        },
+      ],
+    });
+  });
+}
+
+async function mockAnalysis(page: Page) {
+  const sector = {
+    category_type: 'sector',
+    slug: 'it',
+    name: 'IT',
+    market_cap: 12_500_000,
+    pe: 24.6,
+    advance: 8,
+    decline: 2,
+    sentiment: 'Bullish',
+    earnings_yoy: 11.4,
+    return_1d: 0.82,
+    return_1w: 1.4,
+    return_1m: 3.1,
+    return_6m: 9.7,
+    last_updated: '2026-10-30',
+  };
+  const industry = { ...sector, category_type: 'industry', slug: 'it-services', name: 'IT Services' };
+  const stock = {
+    id: 1,
+    symbol: 'TCS',
+    company_name: 'Tata Consultancy Services',
+    exchange: 'NSE',
+    curr_price: 3120,
+    per_change: 0.94,
+    market_cap: 11_300_000,
+    ttm_pe: 26.1,
+    net_profit: 46_000,
+    net_profit_yoy: 8.2,
+    tech_trend: 'Bullish',
+  };
+
+  await page.route('**/api/py/markets/sectors/*/stocks', async (route) => {
+    await route.fulfill({ status: 200, json: [stock] });
+  });
+  await page.route('**/api/py/markets/industries/*/stocks', async (route) => {
+    await route.fulfill({ status: 200, json: [stock] });
+  });
+  await page.route('**/api/py/markets/sectors', async (route) => {
+    await route.fulfill({ status: 200, json: [sector] });
+  });
+  await page.route('**/api/py/markets/industries', async (route) => {
+    await route.fulfill({ status: 200, json: [industry] });
+  });
+}
+
+async function overlapArea(page: Page, anchor: string): Promise<number> {
+  const anchorBox = await page.locator(`[data-widget-tour="${anchor}"]`).first().boundingBox();
+  const popoverBox = await page.locator('[data-tour-popover]').boundingBox();
+  if (!anchorBox || !popoverBox) return Number.MAX_SAFE_INTEGER;
+  const overlapX =
+    Math.min(anchorBox.x + anchorBox.width, popoverBox.x + popoverBox.width) -
+    Math.max(anchorBox.x, popoverBox.x);
+  const overlapY =
+    Math.min(anchorBox.y + anchorBox.height, popoverBox.y + popoverBox.height) -
+    Math.max(anchorBox.y, popoverBox.y);
+  return Math.max(0, overlapX) * Math.max(0, overlapY);
+}
+
+async function expectPopoverClearsAnchor(page: Page, anchor: string) {
+  // The popover is placed one frame after the step text changes.
+  await expect(page.locator('[data-tour-popover]')).toBeVisible();
+  await expect.poll(() => overlapArea(page, anchor), { timeout: 4_000 }).toBeLessThan(1);
 }
 
 async function boot(
@@ -156,4 +259,119 @@ test('DOCS shows an open hint when the widget is not in a panel', async ({ page 
     timeout: 10_000,
   });
   await expect(page.locator(OVERLAY)).toHaveCount(0);
+});
+
+test('NOTIF tour opens the heatmap, returns to the stream, and never covers its target', async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await mockNotifications(page);
+  await boot(page, { panels: { 'panel-1': 'NOTIF' }, unseen: ['NOTIF'] });
+
+  const overlay = page.locator(`${PANEL_1} ${OVERLAY}`);
+  await expect(overlay).toContainText('STEP 1 OF 7', { timeout: 20_000 });
+  await expectPopoverClearsAnchor(page, 'notif-scope-selector');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 2 OF 7');
+  await expectPopoverClearsAnchor(page, 'notif-view-mode');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 3 OF 7');
+  await expect(page.locator(`${PANEL_1} [role="tab"][aria-selected="true"]`)).toContainText(
+    'INDUSTRY HEATMAP',
+  );
+  await expectPopoverClearsAnchor(page, 'notif-heatmap');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 4 OF 7');
+  await expect(page.locator(`${PANEL_1} [role="tab"][aria-selected="true"]`)).toContainText(
+    'LIVE ALERTS',
+  );
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 5 OF 7');
+  await expectPopoverClearsAnchor(page, 'notif-categories');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 6 OF 7');
+  await expectPopoverClearsAnchor(page, 'notif-read-filter');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 7 OF 7');
+  await expectPopoverClearsAnchor(page, 'notif-alert-card');
+});
+
+test('SCAN tour highlights the heatmap grid it switches to', async ({ page }) => {
+  await mockBackend(page);
+  await mockNotifications(page);
+  await boot(page, { panels: { 'panel-1': 'SCAN' }, unseen: ['SCAN'] });
+
+  const overlay = page.locator(`${PANEL_1} ${OVERLAY}`);
+  await expect(overlay).toContainText('STEP 1 OF 6', { timeout: 20_000 });
+  await expectPopoverClearsAnchor(page, 'scan-scope');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 2 OF 6');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 3 OF 6');
+  await expect(page.locator(`${PANEL_1} [role="tab"][aria-selected="true"]`)).toContainText(
+    'INDUSTRY HEATMAP',
+  );
+  await expectPopoverClearsAnchor(page, 'scan-heatmap');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 4 OF 6');
+  await expect(page.locator(`${PANEL_1} [role="tab"][aria-selected="true"]`)).toContainText(
+    'LIVE ALERTS',
+  );
+  await expectPopoverClearsAnchor(page, 'scan-categories');
+});
+
+test('ANALYSIS tour visits Sectors and Heatmap, never covers its target, and restores Summary', async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await mockAnalysis(page);
+  await boot(page, { panels: { 'panel-1': 'ANALYSIS' }, unseen: ['ANALYSIS'] });
+
+  const overlay = page.locator(`${PANEL_1} ${OVERLAY}`);
+  const activeTab = page.locator(`${PANEL_1} [role="tab"][aria-selected="true"]`);
+  await expect(overlay).toContainText('STEP 1 OF 8', { timeout: 20_000 });
+  await expectPopoverClearsAnchor(page, 'analysis-tabs');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 2 OF 8');
+  await expect(activeTab).toContainText('Summary');
+  await expectPopoverClearsAnchor(page, 'analysis-kpis');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 3 OF 8');
+  await expect(activeTab).toContainText('Sectors');
+  await expectPopoverClearsAnchor(page, 'analysis-rail');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 4 OF 8');
+  await expectPopoverClearsAnchor(page, 'analysis-stats');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 5 OF 8');
+  await expectPopoverClearsAnchor(page, 'analysis-actions');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 6 OF 8');
+  await expect(activeTab).toContainText('Heatmap');
+  await expectPopoverClearsAnchor(page, 'analysis-heat-controls');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 7 OF 8');
+  await expectPopoverClearsAnchor(page, 'analysis-heat-legend');
+
+  await overlay.getByRole('button', { name: 'NEXT' }).click();
+  await expect(overlay).toContainText('STEP 8 OF 8');
+  await expectPopoverClearsAnchor(page, 'analysis-heatmap');
+
+  await overlay.getByRole('button', { name: 'FINISH' }).click();
+  await expect(activeTab).toContainText('Summary');
 });

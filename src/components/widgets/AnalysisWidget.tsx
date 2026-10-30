@@ -1089,6 +1089,7 @@ function SplitCockpitPane({
       {/* Left rail */}
       <div
         data-testid="analysis-rail"
+        data-widget-tour="analysis-rail"
         className={`flex shrink-0 flex-col border-r border-terminal-gray ${
           wide ? 'w-[210px]' : mid ? 'w-[190px]' : 'w-[160px]'
         }`}
@@ -1184,6 +1185,7 @@ function SplitCockpitPane({
         {/* 6 stats cells */}
         <div
           data-testid="analysis-stats"
+          data-widget-tour="analysis-stats"
           className={`grid shrink-0 divide-x divide-terminal-gray border-b border-terminal-gray ${
             mid ? 'grid-cols-6' : 'grid-cols-3'
           }`}
@@ -2156,7 +2158,10 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
     >
       <div className="h-full overflow-y-auto flex flex-col">
         {/* 1. Scope + count row */}
-        <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-terminal-gray px-2">
+        <div
+          data-widget-tour="analysis-heat-controls"
+          className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-terminal-gray px-2"
+        >
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -2308,6 +2313,7 @@ function HeatmapPane({ sectors, industries, wide = true, mid = true }: HeatmapPa
         {/* 3. Legend band at the top of the map */}
         <div
           data-testid="analysis-heat-legend"
+          data-widget-tour="analysis-heat-legend"
           className="shrink-0 border-y border-terminal-gray bg-[#060606] px-2 py-1.5"
         >
           <div className="flex items-baseline justify-between gap-2">
@@ -2761,6 +2767,7 @@ export function AnalysisWidget() {
             type="button"
             role="tab"
             data-testid="analysis-tab-summary"
+            data-widget-tour-click="tab-summary"
             aria-selected={activeTab === 'summary'}
             onClick={() => setActiveTab('summary')}
             className={`relative pb-[6px] pt-[6px] text-[11px] font-bold uppercase tracking-wider transition-colors ${
@@ -2775,6 +2782,7 @@ export function AnalysisWidget() {
             type="button"
             role="tab"
             data-testid="analysis-tab-sectors"
+            data-widget-tour-click="tab-sectors"
             aria-selected={activeTab === 'sector'}
             onClick={() => setActiveTab('sector')}
             className={`relative pb-[6px] pt-[6px] text-[11px] font-bold uppercase tracking-wider transition-colors ${
@@ -2789,6 +2797,7 @@ export function AnalysisWidget() {
             type="button"
             role="tab"
             data-testid="analysis-tab-industries"
+            data-widget-tour-click="tab-industries"
             aria-selected={activeTab === 'industry'}
             onClick={() => setActiveTab('industry')}
             className={`relative pb-[6px] pt-[6px] text-[11px] font-bold uppercase tracking-wider transition-colors ${
@@ -2803,6 +2812,7 @@ export function AnalysisWidget() {
             type="button"
             role="tab"
             data-testid="analysis-tab-heatmap"
+            data-widget-tour-click="tab-heatmap"
             aria-selected={activeTab === 'heatmap'}
             onClick={() => setActiveTab('heatmap')}
             className={`relative pb-[6px] pt-[6px] text-[11px] font-bold uppercase tracking-wider transition-colors ${

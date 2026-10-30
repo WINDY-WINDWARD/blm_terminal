@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAtom } from 'jotai';
 import { activeWidgetTourAtom } from '@/store/terminalStore';
 import { getWidgetTour } from '@/lib/widgetTours';
+import { computePlacement, computeScrollDelta, spotlightRect } from '@/lib/widgetTours/placement';
+import type { TourRect } from '@/lib/widgetTours/placement';
+import type { WidgetTourStep } from '@/lib/widgetTours/types';
 
 export interface WidgetTourOverlayProps {
   panelId: string;
@@ -17,11 +20,52 @@ interface TargetBox {
 }
 
 interface PopoverPos {
-  top?: number;
-  bottom?: number;
+  top: number;
   left: number;
   width: number;
   maxHeight: number;
+  dock: 'none' | 'top' | 'bottom';
+}
+
+const ANCHOR_TIMEOUT_MS = 2000;
+const ACTION_SETTLE_MS = 60;
+const MIN_POPOVER_WIDTH = 200;
+const MAX_POPOVER_WIDTH = 320;
+
+/**
+ * Definitions may pass either a CSS selector or a bare click id such as
+ * `tab-bulk`. Normalise both to the attribute selector the widgets expose.
+ */
+function toClickSelector(value: string): string {
+  return value.includes('[') ? value : `[data-widget-tour-click="${value}"]`;
+}
+
+function getPanel(panelId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-tour-panel-id="${panelId}"]`);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+function findScroller(from: HTMLElement, boundary: HTMLElement): HTMLElement | null {
+  let node = from.parentElement;
+
+  while (node && node !== boundary) {
+    const style = window.getComputedStyle(node);
+    const canScrollY =
+      /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+    const canScrollX =
+      /(auto|scroll)/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
+    if (canScrollY || canScrollX) return node;
+    node = node.parentElement;
+  }
+
+  return null;
 }
 
 export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
@@ -30,14 +74,19 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const targetElRef = useRef<HTMLElement | null>(null);
+  const restoreRef = useRef<HTMLElement[]>([]);
+  const popoverHeightRef = useRef(180);
+
   const [targetBox, setTargetBox] = useState<TargetBox | null>(null);
   const [popoverPos, setPopoverPos] = useState<PopoverPos | null>(null);
   const [isAnchorFound, setIsAnchorFound] = useState(false);
+  const [popoverHeight, setPopoverHeight] = useState(180);
 
   const isActive = activeTour !== null && activeTour.panelId === panelId;
   const definition = isActive && activeTour ? getWidgetTour(activeTour.command) : undefined;
   const steps = definition?.steps ?? [];
-  const currentStep = steps[stepIndex];
+  const currentStep: WidgetTourStep | undefined = steps[stepIndex];
 
   const [prevTourKey, setPrevTourKey] = useState<string | null>(null);
 
@@ -47,122 +96,202 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
     setStepIndex(0);
   }
 
-  const updatePosition = useCallback(() => {
-    if (!isActive || !currentStep) return;
+  popoverHeightRef.current = popoverHeight;
 
-    window.requestAnimationFrame(() => {
-      const panelEl = document.querySelector<HTMLElement>(`[data-tour-panel-id="${panelId}"]`);
+  const positionStep = useCallback(
+    async (targetEl: HTMLElement, step: WidgetTourStep, scroll: boolean) => {
       const overlayEl = overlayRef.current;
-      if (!panelEl || !overlayEl) return;
+      if (!overlayEl) return;
 
       const panelRect = overlayEl.getBoundingClientRect();
-      const targetEl = panelEl.querySelector<HTMLElement>(`[data-widget-tour="${currentStep.anchor}"]`);
-
-      if (!targetEl) {
-        setIsAnchorFound(false);
-        setTargetBox(null);
-        return;
-      }
-
-      const initialRect = targetEl.getBoundingClientRect();
-      const isOutsidePanel =
-        initialRect.top < panelRect.top || initialRect.bottom > panelRect.bottom;
-      if (isOutsidePanel) {
-        targetEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      }
-
-      const targetRect = targetEl.getBoundingClientRect();
-      // Target must have some size and be somewhat visible
-      if (targetRect.width === 0 && targetRect.height === 0) {
-        setIsAnchorFound(false);
-        setTargetBox(null);
-        return;
-      }
-
-      setIsAnchorFound(true);
-
-      const relTop = Math.max(0, targetRect.top - panelRect.top);
-      const relLeft = Math.max(0, targetRect.left - panelRect.left);
-      const clampedWidth = Math.min(targetRect.width, panelRect.width - relLeft);
-      const clampedHeight = Math.min(targetRect.height, panelRect.height - relTop);
-
-      setTargetBox({
-        top: relTop,
-        left: relLeft,
-        width: clampedWidth,
-        height: clampedHeight,
+      const panel: TourRect = { top: 0, left: 0, width: panelRect.width, height: panelRect.height };
+      const toRect = (rect: DOMRect): TourRect => ({
+        top: rect.top - panelRect.top,
+        left: rect.left - panelRect.left,
+        width: rect.width,
+        height: rect.height,
       });
 
-      const popoverWidth = Math.min(300, Math.max(200, panelRect.width - 16));
-      const spaceBelow = panelRect.height - (relTop + clampedHeight);
-      const spaceAbove = relTop;
-      const prefPlacement = currentStep.placement ?? 'auto';
+      const popoverWidth = Math.max(
+        MIN_POPOVER_WIDTH,
+        Math.min(MAX_POPOVER_WIDTH, panelRect.width - 16),
+      );
 
-      let chosenTop: number | undefined;
-      let chosenBottom: number | undefined;
-      const popoverHeightEst = 220;
+      const measure = () =>
+        computePlacement({
+          target: toRect(targetEl.getBoundingClientRect()),
+          panelWidth: panelRect.width,
+          panelHeight: panelRect.height,
+          popoverWidth,
+          popoverHeight: popoverHeightRef.current,
+          preference: step.placement,
+        });
 
-      if (prefPlacement === 'below' && spaceBelow >= 120) {
-        chosenTop = relTop + clampedHeight + 8;
-      } else if (prefPlacement === 'above' && spaceAbove >= 120) {
-        chosenBottom = panelRect.height - relTop + 8;
-      } else if (spaceBelow >= popoverHeightEst) {
-        chosenTop = relTop + clampedHeight + 8;
-      } else if (spaceAbove >= popoverHeightEst) {
-        chosenBottom = panelRect.height - relTop + 8;
-      } else if (spaceBelow >= spaceAbove) {
-        chosenTop = Math.min(relTop + clampedHeight + 8, panelRect.height - 120);
-      } else {
-        chosenBottom = 8;
+      let placement = measure();
+
+      if (scroll) {
+        const panelEl = getPanel(panelId);
+        const scroller = panelEl ? findScroller(targetEl, panelEl) : null;
+        if (scroller) {
+          const { dx, dy } = computeScrollDelta(toRect(targetEl.getBoundingClientRect()), placement.safe);
+          if (dx !== 0 || dy !== 0) {
+            scroller.scrollBy({ left: dx, top: dy, behavior: 'auto' });
+            await nextFrame();
+            await nextFrame();
+            placement = measure();
+          }
+        }
       }
 
-      const clampedLeft = Math.max(8, Math.min(relLeft, panelRect.width - popoverWidth - 8));
-      const availableHeight =
-        chosenTop !== undefined
-          ? panelRect.height - chosenTop - 8
-          : chosenBottom !== undefined
-            ? panelRect.height - chosenBottom - 8
-            : panelRect.height - 32;
-      const maxHeight = Math.max(120, Math.min(panelRect.height - 16, availableHeight));
-
+      const target = spotlightRect(toRect(targetEl.getBoundingClientRect()), panel, placement.safe);
+      setTargetBox(target);
       setPopoverPos({
-        top: chosenTop,
-        bottom: chosenBottom,
-        left: clampedLeft,
-        width: popoverWidth,
-        maxHeight,
+        top: placement.top,
+        left: placement.left,
+        width: placement.width,
+        maxHeight: placement.maxHeight,
+        dock: placement.dock,
       });
-    });
-  }, [isActive, currentStep, panelId]);
+    },
+    [panelId],
+  );
 
-  // Position listeners
+  // Remember the sub-view the widget was showing, so the tour can put it back.
+  useEffect(() => {
+    if (!isActive) return;
+
+    const panelEl = getPanel(panelId);
+    restoreRef.current = panelEl
+      ? Array.from(
+          panelEl.querySelectorAll<HTMLElement>(
+            '[data-widget-tour-click][aria-selected="true"], [data-widget-tour-click][data-tour-active="true"]',
+          ),
+        )
+      : [];
+
+    return () => {
+      for (const el of restoreRef.current) {
+        if (el.isConnected) el.click();
+      }
+      restoreRef.current = [];
+    };
+  }, [isActive, panelId]);
+
+  // Undo a view the tour opened, such as a doc page returning to the index.
+  useEffect(() => {
+    if (!isActive || !definition?.restoreActions?.length) return;
+
+    return () => {
+      const panelEl = getPanel(panelId);
+      for (const click of definition.restoreActions ?? []) {
+        panelEl?.querySelector<HTMLElement>(toClickSelector(click.selector))?.click();
+      }
+    };
+  }, [isActive, panelId, definition]);
+
+  // Run the definition's opening clicks once per tour.
+  useEffect(() => {
+    if (!isActive || !definition) return;
+
+    const panelEl = getPanel(panelId);
+    for (const click of definition.startActions ?? []) {
+      panelEl?.querySelector<HTMLElement>(toClickSelector(click.selector))?.click();
+    }
+    // Only re-run when a new tour starts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, activeTour?.command, panelId]);
+
+  // Prepare each step: run its clicks, wait for the anchor, scroll it into the free band.
   useEffect(() => {
     if (!isActive || !currentStep) return;
 
-    updatePosition();
+    let cancelled = false;
+    setIsAnchorFound(false);
+    setTargetBox(null);
+    setPopoverPos(null);
+    targetElRef.current = null;
 
-    const panelEl = document.querySelector<HTMLElement>(`[data-tour-panel-id="${panelId}"]`);
-    const overlayEl = overlayRef.current;
-    const targetEl = panelEl?.querySelector<HTMLElement>(`[data-widget-tour="${currentStep.anchor}"]`);
+    const run = async () => {
+      const panelEl = getPanel(panelId);
+      if (!panelEl) return;
 
-    const ro = new ResizeObserver(() => {
-      updatePosition();
-    });
+      for (const click of currentStep.actions ?? []) {
+        const el = panelEl.querySelector<HTMLElement>(toClickSelector(click.selector));
+        if (!el) continue;
+        if (el.getAttribute('data-tour-active') === 'true') continue;
+        el.click();
+        await wait(ACTION_SETTLE_MS);
+      }
 
-    if (overlayEl) ro.observe(overlayEl);
-    else if (panelEl) ro.observe(panelEl);
-    if (targetEl) ro.observe(targetEl);
+      const startedAt = performance.now();
+      let targetEl: HTMLElement | null = null;
+      while (!cancelled) {
+        const candidate = panelEl.querySelector<HTMLElement>(
+          `[data-widget-tour="${currentStep.anchor}"]`,
+        );
+        if (candidate) {
+          const rect = candidate.getBoundingClientRect();
+          if (rect.width > 0 || rect.height > 0) {
+            targetEl = candidate;
+            break;
+          }
+        }
+        if (performance.now() - startedAt > ANCHOR_TIMEOUT_MS) break;
+        await nextFrame();
+        await wait(40);
+      }
 
-    const onResize = () => updatePosition();
-    window.addEventListener('resize', onResize);
-    window.addEventListener('scroll', onResize, true);
+      if (cancelled) return;
+
+      if (!targetEl) {
+        if (stepIndex < steps.length - 1) {
+          setStepIndex(stepIndex + 1);
+        } else {
+          setActiveTour(null);
+        }
+        return;
+      }
+
+      targetElRef.current = targetEl;
+      await positionStep(targetEl, currentStep, true);
+      if (!cancelled) setIsAnchorFound(true);
+    };
+
+    void run();
 
     return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('scroll', onResize, true);
+      cancelled = true;
     };
-  }, [isActive, currentStep, panelId, updatePosition]);
+  }, [isActive, currentStep, panelId, positionStep, stepIndex, steps.length, setActiveTour]);
+
+  // Follow panel and target size changes without moving the page under the user.
+  useEffect(() => {
+    if (!isActive || !currentStep) return;
+
+    const overlayEl = overlayRef.current;
+    const resizeObserver = new ResizeObserver(() => {
+      const targetEl = targetElRef.current;
+      if (targetEl) void positionStep(targetEl, currentStep, false);
+    });
+
+    if (overlayEl) resizeObserver.observe(overlayEl);
+    const targetEl = targetElRef.current;
+    if (targetEl) resizeObserver.observe(targetEl);
+
+    return () => resizeObserver.disconnect();
+  }, [isActive, currentStep, positionStep]);
+
+  // Measure the real popover height so the placement uses accurate space.
+  useEffect(() => {
+    const el = popoverRef.current;
+    if (!el) return;
+    const measured = el.offsetHeight;
+    if (measured > 0 && Math.abs(measured - popoverHeightRef.current) > 4) {
+      setPopoverHeight(measured);
+      const targetEl = targetElRef.current;
+      if (targetEl && currentStep) void positionStep(targetEl, currentStep, false);
+    }
+  });
 
   // Focus popover on step change
   useEffect(() => {
@@ -258,6 +387,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
       ref={overlayRef}
       className="absolute inset-0 z-40 overflow-hidden font-mono select-none"
       data-widget-tour-overlay=""
+      data-tour-dock={popoverPos?.dock ?? 'none'}
     >
       {/* Dimmed backdrop or cutout */}
       {isAnchorFound && targetBox ? (
@@ -282,12 +412,12 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
         role="dialog"
         aria-modal="true"
         aria-label={currentStep.title}
+        data-tour-popover=""
         className="absolute z-50 bg-[#121212] border border-terminal-amber text-terminal-amber shadow-2xl flex flex-col focus:outline-none"
         style={
           isAnchorFound && popoverPos
             ? {
-                top: popoverPos.top !== undefined ? `${popoverPos.top}px` : undefined,
-                bottom: popoverPos.bottom !== undefined ? `${popoverPos.bottom}px` : undefined,
+                top: `${popoverPos.top}px`,
                 left: `${popoverPos.left}px`,
                 width: `${popoverPos.width}px`,
                 maxHeight: `${popoverPos.maxHeight}px`,
@@ -298,6 +428,7 @@ export function WidgetTourOverlay({ panelId }: WidgetTourOverlayProps) {
                 transform: 'translate(-50%, -50%)',
                 width: 'min(300px, calc(100% - 16px))',
                 maxHeight: 'calc(100% - 32px)',
+                visibility: 'hidden',
               }
         }
       >

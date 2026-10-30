@@ -8,8 +8,10 @@ import type { DocField } from '@/lib/widgetDocs/types';
 const EXPECTED_ANCHORS = [
   'notif-scope-selector',
   'notif-view-mode',
-  'notif-category-matrix',
-  'notif-subfilters',
+  'notif-heatmap',
+  'notif-view-mode',
+  'notif-categories',
+  'notif-read-filter',
   'notif-alert-card',
 ];
 
@@ -27,12 +29,12 @@ describe('NOTIF Widget Tour and Documentation', () => {
   const notifSourcePath = path.resolve(__dirname, '../../components/widgets/NotifWidget.tsx');
   const notifSource = readFileSync(notifSourcePath, 'utf-8');
 
-  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(notifTour.steps).toHaveLength(5);
+  it('has 7 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(notifTour.steps).toHaveLength(7);
 
     const ids = notifTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(5);
+    expect(uniqueIds.size).toBe(7);
 
     for (const step of notifTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);
@@ -47,9 +49,21 @@ describe('NOTIF Widget Tour and Documentation', () => {
     expect(anchors).toEqual(EXPECTED_ANCHORS);
   });
 
-  it('contains every anchor in NotifWidget.tsx as data-widget-tour attributes', () => {
+  it('contains every anchor in NotifWidget.tsx, through the shared tourId expression', () => {
     for (const anchor of EXPECTED_ANCHORS) {
-      expect(notifSource).toContain(`data-widget-tour="${anchor}"`);
+      expect(notifSource).toMatch(new RegExp(`['"]${anchor}['"]`));
+    }
+    expect(notifSource).toContain("const tourId = defaultWatchlist === 'all' ? 'scan' : 'notif';");
+  });
+
+  it('only clicks elements that are marked as tour actions', () => {
+    const selectors = notifTour.steps.flatMap((step) => step.actions ?? []);
+    expect(selectors.length).toBeGreaterThan(0);
+
+    for (const action of selectors) {
+      const name = action.selector.match(/data-widget-tour-click="([^"]+)"/)?.[1];
+      expect(name).toBeTruthy();
+      expect(notifSource).toContain(`data-widget-tour-click="${name}"`);
     }
   });
 

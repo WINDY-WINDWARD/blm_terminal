@@ -78,7 +78,7 @@ export const picksDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers 4 key areas: 1) Category Tabs, 2) Scan Triggers, 3) Pick Cards, and 4) Details Modal. To replay the tour, open DOCS in another panel, keep this PICKS panel open, then click REPLAY TOUR.',
+      body: 'The guided tour has four steps: 1) the PICKS tab, 2) the ACTIVE tab and the RUN HUNTER / RUN VERIFIER actions, 3) a pick card with its entry, target and stop, and 4) the DETAILS button that opens the full thesis. It returns to the tab that was open before the tour started. To replay the tour, open DOCS in another panel, keep this PICKS panel open, then click REPLAY TOUR.',
     },
   ],
 };

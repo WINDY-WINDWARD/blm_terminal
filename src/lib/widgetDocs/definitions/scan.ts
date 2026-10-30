@@ -82,7 +82,7 @@ export const scanDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers 4 key areas: 1) Universe Scope & Date Filter, 2) Sector Heatmap Concentration, 3) Signal Categories & Severity, and 4) Independent Card Actions. You can replay this tour from DOCS with both panels open.',
+      body: 'The tour has 6 steps and switches views as it goes: 1) Universe and Date, 2) Stream and Heatmap tabs, 3) it opens INDUSTRY HEATMAP to show sector concentration, 4) it returns to the stream for Signal Categories, 5) a Universe Alert Card, 6) the Load Chart and Company actions. The tour restores the view you were on when it ends. Replay it from DOCS with both panels open.',
     },
   ],
 };

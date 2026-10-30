@@ -107,7 +107,7 @@ export const posDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour walks through 5 core surfaces: mode selection, portfolio KPI metrics, position matrix table, multi-leg averaging, and square-off liquidation. To replay the tour, open DOCS in another panel, keep this POS panel open, then click REPLAY TOUR.',
+      body: 'The guided tour walks through six surfaces and switches modes as it goes: LIVE / PAPER, the paper OPEN / CLOSED tabs, the portfolio KPIs, the position matrix, multi-leg averaging, and square-off. The mode and paper-tab steps are skipped when the gateway or the paper ledger is empty. It returns to the mode that was open before the tour started. To replay the tour, open DOCS in another panel, keep this POS panel open, then click REPLAY TOUR.',
     },
   ],
 };

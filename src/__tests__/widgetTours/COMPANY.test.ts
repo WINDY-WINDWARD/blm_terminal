@@ -7,8 +7,9 @@ import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
   'company-tabs',
-  'company-fundamentals',
+  'company-ratios',
   'company-valuation',
+  'company-deals',
   'company-corporate',
 ];
 
@@ -31,12 +32,12 @@ describe('COMPANY Widget Tour and Documentation', () => {
   );
   const fundamentalsSource = readFileSync(fundamentalsSourcePath, 'utf-8');
 
-  it('has 4 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(companyTour.steps).toHaveLength(4);
+  it('has 5 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(companyTour.steps).toHaveLength(5);
 
     const ids = companyTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(4);
+    expect(uniqueIds.size).toBe(5);
 
     for (const step of companyTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);
@@ -53,9 +54,31 @@ describe('COMPANY Widget Tour and Documentation', () => {
 
   it('contains every anchor as a data-widget-tour attribute in the owning source file', () => {
     expect(companySource).toContain('data-widget-tour="company-tabs"');
-    expect(companySource).toContain('data-widget-tour="company-fundamentals"');
     expect(companySource).toContain('data-widget-tour="company-corporate"');
+    expect(fundamentalsSource).toContain('data-widget-tour="company-ratios"');
     expect(fundamentalsSource).toContain('tourAnchor="company-valuation"');
+
+    const dealsSource = readFileSync(
+      path.resolve(__dirname, '../../components/widgets/CompanyTabs/DealsTab.tsx'),
+      'utf-8',
+    );
+    expect(dealsSource).toContain('data-widget-tour="company-deals"');
+  });
+
+  it('wires every tour action to a data-widget-tour-click control', () => {
+    expect(companySource).toContain('data-widget-tour-click={`tab-${tab.id}`}');
+
+    const dealsSource = readFileSync(
+      path.resolve(__dirname, '../../components/widgets/CompanyTabs/DealsTab.tsx'),
+      'utf-8',
+    );
+    expect(dealsSource).toContain('data-widget-tour-click={`deals-${t.id}`}');
+
+    for (const step of companyTour.steps) {
+      for (const action of step.actions ?? []) {
+        expect(action.selector).toMatch(/^(tab|deals)-[a-z0-9-]+$/);
+      }
+    }
   });
 
   it('conforms to companyDoc metadata and screenshot structure', () => {

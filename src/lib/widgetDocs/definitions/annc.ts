@@ -93,7 +93,7 @@ export const anncDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers four areas: 1) Announcement Categories, 2) Split Results Schedule, 3) Search and Filter Filings, and 4) Inspect and Open Filings. To replay the tour, open DOCS in another panel, keep this ANNC panel open, then click REPLAY TOUR.',
+      body: 'The tour has 5 steps and switches tabs as it explains them: 1) the five categories, kept on RESULTS, 2) the Upcoming and Announced split, 3) the CORP ACTION tab, 4) search, and 5) the filing list, which it returns to RESULTS for. It restores the tab that was active before the tour. To replay it, open DOCS in another panel, keep this ANNC panel open, then click REPLAY TOUR.',
     },
   ],
 };

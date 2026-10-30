@@ -334,6 +334,9 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
             <div data-widget-tour="pos-mode-toggle" className="flex rounded bg-[#121216] p-0.5 border border-[#27272a] ml-1">
               <button
                 type="button"
+                role="tab"
+                aria-selected={effectiveMode === 'live'}
+                data-widget-tour-click="mode-live"
                 onClick={() => setViewMode('live')}
                 className={`px-2.5 py-0.5 text-[10px] font-bold rounded transition-all ${
                   effectiveMode === 'live'
@@ -345,6 +348,9 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
               </button>
               <button
                 type="button"
+                role="tab"
+                aria-selected={effectiveMode === 'paper'}
+                data-widget-tour-click="mode-paper"
                 onClick={() => setViewMode('paper')}
                 className={`px-2.5 py-0.5 text-[10px] font-bold rounded transition-all ${
                   effectiveMode === 'paper'
@@ -359,9 +365,12 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
 
           {/* Sub-tabs for Paper Trades (OPEN vs CLOSED) */}
           {effectiveMode === 'paper' && (
-            <div className="flex rounded bg-[#121216] p-0.5 border border-[#27272a] ml-1">
+            <div data-widget-tour="pos-paper-tabs" className="flex rounded bg-[#121216] p-0.5 border border-[#27272a] ml-1">
               <button
                 type="button"
+                role="tab"
+                aria-selected={paperTab === 'open'}
+                data-widget-tour-click="tab-open"
                 onClick={() => setPaperTab('open')}
                 className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
                   paperTab === 'open'
@@ -373,6 +382,9 @@ export function PosWidget({ panelId: _panelId }: PosWidgetProps = {}) {
               </button>
               <button
                 type="button"
+                role="tab"
+                aria-selected={paperTab === 'closed'}
+                data-widget-tour-click="tab-closed"
                 onClick={() => setPaperTab('closed')}
                 className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
                   paperTab === 'closed'

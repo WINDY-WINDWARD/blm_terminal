@@ -6,9 +6,9 @@ import { screenerDoc } from '@/lib/widgetDocs/definitions/screener';
 import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
-  'screener-actions',
   'screener-intervals',
   'screener-query',
+  'screener-actions',
   'screener-table',
 ];
 

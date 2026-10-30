@@ -121,7 +121,7 @@ export const companyDoc: WidgetDoc = {
     },
     {
       heading: 'Guided tour',
-      body: 'The guided tour covers 4 key areas: 1) Company Navigation Tabs, 2) Core Ratios and Accounting Health, 3) Intrinsic Valuation Models, and 4) Corporate Filings and Disclosures. To replay the tour, open DOCS in another panel, keep the COMPANY panel open, then click REPLAY TOUR.',
+      body: 'The tour has 5 steps and opens each view it describes: 1) the five tabs, 2) the core ratio grid and Piotroski score, 3) the DCF / Graham / DDM / PEG valuation card, 4) the Deals tab with Insider Trades selected, and 5) the Corporate records. It returns to the tab that was active before it started. To replay it, open DOCS in another panel, keep the COMPANY panel open, then click REPLAY TOUR.',
     },
   ],
 };

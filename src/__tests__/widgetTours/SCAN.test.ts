@@ -7,8 +7,10 @@ import type { DocField } from '@/lib/widgetDocs/types';
 
 const EXPECTED_ANCHORS = [
   'scan-scope',
-  'scan-heatmap-toggle',
-  'scan-filters',
+  'scan-view-mode',
+  'scan-heatmap',
+  'scan-categories',
+  'scan-alert-card',
   'scan-popout-actions',
 ];
 
@@ -26,12 +28,12 @@ describe('SCAN Widget Tour and Documentation', () => {
   const notifSourcePath = path.resolve(__dirname, '../../components/widgets/NotifWidget.tsx');
   const notifSource = readFileSync(notifSourcePath, 'utf-8');
 
-  it('has 4 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
-    expect(scanTour.steps).toHaveLength(4);
+  it('has 6 tour steps with unique kebab-case ids, non-empty titles, and non-empty bodies', () => {
+    expect(scanTour.steps).toHaveLength(6);
 
     const ids = scanTour.steps.map((step) => step.id);
     const uniqueIds = new Set(ids);
-    expect(uniqueIds.size).toBe(4);
+    expect(uniqueIds.size).toBe(6);
 
     for (const step of scanTour.steps) {
       expect(step.id).toMatch(KEBAB_CASE_REGEX);
@@ -46,9 +48,21 @@ describe('SCAN Widget Tour and Documentation', () => {
     expect(anchors).toEqual(EXPECTED_ANCHORS);
   });
 
-  it('contains every anchor in NotifWidget.tsx as a data-widget-tour attribute', () => {
+  it('contains every anchor in NotifWidget.tsx, through the shared tourId expression', () => {
     for (const anchor of EXPECTED_ANCHORS) {
-      expect(notifSource).toContain(`data-widget-tour="${anchor}"`);
+      expect(notifSource).toMatch(new RegExp(`['"]${anchor}['"]`));
+    }
+    expect(notifSource).toContain("tourId === 'scan' ? 'scan-view-mode' : 'notif-view-mode'");
+  });
+
+  it('only clicks elements that are marked as tour actions', () => {
+    const selectors = scanTour.steps.flatMap((step) => step.actions ?? []);
+    expect(selectors.length).toBeGreaterThan(0);
+
+    for (const action of selectors) {
+      const name = action.selector.match(/data-widget-tour-click="([^"]+)"/)?.[1];
+      expect(name).toBeTruthy();
+      expect(notifSource).toContain(`data-widget-tour-click="${name}"`);
     }
   });
 

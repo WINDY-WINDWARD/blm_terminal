@@ -718,6 +718,7 @@ export function MoversWidget() {
                     role="tab"
                     aria-selected={activeView === view}
                     data-active={activeView === view}
+                    data-widget-tour-click={`view-${view}`}
                     onClick={() => handleViewChange(view)}
                     className={`rounded border px-2.5 py-1.5 text-[11px] font-bold uppercase transition-colors ${
                       activeView === view
