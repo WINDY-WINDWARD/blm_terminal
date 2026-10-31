@@ -184,6 +184,7 @@ export function AiToolbar({
         {/* New Chat Button */}
         <button
           onClick={onNewChat}
+          data-testid="ai-new-chat"
           className="px-2.5 py-1 rounded bg-[#121216] border border-[#27272a] hover:border-amber-400 hover:text-terminal-amber text-zinc-200 text-xs font-mono font-semibold transition-colors"
           title="Create new scratch session"
         >

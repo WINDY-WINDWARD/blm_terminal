@@ -401,6 +401,11 @@ export function AiWidget() {
   );
 
   useEffect(() => {
+    if (messages.length === 0) {
+      const list = messagesEndRef.current?.parentElement;
+      if (list) list.scrollTop = 0;
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -415,7 +420,10 @@ export function AiWidget() {
     <div className="h-full w-full flex overflow-hidden font-mono text-xs bg-[#09090b] text-[#f4f4f5] relative select-none">
       {/* Disclaimer Modal */}
       {showDisclaimer && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          data-testid="ai-disclaimer"
+        >
           <div className="border border-terminal-amber/50 bg-[#09090b] p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-2xl rounded">
             <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
             <div className="text-[10px] leading-relaxed text-zinc-300">

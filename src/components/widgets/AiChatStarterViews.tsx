@@ -69,10 +69,13 @@ export function EmptyChatState({
   const endItem = Math.min((promptsPage + 1) * 4, promptsTotal);
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-2 max-w-3xl mx-auto w-full my-auto @3xl:p-4">
+    <div
+      className="flex-1 flex flex-col items-center justify-start p-1.5 max-w-3xl mx-auto w-full @3xl:p-2.5"
+      data-testid="ai-launch-screen"
+    >
       {/* Compact Hero Card */}
-      <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-3 shadow-xl">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <div className="w-full bg-[#0c0c0f] border border-[#27272a] rounded-lg p-2.5 shadow-lg">
+        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <span
               className={cn(
@@ -93,10 +96,10 @@ export function EmptyChatState({
             CTX: <span className="text-terminal-amber font-bold">{symbol ? `${symbol}.${exchange}` : 'NIFTY.NSE'}</span>
           </div>
         </div>
-        <p className="text-xs text-zinc-300 leading-relaxed font-mono">
+        <p className="text-xs text-zinc-300 leading-snug font-mono">
           {sessionMode === 'script'
-            ? 'Generate, optimize, and backtest custom technical indicators and chart overlays. Accept generated scripts to instantly mount them onto your chart panels.'
-            : 'Institutional-grade equity analysis powered by real-time NSE tick data, multi-model intrinsic valuation engines, corporate filings, and global macro spillovers.'}
+            ? 'Generate, optimize, and backtest indicators, then mount them on your charts.'
+            : 'Institutional equity analysis on NSE tick data, filings, and global macro.'}
         </p>
         {Boolean(armedWorkflows) && (
           <p className="text-[10px] font-mono text-zinc-500 mt-2">
@@ -114,7 +117,7 @@ export function EmptyChatState({
         )}
       </div>
 
-      <div className="flex flex-col gap-4 w-full mt-4">
+      <div className="flex flex-col gap-3 w-full mt-3">
         {/* SYSTEM PROMPTS section */}
         <AiStarterSection label="SYSTEM PROMPTS" count={4}>
           {systemPrompts.map((p, idx) => (
@@ -147,17 +150,19 @@ export function EmptyChatState({
               </button>
             }
           >
-            <div className="col-span-full">
-              <AiPromptComposer
-                open={composerOpen}
-                disabled={isStreaming}
-                onOpenChange={setComposerOpen}
-                onSubmit={(description) => {
-                  onCreatePrompt(description);
-                  setComposerOpen(false);
-                }}
-              />
-            </div>
+            {(composerOpen || userPrompts.length === 0) && (
+              <div className="col-span-full">
+                <AiPromptComposer
+                  open={composerOpen}
+                  disabled={isStreaming}
+                  onOpenChange={setComposerOpen}
+                  onSubmit={(description) => {
+                    onCreatePrompt(description);
+                    setComposerOpen(false);
+                  }}
+                />
+              </div>
+            )}
             {editingPrompt && (
               <AiPromptEditPanel
                 key={editingPrompt.id}
@@ -194,8 +199,8 @@ export function EmptyChatState({
           </AiStarterSection>
 
           {promptsTotal > 4 && (
-            <div className="flex items-center justify-between pt-1 w-full">
-              <span className="text-[10px] font-mono text-zinc-500">
+            <div className="flex items-center justify-between pt-0.5 w-full">
+              <span className="text-[10px] font-mono text-zinc-400">
                 Showing {startItem}–{endItem} of {promptsTotal}
               </span>
               <div className="flex items-center gap-1">

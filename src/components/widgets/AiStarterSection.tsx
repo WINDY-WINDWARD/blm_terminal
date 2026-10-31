@@ -16,7 +16,7 @@ export function AiStarterSection({
   children,
 }: AiStarterSectionProps) {
   return (
-    <section className="w-full flex flex-col gap-2.5">
+    <section className="w-full flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-zinc-400">
           {label}
@@ -29,7 +29,7 @@ export function AiStarterSection({
         <div className="flex-1 h-px bg-[#27272a]" />
         {action}
       </div>
-      <div className="grid grid-cols-1 @md:grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-1 @md:grid-cols-2 gap-2">
         {children}
       </div>
     </section>

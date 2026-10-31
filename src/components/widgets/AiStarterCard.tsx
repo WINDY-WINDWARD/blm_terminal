@@ -29,7 +29,7 @@ export function AiStarterCard({
   onDuplicate,
 }: AiStarterCardProps) {
   return (
-    <div className="group relative flex flex-col p-3 rounded-lg bg-[#0c0c0f] border border-[#27272a] hover:border-amber-400/60 hover:bg-[#121217] transition-all shadow-md">
+    <div className="group relative flex flex-col p-2.5 rounded-lg bg-[#0c0c0f] border border-[#27272a] hover:border-amber-400/60 hover:bg-[#121217] transition-all shadow-md">
       <button
         type="button"
         onClick={onLaunch}
