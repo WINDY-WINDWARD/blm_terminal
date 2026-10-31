@@ -66,10 +66,11 @@ function renderDrawer(overrides: Partial<DrawerProps> = {}) {
     onClose: vi.fn(),
     workflows: [makeWorkflow()],
     runs: [],
-    models: [],
     loading: false,
     runsLoading: false,
     onOpenRun: vi.fn(),
+    onCreateWorkflow: vi.fn(),
+    onEditWorkflow: vi.fn(),
     ...overrides,
   };
   render(<AiWorkflowDrawer {...props} />);
@@ -144,5 +145,17 @@ describe('AiWorkflowDrawer', () => {
 
     await waitFor(() => expect(patchedBody).not.toBeNull());
     expect(patchedBody).toEqual(expect.objectContaining({ is_enabled: false }));
+  });
+
+  it('asks the parent to create a workflow from the header', () => {
+    const props = renderDrawer();
+    fireEvent.click(screen.getByRole('button', { name: 'New workflow' }));
+    expect(props.onCreateWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the parent to edit a workflow from the row actions', () => {
+    const props = renderDrawer();
+    fireEvent.click(screen.getByTitle('Edit'));
+    expect(props.onEditWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
   });
 });

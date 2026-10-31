@@ -54,6 +54,7 @@ import {
   useCustomPrompts,
 } from '@/hooks/useAiCustomPrompts';
 import type {
+  Workflow,
   WorkflowCardPayload,
   PromptCardPayload,
   WorkflowUpdateInput,
@@ -69,6 +70,7 @@ import { EmptyChatState, PersonaStrip } from '@/components/widgets/AiChatStarter
 import { AiInputBar } from '@/components/widgets/AiInputBar';
 import { AiToolbar } from '@/components/widgets/AiToolbar';
 import { AiWorkflowDrawer } from '@/components/widgets/AiWorkflowDrawer';
+import { AiWorkflowModal } from '@/components/widgets/AiWorkflowModal';
 
 // Re-exports to preserve exact contract for existing tests and external consumers
 export {
@@ -288,6 +290,28 @@ export function AiWidget() {
   );
 
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
+  const [workflowModal, setWorkflowModal] = useState<{
+    open: boolean;
+    workflow: Workflow | null;
+  }>({ open: false, workflow: null });
+
+  const handleAskCopilot = useCallback(
+    (description: string) => {
+      const metaPrompt = `Create a scheduled workflow from this request: "${description}".
+
+Call create_workflow with:
+- name: short title, max 60 characters
+- prompt: a self-contained instruction. State the objective, the scope (symbols, watchlist, or market), the checks to run, and the output format. Under 1200 characters.
+- schedule_type and time_of_day: infer the cadence. Times are IST. Use weekdays for market-hours requests.
+- symbols: the tickers named or implied, uppercase, max 10. Leave empty when the request covers a watchlist or the whole market.
+
+Then confirm what you created in one sentence.`;
+      launchPrompt(metaPrompt);
+      setWorkflowsOpen(false);
+      setWorkflowModal({ open: false, workflow: null });
+    },
+    [launchPrompt],
+  );
 
   const dismissMessageCard = useCallback(
     (type: 'workflow' | 'prompt', card: WorkflowCardPayload | PromptCardPayload) => {
@@ -608,10 +632,20 @@ export function AiWidget() {
         onClose={() => setWorkflowsOpen(false)}
         workflows={workflowsData?.items ?? []}
         runs={[]}
-        models={availableModels}
         loading={workflowsLoading}
         runsLoading={false}
         onOpenRun={handleOpenRun}
+        onCreateWorkflow={() => setWorkflowModal({ open: true, workflow: null })}
+        onEditWorkflow={(w) => setWorkflowModal({ open: true, workflow: w })}
+      />
+
+      <AiWorkflowModal
+        open={workflowModal.open}
+        workflow={workflowModal.workflow}
+        models={availableModels}
+        onClose={() => setWorkflowModal({ open: false, workflow: null })}
+        onAskCopilot={handleAskCopilot}
+        onSaved={() => setWorkflowModal({ open: false, workflow: null })}
       />
     </div>
   );

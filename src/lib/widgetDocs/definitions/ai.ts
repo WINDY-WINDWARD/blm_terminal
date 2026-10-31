@@ -23,6 +23,7 @@ export const aiDoc: WidgetDoc = {
       items: [
         '☰ Sessions: opens the drawer with chat history and document library management.',
         '⏱ Workflows: opens the right drawer with scheduled workflows and the run inbox. The badge shows unread runs.',
+        '＋ in the workflows drawer: opens the NEW WORKFLOW dialog. Ask copilot describes the workflow in one sentence, or set it up manually.',
         'Model selector: selects the language model for the current conversation.',
         'CTX badge: displays the active symbol and exchange context. Check this badge before asking questions.',
         'Research / Script mode switch: toggles between question answering and indicator code generation.',
@@ -74,6 +75,10 @@ export const aiDoc: WidgetDoc = {
         {
           name: 'WORKFLOWS DRAWER',
           desc: 'Right drawer with two tabs. SCHEDULED lists workflows with status, next run, and catch-up window. INBOX lists finished runs with the trigger type.',
+        },
+        {
+          name: 'WORKFLOW DIALOG',
+          desc: 'Two tabs when creating. ASK COPILOT turns one sentence into a name, prompt, and schedule. SET UP MANUALLY edits the same fields directly. Saving asks the server for the next three run times before you confirm.',
         },
         {
           name: 'WORKFLOW CARD',

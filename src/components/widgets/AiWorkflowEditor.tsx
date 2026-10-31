@@ -93,13 +93,13 @@ export function AiWorkflowEditor({
     return getDefaultOnceAt();
   });
   const [cron, setCron] = useState(workflow?.cron_expression ?? '0 10 * * 1-5');
-  const [symbols, setSymbols] = useState(workflow?.symbols ? workflow.symbols.join(', ') : '');
   const [model, setModel] = useState(workflow?.model ?? '');
   const [catchUpEnabled, setCatchUpEnabled] = useState(workflow?.catch_up_enabled ?? true);
   const [catchUpHours, setCatchUpHours] = useState<number>(
     workflow?.catch_up_window_hours ?? defaultCatchUpHours((workflow?.schedule_type as ScheduleType) || 'daily'),
   );
   const [allowWriteTools, setAllowWriteTools] = useState(workflow?.allow_write_tools ?? false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -175,11 +175,6 @@ export function AiWorkflowEditor({
       return;
     }
 
-    const parsedSymbols = symbols
-      .split(',')
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
-
     let onceIso: string | null = null;
     if (scheduleType === 'once') {
       if (!onceAt) {
@@ -213,7 +208,6 @@ export function AiWorkflowEditor({
           days_of_week: scheduleType === 'weekly' ? daysOfWeek : null,
           cron: scheduleType === 'custom' ? cron.trim() : null,
           once_at: onceIso,
-          symbols: parsedSymbols,
           model: model || null,
           catch_up_enabled: catchUpEnabled,
           catch_up_window_hours: catchUpEnabled ? catchUpHours : null,
@@ -235,7 +229,6 @@ export function AiWorkflowEditor({
           days_of_week: scheduleType === 'weekly' ? daysOfWeek : null,
           cron: scheduleType === 'custom' ? cron.trim() : null,
           once_at: onceIso,
-          symbols: parsedSymbols,
           model: model || null,
           catch_up_enabled: catchUpEnabled,
           catch_up_window_hours: catchUpEnabled ? catchUpHours : null,
@@ -252,7 +245,6 @@ export function AiWorkflowEditor({
   }, [
     name,
     prompt,
-    symbols,
     scheduleType,
     timeOfDay,
     daysOfWeek,
@@ -271,245 +263,287 @@ export function AiWorkflowEditor({
 
   const previewRuns = previewMutation.data?.next_runs ?? [];
 
-  return (
-    <div className="flex flex-col gap-3">
-      {/* 1. NAME */}
-      <div>
-        <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-          Name
-        </label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Workflow name"
-          disabled={isSaving}
-          className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-        />
-      </div>
+  const hasName = Boolean(name.trim());
+  const hasPrompt = Boolean(prompt.trim());
+  const isCronValid = scheduleType !== 'custom' || Boolean(cron.trim());
+  const isOnceValid = scheduleType !== 'once' || Boolean(onceAt);
 
-      {/* 2. PROMPT */}
-      <div>
-        <div className="[&>div:last-child]:hidden">
+  let disabledReason: string | null = null;
+  if (!hasName && !hasPrompt) {
+    disabledReason = 'Add a name and prompt to save';
+  } else if (!hasName || !hasPrompt) {
+    disabledReason = 'Name and prompt required';
+  } else if (!isCronValid) {
+    disabledReason = 'Fix the cron expression';
+  } else if (!isOnceValid) {
+    disabledReason = 'Date and time required';
+  }
+
+  const isSaveDisabled = isSaving || !hasName || !hasPrompt || !isCronValid || !isOnceValid;
+
+  return (
+    <div className="flex flex-col min-h-full">
+      <div className="flex flex-col gap-3 p-3 flex-1">
+        {/* 1. NAME */}
+        <div>
+          <label
+            htmlFor="wf-name"
+            className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block"
+          >
+            Name
+          </label>
+          <input
+            id="wf-name"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Workflow name"
+            disabled={isSaving}
+            className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
+          />
+        </div>
+
+        {/* 2. PROMPT */}
+        <div>
           <AiPromptTextEditor
             value={prompt}
             onChange={setPrompt}
-            onSave={() => void handleSave()}
-            onCancel={onCancel}
             saving={isSaving}
             label="Prompt"
+            hideActions
           />
         </div>
-      </div>
 
-      {/* 3. FREQUENCY */}
-      <div>
-        <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-          Frequency
-        </label>
-        <select
-          value={scheduleType}
-          onChange={(e) => handleFrequencyChange(e.target.value as ScheduleType)}
-          disabled={isSaving}
-          className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-        >
-          <option value="daily">Daily</option>
-          <option value="weekdays">Weekdays</option>
-          <option value="weekly">Weekly</option>
-          <option value="hourly">Hourly</option>
-          <option value="once">Once</option>
-          <option value="custom">Custom</option>
-        </select>
-      </div>
+        {/* 3. SCHEDULE */}
+        <div className="flex flex-col gap-3">
+          <div>
+            <label
+              htmlFor="wf-schedule"
+              className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block"
+            >
+              Schedule
+            </label>
+            <select
+              id="wf-schedule"
+              value={scheduleType}
+              onChange={(e) => handleFrequencyChange(e.target.value as ScheduleType)}
+              disabled={isSaving}
+              className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
+            >
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays</option>
+              <option value="weekly">Weekly</option>
+              <option value="hourly">Hourly</option>
+              <option value="once">Once</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
 
-      {/* 4. TIME (shown for daily, weekdays, weekly) */}
-      {['daily', 'weekdays', 'weekly'].includes(scheduleType) && (
-        <div>
-          <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-            Time
-          </label>
-          <input
-            type="time"
-            value={timeOfDay}
-            onChange={(e) => setTimeOfDay(e.target.value)}
-            disabled={isSaving}
-            className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-          />
-        </div>
-      )}
+          {['daily', 'weekdays', 'weekly'].includes(scheduleType) && (
+            <div>
+              <label
+                htmlFor="wf-time"
+                className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block"
+              >
+                Time
+              </label>
+              <input
+                id="wf-time"
+                type="time"
+                value={timeOfDay}
+                onChange={(e) => setTimeOfDay(e.target.value)}
+                disabled={isSaving}
+                className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
+              />
+            </div>
+          )}
 
-      {/* 5. WEEKDAYS (shown for weekly) */}
-      {scheduleType === 'weekly' && (
-        <div>
-          <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-            Weekdays
-          </label>
-          <div className="flex items-center gap-1">
-            {WEEKDAY_OPTIONS.map((opt) => {
-              const active = daysOfWeek.includes(opt.value);
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => toggleDay(opt.value)}
-                  disabled={isSaving}
-                  className={cn(
-                    'flex-1 py-1 text-[10px] font-mono rounded border transition-colors',
-                    active
-                      ? 'bg-terminal-amber text-black font-bold border-terminal-amber'
-                      : 'bg-[#121216] text-zinc-400 border-[#27272a] hover:border-zinc-500',
-                  )}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
+          {scheduleType === 'weekly' && (
+            <div>
+              <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
+                Weekdays
+              </label>
+              <div className="flex items-center gap-1">
+                {WEEKDAY_OPTIONS.map((opt) => {
+                  const active = daysOfWeek.includes(opt.value);
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => toggleDay(opt.value)}
+                      disabled={isSaving}
+                      className={cn(
+                        'flex-1 py-1 text-[10px] font-mono rounded border transition-colors',
+                        active
+                          ? 'bg-terminal-amber text-black font-bold border-terminal-amber'
+                          : 'bg-[#121216] text-zinc-400 border-[#27272a] hover:border-zinc-500',
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {scheduleType === 'once' && (
+            <div>
+              <label
+                htmlFor="wf-once"
+                className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block"
+              >
+                Date and Time
+              </label>
+              <input
+                id="wf-once"
+                type="datetime-local"
+                value={onceAt}
+                onChange={(e) => setOnceAt(e.target.value)}
+                disabled={isSaving}
+                className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
+              />
+            </div>
+          )}
+
+          {scheduleType === 'custom' && (
+            <div>
+              <label
+                htmlFor="wf-cron"
+                className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block"
+              >
+                Cron
+              </label>
+              <input
+                id="wf-cron"
+                type="text"
+                value={cron}
+                onChange={(e) => setCron(e.target.value)}
+                placeholder="0 10 * * 1-5"
+                disabled={isSaving}
+                className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
+              />
+            </div>
+          )}
+
+          <div className="text-[10px] font-mono text-zinc-500">
+            Scope comes from the prompt. Mention symbols, a watchlist, or the whole market.
           </div>
         </div>
-      )}
 
-      {/* 6. DATE AND TIME (shown for once) */}
-      {scheduleType === 'once' && (
-        <div>
-          <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-            Date and Time
-          </label>
-          <input
-            type="datetime-local"
-            value={onceAt}
-            onChange={(e) => setOnceAt(e.target.value)}
-            disabled={isSaving}
-            className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-          />
+        {/* 4. PREVIEW LINE */}
+        <div className="p-2 bg-[#121216] border border-[#27272a] rounded-md text-[11px] font-mono text-zinc-400">
+          <span className="text-zinc-500">Next: </span>
+          {previewMutation.isPending ? (
+            <span className="text-zinc-500">calculating…</span>
+          ) : previewRuns.length > 0 ? (
+            <span className="text-zinc-300">
+              {previewRuns.map((r) => formatIst(r)).filter(Boolean).join(', ')}
+            </span>
+          ) : (
+            <span className="text-zinc-500">—</span>
+          )}
         </div>
-      )}
 
-      {/* 7. CRON (shown for custom) */}
-      {scheduleType === 'custom' && (
-        <div>
-          <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-            Cron
-          </label>
-          <input
-            type="text"
-            value={cron}
-            onChange={(e) => setCron(e.target.value)}
-            placeholder="0 10 * * 1-5"
-            disabled={isSaving}
-            className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-          />
-        </div>
-      )}
+        {/* 5. ADVANCED */}
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((prev) => !prev)}
+            className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-zinc-400 hover:text-zinc-200 transition-colors"
+          >
+            <span>{advancedOpen ? '▾' : '▸'}</span>
+            <span>ADVANCED</span>
+          </button>
+          {advancedOpen && (
+            <div className="flex flex-col gap-3 mt-2">
+              <div>
+                <label
+                  htmlFor="wf-model"
+                  className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block"
+                >
+                  Model
+                </label>
+                <select
+                  id="wf-model"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={isSaving}
+                  className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
+                >
+                  <option value="">App default</option>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-      {/* 8. SYMBOLS */}
-      <div>
-        <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-          Symbols
-        </label>
-        <input
-          type="text"
-          value={symbols}
-          onChange={(e) => setSymbols(e.target.value)}
-          placeholder="RELIANCE, INFY, TCS"
-          disabled={isSaving}
-          className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-        />
-      </div>
+              <div className="flex flex-col gap-2 pt-1 border-t border-[#27272a]/60">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={catchUpEnabled}
+                      onChange={(e) => setCatchUpEnabled(e.target.checked)}
+                      disabled={isSaving}
+                      className="rounded border-[#27272a] bg-[#121216] text-terminal-amber focus:ring-0"
+                    />
+                    <span className="text-xs font-mono text-zinc-300">Catch up if missed</span>
+                  </label>
+                  {catchUpEnabled && (
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={1}
+                        max={168}
+                        value={catchUpHours}
+                        onChange={(e) => setCatchUpHours(Math.max(1, Number(e.target.value)))}
+                        disabled={isSaving}
+                        className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-0.5 w-14 text-right outline-none"
+                      />
+                      <span className="text-[10px] font-mono text-zinc-500">h</span>
+                    </div>
+                  )}
+                </div>
 
-      {/* 9. MODEL */}
-      <div>
-        <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 mb-1 block">
-          Model
-        </label>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={isSaving}
-          className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-1 w-full outline-none"
-        >
-          <option value="">App default</option>
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* 10. TWO TOGGLE ROWS */}
-      <div className="flex flex-col gap-2 pt-1 border-t border-[#27272a]/60">
-        {/* Toggle 1: Catch up if missed */}
-        <div className="flex items-center justify-between gap-2">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={catchUpEnabled}
-              onChange={(e) => setCatchUpEnabled(e.target.checked)}
-              disabled={isSaving}
-              className="rounded border-[#27272a] bg-[#121216] text-terminal-amber focus:ring-0"
-            />
-            <span className="text-xs font-mono text-zinc-300">Catch up if missed</span>
-          </label>
-          {catchUpEnabled && (
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                min={1}
-                max={168}
-                value={catchUpHours}
-                onChange={(e) => setCatchUpHours(Math.max(1, Number(e.target.value)))}
-                disabled={isSaving}
-                className="bg-[#121216] border border-[#27272a] focus:border-terminal-amber/60 rounded-md text-xs font-mono text-zinc-200 px-2 py-0.5 w-14 text-right outline-none"
-              />
-              <span className="text-[10px] font-mono text-zinc-500">h</span>
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={allowWriteTools}
+                      onChange={(e) => setAllowWriteTools(e.target.checked)}
+                      disabled={isSaving}
+                      className="rounded border-[#27272a] bg-[#121216] text-terminal-amber focus:ring-0"
+                    />
+                    <span className="text-xs font-mono text-zinc-300">Allow actions</span>
+                  </label>
+                  <div className="text-[10px] font-mono text-zinc-500 ml-5 mt-0.5">
+                    Orders, watchlists, positions
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
 
-        {/* Toggle 2: Allow actions */}
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={allowWriteTools}
-              onChange={(e) => setAllowWriteTools(e.target.checked)}
-              disabled={isSaving}
-              className="rounded border-[#27272a] bg-[#121216] text-terminal-amber focus:ring-0"
-            />
-            <span className="text-xs font-mono text-zinc-300">Allow actions</span>
-          </label>
-          <div className="text-[10px] font-mono text-zinc-500 ml-5 mt-0.5">
-            Orders, watchlists, positions
-          </div>
-        </div>
-      </div>
-
-      {/* 11. PREVIEW BLOCK */}
-      <div className="p-2 bg-[#121216] border border-[#27272a] rounded-md text-[11px] font-mono text-zinc-400">
-        <span className="text-zinc-500">Next: </span>
-        {previewMutation.isPending ? (
-          <span className="text-zinc-500">calculating…</span>
-        ) : previewRuns.length > 0 ? (
-          <span className="text-zinc-300">
-            {previewRuns.map((r) => formatIst(r)).filter(Boolean).join(', ')}
-          </span>
-        ) : (
-          <span className="text-zinc-500">—</span>
+        {/* Error message */}
+        {errorMessage && (
+          <div className="text-[11px] font-mono text-red-400">{errorMessage}</div>
         )}
       </div>
 
-      {/* Inline error */}
-      {errorMessage && (
-        <div className="text-[11px] font-mono text-red-400">{errorMessage}</div>
-      )}
-
-      {/* 12. BUTTONS: SAVE and Cancel */}
-      <div className="flex items-center gap-2 pt-1">
+      {/* 6. STICKY FOOTER */}
+      <div className="sticky bottom-0 z-10 border-t border-[#27272a] bg-[#0c0c0f] px-3 py-2 flex items-center gap-2">
+        <div className="flex-1 text-[11px] font-mono text-zinc-500 truncate">
+          {disabledReason}
+        </div>
         <button
           type="button"
           onClick={() => void handleSave()}
-          disabled={isSaving || !name.trim() || !prompt.trim()}
-          className="flex-1 py-1.5 px-3 bg-terminal-amber hover:bg-terminal-amber/80 text-black font-mono font-bold text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={isSaveDisabled}
+          className="py-1.5 px-3 bg-terminal-amber hover:bg-terminal-amber/80 text-black font-mono font-bold text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
         >
           {isSaving ? 'Saving...' : 'SAVE'}
         </button>
@@ -517,7 +551,7 @@ export function AiWorkflowEditor({
           type="button"
           onClick={onCancel}
           disabled={isSaving}
-          className="py-1.5 px-3 border border-[#27272a] text-zinc-300 hover:text-white hover:border-zinc-500 font-mono text-xs rounded transition-colors"
+          className="py-1.5 px-3 border border-[#27272a] text-zinc-300 hover:text-white hover:border-zinc-500 font-mono text-xs rounded transition-colors shrink-0"
         >
           Cancel
         </button>

@@ -11,8 +11,6 @@ import {
   useWorkflowRuns,
 } from '@/hooks/useAiWorkflows';
 import type { Workflow, WorkflowRun } from '@/types/aiWorkflowTypes';
-import type { ModelOption } from '@/types/aiWidgetTypes';
-import { AiWorkflowEditor } from '@/components/widgets/AiWorkflowEditor';
 import { formatIst } from '@/lib/aiWorkflowTime';
 
 export interface AiWorkflowDrawerProps {
@@ -20,10 +18,11 @@ export interface AiWorkflowDrawerProps {
   onClose: () => void;
   workflows: Workflow[];
   runs: WorkflowRun[];
-  models: ModelOption[];
   loading: boolean;
   runsLoading: boolean;
   onOpenRun: (run: WorkflowRun) => void;
+  onCreateWorkflow: () => void;
+  onEditWorkflow: (workflow: Workflow) => void;
 }
 
 type TabType = 'scheduled' | 'inbox';
@@ -66,15 +65,13 @@ export function AiWorkflowDrawer({
   onClose,
   workflows,
   runs,
-  models,
   loading,
   runsLoading,
   onOpenRun,
+  onCreateWorkflow,
+  onEditWorkflow,
 }: AiWorkflowDrawerProps) {
   const [tab, setTab] = useState<TabType>('scheduled');
-  const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null | undefined>(
-    undefined,
-  );
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const [runsLimit, setRunsLimit] = useState(20);
@@ -106,10 +103,12 @@ export function AiWorkflowDrawer({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setEditingWorkflow(null)}
-            className="text-[11px] font-mono text-terminal-amber hover:text-white font-medium"
+            onClick={onCreateWorkflow}
+            className="text-zinc-400 hover:text-white text-xs px-1"
+            title="New workflow"
+            aria-label="New workflow"
           >
-            + New
+            +
           </button>
           <button
             type="button"
@@ -126,32 +125,19 @@ export function AiWorkflowDrawer({
       <div className="flex items-center border-b border-[#27272a] bg-[#09090b] px-2 shrink-0">
         <TabButton
           active={tab === 'scheduled'}
-          onClick={() => {
-            setTab('scheduled');
-            setEditingWorkflow(undefined);
-          }}
+          onClick={() => setTab('scheduled')}
           label={`SCHEDULED (${workflows.length})`}
         />
         <TabButton
           active={tab === 'inbox'}
-          onClick={() => {
-            setTab('inbox');
-            setEditingWorkflow(undefined);
-          }}
+          onClick={() => setTab('inbox')}
           label={`INBOX (${unreadRunsCount})`}
         />
       </div>
 
       {/* Body */}
       <div className="overflow-y-auto custom-scroll flex-1 p-2">
-        {editingWorkflow !== undefined ? (
-          <AiWorkflowEditor
-            workflow={editingWorkflow}
-            models={models}
-            onCancel={() => setEditingWorkflow(undefined)}
-            onSaved={() => setEditingWorkflow(undefined)}
-          />
-        ) : tab === 'scheduled' ? (
+        {tab === 'scheduled' ? (
           /* SCHEDULED TAB */
           <div className="flex flex-col gap-1.5">
             {loading && workflows.length === 0 ? (
@@ -227,7 +213,7 @@ export function AiWorkflowDrawer({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setEditingWorkflow(wf);
+                            onEditWorkflow(wf);
                           }}
                           title="Edit"
                           className="w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-[10px]"
