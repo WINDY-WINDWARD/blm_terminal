@@ -23,25 +23,33 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add iinvest lookup columns to stock_universe."""
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing = {c["name"] for c in inspector.get_columns("stock_universe")}
+    existing_indexes = {i["name"] for i in inspector.get_indexes("stock_universe")}
     with op.batch_alter_table("stock_universe", schema=None) as batch_op:
-        batch_op.add_column(
-            sa.Column("isin", sa.String(length=12), nullable=True)
-        )
-        batch_op.add_column(
-            sa.Column("iinvest_path", sa.String(length=256), nullable=True)
-        )
-        batch_op.add_column(
-            sa.Column(
-                "iinvest_path_resolved_at",
-                sa.DateTime(timezone=False),
-                nullable=True,
+        if "isin" not in existing:
+            batch_op.add_column(
+                sa.Column("isin", sa.String(length=12), nullable=True)
             )
-        )
-        batch_op.create_index(
-            batch_op.f("ix_stock_universe_isin"),
-            ["isin"],
-            unique=False,
-        )
+        if "iinvest_path" not in existing:
+            batch_op.add_column(
+                sa.Column("iinvest_path", sa.String(length=256), nullable=True)
+            )
+        if "iinvest_path_resolved_at" not in existing:
+            batch_op.add_column(
+                sa.Column(
+                    "iinvest_path_resolved_at",
+                    sa.DateTime(timezone=False),
+                    nullable=True,
+                )
+            )
+        if "ix_stock_universe_isin" not in existing_indexes:
+            batch_op.create_index(
+                batch_op.f("ix_stock_universe_isin"),
+                ["isin"],
+                unique=False,
+            )
 
 
 def downgrade() -> None:

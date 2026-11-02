@@ -28,6 +28,7 @@ import { NotifWidget } from './widgets/NotifWidget';
 import { ScanWidget } from './widgets/ScanWidget';
 import { ScreenerWidget } from './widgets/ScreenerWidget';
 import { AnnouncementsWidget } from './widgets/AnnouncementsWidget';
+import { WidgetTourOverlay } from './widgetTour/WidgetTourOverlay';
 import { DocsWidget } from './widgets/DocsWidget';
 import { AiWidget } from './widgets/AiWidget';
 import { PortfolioWidget } from './widgets/PortfolioWidget';
@@ -179,7 +180,7 @@ export function Panel({ id, title }: PanelProps) {
     <div
       data-tour-panel={title}
       data-tour-panel-id={id}
-      className={`bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-150 h-full w-full min-h-0 min-w-0 ${
+      className={`relative bg-terminal-bg border-2 flex flex-col overflow-hidden cursor-default transition-colors duration-150 h-full w-full min-h-0 min-w-0 ${
         isSelected
           ? 'border-yellow-500'
           : isFocused
@@ -232,6 +233,7 @@ export function Panel({ id, title }: PanelProps) {
           </div>
         </ErrorBoundary>
       </div>
+      <WidgetTourOverlay panelId={id} />
     </div>
   );
 }

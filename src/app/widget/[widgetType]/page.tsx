@@ -10,6 +10,9 @@ import { cn } from '@/lib/utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { TradingViewImportModal } from '@/components/modals/TradingViewImportModal';
 import { SettingsModal } from '@/components/modals/SettingsModal';
+import { WidgetTourController } from '@/components/widgetTour/WidgetTourController';
+import { WidgetTourOverlay } from '@/components/widgetTour/WidgetTourOverlay';
+import { usePopoutTourResponder } from '@/lib/widgetTours/popoutChannel';
 
 export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetType: string }> }) {
   const unwrappedParams = use(params);
@@ -40,6 +43,8 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
     () => `popout_direct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
   );
   const panelId = searchParams.get('popoutPanelId') || searchParams.get('originPanelId') || fallbackPanelId;
+
+  usePopoutTourResponder(panelId, widgetTitle);
 
   // Rehydrate Jotai state from URL on mount. The global symbol is only
   // set when this popout has no chart override of its own — otherwise a
@@ -88,7 +93,11 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
   };
 
   return (
-    <div className="h-screen w-screen bg-terminal-bg text-terminal-amber font-mono overflow-hidden flex flex-col select-none">
+    <div
+      data-tour-panel-id={panelId}
+      className="relative h-screen w-screen bg-terminal-bg text-terminal-amber font-mono overflow-hidden flex flex-col select-none"
+    >
+      <WidgetTourController surface="popout" panelId={panelId} command={widgetTitle} />
       {/* Draggable Titlebar with Native Window Controls area offset */}
       <div 
         className={cn(
@@ -120,6 +129,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
         {/* originPanelId keeps per-panel state (e.g. chart symbol overrides)
             shared between the home panel and its popout. */}
         <WidgetRenderer title={widgetTitle} panelId={panelId} symbolOverride={searchParams.get('symbol') || undefined} />
+        <WidgetTourOverlay panelId={panelId} />
       </div>
 
       {widgetTitle === 'WATCH' && (

@@ -3,6 +3,7 @@ import { atomWithStorage } from 'jotai/utils';
 import type { FundsData } from '@/lib/openalgo';
 import type { NewsArticle } from '@/lib/newsSocket';
 import type { ActiveIndicator } from '@/lib/indicators/types';
+import type { WidgetTourRequest } from '@/lib/widgetTours/types';
 import { DEFAULT_MOVERS_COLUMN_ORDER } from '@/lib/moversColumns';
 
 /** Live tick data shape — LTP-centric, populated by marketWs SymbolData */
@@ -125,6 +126,9 @@ export const tutorialStatusAtom = atomWithStorage<TutorialStatus>(
   'terminal.tutorial.v1',
   'pending',
 );
+
+export const widgetTourQueueAtom = atom<WidgetTourRequest[]>([]);
+export const activeWidgetTourAtom = atom<WidgetTourRequest | null>(null);
 
 // ─── Existing Atoms ───────────────────────────────────────────────────────────
 

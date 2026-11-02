@@ -26,6 +26,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "docs:screenshots": "node scripts/capture-widget-screenshots.mjs",
     "verify:release": "node scripts/verify_release.js",
     "verify:release:live": "node scripts/verify_release.js --live --binary",
     "stage:cliproxyapi": "powershell -ExecutionPolicy Bypass -File ./scripts/stage_cliproxyapi.ps1",

@@ -51,7 +51,10 @@ export function AiToolbar({
   onNewChat,
 }: AiToolbarProps) {
   return (
-    <div className="bg-[#09090b] border-b border-[#27272a] p-2 flex flex-col items-stretch justify-between gap-2 shrink-0 @3xl:flex-row @3xl:items-center">
+    <div
+      data-widget-tour="ai-toolbar"
+      className="bg-[#09090b] border-b border-[#27272a] p-2 flex flex-col items-stretch justify-between gap-2 shrink-0 @3xl:flex-row @3xl:items-center"
+    >
       <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @3xl:w-auto">
         {/* History Drawer Button */}
         <button
@@ -112,6 +115,7 @@ export function AiToolbar({
           role="switch"
           aria-checked={sessionMode === 'script'}
           data-testid="ai-mode-toggle"
+          data-widget-tour="ai-mode-toggle"
           data-mode={sessionMode}
           onClick={onToggleMode}
           disabled={isStreaming}

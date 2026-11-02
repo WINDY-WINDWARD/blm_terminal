@@ -59,6 +59,7 @@ export function AiInputBar({
 
   return (
     <div
+      data-widget-tour="ai-input"
       className={cn(
         'p-2.5 bg-[#09090b] border-t border-[#27272a] shrink-0 transition-colors',
         dragActive && 'bg-terminal-amber/10 border-terminal-amber/50',

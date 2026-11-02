@@ -289,10 +289,12 @@ export function AiWidget() {
         </div>
 
         {/* Persona Bento Strip */}
-        <PersonaStrip
-          activePersona={activePersona}
-          onSelectPersona={setActivePersona}
-        />
+        <div data-widget-tour="ai-personas">
+          <PersonaStrip
+            activePersona={activePersona}
+            onSelectPersona={setActivePersona}
+          />
+        </div>
 
         {/* Elevated Bento Input Bar */}
         <AiInputBar

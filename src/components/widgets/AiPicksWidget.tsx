@@ -11,6 +11,9 @@ import { AiPickModal, type AIPick } from './AiPickModal';
 function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
+      role="tab"
+      aria-selected={active}
+      data-widget-tour-click={`tab-${label.toLowerCase()}`}
       onClick={onClick}
       className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-colors border-b-2 flex items-center gap-1 active:scale-[0.96] ${
         active
@@ -301,7 +304,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
 
       {/* Header Tabs & Actions */}
       <div className="flex shrink-0 items-center justify-between border-b border-terminal-gray/50 px-1 gap-2 flex-wrap">
-        <div className="flex items-center overflow-x-auto">
+        <div data-widget-tour="picks-tabs" className="flex items-center overflow-x-auto">
           <TabButton
             active={activeTab === 'PICKS'}
             onClick={() => {
@@ -337,7 +340,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
         </div>
 
         {auth?.user?.is_admin && (
-          <div className="flex items-center gap-1.5 py-1 shrink-0 ml-auto">
+          <div data-widget-tour="picks-triggers" className="flex items-center gap-1.5 py-1 shrink-0 ml-auto">
             <ActionButton
               onClick={() => handleTriggerRun('hunter')}
               loading={isMorningRunning || triggeringMode === 'hunter'}
@@ -430,6 +433,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
               <article
                 key={pick.id} 
                 data-testid={`pick-ticket-${pick.id}`}
+                data-widget-tour="picks-card"
                 onClick={() => setSelectedPickId(pick.id)}
                 className={cn(
                   'group grid min-w-0 grid-cols-1 gap-3 rounded-md border p-3 transition-colors duration-150 hover:border-zinc-600 hover:bg-[#121216] @md:grid-cols-[minmax(0,1fr)_auto] @md:p-4 cursor-pointer',
@@ -480,6 +484,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
                   </div>
                   <button
                     type="button"
+                    data-widget-tour="picks-details"
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedPickId(pick.id);
@@ -521,14 +526,16 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
 
       {/* Modern Cyberpunk AI Modal */}
       {selectedPick && (
-        <AiPickModal
-          pick={selectedPick}
-          onClose={() => setSelectedPickId(null)}
-          currentLivePrice={tickData[`${selectedPick.symbol}.NSE`]?.ltp}
-          onSelectSymbol={(sym) => setActiveSymbol(sym)}
-          isAdmin={auth?.user?.is_admin}
-          onUpdateStatus={updateStatusMutation.mutate}
-        />
+        <div data-widget-tour="picks-modal">
+          <AiPickModal
+            pick={selectedPick}
+            onClose={() => setSelectedPickId(null)}
+            currentLivePrice={tickData[`${selectedPick.symbol}.NSE`]?.ltp}
+            onSelectSymbol={(sym) => setActiveSymbol(sym)}
+            isAdmin={auth?.user?.is_admin}
+            onUpdateStatus={updateStatusMutation.mutate}
+          />
+        </div>
       )}
     </div>
   );

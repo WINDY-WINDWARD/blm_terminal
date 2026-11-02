@@ -1166,7 +1166,7 @@ export function WatchWidget() {
       {/* Bento Toolbar Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-2 border-b border-[#27272a] bg-[#09090b] flex-shrink-0">
         {/* Watchlist selector */}
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div data-widget-tour="watch-selector-deck" className="flex shrink-0 items-center gap-1.5">
           <span className="text-zinc-400 text-[10px] uppercase font-bold tracking-wider mr-0.5">LIST:</span>
           <div className="flex items-center gap-1 bg-[#141418] border border-[#27272a] rounded px-1.5 py-0.5">
             <select
@@ -1200,6 +1200,7 @@ export function WatchWidget() {
         {/* Add symbol form */}
         <form
           onSubmit={handleAdd}
+          data-widget-tour="watch-add-symbol-form"
           className="flex w-full items-center gap-1.5 @3xl:w-auto @3xl:min-w-[240px] @3xl:max-w-sm @3xl:flex-1"
         >
           <input
@@ -1246,7 +1247,7 @@ export function WatchWidget() {
         </form>
 
         {/* Breadth & Sort Indicators */}
-        <div className="hidden @3xl:flex items-center gap-2 text-[10px] text-zinc-400 pl-1 whitespace-nowrap">
+        <div data-widget-tour="watch-breadth-indicator" className="hidden @3xl:flex items-center gap-2 text-[10px] text-zinc-400 pl-1 whitespace-nowrap">
           <span>SORT: <strong className="text-terminal-amber font-mono font-bold uppercase">{sortColumn ? `${sortColumn} (${sortDirection})` : 'DEFAULT'}</strong></span>
           <span>•</span>
           <span>ADV: <strong className="text-terminal-green font-bold">{advCount}</strong> / DEC: <strong className="text-terminal-red font-bold">{decCount}</strong></span>
@@ -1300,7 +1301,7 @@ export function WatchWidget() {
         {!isLoading && !isError && (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
-              <thead className="bg-[#121216] text-zinc-400 font-mono text-[11px] uppercase tracking-wider sticky top-0 z-10 border-b border-[#27272a]">
+              <thead data-widget-tour="watch-table-header" className="bg-[#121216] text-zinc-400 font-mono text-[11px] uppercase tracking-wider sticky top-0 z-10 border-b border-[#27272a]">
                 <tr>
                   <th className="p-1.5 border-r border-[#27272a]/60 w-7 text-center">✕</th>
                   <th
@@ -1324,6 +1325,7 @@ export function WatchWidget() {
                         onDragEnd={clearColumnDrag}
                         aria-sort={sortColumn === (colConfig?.key || (col as SortColumn)) ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
                         data-column-key={col}
+                        data-widget-tour={colConfig?.label === 'ALERTS' ? 'watch-alerts-cell' : undefined}
                         title="Drag to reorder; click to sort"
                         className={`relative p-1.5 border-r border-[#27272a]/60 cursor-grab active:cursor-grabbing hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none ${COLUMN_VISIBILITY[col as SortColumn] ?? ''} ${
                           draggedColumn === col ? 'opacity-40' : ''
