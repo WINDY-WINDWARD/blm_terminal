@@ -2,8 +2,9 @@
 
 from app.models import (  # noqa: F401
     ai_chat,
-    ai_provider,
     ai_picks,
+    ai_provider,
+    ai_workflow,
     api_cache,
     breakout_snapshot,
     corporatefilings,

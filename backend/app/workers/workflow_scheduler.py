@@ -1,0 +1,501 @@
+"""Daemon worker and scheduler for automated AI workflows."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+import logging
+import time
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from app.database import AsyncSessionLocal
+from app.models.ai_workflow import AiWorkflow, AiWorkflowRun
+from app.services.workflow_runner import run_workflow
+from app.services.workflow_schedule import next_run, next_runs, slot_key
+
+logger = logging.getLogger(__name__)
+
+JOB_KEY = "job.ai_workflows_scheduler"
+SWEEP_SECONDS = 30
+# A slot that is only slightly late is normal scheduling jitter, not a miss.
+# Slots older than this are handled by catch_up_missed instead of enqueue_due_runs.
+CATCH_UP_GRACE_SECONDS = 120
+# A run needs the local provider proxy to be serving. A run that starts during
+# app warm-up can reach the model with an empty upstream and return no text.
+PROVIDER_WARMUP_SECONDS = 75
+PROVIDER_WAIT_TIMEOUT_SECONDS = 180
+_MODULE_STARTED_AT = time.monotonic()
+
+
+def provider_warmup_remaining() -> float:
+    """Return seconds left before workflow runs may start after backend boot."""
+    return max(0.0, PROVIDER_WARMUP_SECONDS - (time.monotonic() - _MODULE_STARTED_AT))
+
+
+def provider_stack_ready() -> bool:
+    """Return True when the local provider proxy can serve a request."""
+    try:
+        from app.services.proxy_supervisor import get_proxy_supervisor
+
+        supervisor = get_proxy_supervisor()
+    except Exception:
+        # A direct route has no proxy. Treat an unknown stack as ready.
+        return True
+    if supervisor is None:
+        return True
+    return supervisor.is_running
+
+
+async def wait_for_provider_stack(timeout: float = PROVIDER_WAIT_TIMEOUT_SECONDS) -> bool:
+    """Wait until the provider proxy is serving, or the timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if provider_warmup_remaining() <= 0 and provider_stack_ready():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(2.0)
+
+
+async def recover_stale_runs(now_utc: datetime) -> int:
+    """Recover runs stuck in 'running' state older than 20 minutes as 'failed'."""
+    cutoff = now_utc - timedelta(minutes=20)
+    count = 0
+    async with AsyncSessionLocal() as db:
+        stmt = select(AiWorkflowRun).where(
+            AiWorkflowRun.status == "running",
+            AiWorkflowRun.started_at < cutoff,
+        )
+        runs = (await db.execute(stmt)).scalars().all()
+        for run in runs:
+            run.status = "failed"
+            run.error = "interrupted"
+            run.finished_at = now_utc
+            if run.started_at:
+                run.duration_ms = max(0, int((now_utc - run.started_at).total_seconds() * 1000))
+            count += 1
+        if count > 0:
+            await db.commit()
+    return count
+
+
+async def catch_up_missed(now_utc: datetime) -> int:
+    """Catch up or skip missed slots for enabled non-deleted workflows."""
+    count = 0
+    grace_cutoff = now_utc - timedelta(seconds=CATCH_UP_GRACE_SECONDS)
+    async with AsyncSessionLocal() as db:
+        stmt = select(AiWorkflow).where(
+            AiWorkflow.is_enabled == True,
+            AiWorkflow.deleted_at.is_(None),
+            AiWorkflow.next_run_at.is_not(None),
+            AiWorkflow.next_run_at <= grace_cutoff,
+        )
+        workflows = (await db.execute(stmt)).scalars().all()
+
+        for wf in workflows:
+            if not wf.next_run_at:
+                continue
+
+            if wf.schedule_type == "once":
+                late_hrs = (now_utc - wf.next_run_at).total_seconds() / 3600.0
+                run_status = "queued" if (wf.catch_up_enabled and late_hrs <= wf.catch_up_window_hours) else "skipped"
+                db.add(
+                    AiWorkflowRun(
+                        workflow_id=wf.id,
+                        user_id=wf.user_id,
+                        trigger="catch_up",
+                        status=run_status,
+                        skip_reason=None if run_status == "queued" else "missed_window",
+                        scheduled_for=wf.next_run_at,
+                        slot_key=slot_key(wf.id, wf.next_run_at),
+                        name_snapshot=wf.name,
+                        prompt_snapshot=wf.prompt,
+                    )
+                )
+                wf.is_enabled = False
+                wf.next_run_at = None
+                try:
+                    await db.commit()
+                    count += 1
+                except IntegrityError:
+                    await db.rollback()
+                continue
+
+            current_slot_k = slot_key(wf.id, wf.next_run_at)
+            existing_run = (
+                await db.execute(
+                    select(AiWorkflowRun).where(
+                        AiWorkflowRun.workflow_id == wf.id,
+                        AiWorkflowRun.slot_key == current_slot_k,
+                    )
+                )
+            ).scalars().first()
+
+            if existing_run:
+                continue
+
+            try:
+                future_runs = next_runs(wf.cron_expression, wf.timezone, wf.next_run_at, count=50)
+            except Exception as e:
+                logger.warning("Failed computing next_runs for workflow %d: %s", wf.id, e)
+                continue
+
+            subsequent = [dt for dt in future_runs if dt <= now_utc]
+
+            if not subsequent:
+                lateness_hrs = (now_utc - wf.next_run_at).total_seconds() / 3600.0
+                catchable = wf.catch_up_enabled and lateness_hrs <= wf.catch_up_window_hours
+                run_record = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="catch_up",
+                    status="queued" if catchable else "skipped",
+                    skip_reason=None if catchable else "missed_window",
+                    scheduled_for=wf.next_run_at,
+                    slot_key=current_slot_k,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+                db.add(run_record)
+                try:
+                    wf.next_run_at = next_run(wf.cron_expression, wf.timezone, now_utc)
+                except Exception:
+                    pass
+                try:
+                    await db.commit()
+                    count += 1
+                except IntegrityError:
+                    await db.rollback()
+                continue
+
+            all_slots = ([wf.next_run_at] + subsequent)[:50]
+
+            # Write "skipped" run with skip_reason "missed_window" for all except the last
+            for slot in all_slots[:-1]:
+                slot_k = slot_key(wf.id, slot)
+                skipped_run = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="catch_up",
+                    status="skipped",
+                    skip_reason="missed_window",
+                    scheduled_for=slot,
+                    slot_key=slot_k,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+                db.add(skipped_run)
+
+            # For the last slot, write "catch_up" or "skipped"
+            last_slot = all_slots[-1]
+            last_slot_k = slot_key(wf.id, last_slot)
+            last_lateness_hrs = (now_utc - last_slot).total_seconds() / 3600.0
+
+            if wf.catch_up_enabled and last_lateness_hrs <= wf.catch_up_window_hours:
+                last_run = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="catch_up",
+                    status="queued",
+                    scheduled_for=last_slot,
+                    slot_key=last_slot_k,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+            else:
+                last_run = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="catch_up",
+                    status="skipped",
+                    skip_reason="missed_window",
+                    scheduled_for=last_slot,
+                    slot_key=last_slot_k,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+            db.add(last_run)
+
+            # Set next_run_at to the next future occurrence
+            try:
+                wf.next_run_at = next_run(wf.cron_expression, wf.timezone, now_utc)
+            except Exception as e:
+                logger.warning("Failed advancing next_run_at for workflow %d: %s", wf.id, e)
+
+            try:
+                await db.commit()
+                count += len(all_slots)
+            except IntegrityError:
+                await db.rollback()
+
+    return count
+
+
+async def enqueue_due_runs(now_utc: datetime) -> int:
+    """Enqueue scheduled runs for enabled workflows whose next_run_at is due."""
+    count = 0
+    async with AsyncSessionLocal() as db:
+        stmt = select(AiWorkflow).where(
+            AiWorkflow.is_enabled == True,
+            AiWorkflow.deleted_at.is_(None),
+            AiWorkflow.next_run_at.is_not(None),
+            AiWorkflow.next_run_at <= now_utc,
+        )
+        workflows = (await db.execute(stmt)).scalars().all()
+
+        for wf in workflows:
+            if not wf.next_run_at:
+                continue
+
+            scheduled_slot = wf.next_run_at
+            sk = slot_key(wf.id, scheduled_slot)
+
+            active_check = await db.execute(
+                select(AiWorkflowRun).where(
+                    AiWorkflowRun.workflow_id == wf.id,
+                    AiWorkflowRun.status.in_(["queued", "running"]),
+                )
+            )
+            is_active = active_check.scalars().first() is not None
+
+            if is_active:
+                run_record = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="schedule",
+                    status="skipped",
+                    skip_reason="still_running",
+                    scheduled_for=scheduled_slot,
+                    slot_key=sk,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+            else:
+                run_record = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="schedule",
+                    status="queued",
+                    scheduled_for=scheduled_slot,
+                    slot_key=sk,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+            db.add(run_record)
+
+            # Advance next_run_at
+            if wf.schedule_type == "once":
+                wf.is_enabled = False
+                wf.next_run_at = None
+            else:
+                try:
+                    wf.next_run_at = next_run(wf.cron_expression, wf.timezone, scheduled_slot)
+                except Exception as e:
+                    logger.warning("Failed advancing next_run_at for workflow %d: %s", wf.id, e)
+
+            try:
+                await db.commit()
+                count += 1
+            except IntegrityError:
+                await db.rollback()
+
+    return count
+
+
+async def execute_pending() -> int:
+    """Execute up to 5 queued runs sequentially and schedule retries on failure."""
+    if provider_warmup_remaining() > 0 or not provider_stack_ready():
+        # Leave the runs queued. The next sweep retries once the stack is up.
+        return 0
+
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    executed_count = 0
+
+    async with AsyncSessionLocal() as db:
+        stmt = (
+            select(AiWorkflowRun)
+            .where(
+                AiWorkflowRun.status == "queued",
+                AiWorkflowRun.scheduled_for <= now_utc,
+            )
+            .order_by(AiWorkflowRun.created_at)
+            .limit(5)
+        )
+        pending_runs = (await db.execute(stmt)).scalars().all()
+        run_items = [(r.id, r.workflow_id, r.attempt, r.trigger, r.name_snapshot, r.prompt_snapshot, r.user_id) for r in pending_runs]
+
+    for run_id, workflow_id, attempt, trigger, name_snapshot, prompt_snapshot, user_id in run_items:
+        await _execute_and_maybe_retry(
+            run_id, workflow_id, attempt, trigger, name_snapshot, prompt_snapshot, user_id
+        )
+        executed_count += 1
+
+    return executed_count
+
+
+# A single retry is enough for a transient failure. A configuration error such
+# as an unknown model never succeeds on a second attempt, so it is not retried.
+MAX_RETRY_ATTEMPTS = 1
+RETRY_DELAY_MINUTES = 5
+NON_RETRYABLE_MARKERS = (
+    "unavailable for its provider route",
+    "Refresh the model list",
+    "no api key",
+    "is not configured",
+)
+
+
+def is_retryable_failure(outcome: str) -> bool:
+    """Return True when a failed run is worth another automatic attempt."""
+    if not outcome.startswith("error:"):
+        return False
+    lowered = outcome.lower()
+    return not any(marker.lower() in lowered for marker in NON_RETRYABLE_MARKERS)
+
+
+async def _execute_and_maybe_retry(
+    run_id: int,
+    workflow_id: int,
+    attempt: int,
+    trigger: str,
+    name_snapshot: str | None,
+    prompt_snapshot: str | None,
+    user_id: int,
+) -> str:
+    """Execute one claimed run and queue a single retry for transient failures."""
+    outcome = await run_workflow(workflow_id, run_id)
+
+    if not is_retryable_failure(outcome) or attempt >= MAX_RETRY_ATTEMPTS:
+        return outcome
+
+    async with AsyncSessionLocal() as db:
+        wf = await db.get(AiWorkflow, workflow_id)
+        if not wf or wf.allow_write_tools:
+            return outcome
+
+        retry_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        retry_run = AiWorkflowRun(
+            workflow_id=workflow_id,
+            user_id=user_id,
+            trigger="retry",
+            status="queued",
+            attempt=attempt + 1,
+            scheduled_for=retry_now + timedelta(minutes=RETRY_DELAY_MINUTES),
+            slot_key=f"{workflow_id}:retry{attempt + 1}:{int(retry_now.timestamp())}",
+            name_snapshot=name_snapshot,
+            prompt_snapshot=prompt_snapshot,
+        )
+        db.add(retry_run)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+
+    logger.info(
+        "Run %d failed with a transient error (trigger=%s); retry queued in %d minutes",
+        run_id,
+        trigger,
+        RETRY_DELAY_MINUTES,
+    )
+    return outcome
+
+
+async def execute_run(run_id: int) -> str:
+    """Execute one queued run now instead of waiting for the next sweep."""
+    if not await wait_for_provider_stack():
+        logger.info(
+            "Run %d left queued: the provider stack was not ready within %d seconds",
+            run_id,
+            PROVIDER_WAIT_TIMEOUT_SECONDS,
+        )
+        return "skipped:provider-not-ready"
+
+    async with AsyncSessionLocal() as db:
+        stmt = select(AiWorkflowRun).where(
+            AiWorkflowRun.id == run_id,
+            AiWorkflowRun.status == "queued",
+        )
+        run = (await db.execute(stmt)).scalars().first()
+        if run is None:
+            return "skipped:not-queued"
+        args = (
+            run.id,
+            run.workflow_id,
+            run.attempt,
+            run.trigger,
+            run.name_snapshot,
+            run.prompt_snapshot,
+            run.user_id,
+        )
+
+    return await _execute_and_maybe_retry(*args)
+
+
+async def run_sweep_once() -> str:
+    """Execute a single sweep of the AI workflows scheduler."""
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_count = await recover_stale_runs(now_utc)
+    catchup_count = await catch_up_missed(now_utc)
+    enqueued_count = await enqueue_due_runs(now_utc)
+    executed_count = await execute_pending()
+    return (
+        f"Sweep completed: {stale_count} stale recovered, "
+        f"{catchup_count} missed processed, "
+        f"{enqueued_count} enqueued, "
+        f"{executed_count} executed"
+    )
+
+
+def workflow_scheduler_worker() -> None:
+    """Daemon thread for the AI workflows scheduler worker."""
+    from app.backgroundtasks._runtime import (
+        _is_job_enabled,
+        _report_job_waiting,
+        _run_async,
+        _shutdown_event,
+        _sleep_interruptible,
+    )
+    from app.jobs.runner import update_job_status_sync
+
+    # Workflows read live data through their own tools and need no startup
+    # pipeline output. Waiting for that event parked the queue for minutes after
+    # every launch, so manual runs sat in "queued" with nothing to execute them.
+    logger.info("AI Workflows Scheduler daemon started.")
+
+    try:
+        if _is_job_enabled(JOB_KEY):
+            update_job_status_sync(JOB_KEY, "running", progress=10, message="Executing initial sweep...")
+            summary = _run_async(run_sweep_once())
+            logger.info("AI Workflows Scheduler initial sweep: %s", summary)
+            update_job_status_sync(
+                JOB_KEY, "completed", progress=100, message=summary, last_completed=datetime.now(timezone.utc)
+            )
+    except Exception as exc:
+        logger.error("AI Workflows Scheduler initial sweep error: %s", exc, exc_info=True)
+        update_job_status_sync(JOB_KEY, "failed", progress=0, message="Initial sweep failed", error=str(exc)[:512])
+
+    while not _shutdown_event.is_set():
+        if not _is_job_enabled(JOB_KEY):
+            update_job_status_sync(JOB_KEY, "waiting", progress=0, message="Disabled")
+            if _sleep_interruptible(SWEEP_SECONDS):
+                break
+            continue
+
+        _report_job_waiting(JOB_KEY, "*/1 * * * *", message="Waiting for next sweep...")
+        if _sleep_interruptible(SWEEP_SECONDS):
+            break
+
+        if not _shutdown_event.is_set():
+            try:
+                update_job_status_sync(JOB_KEY, "running", progress=10, message="Running sweep...")
+                summary = _run_async(run_sweep_once())
+                update_job_status_sync(
+                    JOB_KEY, "completed", progress=100, message=summary, last_completed=datetime.now(timezone.utc)
+                )
+            except Exception as exc:
+                logger.error("AI Workflows Scheduler sweep error: %s", exc, exc_info=True)
+                update_job_status_sync(JOB_KEY, "failed", progress=0, message="Sweep failed", error=str(exc)[:512])
+
+    update_job_status_sync(JOB_KEY, "idle", progress=0, message="Stopped")

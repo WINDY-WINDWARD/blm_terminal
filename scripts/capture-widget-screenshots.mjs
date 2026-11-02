@@ -235,6 +235,95 @@ async function waitForWidgetReady(page, command) {
   console.warn(`  ${command} still reported a loading state after 30 s. Capturing anyway.`);
 }
 
+// Documentation seed for the AI launch screen. A fresh account has no saved prompts, so
+// the MY PROMPTS section shows only the empty tile and the pagination footer never
+// renders. These rows are deleted right after capture.
+const SEED_CUSTOM_PROMPTS = [
+  {
+    title: 'Pre-market gap scan',
+    tag: 'GAPS',
+    description: 'Flag watchlist names gapping over 2% before the open.',
+    prompt:
+      'Scan my watchlist for gaps above 2% versus the previous close. For each name, state the gap direction, the catalyst if one exists, and whether the gap holds above the previous day high.',
+  },
+  {
+    title: 'Result-day playbook',
+    tag: 'EARNINGS',
+    description: 'Map the reaction, guidance tone, and follow-through risk.',
+    prompt:
+      'Summarise the latest result for this symbol: revenue and margin direction, guidance tone, and the one line that changes the thesis. Then state the follow-through risk over the next five sessions.',
+  },
+  {
+    title: 'FII and DII flow digest',
+    tag: 'FLOWS',
+    description: "Read the day's institutional flows against sector moves.",
+    prompt:
+      'Report today FII and DII cash flows, then compare them against sector performance. Name the sectors where flows and price disagree.',
+  },
+  {
+    title: 'Breakout watch',
+    tag: 'TECHNICAL',
+    description: 'Rank names pressing 52-week highs on volume expansion.',
+    prompt:
+      'List watchlist names within 3% of a 52-week high with volume above the 20-day average. Rank them by volume expansion and note the nearest support level.',
+  },
+  {
+    title: 'Peer valuation check',
+    tag: 'VALUATION',
+    description: 'Compare a symbol against its sector on P/E, ROE, and growth.',
+    prompt:
+      'Compare this symbol with three sector peers on P/E, ROE, and five-year sales growth. State whether the current premium or discount is justified.',
+  },
+];
+
+async function seedCustomPrompts(page) {
+  return page.evaluate(async (prompts) => {
+    const created = [];
+    for (const prompt of prompts) {
+      const res = await fetch('/api/py/ai/prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...prompt, mode: 'research' }),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (typeof data?.id === 'number') created.push(data.id);
+    }
+    return created;
+  }, SEED_CUSTOM_PROMPTS);
+}
+
+async function clearCustomPrompts(page, promptIds) {
+  if (promptIds.length === 0) return;
+  await page
+    .evaluate(async (ids) => {
+      for (const id of ids) {
+        await fetch(`/api/py/ai/prompts/${id}`, { method: 'DELETE' });
+      }
+    }, promptIds)
+    .catch(() => undefined);
+}
+
+// The AI widget covers itself with a 4 s disclaimer on mount and restores the last
+// session, so the docs shot must wait the overlay out and open a fresh chat to show
+// the launch screen (system prompts + saved prompts).
+async function prepareAiWidget(page) {
+  await page
+    .locator('[data-testid="ai-disclaimer"]')
+    .waitFor({ state: 'detached', timeout: 12_000 })
+    .catch(() => undefined);
+
+  const newChat = page.locator('[data-testid="ai-new-chat"]');
+  if ((await newChat.count()) > 0) {
+    await newChat.first().click().catch(() => undefined);
+  }
+
+  await page
+    .locator('[data-testid="ai-launch-screen"]')
+    .waitFor({ state: 'visible', timeout: 15_000 })
+    .catch(() => console.warn('  AI launch screen did not appear. Capturing the current view.'));
+}
+
 async function main() {
   const only = parseOnlyArgument();
   const targets = only ? WIDGET_COMMANDS.filter((command) => only.has(command)) : WIDGET_COMMANDS;
@@ -257,6 +346,7 @@ async function main() {
   let page;
   let original = null;
   let seededPaperTrades = [];
+  let seededPrompts = [];
   try {
     await waitForPort(CDP_PORT, 90_000);
     browser = await chromium.connectOverCDP(CDP_URL);
@@ -310,6 +400,13 @@ async function main() {
         }
       }
 
+      if (command === 'AI' && process.env.BLM_SCREENSHOT_SEED_PROMPTS === '1') {
+        seededPrompts = await seedCustomPrompts(page);
+        if (seededPrompts.length === 0) {
+          console.warn('  AI prompt seeding created no prompts.');
+        }
+      }
+
       await page.evaluate(
         ({ key, value }) => window.localStorage.setItem(key, value),
         {
@@ -321,6 +418,7 @@ async function main() {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await waitForTerminal(page);
       await waitForWidgetReady(page, command);
+      if (command === 'AI') await prepareAiWidget(page);
       await page.waitForTimeout(SETTLE_MS);
       await hideTourOverlays(page);
 
@@ -337,6 +435,11 @@ async function main() {
       if (command === 'POS' && seededPaperTrades.length > 0) {
         await clearPaperTrades(page, seededPaperTrades);
         seededPaperTrades = [];
+      }
+
+      if (command === 'AI' && seededPrompts.length > 0) {
+        await clearCustomPrompts(page, seededPrompts);
+        seededPrompts = [];
       }
     }
 
@@ -362,6 +465,9 @@ async function main() {
         '',
         'POS needs `$env:BLM_SCREENSHOT_SEED_POS="1"` to seed three paper trades for the capture.',
         'The script deletes those trades after the screenshot.',
+        '',
+        'AI needs `$env:BLM_SCREENSHOT_SEED_PROMPTS="1"` to seed five saved prompts so the',
+        'MY PROMPTS grid and its pagination footer render. The script deletes them afterwards.',
         '',
       ].join('\n'),
       'utf-8',

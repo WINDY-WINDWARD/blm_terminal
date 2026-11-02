@@ -114,24 +114,6 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   alerts: { key: 'alerts', label: 'ALERTS', textAlign: 'center', defaultSort: 'desc' },
 };
 
-// Pane-width visibility. The widget lives in a resizable panel, so these use
-// container queries rather than the desktop window breakpoints.
-const COLUMN_VISIBILITY: Partial<Record<SortColumn, string>> = {
-  momentum: 'hidden @3xl:table-cell',
-  '3m': 'hidden @3xl:table-cell',
-  '6m': 'hidden @3xl:table-cell',
-  '1y': 'hidden @3xl:table-cell',
-  msfv: 'hidden @3xl:table-cell',
-  results: 'hidden @2xl:table-cell',
-  '1w': 'hidden @lg:table-cell',
-  '1m': 'hidden @md:table-cell',
-  '2y': 'hidden @4xl:table-cell',
-  '3y': 'hidden @4xl:table-cell',
-  '5y': 'hidden @4xl:table-cell',
-  '52wh': 'hidden @4xl:table-cell',
-  '52wl': 'hidden @4xl:table-cell',
-};
-
 function formatResultsDate(dateStr: string): string {
   const match = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
   if (!match) return dateStr;
@@ -329,7 +311,7 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
   return (
     <tr
       onClick={() => onRowClick(item)}
-      className={`border-b border-[#27272a]/70 hover:bg-zinc-900/60 cursor-pointer transition-colors ${
+      className={`group border-b border-[#27272a]/70 hover:bg-zinc-900/60 cursor-pointer transition-colors ${
         isActive ? 'bg-terminal-amber/5 border-l-2 border-l-terminal-amber' : ''
       }`}
     >
@@ -346,7 +328,11 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
           ✕
         </button>
       </td>
-      <td className="p-1.5 border-r border-[#27272a]/50 text-terminal-amber font-bold whitespace-nowrap">
+      <td
+        className={`sticky left-0 z-[5] p-1.5 border-r border-[#27272a]/50 text-terminal-amber font-bold whitespace-nowrap shadow-[inset_-1px_0_0_#27272a] ${
+          isActive ? 'bg-[#141208]' : 'bg-[#0a0a0a] group-hover:bg-[#111114]'
+        }`}
+      >
         <span>{item.symbol}</span>
         <span className="text-zinc-400 text-[9px] bg-zinc-800/80 px-1 py-0.5 rounded ml-1.5 font-normal tracking-wide">{item.exchange}</span>
       </td>
@@ -355,7 +341,7 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
         return (
           <td
             key={col}
-            className={`p-1.5 border-r border-[#27272a]/50 ${isCenter ? 'text-center' : 'text-right'} ${COLUMN_VISIBILITY[col as SortColumn] ?? ''}`}
+            className={`p-1.5 border-r border-[#27272a]/50 whitespace-nowrap ${isCenter ? 'text-center' : 'text-right'}`}
           >
             {renderCell(col)}
           </td>
@@ -1295,12 +1281,14 @@ export function WatchWidget() {
       )}
 
       {/* Watchlist table */}
-      <div className="flex-1 overflow-auto bg-[#0a0a0a]">
+      {/* Columns never hide. The table grows past the pane and this wrapper
+          scrolls, so a narrow pane keeps every column readable. */}
+      <div className="flex-1 min-h-0 overflow-auto bg-[#0a0a0a]">
         {isLoading && <div className="p-3 text-terminal-amber animate-pulse">LOADING WATCHLIST...</div>}
         {isError && <div className="p-3 text-terminal-red font-bold">FAILED TO LOAD WATCHLIST</div>}
         {!isLoading && !isError && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+          <div>
+            <table className="w-max min-w-full text-left border-collapse">
               <thead data-widget-tour="watch-table-header" className="bg-[#121216] text-zinc-400 font-mono text-[11px] uppercase tracking-wider sticky top-0 z-10 border-b border-[#27272a]">
                 <tr>
                   <th className="p-1.5 border-r border-[#27272a]/60 w-7 text-center">✕</th>
@@ -1308,7 +1296,7 @@ export function WatchWidget() {
                     onClick={() => handleHeaderClick('symbol')}
                     aria-sort={sortColumn === 'symbol' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
                     data-column-key="symbol"
-                    className="p-1.5 border-r border-[#27272a]/60 cursor-pointer hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none"
+                    className="sticky left-0 z-30 p-1.5 border-r border-[#27272a]/60 bg-[#121216] shadow-[inset_-1px_0_0_#27272a] cursor-pointer hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none"
                   >
                     SYMBOL{getSortIndicator('symbol')}
                   </th>
@@ -1327,7 +1315,7 @@ export function WatchWidget() {
                         data-column-key={col}
                         data-widget-tour={colConfig?.label === 'ALERTS' ? 'watch-alerts-cell' : undefined}
                         title="Drag to reorder; click to sort"
-                        className={`relative p-1.5 border-r border-[#27272a]/60 cursor-grab active:cursor-grabbing hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none ${COLUMN_VISIBILITY[col as SortColumn] ?? ''} ${
+                        className={`relative p-1.5 border-r border-[#27272a]/60 cursor-grab active:cursor-grabbing hover:text-terminal-amber hover:bg-[#18181d] transition-colors whitespace-nowrap select-none ${
                           draggedColumn === col ? 'opacity-40' : ''
                         } ${
                           colConfig?.textAlign === 'right' ? 'text-right' : 'text-center'

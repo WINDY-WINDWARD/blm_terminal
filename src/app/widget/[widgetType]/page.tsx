@@ -125,7 +125,7 @@ export default function PopoutWidgetPage({ params }: { params: Promise<{ widgetT
       </div>
 
       {/* Widget Content */}
-      <div className="flex-1 min-h-0 relative overflow-hidden select-text">
+      <div className="@container flex-1 min-h-0 min-w-0 relative overflow-hidden select-text">
         {/* originPanelId keeps per-panel state (e.g. chart symbol overrides)
             shared between the home panel and its popout. */}
         <WidgetRenderer title={widgetTitle} panelId={panelId} symbolOverride={searchParams.get('symbol') || undefined} />

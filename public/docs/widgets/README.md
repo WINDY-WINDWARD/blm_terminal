@@ -14,3 +14,6 @@ configured, so its DOCS page is text only.
 
 POS needs `$env:BLM_SCREENSHOT_SEED_POS="1"` to seed three paper trades for the capture.
 The script deletes those trades after the screenshot.
+
+AI needs `$env:BLM_SCREENSHOT_SEED_PROMPTS="1"` to seed five saved prompts so the
+MY PROMPTS grid and its pagination footer render. The script deletes them afterwards.

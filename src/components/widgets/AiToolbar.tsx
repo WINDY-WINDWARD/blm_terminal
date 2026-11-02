@@ -6,11 +6,17 @@ import type { ModelOption } from '@/types/aiWidgetTypes';
 import type { RouteModelCatalogResponse } from '@/types/aiRoutes';
 import { AiModelDropdown } from '@/components/widgets/AiModelDropdown';
 import { modeKnobClass, modeTrackClass } from '@/types/aiWidgetTypes';
+import { formatIst } from '@/lib/aiWorkflowTime';
 
 export interface AiToolbarProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   sessionCount: number;
+  workflowsOpen: boolean;
+  onToggleWorkflows: () => void;
+  armedWorkflows: number;
+  unreadRuns: number;
+  nextRunAt: string | null;
   model: string;
   defaultModel: string;
   onModelChange: (model: string) => void;
@@ -33,6 +39,11 @@ export function AiToolbar({
   sidebarOpen,
   onToggleSidebar,
   sessionCount,
+  workflowsOpen,
+  onToggleWorkflows,
+  armedWorkflows,
+  unreadRuns,
+  nextRunAt,
   model,
   defaultModel,
   onModelChange,
@@ -72,6 +83,32 @@ export function AiToolbar({
           {sessionCount > 0 && (
             <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1 py-0.2 rounded font-mono">
               {sessionCount}
+            </span>
+          )}
+        </button>
+
+        {/* Workflows Pill Button */}
+        <button
+          onClick={onToggleWorkflows}
+          data-widget-tour="ai-workflows"
+          className={cn(
+            'flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-mono transition-colors',
+            workflowsOpen
+              ? 'bg-terminal-amber/15 border-terminal-amber/50 text-terminal-amber font-bold'
+              : 'bg-[#121216] border-[#27272a] text-zinc-300 hover:border-amber-400/40 hover:text-white',
+          )}
+          title={nextRunAt ? `Next run ${formatIst(nextRunAt)}` : 'Scheduled workflows'}
+        >
+          <span className="text-terminal-amber">⏱</span>
+          <span className="text-[11px] font-medium">Workflows</span>
+          {armedWorkflows > 0 && (
+            <span className="text-[10px] bg-zinc-800 text-zinc-300 px-1 py-0.2 rounded font-mono">
+              {armedWorkflows}
+            </span>
+          )}
+          {unreadRuns > 0 && (
+            <span className="text-[9px] bg-terminal-amber text-black px-1 rounded font-mono font-bold">
+              {unreadRuns > 9 ? '9+' : unreadRuns}
             </span>
           )}
         </button>
@@ -147,6 +184,7 @@ export function AiToolbar({
         {/* New Chat Button */}
         <button
           onClick={onNewChat}
+          data-testid="ai-new-chat"
           className="px-2.5 py-1 rounded bg-[#121216] border border-[#27272a] hover:border-amber-400 hover:text-terminal-amber text-zinc-200 text-xs font-mono font-semibold transition-colors"
           title="Create new scratch session"
         >

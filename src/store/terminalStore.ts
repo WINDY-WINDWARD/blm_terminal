@@ -392,6 +392,11 @@ export const moversColumnOrderAtom = atomWithStorage<string[]>(
 /** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
 export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec');
 
+// ─── AI Chat ─────────────────────────────────────────────────────────────────
+
+/** Last model picked in the AI widget. Reused for new chats and after a restart. */
+export const aiChatModelAtom = atomWithStorage<string>('terminal.aiChatModel', '');
+
 // ─── Ticker Bar ──────────────────────────────────────────────────────────────
 
 /** Ticker source preference. Values: 'default' | 'top' | 'watchlist:<id>' */

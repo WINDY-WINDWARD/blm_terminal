@@ -754,7 +754,7 @@ export function MoversWidget() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+          <div className="min-h-0 flex-1 overflow-auto">
             <table data-testid="movers-matrix-table" className="w-full border-collapse text-left font-mono tabular-nums">
               <thead
                 data-widget-tour="movers-matrix-columns"
