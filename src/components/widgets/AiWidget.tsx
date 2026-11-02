@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   activeExchangeAtom,
   activeSymbolAtom,
+  aiChatModelAtom,
   showSettingsModalAtom,
   settingsModalTabAtom,
 } from '@/store/terminalStore';
@@ -96,6 +97,8 @@ export function AiWidget() {
   const setSettingsModalTab = useSetAtom(settingsModalTabAtom);
   const symbol = useAtomValue(activeSymbolAtom);
   const exchange = useAtomValue(activeExchangeAtom);
+  const rememberedModel = useAtomValue(aiChatModelAtom);
+  const setRememberedModel = useSetAtom(aiChatModelAtom);
 
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -170,6 +173,16 @@ export function AiWidget() {
   const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research', documents } = currentSession;
   const sessionDocuments = documents ?? [];
 
+  // Restore the last model the user picked. Runs once the catalog is known, so a
+  // retired model id falls back to the catalog default instead of sticking.
+  useEffect(() => {
+    if (!rememberedModel) return;
+    if (!availableModels.some((m) => m.id === rememberedModel)) return;
+    if (model === rememberedModel) return;
+    if (messages.length > 0 || isStreaming) return;
+    patchSession(activeKey, { model: rememberedModel });
+  }, [rememberedModel, availableModels, model, messages.length, isStreaming, activeKey, patchSession]);
+
   const {
     libraryDocuments,
     uploadJobs,
@@ -225,18 +238,27 @@ export function AiWidget() {
   const { data: workflowSummary } = useWorkflowSummary();
   const { data: workflowsData, isLoading: workflowsLoading } = useWorkflowList();
 
+  const [workflowsOpen, setWorkflowsOpen] = useState(false);
+  const [workflowModal, setWorkflowModal] = useState<{
+    open: boolean;
+    workflow: Workflow | null;
+  }>({ open: false, workflow: null });
+
   const [activeRunBanner, setActiveRunBanner] = useState<{
     name: string;
     trigger: string;
     scheduledFor: string;
+    note?: string;
   } | null>(null);
 
   const handleOpenRun = useCallback(
     (run: WorkflowRun) => {
+      setWorkflowsOpen(false);
       setActiveRunBanner({
         name: run.name_snapshot || 'Workflow',
         trigger: run.trigger,
         scheduledFor: run.scheduled_for,
+        note: run.session_id ? undefined : 'No transcript yet',
       });
       if (run.session_id) {
         void loadSession(run.session_id);
@@ -288,12 +310,6 @@ export function AiWidget() {
     },
     [deletePrompt],
   );
-
-  const [workflowsOpen, setWorkflowsOpen] = useState(false);
-  const [workflowModal, setWorkflowModal] = useState<{
-    open: boolean;
-    workflow: Workflow | null;
-  }>({ open: false, workflow: null });
 
   const handleAskCopilot = useCallback(
     (description: string) => {
@@ -512,7 +528,10 @@ Then confirm what you created in one sentence.`;
           nextRunAt={workflowSummary?.next_run_at ?? null}
           model={model}
           defaultModel={defaultModel}
-          onModelChange={(newModel) => patchSession(activeKey, { model: newModel })}
+          onModelChange={(newModel) => {
+            setRememberedModel(newModel);
+            patchSession(activeKey, { model: newModel });
+          }}
           isStreaming={isStreaming}
           availableModels={availableModels}
           catalogData={catalogData}
@@ -533,10 +552,13 @@ Then confirm what you created in one sentence.`;
 
         {/* Workflow Run Banner */}
         {activeRunBanner && (
-          <div className="px-3 py-1.5 bg-[#12100a] border-b border-terminal-amber/30 flex items-center gap-2 text-[10px] font-mono shrink-0">
+          <div className="px-3 py-1.5 bg-[#12100a] border-b border-terminal-amber/30 flex items-center gap-2 text-[10px] font-mono shrink-0 select-text">
             <span className="text-terminal-amber">⏱</span>
             <span className="text-zinc-200 font-bold truncate">{activeRunBanner.name}</span>
             <span className="text-zinc-500 uppercase">{activeRunBanner.trigger}</span>
+            {activeRunBanner.note && (
+              <span className="text-zinc-500 lowercase">({activeRunBanner.note})</span>
+            )}
             <button
               type="button"
               onClick={() => setActiveRunBanner(null)}
@@ -549,7 +571,7 @@ Then confirm what you created in one sentence.`;
         )}
 
         {/* Scrollable Message List / Empty State */}
-        <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3 min-h-0 custom-scroll">
+        <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3 min-h-0 custom-scroll select-text">
           {messages.length === 0 ? (
             <EmptyChatState
               sessionMode={sessionMode}
@@ -623,6 +645,11 @@ Then confirm what you created in one sentence.`;
           onRemoveDocument={(id) => void removeSessionDocument(id)}
           onUploadFile={uploadFile}
           inputRef={inputRef}
+          readOnly={Boolean(activeRunBanner)}
+          onContinue={() => {
+            setActiveRunBanner(null);
+            startNewChat('research');
+          }}
         />
       </div>
 

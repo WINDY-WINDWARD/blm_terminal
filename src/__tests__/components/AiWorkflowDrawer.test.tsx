@@ -153,9 +153,52 @@ describe('AiWorkflowDrawer', () => {
     expect(props.onCreateWorkflow).toHaveBeenCalledTimes(1);
   });
 
-  it('asks the parent to edit a workflow from the row actions', () => {
+  it('renders a status chip instead of OPEN when session_id is null', async () => {
+    server.use(
+      http.get('/api/py/ai/workflow-runs', () =>
+        HttpResponse.json({
+          items: [makeRun({ id: 21, session_id: null, status: 'queued' })],
+          total: 1,
+          limit: 20,
+          offset: 0,
+          has_more: false,
+        }),
+      ),
+    );
+
+    renderDrawer();
+    fireEvent.click(await screen.findByText('INBOX (1)'));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'OPEN' })).not.toBeInTheDocument();
+    });
+
+    const chip = screen.getByText('QUEUED');
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute('title', 'This run has not produced a transcript yet.');
+  });
+
+  it('renders OPEN when session_id is a number and calls onOpenRun when clicked', async () => {
+    server.use(
+      http.get('/api/py/ai/workflow-runs', () =>
+        HttpResponse.json({
+          items: [makeRun({ id: 22, session_id: 123, status: 'succeeded' })],
+          total: 1,
+          limit: 20,
+          offset: 0,
+          has_more: false,
+        }),
+      ),
+    );
     const props = renderDrawer();
-    fireEvent.click(screen.getByTitle('Edit'));
-    expect(props.onEditWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+
+    fireEvent.click(await screen.findByText('INBOX (1)'));
+
+    const openBtn = await screen.findByRole('button', { name: 'OPEN' });
+    fireEvent.click(openBtn);
+
+    expect(props.onOpenRun).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 22, session_id: 123 }),
+    );
   });
 });

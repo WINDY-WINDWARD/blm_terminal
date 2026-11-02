@@ -136,7 +136,7 @@ export function AiWorkflowDrawer({
       </div>
 
       {/* Body */}
-      <div className="overflow-y-auto custom-scroll flex-1 p-2">
+      <div className="overflow-y-auto custom-scroll flex-1 p-2 select-text">
         {tab === 'scheduled' ? (
           /* SCHEDULED TAB */
           <div className="flex flex-col gap-1.5">
@@ -352,18 +352,31 @@ export function AiWorkflowDrawer({
                     )}
 
                     <div className="flex items-center justify-end pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!run.is_read) {
-                            markRunRead.mutate(run.id);
-                          }
-                          onOpenRun(run);
-                        }}
-                        className="text-[10px] font-mono px-2 py-0.5 border border-[#27272a] hover:border-terminal-amber hover:text-terminal-amber rounded text-zinc-300 transition-colors"
-                      >
-                        OPEN
-                      </button>
+                      {run.session_id ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!run.is_read) {
+                              markRunRead.mutate(run.id);
+                            }
+                            onOpenRun(run);
+                          }}
+                          className="text-[10px] font-mono px-2 py-0.5 border border-[#27272a] hover:border-terminal-amber hover:text-terminal-amber rounded text-zinc-300 transition-colors"
+                        >
+                          OPEN
+                        </button>
+                      ) : (
+                        <span
+                          title="This run has not produced a transcript yet."
+                          className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 select-none"
+                        >
+                          {run.status === 'queued'
+                            ? 'QUEUED'
+                            : run.status === 'running'
+                              ? 'RUNNING'
+                              : 'NO TRANSCRIPT'}
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
