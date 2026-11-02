@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
+import time
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,41 @@ SWEEP_SECONDS = 30
 # A slot that is only slightly late is normal scheduling jitter, not a miss.
 # Slots older than this are handled by catch_up_missed instead of enqueue_due_runs.
 CATCH_UP_GRACE_SECONDS = 120
+# A run needs the local provider proxy to be serving. A run that starts during
+# app warm-up can reach the model with an empty upstream and return no text.
+PROVIDER_WARMUP_SECONDS = 75
+PROVIDER_WAIT_TIMEOUT_SECONDS = 180
+_MODULE_STARTED_AT = time.monotonic()
+
+
+def provider_warmup_remaining() -> float:
+    """Return seconds left before workflow runs may start after backend boot."""
+    return max(0.0, PROVIDER_WARMUP_SECONDS - (time.monotonic() - _MODULE_STARTED_AT))
+
+
+def provider_stack_ready() -> bool:
+    """Return True when the local provider proxy can serve a request."""
+    try:
+        from app.services.proxy_supervisor import get_proxy_supervisor
+
+        supervisor = get_proxy_supervisor()
+    except Exception:
+        # A direct route has no proxy. Treat an unknown stack as ready.
+        return True
+    if supervisor is None:
+        return True
+    return supervisor.is_running
+
+
+async def wait_for_provider_stack(timeout: float = PROVIDER_WAIT_TIMEOUT_SECONDS) -> bool:
+    """Wait until the provider proxy is serving, or the timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if provider_warmup_remaining() <= 0 and provider_stack_ready():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(2.0)
 
 
 async def recover_stale_runs(now_utc: datetime) -> int:
@@ -270,6 +306,10 @@ async def enqueue_due_runs(now_utc: datetime) -> int:
 
 async def execute_pending() -> int:
     """Execute up to 5 queued runs sequentially and schedule retries on failure."""
+    if provider_warmup_remaining() > 0 or not provider_stack_ready():
+        # Leave the runs queued. The next sweep retries once the stack is up.
+        return 0
+
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     executed_count = 0
 
@@ -364,6 +404,14 @@ async def _execute_and_maybe_retry(
 
 async def execute_run(run_id: int) -> str:
     """Execute one queued run now instead of waiting for the next sweep."""
+    if not await wait_for_provider_stack():
+        logger.info(
+            "Run %d left queued: the provider stack was not ready within %d seconds",
+            run_id,
+            PROVIDER_WAIT_TIMEOUT_SECONDS,
+        )
+        return "skipped:provider-not-ready"
+
     async with AsyncSessionLocal() as db:
         stmt = select(AiWorkflowRun).where(
             AiWorkflowRun.id == run_id,

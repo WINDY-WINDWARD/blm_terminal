@@ -81,6 +81,11 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
         if not run or not workflow:
             return f"error:Run {run_id} or workflow {workflow_id} not found"
 
+        # Accumulate the answer and the tool calls, so the run transcript shows
+        # the same detail as a normal chat.
+        full_content = ""
+        tool_calls_seen: list[str] = []
+
         try:
             # 2. Resolve the model: pinned model, then the hunter model, then the
             #    first model the active route actually serves.
@@ -175,7 +180,6 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
                 return allowed_events + denied_events, combined_msgs
 
             # 6. Call stream_chat_completion
-            full_content = ""
             async for chunk in stream_chat_completion(
                 messages=messages,
                 model=model,
@@ -190,17 +194,30 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
                 evt = json.loads(chunk)
                 if evt.get("type") == "token":
                     full_content += evt.get("text", "")
+                elif evt.get("type") == "tool_call":
+                    name = evt.get("name") or ""
+                    if name:
+                        tool_calls_seen.append(name)
                 elif evt.get("type") == "error":
                     err_class = evt.get("error_class", "")
                     msg = evt.get("message", "API error")
                     err_prefix = f" [{err_class}]" if err_class else ""
                     raise RuntimeError(f"AI provider error{err_prefix}: {msg}")
 
+            # A stream that ends without text means the provider stack was not
+            # ready. Fail the run instead of reporting "No findings" with an
+            # empty transcript.
+            if not full_content.strip():
+                raise RuntimeError(
+                    "AI provider returned an empty response. The provider may still be starting."
+                )
+
             # 7. Persist assistant text as ChatMessageRecord row
             assistant_msg = ChatMessageRecord(
                 session_id=session.id,
                 role="assistant",
                 content=full_content,
+                tool_calls_json=json.dumps(tool_calls_seen) if tool_calls_seen else None,
             )
             db.add(assistant_msg)
 
@@ -256,6 +273,9 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
                                 session_id=run.session_id,
                                 role="assistant",
                                 content=f"⚠ {err_text}",
+                                tool_calls_json=(
+                                    json.dumps(tool_calls_seen) if tool_calls_seen else None
+                                ),
                             )
                         )
                 except Exception as msg_err:

@@ -264,6 +264,7 @@ async def test_workflow_runner_success_writes_user_before_assistant(runner_db, m
             msgs = (await inner_session.execute(stmt)).scalars().all()
             messages_during_stream.extend([(m.role, m.content) for m in msgs])
 
+        yield json.dumps({"type": "tool_call", "name": "get_watchlist_symbols", "args": "{}"})
         yield json.dumps({"type": "token", "text": "Market is "})
         yield json.dumps({"type": "token", "text": "bullish today."})
 
@@ -300,6 +301,71 @@ async def test_workflow_runner_success_writes_user_before_assistant(runner_db, m
         assert messages[0].content == "Generate market overview"
         assert messages[1].role == "assistant"
         assert messages[1].content == "Market is bullish today."
+        assert json.loads(messages[1].tool_calls_json or "[]") == ["get_watchlist_symbols"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_runner_empty_stream_is_a_failure(runner_db, monkeypatch):
+    """A stream that yields no text fails the run instead of reporting "No findings"."""
+    async with runner_db.session_factory() as session:
+        wf = AiWorkflow(
+            user_id=1,
+            name="Empty Stream Workflow",
+            prompt="Summarise the market",
+            schedule_type="manual",
+            cron_expression="0 0 * * *",
+            model=None,
+            is_enabled=True,
+        )
+        session.add(wf)
+        await session.commit()
+        await session.refresh(wf)
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        run = AiWorkflowRun(
+            workflow_id=wf.id,
+            user_id=1,
+            trigger="manual",
+            scheduled_for=now,
+            slot_key="manual-test-run-empty",
+            status="queued",
+            prompt_snapshot=wf.prompt,
+            name_snapshot=wf.name,
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+
+        wf_id = wf.id
+        run_id = run.id
+
+    async def fake_stream_empty(*args, **kwargs):
+        # This is what a half-started provider returns: a clean end, no text.
+        yield json.dumps({"type": "done"})
+
+    monkeypatch.setattr(runner_mod, "stream_chat_completion", fake_stream_empty)
+
+    res = await runner_mod.run_workflow(wf_id, run_id)
+    assert res.startswith("error:")
+    assert "empty response" in res
+
+    async with runner_db.session_factory() as session:
+        run_row = await session.get(AiWorkflowRun, run_id)
+        assert run_row is not None
+        assert run_row.status == "failed"
+        assert "empty response" in (run_row.error or "")
+        assert run_row.output_text in (None, "")
+
+        stmt = (
+            select(ChatMessageRecord)
+            .where(ChatMessageRecord.session_id == run_row.session_id)
+            .order_by(ChatMessageRecord.id.asc())
+        )
+        messages = (await session.execute(stmt)).scalars().all()
+        assert len(messages) == 2
+        assert messages[0].role == "user"
+        assert messages[1].role == "assistant"
+        assert messages[1].content.startswith("⚠ ")
 
 
 @pytest.mark.asyncio

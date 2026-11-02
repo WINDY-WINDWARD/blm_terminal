@@ -237,3 +237,48 @@ async def test_catch_up_single_missed_slot_disabled_catch_up_skips_run(session_f
         assert wf is not None
         assert wf.next_run_at == datetime(2026, 11, 2, 4, 30)
 
+
+@pytest.mark.asyncio
+async def test_execute_pending_waits_for_warmup(monkeypatch):
+    """Queued runs stay queued while the provider stack is still warming up."""
+    executed: list[tuple] = []
+
+    async def _fake_execute(*args, **kwargs):
+        executed.append(args)
+        return "ok"
+
+    monkeypatch.setattr(sched, "provider_warmup_remaining", lambda: 30.0)
+    monkeypatch.setattr(sched, "provider_stack_ready", lambda: True)
+    monkeypatch.setattr(sched, "_execute_and_maybe_retry", _fake_execute)
+
+    assert await sched.execute_pending() == 0
+    assert executed == []
+
+
+@pytest.mark.asyncio
+async def test_execute_pending_waits_for_provider_proxy(monkeypatch):
+    """A stopped provider proxy parks the queue instead of failing every run."""
+    executed: list[tuple] = []
+
+    async def _fake_execute(*args, **kwargs):
+        executed.append(args)
+        return "ok"
+
+    monkeypatch.setattr(sched, "provider_warmup_remaining", lambda: 0.0)
+    monkeypatch.setattr(sched, "provider_stack_ready", lambda: False)
+    monkeypatch.setattr(sched, "_execute_and_maybe_retry", _fake_execute)
+
+    assert await sched.execute_pending() == 0
+    assert executed == []
+
+
+@pytest.mark.asyncio
+async def test_execute_run_leaves_run_queued_when_provider_never_ready(monkeypatch):
+    """A manual run is not started against a provider stack that never comes up."""
+
+    async def _not_ready(timeout=sched.PROVIDER_WAIT_TIMEOUT_SECONDS):
+        return False
+
+    monkeypatch.setattr(sched, "wait_for_provider_stack", _not_ready)
+
+    assert await sched.execute_run(4242) == "skipped:provider-not-ready"
