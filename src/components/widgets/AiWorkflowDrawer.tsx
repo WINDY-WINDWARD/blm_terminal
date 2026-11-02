@@ -142,6 +142,13 @@ export function AiWorkflowDrawer({
         {tab === 'scheduled' ? (
           /* SCHEDULED TAB */
           <div className="flex flex-col gap-1.5">
+            {toggleWorkflow.isError && (
+              <div className="px-1 py-1 text-[10px] font-mono text-red-400 border border-red-900/60 rounded bg-red-950/30">
+                {toggleWorkflow.error instanceof Error
+                  ? toggleWorkflow.error.message
+                  : 'Failed to change the workflow state.'}
+              </div>
+            )}
             {loading && workflows.length === 0 ? (
               <div className="p-4 text-center text-zinc-500 font-mono text-xs">
                 Loading workflows…
@@ -158,10 +165,17 @@ export function AiWorkflowDrawer({
                 const isExpanded = expandedId === wf.id;
                 const lastRun = displayRuns.find((r) => r.workflow_id === wf.id);
                 const lastFailed = lastRun?.status === 'failed';
+                const isToggling =
+                  toggleWorkflow.isPending && toggleWorkflow.variables?.id === wf.id;
+                // Reflect a just-finished toggle immediately, before the list refetches.
+                const isEnabled =
+                  toggleWorkflow.data?.id === wf.id
+                    ? toggleWorkflow.data.is_enabled
+                    : wf.is_enabled;
 
                 const dotColor = lastFailed
                   ? 'bg-red-500'
-                  : wf.is_enabled
+                  : isEnabled
                     ? 'bg-emerald-400'
                     : 'bg-zinc-500';
 
@@ -179,13 +193,21 @@ export function AiWorkflowDrawer({
                     <div className="flex items-center gap-1.5">
                       <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotColor)} />
                       <span
-                        className="text-xs font-mono text-zinc-200 truncate flex-1 font-medium"
+                        className={cn(
+                          'text-xs font-mono truncate flex-1 font-medium',
+                          isEnabled ? 'text-zinc-200' : 'text-zinc-500',
+                        )}
                         title={wf.name}
                       >
                         {wf.name}
                       </span>
+                      {!isEnabled && (
+                        <span className="shrink-0 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400">
+                          Paused
+                        </span>
+                      )}
                       {/* Hover actions */}
-                      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity shrink-0">
+                      <div className="opacity-60 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity shrink-0">
                         <button
                           type="button"
                           onClick={(e) => {
@@ -203,13 +225,21 @@ export function AiWorkflowDrawer({
                             e.stopPropagation();
                             toggleWorkflow.mutate({
                               id: wf.id,
-                              is_enabled: !wf.is_enabled,
+                              is_enabled: !isEnabled,
                             });
                           }}
-                          title={wf.is_enabled ? 'Pause' : 'Resume'}
-                          className="w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-[10px]"
+                          disabled={isToggling}
+                          aria-pressed={!isEnabled}
+                          title={isEnabled ? 'Pause scheduled runs' : 'Resume scheduled runs'}
+                          className={cn(
+                            'w-5 h-5 flex items-center justify-center rounded hover:bg-zinc-800 text-[10px] transition-colors',
+                            isEnabled
+                              ? 'text-zinc-400 hover:text-terminal-amber'
+                              : 'text-terminal-amber',
+                            isToggling && 'opacity-50 animate-pulse',
+                          )}
                         >
-                          {wf.is_enabled ? '⏸' : '▶'}
+                          {isToggling ? '···' : isEnabled ? '⏸' : '▶'}
                         </button>
                         <button
                           type="button"
@@ -240,6 +270,9 @@ export function AiWorkflowDrawer({
                     <div className="text-[10px] font-mono text-zinc-500 truncate mt-0.5 pl-3">
                       {wf.schedule_label}
                       {wf.catch_up_enabled && ` · catch-up ${wf.catch_up_window_hours}h`}
+                      {!isEnabled && (
+                        <span className="text-terminal-amber"> · paused, will not run</span>
+                      )}
                     </div>
 
                     {/* Expanded details */}

@@ -141,10 +141,13 @@ describe('AiWorkflowDrawer', () => {
     );
 
     renderDrawer();
-    fireEvent.click(screen.getByTitle('Pause'));
+    fireEvent.click(screen.getByTitle('Pause scheduled runs'));
 
     await waitFor(() => expect(patchedBody).not.toBeNull());
     expect(patchedBody).toEqual(expect.objectContaining({ is_enabled: false }));
+    // The row must show that the workflow is paused.
+    await waitFor(() => expect(screen.getByText('Paused')).toBeInTheDocument());
+    expect(screen.getByText(/paused, will not run/)).toBeInTheDocument();
   });
 
   it('asks the parent to create a workflow from the header', () => {
