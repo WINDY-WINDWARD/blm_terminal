@@ -120,6 +120,12 @@ export function AiWidget() {
     aiAuthStatus,
   } = useAiModels();
 
+  // The remembered model is the boot default for every new session, so the
+  // choice survives an app restart even when no session is restored.
+  const bootModel = availableModels.some((m) => m.id === rememberedModel)
+    ? rememberedModel
+    : defaultModel;
+
   const {
     sessionMap,
     setSessionMap,
@@ -127,7 +133,7 @@ export function AiWidget() {
     setActiveKey,
     hasSentRef,
     patchSession,
-  } = useAiSessionPersistence(defaultModel);
+  } = useAiSessionPersistence(bootModel);
 
   const { data: sessions = [], refetch: refetchSessions } = useQuery<SessionSummary[]>({
     queryKey: ['ai-chat-sessions'],
@@ -173,15 +179,13 @@ export function AiWidget() {
   const { messages, isStreaming, toolsDone, input, model, mode: sessionMode = 'research', documents } = currentSession;
   const sessionDocuments = documents ?? [];
 
-  // Restore the last model the user picked. Runs once the catalog is known, so a
-  // retired model id falls back to the catalog default instead of sticking.
+  // Drop a retired model id from storage so it cannot return on the next launch.
   useEffect(() => {
+    if (availableModels.length === 0) return;
     if (!rememberedModel) return;
-    if (!availableModels.some((m) => m.id === rememberedModel)) return;
-    if (model === rememberedModel) return;
-    if (messages.length > 0 || isStreaming) return;
-    patchSession(activeKey, { model: rememberedModel });
-  }, [rememberedModel, availableModels, model, messages.length, isStreaming, activeKey, patchSession]);
+    if (availableModels.some((m) => m.id === rememberedModel)) return;
+    setRememberedModel(defaultModel);
+  }, [availableModels, rememberedModel, defaultModel, setRememberedModel]);
 
   const {
     libraryDocuments,

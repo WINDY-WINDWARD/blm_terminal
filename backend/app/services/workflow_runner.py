@@ -9,15 +9,15 @@ import logging
 from typing import Any
 import zoneinfo
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.database import AsyncSessionLocal
 from app.models.ai_chat import ChatMessageRecord, ChatSession
 from app.models.ai_workflow import AiWorkflow, AiWorkflowRun
 from app.services.ai_chat_service import BLM_TOOLS, _run_tools_parallel
+from app.services.ai_config import resolve_workflow_model
 from app.services.llm_provider import stream_chat_completion
 from app.services.prompts import UNATTENDED_RUN_PROMPT
-from app.services.route_registry import map_legacy_model_to_route, resolve_active_route_id
 
 logger = logging.getLogger(__name__)
 
@@ -63,25 +63,28 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
     started_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     async with AsyncSessionLocal() as db:
-        run = await db.get(AiWorkflowRun, run_id)
         workflow = await db.get(AiWorkflow, workflow_id)
+
+        # 1. Claim the run atomically. The sweep and a manual trigger must never
+        #    execute the same row twice.
+        claim = await db.execute(
+            update(AiWorkflowRun)
+            .where(AiWorkflowRun.id == run_id, AiWorkflowRun.status == "queued")
+            .values(status="running", started_at=started_at)
+        )
+        await db.commit()
+        if claim.rowcount == 0:
+            logger.info("Run %d was already claimed; skipping", run_id)
+            return "skipped:already-claimed"
+
+        run = await db.get(AiWorkflowRun, run_id, populate_existing=True)
         if not run or not workflow:
             return f"error:Run {run_id} or workflow {workflow_id} not found"
 
-        # 1. Load run and workflow. Set status "running", started_at, commit.
-        run.status = "running"
-        run.started_at = started_at
-        await db.commit()
-
         try:
-            # 2. Resolve model and create a ChatSession
-            try:
-                route_id = await resolve_active_route_id(db)
-                model = map_legacy_model_to_route(workflow.model or "", route_id, preserve_qualified=True)
-            except Exception as res_err:
-                logger.warning("Model resolution failed for workflow %d: %s; falling back to direct:aistudio", workflow_id, res_err)
-                route_id = "direct:aistudio"
-                model = map_legacy_model_to_route("", route_id, preserve_qualified=True)
+            # 2. Resolve the model: pinned model, then the hunter model, then the
+            #    first model the active route actually serves.
+            model = await resolve_workflow_model(workflow.model, db)
 
             today = datetime.now(zoneinfo.ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
             name_label = run.name_snapshot or workflow.name

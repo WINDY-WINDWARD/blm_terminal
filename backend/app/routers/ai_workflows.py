@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,7 +34,7 @@ from app.services.workflow_schedule import (
     next_runs,
     validate_cron,
 )
-from app.workers.workflow_scheduler import catch_up_missed, enqueue_due_runs
+from app.workers.workflow_scheduler import catch_up_missed, enqueue_due_runs, execute_run
 
 router = APIRouter(prefix="/ai", tags=["ai-workflows"])
 
@@ -414,23 +414,35 @@ async def delete_workflow(
 @router.post("/workflows/{workflow_id}/run", response_model=RunOut)
 async def run_workflow_manual(
     workflow_id: int,
+    background_tasks: BackgroundTasks,
     user_id: int = Depends(current_user_dep),
     db: AsyncSession = Depends(get_db),
 ) -> RunOut:
     wf = await _get_owned(db, AiWorkflow, workflow_id, user_id)
 
-    # 409 when a queued or running run exists
-    active_check = await db.execute(
-        select(AiWorkflowRun).where(
-            AiWorkflowRun.workflow_id == wf.id,
-            AiWorkflowRun.status.in_(["queued", "running"]),
+    active = (
+        await db.execute(
+            select(AiWorkflowRun)
+            .where(
+                AiWorkflowRun.workflow_id == wf.id,
+                AiWorkflowRun.status.in_(["queued", "running"]),
+            )
+            .order_by(AiWorkflowRun.id.desc())
         )
-    )
-    if active_check.scalars().first() is not None:
+    ).scalars().first()
+
+    # A run that is genuinely executing still blocks a duplicate.
+    if active is not None and active.status == "running":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already queued or running for this workflow",
         )
+
+    # A queued run (for example a stale retry) is executed now instead of
+    # rejecting the request. The claim inside the runner prevents a double run.
+    if active is not None:
+        background_tasks.add_task(execute_run, active.id)
+        return RunOut.model_validate(active)
 
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     slot_k = f"{wf.id}:manual:{int(now_utc.timestamp())}"
@@ -448,6 +460,7 @@ async def run_workflow_manual(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+    background_tasks.add_task(execute_run, run.id)
     return RunOut.model_validate(run)
 
 

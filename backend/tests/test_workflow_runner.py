@@ -35,6 +35,11 @@ def _scratch_dir() -> Path:
     return path
 
 
+async def _fake_resolve_model(workflow_model, session=None):
+    """Keep the runner tests offline. Model resolution has its own test below."""
+    return "blm:direct:aistudio/gemini-2.5-flash"
+
+
 @pytest.fixture
 async def runner_db(monkeypatch):
     scratch = _scratch_dir()
@@ -48,6 +53,9 @@ async def runner_db(monkeypatch):
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
     monkeypatch.setattr("app.database.AsyncSessionLocal", session_factory)
     monkeypatch.setattr("app.services.workflow_runner.AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(
+        "app.services.workflow_runner.resolve_workflow_model", _fake_resolve_model
+    )
 
     async with session_factory() as session:
         session.add(User(id=1, username="alice", hashed_password="x", is_admin=False))
@@ -104,7 +112,7 @@ async def test_workflow_runner_failure_at_model_resolution(runner_db, monkeypatc
             trigger="manual",
             scheduled_for=now,
             slot_key="manual-test-run-fail-res",
-            status="pending",
+            status="queued",
             prompt_snapshot=wf.prompt,
             name_snapshot=wf.name,
         )
@@ -170,7 +178,7 @@ async def test_workflow_runner_failure_leaves_evidence(runner_db, monkeypatch):
             trigger="manual",
             scheduled_for=now,
             slot_key="manual-test-run-1",
-            status="pending",
+            status="queued",
             prompt_snapshot=wf.prompt,
             name_snapshot=wf.name,
         )
@@ -236,7 +244,7 @@ async def test_workflow_runner_success_writes_user_before_assistant(runner_db, m
             trigger="manual",
             scheduled_for=now,
             slot_key="manual-test-run-2",
-            status="pending",
+            status="queued",
             prompt_snapshot=wf.prompt,
             name_snapshot=wf.name,
         )
@@ -292,3 +300,37 @@ async def test_workflow_runner_success_writes_user_before_assistant(runner_db, m
         assert messages[0].content == "Generate market overview"
         assert messages[1].role == "assistant"
         assert messages[1].content == "Market is bullish today."
+
+
+@pytest.mark.asyncio
+async def test_resolve_workflow_model_prefers_pin_then_hunter(monkeypatch):
+    """An empty pin uses the hunter model and a retired pin falls back to it."""
+    import app.services.ai_config as ai_config
+    import app.services.route_catalog as route_catalog
+
+    async def _catalog(route_id, session=None):
+        return ["gemini-3-flash", "gemini-3.8-flash-high"]
+
+    async def _hunter():
+        return "blm:oauth:antigravity/gemini-3.8-flash-high"
+
+    async def _route(session=None):
+        return "oauth:antigravity"
+
+    monkeypatch.setattr(route_catalog, "get_route_models", _catalog)
+    monkeypatch.setattr(ai_config, "get_configured_hunter_model", _hunter)
+    monkeypatch.setattr(ai_config, "resolve_active_route_id", _route)
+
+    assert (
+        await ai_config.resolve_workflow_model(None)
+        == "blm:oauth:antigravity/gemini-3.8-flash-high"
+    )
+    assert (
+        await ai_config.resolve_workflow_model("gemini-3-flash")
+        == "blm:oauth:antigravity/gemini-3-flash"
+    )
+    # Retired id: not in the catalog, so the hunter model is used instead.
+    assert (
+        await ai_config.resolve_workflow_model("gemini-3.8-flash-low")
+        == "blm:oauth:antigravity/gemini-3.8-flash-high"
+    )

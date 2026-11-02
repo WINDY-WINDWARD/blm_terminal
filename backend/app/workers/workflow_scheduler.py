@@ -287,37 +287,102 @@ async def execute_pending() -> int:
         run_items = [(r.id, r.workflow_id, r.attempt, r.trigger, r.name_snapshot, r.prompt_snapshot, r.user_id) for r in pending_runs]
 
     for run_id, workflow_id, attempt, trigger, name_snapshot, prompt_snapshot, user_id in run_items:
-        outcome = await run_workflow(workflow_id, run_id)
+        await _execute_and_maybe_retry(
+            run_id, workflow_id, attempt, trigger, name_snapshot, prompt_snapshot, user_id
+        )
         executed_count += 1
 
-        if outcome.startswith("error:"):
-            async with AsyncSessionLocal() as db:
-                wf = await db.get(AiWorkflow, workflow_id)
-                # After a failure with attempt < 3 and workflow.allow_write_tools False, insert one queued retry run
-                if wf and not wf.allow_write_tools and attempt < 3:
-                    retry_now = datetime.now(timezone.utc).replace(tzinfo=None)
-                    delay_mins = [5, 15, 30][attempt]
-                    retry_scheduled_for = retry_now + timedelta(minutes=delay_mins)
-                    retry_slot_key = f"{workflow_id}:retry{attempt + 1}:{int(retry_now.timestamp())}"
-
-                    retry_run = AiWorkflowRun(
-                        workflow_id=workflow_id,
-                        user_id=user_id,
-                        trigger=trigger,
-                        status="queued",
-                        attempt=attempt + 1,
-                        scheduled_for=retry_scheduled_for,
-                        slot_key=retry_slot_key,
-                        name_snapshot=name_snapshot,
-                        prompt_snapshot=prompt_snapshot,
-                    )
-                    db.add(retry_run)
-                    try:
-                        await db.commit()
-                    except IntegrityError:
-                        await db.rollback()
-
     return executed_count
+
+
+# A single retry is enough for a transient failure. A configuration error such
+# as an unknown model never succeeds on a second attempt, so it is not retried.
+MAX_RETRY_ATTEMPTS = 1
+RETRY_DELAY_MINUTES = 5
+NON_RETRYABLE_MARKERS = (
+    "unavailable for its provider route",
+    "Refresh the model list",
+    "no api key",
+    "is not configured",
+)
+
+
+def is_retryable_failure(outcome: str) -> bool:
+    """Return True when a failed run is worth another automatic attempt."""
+    if not outcome.startswith("error:"):
+        return False
+    lowered = outcome.lower()
+    return not any(marker.lower() in lowered for marker in NON_RETRYABLE_MARKERS)
+
+
+async def _execute_and_maybe_retry(
+    run_id: int,
+    workflow_id: int,
+    attempt: int,
+    trigger: str,
+    name_snapshot: str | None,
+    prompt_snapshot: str | None,
+    user_id: int,
+) -> str:
+    """Execute one claimed run and queue a single retry for transient failures."""
+    outcome = await run_workflow(workflow_id, run_id)
+
+    if not is_retryable_failure(outcome) or attempt >= MAX_RETRY_ATTEMPTS:
+        return outcome
+
+    async with AsyncSessionLocal() as db:
+        wf = await db.get(AiWorkflow, workflow_id)
+        if not wf or wf.allow_write_tools:
+            return outcome
+
+        retry_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        retry_run = AiWorkflowRun(
+            workflow_id=workflow_id,
+            user_id=user_id,
+            trigger="retry",
+            status="queued",
+            attempt=attempt + 1,
+            scheduled_for=retry_now + timedelta(minutes=RETRY_DELAY_MINUTES),
+            slot_key=f"{workflow_id}:retry{attempt + 1}:{int(retry_now.timestamp())}",
+            name_snapshot=name_snapshot,
+            prompt_snapshot=prompt_snapshot,
+        )
+        db.add(retry_run)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+
+    logger.info(
+        "Run %d failed with a transient error (trigger=%s); retry queued in %d minutes",
+        run_id,
+        trigger,
+        RETRY_DELAY_MINUTES,
+    )
+    return outcome
+
+
+async def execute_run(run_id: int) -> str:
+    """Execute one queued run now instead of waiting for the next sweep."""
+    async with AsyncSessionLocal() as db:
+        stmt = select(AiWorkflowRun).where(
+            AiWorkflowRun.id == run_id,
+            AiWorkflowRun.status == "queued",
+        )
+        run = (await db.execute(stmt)).scalars().first()
+        if run is None:
+            return "skipped:not-queued"
+        args = (
+            run.id,
+            run.workflow_id,
+            run.attempt,
+            run.trigger,
+            run.name_snapshot,
+            run.prompt_snapshot,
+            run.user_id,
+        )
+
+    return await _execute_and_maybe_retry(*args)
 
 
 async def run_sweep_once() -> str:
@@ -345,9 +410,10 @@ def workflow_scheduler_worker() -> None:
         _sleep_interruptible,
     )
     from app.jobs.runner import update_job_status_sync
-    from app.workers.lifecycle import _startup_pipeline_done
 
-    _startup_pipeline_done.wait()
+    # Workflows read live data through their own tools and need no startup
+    # pipeline output. Waiting for that event parked the queue for minutes after
+    # every launch, so manual runs sat in "queued" with nothing to execute them.
     logger.info("AI Workflows Scheduler daemon started.")
 
     try:

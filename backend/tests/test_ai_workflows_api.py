@@ -218,8 +218,14 @@ async def test_workflows_pagination_and_summary(api_env):
 
 
 @pytest.mark.asyncio
-async def test_workflow_runs_and_read_endpoints(api_env):
+async def test_workflow_runs_and_read_endpoints(api_env, monkeypatch):
     _set_user(api_env, 1)
+
+    # The endpoint schedules the run on the event loop. Keep the test offline.
+    async def _noop_execute(run_id: int) -> str:
+        return "skipped:test"
+
+    monkeypatch.setattr("app.routers.ai_workflows.execute_run", _noop_execute)
 
     wf_resp = await api_env.client.post(
         "/api/ai/workflows",
@@ -241,9 +247,11 @@ async def test_workflow_runs_and_read_endpoints(api_env):
     assert run_data["trigger"] == "manual"
     assert run_data["is_read"] is False
 
-    # Trigger again immediately -> 409 Conflict
-    conflict_resp = await api_env.client.post(f"/api/ai/workflows/{wf_id}/run")
-    assert conflict_resp.status_code == 409
+    # A queued run is now executed instead of rejected, so a second trigger
+    # returns the same run rather than a 409.
+    again_resp = await api_env.client.post(f"/api/ai/workflows/{wf_id}/run")
+    assert again_resp.status_code == 200
+    assert again_resp.json()["id"] == run_id
 
     # List runs
     runs_list_resp = await api_env.client.get("/api/ai/workflow-runs")
