@@ -15,7 +15,7 @@ import type {
 } from '@/types/aiWorkflowTypes';
 import type { ModelOption } from '@/types/aiWidgetTypes';
 import { AiPromptTextEditor } from '@/components/widgets/AiPromptTextEditor';
-import { formatIst } from '@/lib/aiWorkflowTime';
+import { formatIst, toDateTimeLocalValue } from '@/lib/aiWorkflowTime';
 
 export interface AiWorkflowEditorProps {
   workflow?: Workflow | null;
@@ -84,11 +84,7 @@ export function AiWorkflowEditor({
   );
   const [onceAt, setOnceAt] = useState<string>(() => {
     if (workflow?.schedule_type === 'once' && workflow.next_run_at) {
-      try {
-        return new Date(workflow.next_run_at).toISOString().slice(0, 16);
-      } catch {
-        return getDefaultOnceAt();
-      }
+      return toDateTimeLocalValue(workflow.next_run_at) || getDefaultOnceAt();
     }
     return getDefaultOnceAt();
   });
@@ -202,7 +198,7 @@ export function AiWorkflowEditor({
           name: trimmedName,
           prompt: trimmedPrompt,
           schedule_type: scheduleType,
-          time_of_day: ['daily', 'weekdays', 'weekly'].includes(scheduleType)
+          time_of_day: ['daily', 'weekdays', 'weekly', 'hourly'].includes(scheduleType)
             ? timeOfDay
             : null,
           days_of_week: scheduleType === 'weekly' ? daysOfWeek : null,
@@ -223,7 +219,7 @@ export function AiWorkflowEditor({
           name: trimmedName,
           prompt: trimmedPrompt,
           schedule_type: scheduleType,
-          time_of_day: ['daily', 'weekdays', 'weekly'].includes(scheduleType)
+          time_of_day: ['daily', 'weekdays', 'weekly', 'hourly'].includes(scheduleType)
             ? timeOfDay
             : null,
           days_of_week: scheduleType === 'weekly' ? daysOfWeek : null,

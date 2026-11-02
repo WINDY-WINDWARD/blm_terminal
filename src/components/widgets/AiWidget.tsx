@@ -499,6 +499,7 @@ Then confirm what you created in one sentence.`;
             activeKey={activeKey}
             streamingKeys={streamingKeys}
             onSelectSession={(id) => {
+              setActiveRunBanner(null);
               void loadSession(id);
               setSidebarOpen(false);
             }}
@@ -658,7 +659,7 @@ Then confirm what you created in one sentence.`;
         open={workflowsOpen}
         onClose={() => setWorkflowsOpen(false)}
         workflows={workflowsData?.items ?? []}
-        runs={[]}
+        unreadRuns={workflowSummary?.unread ?? 0}
         loading={workflowsLoading}
         runsLoading={false}
         onOpenRun={handleOpenRun}

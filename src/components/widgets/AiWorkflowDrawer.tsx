@@ -17,7 +17,8 @@ export interface AiWorkflowDrawerProps {
   open: boolean;
   onClose: () => void;
   workflows: Workflow[];
-  runs: WorkflowRun[];
+  runs?: WorkflowRun[];
+  unreadRuns?: number;
   loading: boolean;
   runsLoading: boolean;
   onOpenRun: (run: WorkflowRun) => void;
@@ -64,7 +65,8 @@ export function AiWorkflowDrawer({
   open,
   onClose,
   workflows,
-  runs,
+  runs = [],
+  unreadRuns,
   loading,
   runsLoading,
   onOpenRun,
@@ -90,7 +92,7 @@ export function AiWorkflowDrawer({
 
   const displayRuns = pagedRunsData?.items ?? runs;
   const isRunsLoading = runsLoading || pagedRunsLoading;
-  const unreadRunsCount = displayRuns.filter((r) => !r.is_read).length;
+  const unreadRunsCount = unreadRuns ?? displayRuns.filter((r) => !r.is_read).length;
   const hasMoreRuns = pagedRunsData ? pagedRunsData.has_more : runs.length >= runsLimit;
 
   return (

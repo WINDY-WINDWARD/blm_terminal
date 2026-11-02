@@ -31,6 +31,16 @@ export function parseUtc(iso: string | null | undefined): Date | null {
 }
 
 /**
+ * Returns YYYY-MM-DDTHH:mm representation of a timestamp in UTC for datetime-local inputs.
+ * Returns '' for empty or unparseable input.
+ */
+export function toDateTimeLocalValue(raw: string | null | undefined): string {
+  const date = parseUtc(raw);
+  if (!date) return '';
+  return date.toISOString().slice(0, 16);
+}
+
+/**
  * Formats a timestamp into 'Mon 10:00' in Asia/Kolkata timezone.
  */
 export function formatIst(iso: string | null | undefined): string {
