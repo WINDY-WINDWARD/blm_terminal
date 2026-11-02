@@ -9,12 +9,15 @@ import logging
 from typing import Any
 import zoneinfo
 
+from sqlalchemy import select
+
 from app.database import AsyncSessionLocal
 from app.models.ai_chat import ChatMessageRecord, ChatSession
 from app.models.ai_workflow import AiWorkflow, AiWorkflowRun
 from app.services.ai_chat_service import BLM_TOOLS, _run_tools_parallel
 from app.services.llm_provider import stream_chat_completion
 from app.services.prompts import UNATTENDED_RUN_PROMPT
+from app.services.route_registry import map_legacy_model_to_route, resolve_active_route_id
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,15 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
         await db.commit()
 
         try:
-            # 2. Create a ChatSession
+            # 2. Resolve model and create a ChatSession
+            try:
+                route_id = await resolve_active_route_id(db)
+                model = map_legacy_model_to_route(workflow.model or "", route_id, preserve_qualified=True)
+            except Exception as res_err:
+                logger.warning("Model resolution failed for workflow %d: %s; falling back to direct:aistudio", workflow_id, res_err)
+                route_id = "direct:aistudio"
+                model = map_legacy_model_to_route("", route_id, preserve_qualified=True)
+
             today = datetime.now(zoneinfo.ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
             name_label = run.name_snapshot or workflow.name
             session_title = f"[Workflow] {name_label} · {today} IST"
@@ -87,16 +98,24 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
             session = ChatSession(
                 user_id=run.user_id,
                 title=session_title,
-                model=workflow.model or "minimax-m2-5-free",
+                model=model,
                 symbol=first_sym,
                 exchange="NSE",
             )
             db.add(session)
-            await db.commit()
-            await db.refresh(session)
+            await db.flush()
 
             run.session_id = session.id
+
+            user_content = run.prompt_snapshot or workflow.prompt
+            user_msg = ChatMessageRecord(
+                session_id=session.id,
+                role="user",
+                content=user_content,
+            )
+            db.add(user_msg)
             await db.commit()
+            await db.refresh(session)
 
             # 3. System prompt = UNATTENDED_RUN_PROMPT + newline + name, symbols, and watchlist scope
             scope_parts = [f"Workflow: {workflow.name}"]
@@ -156,7 +175,7 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
             full_content = ""
             async for chunk in stream_chat_completion(
                 messages=messages,
-                model=workflow.model or "minimax-m2-5-free",
+                model=model,
                 tools=allowed_tool_schemas(workflow.allow_write_tools),
                 tool_executor=executor,
                 system_prompt=system_prompt,
@@ -174,18 +193,12 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
                     err_prefix = f" [{err_class}]" if err_class else ""
                     raise RuntimeError(f"AI provider error{err_prefix}: {msg}")
 
-            # 7. Persist user prompt and assistant text as ChatMessageRecord rows
-            user_msg = ChatMessageRecord(
-                session_id=session.id,
-                role="user",
-                content=user_content,
-            )
+            # 7. Persist assistant text as ChatMessageRecord row
             assistant_msg = ChatMessageRecord(
                 session_id=session.id,
                 role="assistant",
                 content=full_content,
             )
-            db.add(user_msg)
             db.add(assistant_msg)
 
             # 8. Check if output strips to [SILENT]
@@ -219,11 +232,32 @@ async def _execute_workflow_run(workflow_id: int, run_id: int) -> str:
             logger.error("Workflow run %d failed: %s", run_id, exc, exc_info=True)
             finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            err_text = str(exc)[:2000]
             run.status = "failed"
             run.finished_at = finished_at
             run.duration_ms = max(0, duration_ms)
-            run.error = str(exc)[:2000]
+            run.error = err_text
             workflow.last_run_at = finished_at
+
+            # Ensure session exists and failure assistant message is recorded
+            if run.session_id:
+                try:
+                    stmt = select(ChatMessageRecord).where(
+                        ChatMessageRecord.session_id == run.session_id,
+                        ChatMessageRecord.role == "assistant",
+                    )
+                    existing_assistant = (await db.execute(stmt)).scalars().first()
+                    if not existing_assistant:
+                        db.add(
+                            ChatMessageRecord(
+                                session_id=run.session_id,
+                                role="assistant",
+                                content=f"⚠ {err_text}",
+                            )
+                        )
+                except Exception as msg_err:
+                    logger.warning("Failed to record error chat message for run %d: %s", run_id, msg_err)
+
             await db.commit()
             return f"error:{str(exc)[:500]}"
 
@@ -238,12 +272,31 @@ async def run_workflow(workflow_id: int, run_id: int) -> str:
             run = await db.get(AiWorkflowRun, run_id)
             wf = await db.get(AiWorkflow, workflow_id)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            err_msg = "Workflow run timed out after 900 seconds"
             if run:
                 run.status = "failed"
                 run.finished_at = now
                 if run.started_at:
                     run.duration_ms = max(0, int((now - run.started_at).total_seconds() * 1000))
-                run.error = "Workflow run timed out after 900 seconds"
+                run.error = err_msg
+
+                if run.session_id:
+                    try:
+                        stmt = select(ChatMessageRecord).where(
+                            ChatMessageRecord.session_id == run.session_id,
+                            ChatMessageRecord.role == "assistant",
+                        )
+                        existing_assistant = (await db.execute(stmt)).scalars().first()
+                        if not existing_assistant:
+                            db.add(
+                                ChatMessageRecord(
+                                    session_id=run.session_id,
+                                    role="assistant",
+                                    content=f"⚠ {err_msg}",
+                                )
+                            )
+                    except Exception as msg_err:
+                        logger.warning("Failed to record timeout chat message for run %d: %s", run_id, msg_err)
             if wf:
                 wf.last_run_at = now
             await db.commit()

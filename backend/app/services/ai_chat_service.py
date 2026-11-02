@@ -1129,6 +1129,36 @@ BLM_TOOLS_ANTHROPIC: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_tool_args(name: str, fn: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """Drop arguments the tool function does not declare.
+
+    Models sometimes add decoration keys the schema never declared, such as a
+    "reason" string or a bare "_". Passing them straight through raised
+    TypeError, so every call to that tool failed. Ignore the extras instead.
+    """
+    if not isinstance(args, dict):
+        return {}
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return args
+    params = sig.parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return args
+    allowed = {
+        p.name
+        for p in params.values()
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    dropped = sorted(set(args) - allowed)
+    if dropped:
+        logger.warning(
+            "Tool %s dropped unexpected arguments: %s", name, ", ".join(dropped)
+        )
+    return {k: v for k, v in args.items() if k in allowed}
+
+
 async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
     from app.mcp_server import (
         add_watchlist_item,
@@ -1259,7 +1289,7 @@ async def _execute_tool(name: str, args: dict[str, Any]) -> Any:
     fn = dispatch.get(name)
     if fn is None:
         raise ValueError(f"Unknown tool: {name}")
-    return await fn(**args)
+    return await fn(**_sanitize_tool_args(name, fn, args))
 
 
 def _truncate_tool_result(result: Any, max_chars: int = 8000) -> str:
