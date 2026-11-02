@@ -188,3 +188,52 @@ async def test_once_workflow_disables_itself_after_enqueue(session_factory):
         assert wf is not None
         assert wf.is_enabled is False
         assert wf.next_run_at is None
+
+
+async def test_catch_up_single_missed_slot_inside_window_enqueues_run(session_factory):
+    wf_id = await _add_workflow(
+        session_factory,
+        catch_up_enabled=True,
+        catch_up_window_hours=12,
+        next_run_at=datetime(2026, 11, 1, 4, 30),
+    )
+
+    created = await sched.catch_up_missed(datetime(2026, 11, 1, 6, 0))
+    assert created == 1
+
+    runs = await _runs(session_factory, wf_id)
+    assert len(runs) == 1
+    assert runs[0].trigger == "catch_up"
+    assert runs[0].status == "queued"
+    assert runs[0].skip_reason is None
+    assert runs[0].scheduled_for == datetime(2026, 11, 1, 4, 30)
+
+    async with session_factory() as session:
+        wf = await session.get(AiWorkflow, wf_id)
+        assert wf is not None
+        assert wf.next_run_at == datetime(2026, 11, 2, 4, 30)
+
+
+async def test_catch_up_single_missed_slot_disabled_catch_up_skips_run(session_factory):
+    wf_id = await _add_workflow(
+        session_factory,
+        catch_up_enabled=False,
+        catch_up_window_hours=12,
+        next_run_at=datetime(2026, 11, 1, 4, 30),
+    )
+
+    created = await sched.catch_up_missed(datetime(2026, 11, 1, 6, 0))
+    assert created == 1
+
+    runs = await _runs(session_factory, wf_id)
+    assert len(runs) == 1
+    assert runs[0].trigger == "catch_up"
+    assert runs[0].status == "skipped"
+    assert runs[0].skip_reason == "missed_window"
+    assert runs[0].scheduled_for == datetime(2026, 11, 1, 4, 30)
+
+    async with session_factory() as session:
+        wf = await session.get(AiWorkflow, wf_id)
+        assert wf is not None
+        assert wf.next_run_at == datetime(2026, 11, 2, 4, 30)
+

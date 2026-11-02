@@ -294,6 +294,14 @@ async def get_workflows_summary(
     )
 
 
+def _parse_days_of_week(raw: str | None) -> list[int] | None:
+    if not raw:
+        return None
+    segments = [s.strip() for s in raw.split(",")]
+    digits = [int(s) for s in segments if s.isdigit()]
+    return digits if digits else None
+
+
 @router.patch("/workflows/{workflow_id}", response_model=WorkflowOut)
 async def update_workflow(
     workflow_id: int,
@@ -328,8 +336,9 @@ async def update_workflow(
         wf.allow_write_tools = update_data["allow_write_tools"]
     if "catch_up_enabled" in update_data:
         wf.catch_up_enabled = update_data["catch_up_enabled"]
-    if "catch_up_window_hours" in update_data:
-        wf.catch_up_window_hours = update_data["catch_up_window_hours"]
+    window = update_data.get("catch_up_window_hours")
+    if window is not None:
+        wf.catch_up_window_hours = window
     if "is_enabled" in update_data:
         wf.is_enabled = update_data["is_enabled"]
 
@@ -343,7 +352,7 @@ async def update_workflow(
         dow_arg = dow
     else:
         new_days_of_week = wf.days_of_week
-        dow_arg = [int(x) for x in wf.days_of_week.split(",")] if wf.days_of_week else None
+        dow_arg = _parse_days_of_week(wf.days_of_week)
 
     if schedule_changed or enabled_flipped_on:
         if new_schedule_type == "custom":

@@ -354,3 +354,61 @@ async def test_custom_prompts_crud_and_used(api_env):
 
     get_after = await api_env.client.patch(f"/api/ai/prompts/{p1_id}", json={"title": "Test"})
     assert get_after.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_workflow_patch_null_catch_up_window_keeps_previous_value(api_env):
+    _set_user(api_env, 1)
+
+    create_payload = {
+        "name": "Catchup Window Test",
+        "prompt": "Test prompt",
+        "schedule_type": "daily",
+        "time_of_day": "09:15",
+        "catch_up_enabled": True,
+        "catch_up_window_hours": 8,
+    }
+    resp = await api_env.client.post("/api/ai/workflows", json=create_payload)
+    assert resp.status_code == 201, resp.text
+    wf = resp.json()
+    wf_id = wf["id"]
+    assert wf["catch_up_window_hours"] == 8
+
+    patch_payload = {
+        "catch_up_enabled": False,
+        "catch_up_window_hours": None,
+    }
+    patch_resp = await api_env.client.patch(f"/api/ai/workflows/{wf_id}", json=patch_payload)
+    assert patch_resp.status_code == 200, patch_resp.text
+    patched = patch_resp.json()
+    assert patched["catch_up_enabled"] is False
+    assert patched["catch_up_window_hours"] == 8
+
+
+@pytest.mark.asyncio
+async def test_workflow_patch_defensive_days_of_week(api_env):
+    _set_user(api_env, 1)
+
+    async with api_env.session_factory() as session:
+        wf = AiWorkflow(
+            user_id=1,
+            name="Malformed DOW",
+            prompt="Prompt",
+            schedule_type="weekly",
+            cron_expression="0 10 * * 1",
+            timezone="Asia/Kolkata",
+            time_of_day="10:00",
+            days_of_week="1, abc, 3",
+            is_enabled=True,
+            catch_up_enabled=True,
+            catch_up_window_hours=12,
+        )
+        session.add(wf)
+        await session.commit()
+        await session.refresh(wf)
+        wf_id = wf.id
+
+    resp = await api_env.client.patch(f"/api/ai/workflows/{wf_id}", json={"time_of_day": "11:00"})
+    assert resp.status_code == 200, resp.text
+
+

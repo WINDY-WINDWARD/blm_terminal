@@ -110,28 +110,28 @@ async def catch_up_missed(now_utc: datetime) -> int:
 
             if not subsequent:
                 lateness_hrs = (now_utc - wf.next_run_at).total_seconds() / 3600.0
-                if lateness_hrs > wf.catch_up_window_hours:
-                    skipped_run = AiWorkflowRun(
-                        workflow_id=wf.id,
-                        user_id=wf.user_id,
-                        trigger="catch_up",
-                        status="skipped",
-                        skip_reason="missed_window",
-                        scheduled_for=wf.next_run_at,
-                        slot_key=current_slot_k,
-                        name_snapshot=wf.name,
-                        prompt_snapshot=wf.prompt,
-                    )
-                    db.add(skipped_run)
-                    try:
-                        wf.next_run_at = next_run(wf.cron_expression, wf.timezone, now_utc)
-                    except Exception:
-                        pass
-                    try:
-                        await db.commit()
-                        count += 1
-                    except IntegrityError:
-                        await db.rollback()
+                catchable = wf.catch_up_enabled and lateness_hrs <= wf.catch_up_window_hours
+                run_record = AiWorkflowRun(
+                    workflow_id=wf.id,
+                    user_id=wf.user_id,
+                    trigger="catch_up",
+                    status="queued" if catchable else "skipped",
+                    skip_reason=None if catchable else "missed_window",
+                    scheduled_for=wf.next_run_at,
+                    slot_key=current_slot_k,
+                    name_snapshot=wf.name,
+                    prompt_snapshot=wf.prompt,
+                )
+                db.add(run_record)
+                try:
+                    wf.next_run_at = next_run(wf.cron_expression, wf.timezone, now_utc)
+                except Exception:
+                    pass
+                try:
+                    await db.commit()
+                    count += 1
+                except IntegrityError:
+                    await db.rollback()
                 continue
 
             all_slots = ([wf.next_run_at] + subsequent)[:50]
