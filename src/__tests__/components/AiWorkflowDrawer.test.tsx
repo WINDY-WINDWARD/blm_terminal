@@ -204,4 +204,31 @@ describe('AiWorkflowDrawer', () => {
       expect.objectContaining({ id: 22, session_id: 123 }),
     );
   });
+
+  it('explains why a run was skipped', async () => {
+    server.use(
+      http.get('/api/py/ai/workflow-runs', () =>
+        HttpResponse.json({
+          items: [
+            makeRun({
+              id: 23,
+              status: 'skipped',
+              skip_reason: 'still_running',
+              session_id: null,
+            }),
+          ],
+          total: 1,
+          limit: 20,
+          offset: 0,
+          has_more: false,
+        }),
+      ),
+    );
+
+    renderDrawer();
+    fireEvent.click(await screen.findByText('INBOX (1)'));
+
+    expect(await screen.findByText('SKIPPED')).toBeInTheDocument();
+    expect(screen.getByText(/the previous run was still running/)).toBeInTheDocument();
+  });
 });

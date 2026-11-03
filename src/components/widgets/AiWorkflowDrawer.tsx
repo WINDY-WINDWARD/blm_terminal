@@ -28,6 +28,14 @@ export interface AiWorkflowDrawerProps {
 
 type TabType = 'scheduled' | 'inbox';
 
+// Why a slot did not produce a run. The backend records one of these on
+// every skipped run, and an unexplained skip reads like a silent failure.
+const SKIP_REASON_LABELS: Record<string, string> = {
+  still_running: 'the previous run was still running',
+  missed_window: 'outside the catch-up window',
+  never_started: 'it never started',
+};
+
 function TabButton({
   active,
   onClick,
@@ -383,6 +391,15 @@ export function AiWorkflowDrawer({
                     {run.output_summary && (
                       <div className="text-xs font-mono text-zinc-300 line-clamp-2 mt-0.5 leading-relaxed">
                         {run.output_summary}
+                      </div>
+                    )}
+
+                    {run.status === 'skipped' && (
+                      <div className="mt-0.5 text-[10px] font-mono text-zinc-500">
+                        <span className="text-[9px] uppercase px-1 py-0.2 rounded bg-zinc-800 text-zinc-400">
+                          SKIPPED
+                        </span>{' '}
+                        {SKIP_REASON_LABELS[run.skip_reason ?? ''] ?? 'no reason recorded'}
                       </div>
                     )}
 

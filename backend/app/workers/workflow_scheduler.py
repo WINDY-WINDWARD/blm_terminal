@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import time
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.database import AsyncSessionLocal
@@ -34,8 +34,19 @@ def provider_warmup_remaining() -> float:
     return max(0.0, PROVIDER_WARMUP_SECONDS - (time.monotonic() - _MODULE_STARTED_AT))
 
 
-def provider_stack_ready() -> bool:
-    """Return True when the local provider proxy can serve a request."""
+async def ensure_provider_stack_ready(timeout: float = PROVIDER_WAIT_TIMEOUT_SECONDS) -> bool:
+    """Start the routed provider if it is not serving yet.
+
+    A scheduled run is often the first AI traffic after boot, so nothing has
+    started the proxy. Waiting for `is_running` alone deadlocks the queue: the
+    proxy only starts when an AI request arrives, and no request can arrive
+    while every run waits.
+    """
+    remaining = provider_warmup_remaining()
+    while remaining > 0:
+        await asyncio.sleep(min(2.0, remaining))
+        remaining = provider_warmup_remaining()
+
     try:
         from app.services.proxy_supervisor import get_proxy_supervisor
 
@@ -45,36 +56,60 @@ def provider_stack_ready() -> bool:
         return True
     if supervisor is None:
         return True
+
+    try:
+        from app.services.route_registry import resolve_active_route_id
+
+        route_id = await resolve_active_route_id()
+    except Exception:
+        route_id = ""
+    if not str(route_id).startswith("oauth:"):
+        # A direct route never uses the local proxy.
+        return True
+
+    if supervisor.is_running:
+        return True
+
+    try:
+        await asyncio.wait_for(supervisor.ensure_started(), timeout)
+    except Exception as exc:
+        logger.warning("Provider proxy did not start within %ss: %s", timeout, exc)
+        return False
     return supervisor.is_running
 
 
-async def wait_for_provider_stack(timeout: float = PROVIDER_WAIT_TIMEOUT_SECONDS) -> bool:
-    """Wait until the provider proxy is serving, or the timeout elapses."""
-    deadline = time.monotonic() + timeout
-    while True:
-        if provider_warmup_remaining() <= 0 and provider_stack_ready():
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        await asyncio.sleep(2.0)
-
-
 async def recover_stale_runs(now_utc: datetime) -> int:
-    """Recover runs stuck in 'running' state older than 20 minutes as 'failed'."""
-    cutoff = now_utc - timedelta(minutes=20)
+    """Recover runs that were claimed but died, or that never started at all."""
+    running_cutoff = now_utc - timedelta(minutes=20)
+    queued_cutoff = now_utc - timedelta(minutes=30)
     count = 0
     async with AsyncSessionLocal() as db:
         stmt = select(AiWorkflowRun).where(
-            AiWorkflowRun.status == "running",
-            AiWorkflowRun.started_at < cutoff,
+            or_(
+                and_(
+                    AiWorkflowRun.status == "running",
+                    AiWorkflowRun.started_at < running_cutoff,
+                ),
+                and_(
+                    AiWorkflowRun.status == "queued",
+                    func.coalesce(AiWorkflowRun.created_at, AiWorkflowRun.scheduled_for) < queued_cutoff,
+                ),
+            )
         )
         runs = (await db.execute(stmt)).scalars().all()
         for run in runs:
-            run.status = "failed"
-            run.error = "interrupted"
+            if run.status == "running":
+                run.status = "failed"
+                run.error = "interrupted"
+                if run.started_at:
+                    run.duration_ms = max(0, int((now_utc - run.started_at).total_seconds() * 1000))
+            else:
+                # A queued run that never started must not block its workflow
+                # forever. Record it as skipped so the next slot can run.
+                run.status = "skipped"
+                run.skip_reason = "never_started"
+                run.error = "never started"
             run.finished_at = now_utc
-            if run.started_at:
-                run.duration_ms = max(0, int((now_utc - run.started_at).total_seconds() * 1000))
             count += 1
         if count > 0:
             await db.commit()
@@ -255,7 +290,7 @@ async def enqueue_due_runs(now_utc: datetime) -> int:
             active_check = await db.execute(
                 select(AiWorkflowRun).where(
                     AiWorkflowRun.workflow_id == wf.id,
-                    AiWorkflowRun.status.in_(["queued", "running"]),
+                    AiWorkflowRun.status == "running",
                 )
             )
             is_active = active_check.scalars().first() is not None
@@ -306,7 +341,7 @@ async def enqueue_due_runs(now_utc: datetime) -> int:
 
 async def execute_pending() -> int:
     """Execute up to 5 queued runs sequentially and schedule retries on failure."""
-    if provider_warmup_remaining() > 0 or not provider_stack_ready():
+    if not await ensure_provider_stack_ready():
         # Leave the runs queued. The next sweep retries once the stack is up.
         return 0
 
@@ -404,7 +439,7 @@ async def _execute_and_maybe_retry(
 
 async def execute_run(run_id: int) -> str:
     """Execute one queued run now instead of waiting for the next sweep."""
-    if not await wait_for_provider_stack():
+    if not await ensure_provider_stack_ready():
         logger.info(
             "Run %d left queued: the provider stack was not ready within %d seconds",
             run_id,
