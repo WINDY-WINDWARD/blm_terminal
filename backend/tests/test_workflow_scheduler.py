@@ -239,37 +239,88 @@ async def test_catch_up_single_missed_slot_disabled_catch_up_skips_run(session_f
 
 
 @pytest.mark.asyncio
-async def test_execute_pending_waits_for_warmup(monkeypatch):
-    """Queued runs stay queued while the provider stack is still warming up."""
-    executed: list[tuple] = []
+async def test_execute_pending_leaves_queue_when_provider_never_starts(monkeypatch):
+    """A provider that will not come up parks the queue instead of failing runs."""
+
+    async def _not_ready(timeout=sched.PROVIDER_WAIT_TIMEOUT_SECONDS):
+        return False
 
     async def _fake_execute(*args, **kwargs):
-        executed.append(args)
-        return "ok"
+        raise AssertionError("no run should start while the provider is down")
 
-    monkeypatch.setattr(sched, "provider_warmup_remaining", lambda: 30.0)
-    monkeypatch.setattr(sched, "provider_stack_ready", lambda: True)
+    monkeypatch.setattr(sched, "ensure_provider_stack_ready", _not_ready)
     monkeypatch.setattr(sched, "_execute_and_maybe_retry", _fake_execute)
 
     assert await sched.execute_pending() == 0
-    assert executed == []
 
 
 @pytest.mark.asyncio
-async def test_execute_pending_waits_for_provider_proxy(monkeypatch):
-    """A stopped provider proxy parks the queue instead of failing every run."""
-    executed: list[tuple] = []
+async def test_ensure_provider_stack_ready_starts_a_stopped_proxy(monkeypatch):
+    """A scheduled run must start the proxy instead of waiting for a user request."""
+    from app.services import proxy_supervisor, route_registry
 
-    async def _fake_execute(*args, **kwargs):
-        executed.append(args)
-        return "ok"
+    calls = {"ensure": 0}
+
+    class _Supervisor:
+        is_running = False
+
+        async def ensure_started(self):
+            calls["ensure"] += 1
+            self.is_running = True
+
+    supervisor = _Supervisor()
+
+    async def _active_route():
+        return "oauth:antigravity"
 
     monkeypatch.setattr(sched, "provider_warmup_remaining", lambda: 0.0)
-    monkeypatch.setattr(sched, "provider_stack_ready", lambda: False)
-    monkeypatch.setattr(sched, "_execute_and_maybe_retry", _fake_execute)
+    monkeypatch.setattr(proxy_supervisor, "get_proxy_supervisor", lambda: supervisor)
+    monkeypatch.setattr(route_registry, "resolve_active_route_id", _active_route)
 
-    assert await sched.execute_pending() == 0
-    assert executed == []
+    assert await sched.ensure_provider_stack_ready(timeout=5) is True
+    assert calls["ensure"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_stack_ready_reports_timeout(monkeypatch):
+    """A proxy that fails to start returns False so the run stays queued."""
+    from app.services import proxy_supervisor, route_registry
+
+    class _Supervisor:
+        is_running = False
+
+        async def ensure_started(self):
+            raise RuntimeError("proxy missing")
+
+    async def _active_route():
+        return "oauth:antigravity"
+
+    monkeypatch.setattr(sched, "provider_warmup_remaining", lambda: 0.0)
+    monkeypatch.setattr(proxy_supervisor, "get_proxy_supervisor", lambda: _Supervisor())
+    monkeypatch.setattr(route_registry, "resolve_active_route_id", _active_route)
+
+    assert await sched.ensure_provider_stack_ready(timeout=1) is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_stack_ready_skips_the_proxy_for_direct_routes(monkeypatch):
+    """A direct route never needs the local proxy."""
+    from app.services import proxy_supervisor, route_registry
+
+    class _Supervisor:
+        is_running = False
+
+        async def ensure_started(self):
+            raise AssertionError("direct routes must not start the proxy")
+
+    async def _active_route():
+        return "direct:aistudio"
+
+    monkeypatch.setattr(sched, "provider_warmup_remaining", lambda: 0.0)
+    monkeypatch.setattr(proxy_supervisor, "get_proxy_supervisor", lambda: _Supervisor())
+    monkeypatch.setattr(route_registry, "resolve_active_route_id", _active_route)
+
+    assert await sched.ensure_provider_stack_ready(timeout=1) is True
 
 
 @pytest.mark.asyncio
@@ -279,6 +330,85 @@ async def test_execute_run_leaves_run_queued_when_provider_never_ready(monkeypat
     async def _not_ready(timeout=sched.PROVIDER_WAIT_TIMEOUT_SECONDS):
         return False
 
-    monkeypatch.setattr(sched, "wait_for_provider_stack", _not_ready)
+    monkeypatch.setattr(sched, "ensure_provider_stack_ready", _not_ready)
 
     assert await sched.execute_run(4242) == "skipped:provider-not-ready"
+
+
+async def test_enqueue_due_runs_does_not_let_a_queued_run_block_the_slot(session_factory):
+    """A waiting queued run must not turn the next scheduled slot into a skip."""
+    wf_id = await _add_workflow(session_factory, next_run_at=datetime(2026, 11, 5, 4, 30))
+
+    async with session_factory() as session:
+        session.add(
+            AiWorkflowRun(
+                workflow_id=wf_id,
+                user_id=1,
+                trigger="manual",
+                status="queued",
+                scheduled_for=datetime(2026, 11, 4, 4, 30),
+                slot_key=f"{wf_id}:manual",
+            )
+        )
+        await session.commit()
+
+    assert await sched.enqueue_due_runs(datetime(2026, 11, 5, 5, 0)) == 1
+
+    runs = await _runs(session_factory, wf_id)
+    scheduled = [r for r in runs if r.trigger == "schedule"]
+    assert len(scheduled) == 1
+    assert scheduled[0].status == "queued"
+    assert scheduled[0].skip_reason is None
+
+
+async def test_recover_stale_runs_skips_a_queued_run_that_never_started(session_factory):
+    """A queued run that was never claimed must not block its workflow forever."""
+    wf_id = await _add_workflow(session_factory)
+
+    async with session_factory() as session:
+        session.add(
+            AiWorkflowRun(
+                workflow_id=wf_id,
+                user_id=1,
+                trigger="manual",
+                status="queued",
+                scheduled_for=datetime(2026, 11, 2, 16, 0),
+                slot_key=f"{wf_id}:stale",
+                created_at=datetime(2026, 11, 2, 16, 0),
+            )
+        )
+        await session.commit()
+
+    recovered = await sched.recover_stale_runs(datetime(2026, 11, 3, 0, 0))
+
+    assert recovered == 1
+    runs = await _runs(session_factory, wf_id)
+    assert runs[0].status == "skipped"
+    assert runs[0].skip_reason == "never_started"
+    assert runs[0].finished_at == datetime(2026, 11, 3, 0, 0)
+
+
+async def test_recover_stale_runs_fails_a_run_that_died_while_running(session_factory):
+    """A run whose process died mid-flight is marked failed."""
+    wf_id = await _add_workflow(session_factory)
+
+    async with session_factory() as session:
+        session.add(
+            AiWorkflowRun(
+                workflow_id=wf_id,
+                user_id=1,
+                trigger="schedule",
+                status="running",
+                scheduled_for=datetime(2026, 11, 2, 16, 0),
+                slot_key=f"{wf_id}:running",
+                started_at=datetime(2026, 11, 2, 16, 0),
+            )
+        )
+        await session.commit()
+
+    recovered = await sched.recover_stale_runs(datetime(2026, 11, 3, 0, 0))
+
+    assert recovered == 1
+    runs = await _runs(session_factory, wf_id)
+    assert runs[0].status == "failed"
+    assert runs[0].error == "interrupted"
