@@ -142,6 +142,15 @@ async function proxyRequest(
     // receives it (critical for login cookie to work through the proxy).
     const upstreamSetCookie = upstream.headers.get('set-cookie')
 
+    // 204, 205, and 304 are null-body statuses. Passing a body to the Response
+    // constructor throws a TypeError, so the proxy answered 500 for a DELETE
+    // that the backend had already completed with 204.
+    if (upstream.status === 204 || upstream.status === 205 || upstream.status === 304) {
+      const res = new Response(null, { status: upstream.status })
+      if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+      return res
+    }
+
     const rawBody = await upstream.text()
 
     if (!upstream.ok) {

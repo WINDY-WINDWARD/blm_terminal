@@ -45,4 +45,26 @@ describe('/api/py catch-all proxy', () => {
     expect(init?.body).toBe('{"is_enabled":false}');
     expect(response.status).toBe(200);
   });
+
+  /**
+   * A 204 response must not carry a body. Constructing one threw a TypeError
+   * inside the proxy, so a successful DELETE reached the client as a 500.
+   */
+  it('returns an empty body for a 204 from the backend', async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = new NextRequest('http://localhost/api/py/ai/workflows/2', {
+      method: 'DELETE',
+    });
+
+    const response = await route.DELETE(request, {
+      params: Promise.resolve({ path: ['ai', 'workflows', '2'] }),
+    });
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('');
+  });
 });
