@@ -494,10 +494,37 @@ async function startApp() {
 
     const cliproxyBin = resolveCliproxyBin();
     const cliproxyRuntimeRoot = path.join(userDataPath, 'cliproxy-runtime');
+
+    const rawMcpEnabled = terminalStorageData['terminal.mcpServerEnabled'];
+    const mcpEnabled = rawMcpEnabled === true || rawMcpEnabled === 'true';
+    const rawMcpPort = terminalStorageData['terminal.mcpServerPort'];
+    let mcpFixedPort = null;
+    if (typeof rawMcpPort === 'number' && Number.isInteger(rawMcpPort)) {
+      if (rawMcpPort >= 1024 && rawMcpPort <= 65535) {
+        mcpFixedPort = rawMcpPort;
+      }
+    } else if (typeof rawMcpPort === 'string' && /^\d+$/.test(rawMcpPort.trim())) {
+      const parsedPort = parseInt(rawMcpPort.trim(), 10);
+      if (parsedPort >= 1024 && parsedPort <= 65535) {
+        mcpFixedPort = parsedPort;
+      }
+    }
+
+    if (mcpEnabled && mcpFixedPort !== null) {
+      log(`MCP fixed port: ${mcpFixedPort}`);
+    } else {
+      mcpFixedPort = null;
+      log('MCP fixed port: disabled (ephemeral)');
+    }
+
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
-        // NOTE: no PORT — the backend binds ephemeral and reports BLM_BACKEND_PORT.
+        // PORT: By default omitted so the backend binds ephemeral and reports BLM_BACKEND_PORT.
+        // When terminal.mcpServerEnabled is true and terminal.mcpServerPort is valid (1024-65535),
+        // PORT is set so the external MCP harness can reach http://127.0.0.1:<port>/api/mcp/mcp;
+        // the port is still loopback-bound (backend main.py binds 127.0.0.1).
+        ...(mcpFixedPort !== null ? { PORT: String(mcpFixedPort) } : {}),
         DB_PATH: dbPath,
         LOG_DIR: backendLogDir,
         ENV: isDev ? 'development' : 'production',

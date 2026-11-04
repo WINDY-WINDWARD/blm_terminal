@@ -397,6 +397,12 @@ export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCatego
 /** Last model picked in the AI widget. Reused for new chats and after a restart. */
 export const aiChatModelAtom = atomWithStorage<string>('terminal.aiChatModel', '');
 
+// ─── Local MCP Server ────────────────────────────────────────────────────────
+
+/** Fixed port opt-in for external MCP clients (Claude Code, Codex, Antigravity) */
+export const mcpServerEnabledAtom = atomWithStorage<boolean>('terminal.mcpServerEnabled', false);
+export const mcpServerPortAtom = atomWithStorage<number>('terminal.mcpServerPort', 4747);
+
 // ─── Ticker Bar ──────────────────────────────────────────────────────────────
 
 /** Ticker source preference. Values: 'default' | 'top' | 'watchlist:<id>' */

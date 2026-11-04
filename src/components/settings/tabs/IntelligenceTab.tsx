@@ -1,9 +1,12 @@
 'use client';
 
 import React from 'react';
+import { useAtom } from 'jotai';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { RouteModelCatalogResponse, RouteModelCatalogEntry } from '@/types/aiRoutes';
 import { RouteModelSelect } from '@/components/ai/RouteModelSelect';
+import { cn } from '@/lib/utils';
+import { mcpServerEnabledAtom, mcpServerPortAtom } from '@/store/terminalStore';
 import { BentoCard } from './BentoCard';
 import type { BrowserProvision } from './types';
 
@@ -60,6 +63,43 @@ export function IntelligenceTab({
   routeModelsQuery,
   configLoading,
 }: IntelligenceTabProps) {
+  const [mcpEnabled, setMcpEnabled] = useAtom(mcpServerEnabledAtom);
+  const [mcpPort, setMcpPort] = useAtom(mcpServerPortAtom);
+  const [portInput, setPortInput] = React.useState<string>(String(mcpPort));
+  const [portError, setPortError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setPortInput(String(mcpPort));
+    setPortError(null);
+  }, [mcpPort]);
+
+  const handleToggle = (nextEnabled: boolean) => {
+    setMcpEnabled(nextEnabled);
+    if (typeof window !== 'undefined' && window.electronAPI?.setStoredItem) {
+      window.electronAPI.setStoredItem('terminal.mcpServerEnabled', nextEnabled).catch(() => {});
+    }
+  };
+
+  const handlePortChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value;
+    setPortInput(rawValue);
+    const trimmed = rawValue.trim();
+    if (!trimmed || !/^\d+$/.test(trimmed)) {
+      setPortError('Port must be an integer between 1024 and 65535');
+      return;
+    }
+    const parsed = parseInt(trimmed, 10);
+    if (parsed < 1024 || parsed > 65535) {
+      setPortError('Port must be between 1024 and 65535');
+      return;
+    }
+    setPortError(null);
+    setMcpPort(parsed);
+    if (typeof window !== 'undefined' && window.electronAPI?.setStoredItem) {
+      window.electronAPI.setStoredItem('terminal.mcpServerPort', parsed).catch(() => {});
+    }
+  };
+
   return (
     <>
       {/* Data Extraction & Privacy */}
@@ -277,6 +317,83 @@ export function IntelligenceTab({
           </BentoCard>
         </>
       )}
+
+      {/* Local MCP Server */}
+      <BentoCard
+        icon="⛁"
+        title="Local MCP Server"
+        blurb="Controls the localhost MCP server port so external tools can connect to the terminal's financial tools."
+        badge={
+          <span
+            className={cn(
+              'text-[10px] px-1.5 py-0.5 font-mono border',
+              mcpEnabled
+                ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+            )}
+          >
+            {mcpEnabled ? `PORT ${mcpPort}` : 'DISABLED (EPHEMERAL)'}
+          </span>
+        }
+        className="col-span-1 md:col-span-2 lg:col-span-4"
+      >
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={mcpEnabled}
+                aria-label="Local MCP Server"
+                onClick={() => handleToggle(!mcpEnabled)}
+                className={cn(
+                  'px-3 py-1 text-[11px] font-mono rounded border transition cursor-pointer',
+                  mcpEnabled
+                    ? 'bg-blue-600 text-white border-blue-500 hover:bg-blue-500 font-semibold shadow-sm'
+                    : 'bg-zinc-800 text-zinc-300 border-zinc-600 hover:bg-zinc-700 hover:text-white'
+                )}
+              >
+                {mcpEnabled ? 'Enabled' : 'Disabled'}
+              </button>
+              <span className="text-[11px] font-mono text-zinc-300">
+                Opt-in fixed port for external MCP clients
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="mcp-server-port" className="text-[10px] uppercase font-mono tracking-wider text-terminal-amber">
+                Port
+              </label>
+              <input
+                id="mcp-server-port"
+                aria-label="MCP Server Port"
+                type="number"
+                min={1024}
+                max={65535}
+                value={portInput}
+                onChange={handlePortChange}
+                className={cn(
+                  'w-24 bg-black border text-white text-xs font-mono px-2 py-1 outline-none transition',
+                  portError
+                    ? 'border-red-600 focus:border-red-500'
+                    : 'border-terminal-gray focus:border-terminal-amber'
+                )}
+                placeholder="4747"
+              />
+            </div>
+          </div>
+
+          {portError && (
+            <div role="alert" className="text-[10px] font-mono text-red-400">
+              {portError}
+            </div>
+          )}
+
+          <p className="text-[10px] text-white/60 leading-relaxed font-mono">
+            Fixed IP:PORT required for external MCP clients (Claude Code, Codex, Antigravity). Requires app restart to take effect.
+          </p>
+        </div>
+      </BentoCard>
     </>
   );
 }

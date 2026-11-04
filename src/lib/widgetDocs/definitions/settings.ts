@@ -20,6 +20,7 @@ export const settingsDoc: WidgetDoc = {
         { name: 'Movers Columns', desc: 'Toggle which columns appear in the TOP widget.' },
         { name: 'Panel Layout', desc: 'Switch between 2, 4, 6, or 8 panel grid layouts.' },
         { name: 'AI Provider', desc: 'Engine, keys/OAuth, and model list for the AI widget (auto-saved to system-config ai.*).' },
+        { name: 'Local MCP Server', desc: 'Opt-in fixed localhost port (default 4747) for external MCP clients (Claude Code, Codex, Antigravity) to access backend tools.' },
         { name: 'OpenAlgo', desc: 'API URL and key for broker connectivity (ORDER, POS execution).' },
       ] as DocField[],
     },
