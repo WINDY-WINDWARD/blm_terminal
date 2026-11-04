@@ -19,6 +19,7 @@ import { portfolioDoc } from './definitions/portfolio';
 import { docsDoc } from './definitions/docs';
 import { adminDoc } from './definitions/admin';
 import { settingsDoc } from './definitions/settings';
+import { mcpDoc } from './definitions/mcp';
 
 export { TRIGGER_TYPE_DOCS } from './definitions/triggerTypes';
 
@@ -43,6 +44,7 @@ const ALL_DOCS: WidgetDoc[] = [
   docsDoc,
   adminDoc,
   settingsDoc,
+  mcpDoc,
 ];
 
 export const DOCS_INDEX: WidgetDoc[] = [...ALL_DOCS].sort((a, b) => {

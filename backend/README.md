@@ -39,7 +39,7 @@ This README explains how to run the backend locally and lists all available endp
   - `ticker.py` — ticker warehouse data
   - `jobs.py` — background job monitoring
   - `system_config.py` — system configuration KV store
-  - `mcp_server.py` — FastMCP server mounted at `/api/mcp`
+  - `mcp_server.py` — Streamable HTTP MCP server (mcp SDK 2) mounted at `/api/mcp`
 - `app/services/` — outbound HTTP clients and utilities:
   - `nse_client.py` / `nse_client_async.py` — NSE session bootstrap + HTTP helpers (sync + async)
   - `nse_rate_limiter.py` — circuit breaker + rate limiting for NSE API
