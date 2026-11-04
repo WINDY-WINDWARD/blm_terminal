@@ -66,6 +66,7 @@ from app.services.screener_client import screener_client
 from app.services.news_fetcher import news_fetcher
 from app.services.nse_rate_limiter import NSEServiceUnavailableError
 from app.orchestrator import orchestrator
+from app import mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -891,7 +892,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("ProxySupervisor: startup stale cleanup error: %s", exc)
 
-    yield
+    async with mcp_server.mcp._lowlevel_server._session_manager.run():
+        yield
 
     try:
         from app.services.proxy_supervisor import get_proxy_supervisor, SupervisorState
@@ -1040,7 +1042,7 @@ if INTERNAL_TOKEN:
 @app.middleware("http")
 async def launch_token_guard(request: Request, call_next) -> Response:  # type: ignore[type-arg]
     """Reject token-less local API calls (401). /health stays open."""
-    if request.url.path != "/health":
+    if request.url.path != "/health" and not request.url.path.startswith("/api/mcp"):
         has_launch_token = bool(
             LAUNCH_TOKEN
             and _secrets.compare_digest(
@@ -1103,6 +1105,9 @@ app.include_router(users_router, prefix="/api")
 if settings.is_development:
     from app.routers.notifications import _dev_router
     app.include_router(_dev_router, prefix="/api")
+
+# Mount MCP server under /api/mcp
+app.mount("/api/mcp", mcp_server.mcp.streamable_http_app(json_response=True, stateless_http=True))
 
 
 @app.get("/health", tags=["meta"])

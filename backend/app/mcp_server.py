@@ -34,7 +34,7 @@ def _safe_entities(v: Any) -> dict | None:
 
 import numpy as np
 import pandas as pd
-from mcp.server import FastMCP
+from mcp.server import MCPServer
 from sqlalchemy import select, and_
 
 from app.database import AsyncSessionLocal
@@ -52,7 +52,7 @@ from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("BLM Analytics", stateless_http=True, json_response=True, host="0.0.0.0")
+mcp = MCPServer("BLM Analytics")
 
 # Symbol validation regex (same as in screener router)
 _SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{1,30}$")
