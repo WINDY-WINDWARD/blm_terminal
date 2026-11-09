@@ -51,9 +51,11 @@ The **Release Agent** (`.github/agents/release-agent.md`) is responsible for cre
 ### Frontend & Desktop (repo root)
 ```bash
 npm run dev           # custom web dev server (node server.js)
-npm run build         # production Next.js build + TypeScript check
-npm run electron      # run desktop app in development
-npm run electron:prod # run desktop app in production mode
+npm run build         # production Next.js build + Vitest suite
+npm run desktop:dev   # Electron + Next dev (HMR) + venv backend; no installer
+npm run desktop:dir   # packaged win-unpacked app; no NSIS installer
+npm run electron      # production Next build, then Electron
+npm run electron:prod # Electron against existing .next
 npm run build:desktop # complete build (Next.js + Backend + Electron Builder)
 npm run build:desktop:fast # fast LOCAL build (parallel + skip unchanged); never for releases
 npm run pack:desktop  # local dir packaging via electron-builder

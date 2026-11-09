@@ -408,7 +408,10 @@ function findFreePort() {
 async function startApp() {
   try {
     const isDev = !app.isPackaged;
-    log(`startApp() called — isDev=${isDev}`);
+    // Opt-in development server: skips `next build` and serves the app through
+    // Next dev (HMR). Production and packaged runs keep the prebuilt .next.
+    const electronDevServer = isDev && process.env.BLM_ELECTRON_DEV === '1';
+    log(`startApp() called — isDev=${isDev} electronDevServer=${electronDevServer}`);
 
     // Show splash window immediately while servers boot, so the user never
     // stares at an empty screen during boot.
@@ -624,10 +627,11 @@ async function startApp() {
       // For ASAR paths, fs.existsSync is monkey-patched by Electron to look inside
       const exists = fs.existsSync(serverJsPath);
       log(`server.js exists (via patched fs): ${exists}`);
-      // Also check .next/BUILD_ID which Next.js needs (on real fs or patched fs)
-      const buildIdPath = path.join(nextDir, '.next', 'BUILD_ID');
+      // Also check the production BUILD_ID which Next.js needs (on real fs or patched fs)
+      const nextDistDir = process.env.BLM_NEXT_DIST_DIR || '.next';
+      const buildIdPath = path.join(nextDir, nextDistDir, 'BUILD_ID');
       const buildIdExists = fs.existsSync(buildIdPath);
-      log(`.next/BUILD_ID exists in NEXT_DIR: ${buildIdExists}`);
+      log(`${nextDistDir}/BUILD_ID exists in NEXT_DIR: ${buildIdExists}`);
     } catch (e) {
       log(`existence check error: ${e.message}`);
     }
@@ -640,7 +644,7 @@ async function startApp() {
         ...process.env,
         // NOTE: no PORT — the Next server binds ephemeral and reports back.
         PYTHON_BACKEND_URL: `http://127.0.0.1:${pythonPort}`,
-        NODE_ENV: 'production',
+        NODE_ENV: electronDevServer ? 'development' : 'production',
         NEXT_DIR: nextDir,
         BLM_INTERNAL_TOKEN: serverInternalToken,
         BLM_LOCAL_TOKEN: launchToken
@@ -652,8 +656,13 @@ async function startApp() {
     // Token over IPC (fork channel), then await the reported ephemeral port.
     nextProcess.send({ type: 'launch-token', token: launchToken });
     nextProcess.send({ type: 'internal-token', token: serverInternalToken });
+    // Next dev compiles on first request, so allow a longer cold start.
+    const serverReadyTimeoutMs = electronDevServer ? 120000 : 30000;
     const nextPort = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Next.js did not report server-ready in 30s')), 30000);
+      const timer = setTimeout(
+        () => reject(new Error(`Next.js did not report server-ready in ${serverReadyTimeoutMs / 1000}s`)),
+        serverReadyTimeoutMs
+      );
       const onMessage = (m) => {
         if (m && m.type === 'server-ready' && Number.isInteger(m.port)) {
           clearTimeout(timer);
@@ -692,8 +701,8 @@ async function startApp() {
     });
 
     // 3. Wait for Next.js to be ready (poll)
-    log(`Waiting for Next.js at http://127.0.0.1:${nextPort} (timeout 30s)...`);
-    await waitForServer(`http://127.0.0.1:${nextPort}`, 30000);
+    log(`Waiting for Next.js at http://127.0.0.1:${nextPort} (timeout ${serverReadyTimeoutMs / 1000}s)...`);
+    await waitForServer(`http://127.0.0.1:${nextPort}`, serverReadyTimeoutMs);
     log(`Next.js is ready!`);
 
     // Token injection scoped to the EXACT local origins (never wildcard).

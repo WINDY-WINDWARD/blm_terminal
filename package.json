@@ -4,7 +4,7 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "node server.js",
+    "dev": "cross-env BLM_NEXT_DIST_DIR=.next-dev node server.js",
     "build": "next build && npm run test",
     "build:next": "next build",
     "build:backend": "powershell -ExecutionPolicy Bypass -File ./scripts/build_backend.ps1",
@@ -17,6 +17,8 @@
     "start": "cross-env NODE_ENV=production node server.js",
     "electron": "npm run build:next && cross-env NODE_ENV=production electron .",
     "electron:prod": "cross-env NODE_ENV=production electron .",
+    "desktop:dev": "cross-env BLM_ELECTRON_DEV=1 BLM_NEXT_DIST_DIR=.next-dev electron .",
+    "desktop:dir": "powershell -ExecutionPolicy Bypass -File ./scripts/build_desktop_fast.ps1 -Dir",
     "release": "node scripts/release.js",
     "pack:desktop": "electron-builder --win dir",
     "pack:desktop:mac": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --config electron-builder.json",

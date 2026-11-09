@@ -1,6 +1,6 @@
 ---
 name: desktop-packaging
-description: Procedures for compiling, packaging, testing, and locally installing the BLM Terminal desktop application. Use for build:desktop, build:desktop:fast, pack:desktop, PyInstaller backend builds, installer smoke tests, and clean-state recovery.
+description: Procedures for compiling, packaging, testing, and locally installing the BLM Terminal desktop application. Use for desktop:dev, desktop:dir, build:desktop, build:desktop:fast, pack:desktop, PyInstaller backend builds, installer smoke tests, and clean-state recovery.
 ---
 
 # Skill: BLM Desktop Build & Packaging
@@ -9,27 +9,51 @@ description: Procedures for compiling, packaging, testing, and locally installin
 
 ## Core Directives
 
-1. **Direct From Source Build**:
-   - For local iteration, use the fast build (default): `npm run build:desktop:fast`.
-     It runs the Next.js and backend builds concurrently and skips any side
-     whose inputs are unchanged (hash state in `dist-desktop/.build-hashes.json`).
-   - For releases (version bump, `gh release`, `publish:desktop`), ALWAYS use the
-     full sequential build: `npm run build:desktop`. Never ship a fast-build
-     installer without re-running the full path first.
+1. **Choose the Right Build Path**:
+   - For routine development, use `npm run desktop:dev`. It starts Electron,
+     the `backend/.venv` backend, and Next dev with HMR. It runs no
+     PyInstaller and no installer. First start is about 20 s and edits apply
+     in under 2 s. Both `npm run dev` and `desktop:dev` write to `.next-dev`,
+     so they do not overwrite the production `.next` build.
+   - For a packaged app without an installer, use `npm run desktop:dir`.
+     It produces `dist-desktop/win-unpacked/BLM Terminal.exe`. Add
+     `-- -SkipBackend` when only frontend code changed.
+   - For a local installer, use `npm run build:desktop:fast`. It runs the
+     Next.js and backend builds concurrently and skips any side whose inputs
+     are unchanged (hash state in `.build-cache/desktop-hashes.json`).
+   - For releases (version bump, `gh release`, `publish:desktop`), ALWAYS use
+     the full sequential build: `npm run build:desktop`. Never ship a
+     fast-build installer without re-running the full path first.
    - Never pull remote pre-compiled release assets when requested to build from source.
 
+   | Need | Command | Typical |
+   |---|---|---|
+   | Browser UI only | `npm run dev` | instant |
+   | Electron + HMR | `npm run desktop:dev` | ~20 s first start |
+   | Packaged folder | `npm run desktop:dir -- -SkipBackend` | ~2-3 min |
+   | Local installer | `npm run build:desktop:fast` | ~8-9 min with backend |
+   | Release | `npm run build:desktop` | full |
+
 2. **Clean State Protocol**:
-   - Stop any active background processes before starting a build or install:
+   - For installer builds and installs, stop active app processes so files are not locked:
      ```powershell
      Get-Process | Where-Object { $_.ProcessName -match "BLM Terminal|blm-backend" } | Stop-Process -Force -ErrorAction SilentlyContinue
      ```
+   - Close the installed app before `npm run desktop:dev`. Electron allows one
+     instance per userData directory. For a parallel test, pass
+     `-- --user-data-dir=<temp-dir>`.
+   - Stop the app that runs from `dist-desktop/win-unpacked` before `desktop:dir`.
+     electron-builder writes over that folder.
    - Full builds only: clear temporary build artifacts in `dist-desktop\` to avoid stale cached ASAR or blockmaps:
      ```powershell
      if (Test-Path "dist-desktop") { Remove-Item -Path "dist-desktop\*" -Recurse -Force }
      ```
-   - Fast builds: do NOT clear `dist-desktop\` — the hash-state file and prior
-     outputs live there and are what make skipping correct. Staleness is
-     prevented by input hashing, not by wiping.
+   - Fast builds: do NOT clear `dist-desktop\` — prior outputs live there.
+     Hash state is in `.build-cache/desktop-hashes.json` and survives cleanups,
+     so unchanged stages stay skipped. Staleness is prevented by input hashing,
+     not by wiping.
+   - `desktop:dev` needs no clean-state step. Do not run the silent installer
+     for routine code changes.
 
 3. **Complete Build Sequence**:
    - Execute the combined desktop build script:
@@ -37,7 +61,7 @@ description: Procedures for compiling, packaging, testing, and locally installin
      npm run build:desktop
      ```
    - This executes in sequence:
-     1. `npm run build:next` (Turbopack production build + TypeScript verification)
+     1. `npm run build:next` (Turbopack production build)
      2. `npm run build:backend` (`./scripts/build_backend.ps1` -> PyInstaller compilation into `backend/dist/blm-backend.exe`)
      3. `electron-builder --win --config electron-builder.json` (Creates the NSIS installer and unpacked binaries in `dist-desktop\`)
 
@@ -70,8 +94,7 @@ description: Procedures for compiling, packaging, testing, and locally installin
 5. **Pre-Release Checklist** (run before every release build):
     - **Use the FULL build** (`npm run build:desktop`). The fast build skips
       unchanged stages, so it must never produce a shipped installer directly.
-    - **Refresh the Codex model list**:
-   - **Refresh the Codex model list**: the Codex backend exposes no `/models`
+    - **Refresh the Codex model list**: the Codex backend exposes no `/models`
      catalog, so `CODEX_MODELS` in `backend/app/services/codex_auth.py` is
      hand-curated and rots as OpenAI retires IDs. Before each release, check
      the current catalog at `https://developers.openai.com/codex/models` and:

@@ -24,6 +24,7 @@
 
 # next.js
 /.next/
+/.next-dev/
 /out/
 
 # production
@@ -83,6 +84,9 @@ cookies/manifest.json
 /backend/*.spec
 
 dist-*/
+
+# Fast-build skip state (must survive dist-desktop cleanups)
+.build-cache/
 
 # BLM license system: baked build-time config (regenerate via scripts/gen-license-config.js)
 

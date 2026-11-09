@@ -2,17 +2,22 @@
 #
 # Runs the Next.js and backend builds CONCURRENTLY (they share no inputs) and
 # skips any side whose inputs are unchanged since the last build (hash state
-# in dist-desktop/.build-hashes.json). Packaging uses the standard
-# electron-builder.json unchanged.
+# in .build-cache/desktop-hashes.json, which survives dist-desktop cleanups).
+# Packaging uses the standard electron-builder.json unchanged.
 #
 # RELEASE DISCIPLINE (enforced by docs, not by this script): version bumps,
 # `gh release` flows, and `publish:desktop` MUST use the full sequential
 # `npm run build:desktop`. This script is for local iteration only.
-param([switch]$Full)
+param(
+    [switch]$Full,
+    [switch]$Dir,
+    [switch]$SkipBackend,
+    [switch]$Force
+)
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$HashFile = Join-Path $RepoRoot "dist-desktop/.build-hashes.json"
+$HashFile = Join-Path $RepoRoot ".build-cache/desktop-hashes.json"
 
 # Input sets. PowerShell 5.1 does NOT understand '**' globs — the previous
 # 'backend/**/*.py' pattern silently matched (almost) nothing, which froze the
@@ -92,11 +97,19 @@ $frontendHash = Get-InputHash $FrontendInputs
 $backendOut = Join-Path $RepoRoot "backend/dist/blm-backend.exe"
 $frontendOut = Join-Path $RepoRoot ".next/BUILD_ID"
 
-$skipBackend = (-not $Full) -and $state -and ($state.backendHash -eq $backendHash) -and (Test-Path $backendOut)
-$skipFrontend = (-not $Full) -and $state -and ($state.frontendHash -eq $frontendHash) -and (Test-Path $frontendOut)
+if ($SkipBackend -and ($Full -or $Force)) {
+    throw "-SkipBackend cannot be combined with -Full or -Force."
+}
+if ($SkipBackend -and -not (Test-Path $backendOut)) {
+    throw "-SkipBackend was set, but backend/dist/blm-backend.exe is missing. Run once without -SkipBackend."
+}
 
-if ($skipBackend) { Write-Host "Backend inputs unchanged --- skipping PyInstaller (use -Full to force)." }
-if ($skipFrontend) { Write-Host "Frontend inputs unchanged --- skipping Next.js build (use -Full to force)." }
+$forceAll = $Full -or $Force
+$skipBackend = $SkipBackend -or ((-not $forceAll) -and $state -and ($state.backendHash -eq $backendHash) -and (Test-Path $backendOut))
+$skipFrontend = (-not $forceAll) -and $state -and ($state.frontendHash -eq $frontendHash) -and (Test-Path $frontendOut)
+
+if ($skipBackend) { Write-Host "Backend inputs unchanged or -SkipBackend --- skipping PyInstaller (use -Full/-Force to rebuild)." }
+if ($skipFrontend) { Write-Host "Frontend inputs unchanged --- skipping Next.js build (use -Full/-Force to rebuild)." }
 if ($skipBackend -and $skipFrontend) { Write-Host "Nothing to rebuild --- packaging only." }
 
 $jobs = @{}
@@ -160,16 +173,34 @@ try {
     Remove-Item env:HTTPS_PROXY -ErrorAction SilentlyContinue
     Remove-Item env:ALL_PROXY -ErrorAction SilentlyContinue
     $env:ELECTRON_BUILDER_OFFLINE = 'true'
-    npx electron-builder --win --config electron-builder.json -p never
+    if ($Dir) {
+        # Unpacked app only: no NSIS compression and no installer.
+        npx electron-builder --win dir --config electron-builder.json -p never
+    } else {
+        npx electron-builder --win --config electron-builder.json -p never
+    }
     $builderExit = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $prevPref
 }
 if ($builderExit -ne 0) { throw "electron-builder failed with exit $builderExit" }
 
-# Record hashes for the sides that (re)built.
+if ($Dir) {
+    $unpackedExe = Join-Path $RepoRoot "dist-desktop/win-unpacked/BLM Terminal.exe"
+    Write-Host "Packaged app (no installer): $unpackedExe"
+}
+
+# Record hashes only for sides that rebuilt. A skipped side keeps its previous
+# hash, so a later -SkipBackend run cannot mark changed inputs as built.
+$newState = @{}
+if ($state) {
+    if ($state.backendHash) { $newState['backendHash'] = $state.backendHash }
+    if ($state.frontendHash) { $newState['frontendHash'] = $state.frontendHash }
+}
+if (-not $skipBackend) { $newState['backendHash'] = $backendHash }
+if (-not $skipFrontend) { $newState['frontendHash'] = $frontendHash }
 if (-not (Test-Path (Split-Path $HashFile))) {
     New-Item -ItemType Directory -Path (Split-Path $HashFile) -Force | Out-Null
 }
-@{ backendHash = $backendHash; frontendHash = $frontendHash } | ConvertTo-Json | Set-Content $HashFile
+$newState | ConvertTo-Json | Set-Content $HashFile
 Write-Host "Fast build complete."
