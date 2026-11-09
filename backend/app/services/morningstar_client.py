@@ -43,6 +43,7 @@ ID_CACHE_TTL = 24 * 60 * 60
 from app.services.nse_rate_limiter import throttled_nse_call  # noqa: E402
 REQUEST_DELAY = 1.0
 DB_BATCH_SIZE = 50
+NEGATIVE_CACHE_TTL_HOURS = 5 / 60
 
 SAL_CONTENT_TYPE = "nNsGdN3REOnPMlKDShOYjlk6VYiEVLSdpfpXAm7o2Tk="
 DEFAULT_TOKEN_PAGE = "https://www.morningstar.in/stocks/0p0000bec4/nse-tata-consultancy-services-ltd/overview.aspx"
@@ -368,7 +369,7 @@ class MorningstarClient:
                 "fairValue": None,
                 "updatedAt": None,
             }
-            await set_cached_json(cache_key, result, ttl_hours=24)
+            await set_cached_json(cache_key, result, ttl_hours=NEGATIVE_CACHE_TTL_HOURS)
             return result
 
         fair_value = await self.get_fair_value(ms_id)
@@ -379,19 +380,23 @@ class MorningstarClient:
             "fairValue": fair_value,
             "updatedAt": datetime.now(timezone.utc).isoformat() if fair_value else None,
         }
-        await set_cached_json(cache_key, result, ttl_hours=24)
+        ttl = 24 if fair_value is not None else NEGATIVE_CACHE_TTL_HOURS
+        await set_cached_json(cache_key, result, ttl_hours=ttl)
         return result
 
     async def get_fair_value_batch(
-        self, symbols: list[str], db: AsyncSession | None = None
+        self, symbols: list[str]
     ) -> dict[str, dict[str, Any]]:
-        """Fetch fair value for multiple symbols concurrently (chunked)."""
-        results: list[dict[str, Any]] = []
-        for i in range(0, len(symbols), 5):
-            chunk = symbols[i : i + 5]
-            tasks = [self.get_fair_value_by_symbol(sym, db) for sym in chunk]
-            chunk_results = await asyncio.gather(*tasks)
-            results.extend(chunk_results)
+        """Fetch fair values with bounded concurrency instead of serial chunks."""
+        if not symbols:
+            return {}
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_one(sym: str) -> dict[str, Any]:
+            async with sem:
+                return await self.get_fair_value_by_symbol(sym)
+
+        results = await asyncio.gather(*(fetch_one(sym) for sym in symbols))
         return {res["symbol"]: res for res in results}
 
     def get_fair_value_result(self, symbol: str, ms_id: str | None, fair_value: float | None) -> FairValueResult:

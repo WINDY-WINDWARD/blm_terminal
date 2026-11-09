@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.services.morningstar_client import morningstar_client
 
 logger = logging.getLogger(__name__)
@@ -17,17 +19,22 @@ class FairValueBatchRequest(BaseModel):
     symbols: list[str]
 
 @router.post("/morningstar/fairvalue/batch")
-async def get_fair_value_batch(request: FairValueBatchRequest) -> dict[str, dict[str, Any]]:
+async def get_fair_value_batch(
+    request: FairValueBatchRequest,
+) -> dict[str, dict[str, Any]]:
     """Get fair value for multiple stock symbols."""
     symbols = list(dict.fromkeys(s.upper().strip() for s in request.symbols))
     return await morningstar_client.get_fair_value_batch(symbols)
 
 
 @router.get("/morningstar/fairvalue/{symbol}")
-async def get_fair_value(symbol: str) -> dict[str, Any]:
+async def get_fair_value(
+    symbol: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
     """Get fair value for a stock symbol."""
     symbol = symbol.upper().strip()
-    result = await morningstar_client.get_fair_value_by_symbol(symbol)
+    result = await morningstar_client.get_fair_value_by_symbol(symbol, db)
     return result
 
 

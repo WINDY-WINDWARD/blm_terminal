@@ -23,15 +23,13 @@
  *     { type: "symbol_data_complete",   request_id }
  *     { type: "error", request_id?, message }
  *
- * Per-symbol resolution: NSE-direct first, Python backend fallback
- * on NSE failure (3 attempts with backoff). See `marketWsStreamer.ts`
- * for the resolution policy.
+ * Per-symbol resolution: Python backend first, NSE-direct fallback
+ * on failure. See `marketWsStreamer.ts` for the resolution policy.
  */
 
 import {
   fetchChangeRangesWithFallback,
   fetchSymbolDataWithFallback,
-  NSE_MAX_SYMBOLS_PER_REQUEST,
 } from './marketWsStreamer';
 
 /** Minimal interface a WebSocket-like object must satisfy. */
@@ -85,12 +83,10 @@ async function streamBatch(
     return;
   }
 
-  const capped = symbols.slice(0, NSE_MAX_SYMBOLS_PER_REQUEST);
-
   sendJson(ws, {
     type: startedType,
     request_id: requestId,
-    symbols: capped,
+    symbols,
   });
 
   // Kick off all per-symbol fetches concurrently and emit partials
@@ -106,7 +102,7 @@ async function streamBatch(
     sym: string;
     promise: Promise<{ sym: string; value: unknown }>;
   };
-  const tasks: Task[] = capped.map((sym) => {
+  const tasks: Task[] = symbols.map((sym) => {
     const promise = fetcher(sym)
       .then((value) => ({ sym, value }))
       .catch((err: unknown) => {

@@ -22,6 +22,7 @@ from app.database import get_db
 from app.models.marketcategory import MarketCategory, MarketCategoryStock
 from app.schemas.marketcategory import MarketCategoryOut, MarketCategoryStockOut
 from app.services.market_data import (
+    MAX_BATCH_SYMBOLS,
     fetch_change_ranges_batch,
     fetch_symbol_data_batch,
 )
@@ -216,6 +217,11 @@ async def get_change_ranges(
     Accepts one or more `symbol` query parameters. Returns a single
     `data` envelope that mirrors the proxy's response shape.
     """
+    if len(symbol) > MAX_BATCH_SYMBOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_BATCH_SYMBOLS} symbols are allowed per request",
+        )
     data = await fetch_change_ranges_batch([s.upper() for s in symbol])
     return {"data": data}
 
@@ -232,6 +238,11 @@ async def get_symbol_data(
     Accepts one or more `symbol` query parameters. Returns a single
     `data` envelope that mirrors the proxy's response shape.
     """
+    if len(symbol) > MAX_BATCH_SYMBOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {MAX_BATCH_SYMBOLS} symbols are allowed per request",
+        )
     data = await fetch_symbol_data_batch([s.upper() for s in symbol])
     return {"data": data}
 

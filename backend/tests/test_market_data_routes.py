@@ -94,6 +94,19 @@ async def test_fetch_change_ranges_batch_returns_mapping(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_change_ranges_batch_does_not_truncate(monkeypatch):
+    from app.services import market_data
+
+    _patch_active_client(monkeypatch, change_ranges={"oneWeekPercent": 1.0})
+    symbols = [f"BATCH{i:03d}" for i in range(60)]
+
+    out = await market_data.fetch_change_ranges_batch(symbols)
+
+    assert len(out) == 60
+    assert set(out) == set(symbols)
+
+
+@pytest.mark.asyncio
 async def test_fetch_change_ranges_batch_handles_failure(monkeypatch):
     from app.services import market_data
 
@@ -134,6 +147,16 @@ async def test_fetch_symbol_data_batch_returns_mapping(monkeypatch):
 
     out = await market_data.fetch_symbol_data_batch(["RELIANCE"])
     assert out == {"RELIANCE": expected}
+
+
+@pytest.mark.asyncio
+async def test_fetch_symbol_data_batch_rejects_oversized_list():
+    from app.services import market_data
+
+    with pytest.raises(ValueError, match="At most 200 symbols"):
+        await market_data.fetch_symbol_data_batch(
+            [f"SYM{i:03d}" for i in range(201)]
+        )
 
 
 @pytest.mark.asyncio
@@ -224,6 +247,24 @@ def test_symbol_data_route_binds_single_query_param(monkeypatch):
             }
         }
     }
+
+
+def test_symbol_data_route_rejects_oversized_batch():
+    """A single request may not queue an unbounded number of NSE calls."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.routers import markets as markets_router_module
+
+    app = FastAPI()
+    app.include_router(markets_router_module.router, prefix="/api")
+    client = TestClient(app)
+
+    query = "&".join(f"symbol=S{i:03d}" for i in range(201))
+    resp = client.get(f"/api/markets/symbol-data?{query}")
+
+    assert resp.status_code == 400
+    assert "At most 200 symbols" in resp.json()["detail"]
 
 
 def test_symbol_data_route_binds_repeated_query_params(monkeypatch):

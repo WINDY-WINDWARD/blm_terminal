@@ -36,7 +36,6 @@ const NSE_FIELD_MAP_CHANGE_RANGES = {
 };
 const SYMBOL_DATA_TTL_SECONDS = 60;
 const CHANGE_RANGES_TTL_SECONDS = 300;
-const NSE_MAX_SYMBOLS_PER_REQUEST = 50;
 const NSE_MAX_ATTEMPTS = 3;
 const NSE_CONCURRENCY = parseInt(process.env.NSE_CONCURRENCY || '5', 10);
 const NSE_COURTESY_DELAY = parseFloat(process.env.NSE_COURTESY_DELAY || '0.5');
@@ -177,7 +176,7 @@ async function fetchSymbolDataFromPython(symbol) {
   const url = `${PYTHON_BACKEND_URL}/api/markets/symbol-data?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`Python backend returned ${res.status}`);
   const body = await res.json();
@@ -187,7 +186,7 @@ async function fetchChangeRangesFromPython(symbol) {
   const url = `${PYTHON_BACKEND_URL}/api/markets/change-ranges?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`Python backend returned ${res.status}`);
   const body = await res.json();
@@ -199,29 +198,28 @@ async function fetchSymbolDataWithFallback(symbol) {
   const cacheKey = `symbol-data:${sym}`;
   const cached = symbolDataCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  let nseFailed = false;
+
+  try {
+    const value = await fetchSymbolDataFromPython(sym);
+    if (isSymbolDataCacheable(value)) {
+      symbolDataCache.set(cacheKey, { value, expiresAt: Date.now() + SYMBOL_DATA_TTL_SECONDS * 1000 });
+      return value;
+    }
+  } catch (err) {
+    console.warn(`[marketWsJs] symbol-data Python failed for ${sym}: ${err && err.message}`);
+  }
+
   try {
     const value = await throttledNseCall('symbol-data', () => fetchSymbolDataFromNse(sym));
     if (isSymbolDataCacheable(value)) {
       symbolDataCache.set(cacheKey, { value, expiresAt: Date.now() + SYMBOL_DATA_TTL_SECONDS * 1000 });
       return value;
     }
-    nseFailed = true;
   } catch (err) {
-    nseFailed = true;
     console.warn(`[marketWsJs] symbol-data NSE failed for ${sym}: ${err && err.message}`);
   }
-  void nseFailed;
-  try {
-    const value = await fetchSymbolDataFromPython(sym);
-    if (isSymbolDataCacheable(value)) {
-      symbolDataCache.set(cacheKey, { value, expiresAt: Date.now() + SYMBOL_DATA_TTL_SECONDS * 1000 });
-    }
-    return value;
-  } catch (err) {
-    console.error(`[marketWsJs] symbol-data Python failed for ${sym}: ${err && err.message}`);
-    return null;
-  }
+
+  return null;
 }
 
 async function fetchChangeRangesWithFallback(symbol) {
@@ -229,29 +227,28 @@ async function fetchChangeRangesWithFallback(symbol) {
   const cacheKey = `change-ranges:${sym}`;
   const cached = changeRangesCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  let nseFailed = false;
+
+  try {
+    const value = await fetchChangeRangesFromPython(sym);
+    if (isChangeRangesCacheable(value)) {
+      changeRangesCache.set(cacheKey, { value, expiresAt: Date.now() + CHANGE_RANGES_TTL_SECONDS * 1000 });
+      return value;
+    }
+  } catch (err) {
+    console.warn(`[marketWsJs] change-ranges Python failed for ${sym}: ${err && err.message}`);
+  }
+
   try {
     const value = await throttledNseCall('change-ranges', () => fetchChangeRangesFromNse(sym));
     if (isChangeRangesCacheable(value)) {
       changeRangesCache.set(cacheKey, { value, expiresAt: Date.now() + CHANGE_RANGES_TTL_SECONDS * 1000 });
       return value;
     }
-    nseFailed = true;
   } catch (err) {
-    nseFailed = true;
     console.warn(`[marketWsJs] change-ranges NSE failed for ${sym}: ${err && err.message}`);
   }
-  void nseFailed;
-  try {
-    const value = await fetchChangeRangesFromPython(sym);
-    if (isChangeRangesCacheable(value)) {
-      changeRangesCache.set(cacheKey, { value, expiresAt: Date.now() + CHANGE_RANGES_TTL_SECONDS * 1000 });
-    }
-    return value;
-  } catch (err) {
-    console.error(`[marketWsJs] change-ranges Python failed for ${sym}: ${err && err.message}`);
-    return null;
-  }
+
+  return null;
 }
 
 function sendJson(ws, msg) {
@@ -264,10 +261,9 @@ async function streamBatch(ws, requestId, symbols, startedType, partialType, com
     sendJson(ws, { type: 'error', request_id: requestId, message: 'symbols must be a non-empty list' });
     return;
   }
-  const capped = symbols.slice(0, NSE_MAX_SYMBOLS_PER_REQUEST);
-  sendJson(ws, { type: startedType, request_id: requestId, symbols: capped });
+  sendJson(ws, { type: startedType, request_id: requestId, symbols });
 
-  const tasks = capped.map((sym) => {
+  const tasks = symbols.map((sym) => {
     const promise = fetcher(sym)
       .then((value) => ({ sym, value }))
       .catch((err) => {

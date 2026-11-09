@@ -5,14 +5,13 @@
  * NSE-direct-with-Python-fallback policy lives.
  *
  * The contract:
- *   1. Try NSE directly via the shared throttledNseCall (concurrency
- *      limit, request coalescing, circuit breaker, 2 retries = 3
- *      total attempts).
- *   2. If NSE returns a value, use it. If NSE returns a soft miss
- *      (e.g. ARROWGREEN's empty payload) or fails after 3 attempts,
- *      fall back to the Python backend's HTTP route for that one
- *      symbol.
- *   3. If Python also fails, return null. The WS route emits a
+ *   1. Try the Python backend first. It keeps persistent NSE caches
+ *      and a higher fetch concurrency, so normal watchlist loads do
+ *      not queue behind the Next.js process.
+ *   2. If Python returns no value or fails, fall back to NSE direct
+ *      via the shared throttledNseCall (concurrency limit, request
+ *      coalescing, circuit breaker, 2 retries = 3 total attempts).
+ *   3. If both fail, return null. The WS route emits a
  *      `*_partial` with `data: null` for that symbol.
  *
  * The shared HTTP route files at `src/app/api/nse/{symbol-data,
@@ -29,7 +28,6 @@ import {
   CHANGE_RANGES_TTL_SECONDS,
   NSE_BASE_URL,
   NSE_HEADERS,
-  NSE_MAX_SYMBOLS_PER_REQUEST,
   type ChangeRanges,
   type RawNseSymbolData,
   type SymbolDataExtract,
@@ -118,7 +116,7 @@ async function fetchSymbolDataFromPython(symbol: string): Promise<SymbolDataExtr
   const url = `${getPythonBackendUrl()}/api/markets/symbol-data?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
     headers: getBackendForwardHeaders(null, { Accept: 'application/json' }),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     throw new Error(`Python backend returned ${res.status}`);
@@ -134,7 +132,7 @@ async function fetchChangeRangesFromPython(symbol: string): Promise<ChangeRanges
   const url = `${getPythonBackendUrl()}/api/markets/change-ranges?symbol=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, {
     headers: getBackendForwardHeaders(null, { Accept: 'application/json' }),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) {
     throw new Error(`Python backend returned ${res.status}`);
@@ -182,14 +180,9 @@ async function fetchWithRetries<T>(label: string, fn: () => Promise<T>): Promise
 }
 
 /**
- * Resolve one symbol's data with NSE-direct first, Python fallback.
+ * Resolve one symbol's data with Python-first, NSE fallback.
  * The in-process cache is consulted before any HTTP call, and
  * written on success.
- *
- * NSE is attempted up to 3 times (1 initial + 2 retries) for
- * transient failures (network, aborts, timeouts, NSE 5xx). After
- * the 3rd failure — or on a non-transient error — we fall back
- * to the Python backend's HTTP route for that one symbol.
  */
 export async function fetchSymbolDataWithFallback(
   symbol: string,
@@ -199,7 +192,17 @@ export async function fetchSymbolDataWithFallback(
   const cached = cache.get<SymbolDataExtract>(cacheKey);
   if (cached) return cached;
 
-  let nseFailed = false;
+  try {
+    const value = await fetchSymbolDataFromPython(sym);
+    if (isSymbolDataCacheable(value)) {
+      cache.set(cacheKey, value, SYMBOL_DATA_TTL_SECONDS);
+      return value;
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.warn(`[marketWsStreamer] symbol-data Python failed for ${sym}: ${message}`);
+  }
+
   try {
     // We do our own retry inside fetchWithRetries (3 total attempts
     // including the initial one) so we pass `retries: 0` to the
@@ -214,35 +217,16 @@ export async function fetchSymbolDataWithFallback(
       cache.set(cacheKey, value, SYMBOL_DATA_TTL_SECONDS);
       return value;
     }
-    nseFailed = true;
   } catch (err: unknown) {
-    nseFailed = true;
     if (err instanceof NSEServiceUnavailableError) {
-      console.warn(
-        `[marketWsStreamer] symbol-data circuit open, falling back to Python for ${sym}`,
-      );
+      console.warn(`[marketWsStreamer] symbol-data circuit open for ${sym}`);
     } else {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.warn(
-        `[marketWsStreamer] symbol-data NSE fetch failed for ${sym} after 3 attempts: ${message}`,
-      );
+      console.warn(`[marketWsStreamer] symbol-data NSE fetch failed for ${sym}: ${message}`);
     }
   }
-  void nseFailed;
 
-  try {
-    const value = await fetchSymbolDataFromPython(sym);
-    if (isSymbolDataCacheable(value)) {
-      cache.set(cacheKey, value, SYMBOL_DATA_TTL_SECONDS);
-    }
-    return value;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error(
-      `[marketWsStreamer] symbol-data Python fallback failed for ${sym}: ${message}`,
-    );
-    return null;
-  }
+  return null;
 }
 
 export async function fetchChangeRangesWithFallback(
@@ -253,7 +237,17 @@ export async function fetchChangeRangesWithFallback(
   const cached = cache.get<ChangeRanges>(cacheKey);
   if (cached) return cached;
 
-  let nseFailed = false;
+  try {
+    const value = await fetchChangeRangesFromPython(sym);
+    if (isChangeRangesCacheable(value)) {
+      cache.set(cacheKey, value, CHANGE_RANGES_TTL_SECONDS);
+      return value;
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.warn(`[marketWsStreamer] change-ranges Python failed for ${sym}: ${message}`);
+  }
+
   try {
     const value = await throttledNseCall(
       cacheKey,
@@ -264,37 +258,14 @@ export async function fetchChangeRangesWithFallback(
       cache.set(cacheKey, value, CHANGE_RANGES_TTL_SECONDS);
       return value;
     }
-    nseFailed = true;
   } catch (err: unknown) {
-    nseFailed = true;
     if (err instanceof NSEServiceUnavailableError) {
-      console.warn(
-        `[marketWsStreamer] change-ranges circuit open, falling back to Python for ${sym}`,
-      );
+      console.warn(`[marketWsStreamer] change-ranges circuit open for ${sym}`);
     } else {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.warn(
-        `[marketWsStreamer] change-ranges NSE fetch failed for ${sym} after 3 attempts: ${message}`,
-      );
+      console.warn(`[marketWsStreamer] change-ranges NSE fetch failed for ${sym}: ${message}`);
     }
   }
-  void nseFailed;
 
-  try {
-    const value = await fetchChangeRangesFromPython(sym);
-    if (isChangeRangesCacheable(value)) {
-      cache.set(cacheKey, value, CHANGE_RANGES_TTL_SECONDS);
-    }
-    return value;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error(
-      `[marketWsStreamer] change-ranges Python fallback failed for ${sym}: ${message}`,
-    );
-    return null;
-  }
+  return null;
 }
-
-// Re-export for any callers that want to constrain the batch size
-// the way the HTTP routes do.
-export { NSE_MAX_SYMBOLS_PER_REQUEST };
