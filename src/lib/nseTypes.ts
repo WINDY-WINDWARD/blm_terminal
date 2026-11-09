@@ -65,8 +65,6 @@ export const NSE_FIELD_MAP_CHANGE_RANGES: Record<keyof ChangeRanges, string> = {
 export const CHANGE_RANGES_TTL_SECONDS = 300;
 export const SYMBOL_DATA_TTL_SECONDS = 60;
 
-export const NSE_MAX_SYMBOLS_PER_REQUEST = 50;
-
 export const NSE_BASE_URL = 'https://www.nseindia.com';
 
 export const NSE_HEADERS: HeadersInit = {

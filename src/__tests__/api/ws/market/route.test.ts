@@ -288,7 +288,42 @@ describe('streamSymbolData', () => {
     expect(ws.sent[0].request_id).toBe(99);
   });
 
-  it('mixed batch: 2 symbols fail NSE → still emits partials for all, with the 2 failures carrying Python data', async () => {
+  it('does not truncate a watchlist larger than 50 symbols', async () => {
+    const ws = new FakeWebSocket();
+    const { spy } = makeUrlRoutedFetchSpy([
+      {
+        match: (u) => u.includes('4455') || u.includes('python'),
+        respond: (call) => {
+          const sym = new URL(call.url).searchParams.get('symbol') ?? '';
+          return new Response(
+            JSON.stringify({
+              data: {
+                [sym]: {
+                  equityResponse: [
+                    { orderBook: { lastPrice: 100 }, metaData: { pChange: 0.5 } },
+                  ],
+                },
+              },
+            }),
+            { status: 200 },
+          );
+        },
+      },
+    ]);
+    vi.stubGlobal('fetch', spy as unknown as typeof fetch);
+
+    const symbols = Array.from({ length: 55 }, (_, i) => `SYM${i.toString().padStart(2, '0')}`);
+    await streamSymbolData(ws as unknown as WebSocket, 1, symbols);
+
+    const started = ws.sent.find((m) => m.type === 'symbol_data_started');
+    expect(started?.symbols).toHaveLength(55);
+
+    const partials = ws.sent.filter((m) => m.type === 'symbol_data_partial');
+    expect(partials).toHaveLength(55);
+    expect(new Set(partials.map((p) => p.symbol))).toEqual(new Set(symbols));
+  });
+
+  it('mixed batch: Python supplies 2 symbols and NSE fallback supplies the other 2', async () => {
     const ws = new FakeWebSocket();
     const nseFailures = new Set(['RELIANCE', 'HAL']);
     const pythonData: Record<string, unknown> = {
@@ -329,10 +364,10 @@ describe('streamSymbolData', () => {
     expect(partials).toHaveLength(4);
 
     const bySymbol = Object.fromEntries(partials.map((p) => [p.symbol, p.data]));
-    // The 2 NSE failures got their data from Python.
+    // Python supplied RELIANCE and HAL.
     expect(bySymbol.RELIANCE).toEqual({ ltp: 1310, pChange: 0.7, yearHigh: undefined, yearLow: undefined });
     expect(bySymbol.HAL).toEqual({ ltp: 2200, pChange: 1.1, yearHigh: undefined, yearLow: undefined });
-    // The 2 NSE successes got their data from NSE.
+    // Python had no entry for TCS and INFY, so NSE fallback supplied them.
     expect(bySymbol.TCS).toEqual({ ltp: 1000, pChange: 0.1, yearHigh: undefined, yearLow: undefined });
     expect(bySymbol.INFY).toEqual({ ltp: 1000, pChange: 0.1, yearHigh: undefined, yearLow: undefined });
   });

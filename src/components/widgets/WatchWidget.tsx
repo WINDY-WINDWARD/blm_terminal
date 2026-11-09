@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery, useQueries, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useAtom, useAtomValue } from 'jotai';
 import { 
   activeSymbolAtom, 
@@ -59,6 +59,14 @@ interface WatchRowData {
   fairValueLoading: boolean;
 }
 
+interface FairValueEntry {
+  fairValue: number | null;
+  fairValueUpdatedAt?: string | null;
+  morningstarId?: string | null;
+}
+
+type FairValueBatchResponse = Record<string, FairValueEntry>;
+
 interface ResultCellValue {
   date: string;
   status: 'upcoming' | 'past';
@@ -114,10 +122,45 @@ const SORTABLE_COLUMNS: Record<string, ColumnConfig> = {
   alerts: { key: 'alerts', label: 'ALERTS', textAlign: 'center', defaultSort: 'desc' },
 };
 
+const RESULTS_MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+export function parseResultsDate(dateStr: string): number | null {
+  const match = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (!match) return null;
+  const month = RESULTS_MONTHS[match[2].toLowerCase()];
+  if (month === undefined) return null;
+  const timestamp = Date.UTC(Number(match[3]), month, Number(match[1]));
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function formatResultsDate(dateStr: string): string {
   const match = dateStr.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
   if (!match) return dateStr;
   return `${match[1]} ${match[2]}`;
+}
+
+export function compareResults(
+  a: ResultCellValue | null,
+  b: ResultCellValue | null,
+  direction: SortDirection,
+): number {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  const aDate = parseResultsDate(a.date);
+  const bDate = parseResultsDate(b.date);
+  if (aDate === null && bDate === null) return 0;
+  if (aDate === null) return 1;
+  if (bDate === null) return -1;
+  if (aDate !== bDate) {
+    const result = aDate - bDate;
+    return direction === 'asc' ? result : -result;
+  }
+  if (a.status === b.status) return 0;
+  return a.status === 'upcoming' ? -1 : 1;
 }
 
 function compareValues(a: unknown, b: unknown, direction: SortDirection): number {
@@ -170,7 +213,42 @@ interface WatchRowProps {
   onAlertClick: (symbol: string) => void;
 }
 
-function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash, onAlertClick }: WatchRowProps) {
+function areWatchRowsEqual(prev: WatchRowProps, next: WatchRowProps): boolean {
+  const a = prev.rowData;
+  const b = next.rowData;
+  return (
+    prev.isActive === next.isActive &&
+    prev.columns === next.columns &&
+    prev.resultDates === next.resultDates &&
+    prev.removing === next.removing &&
+    prev.flash === next.flash &&
+    prev.onRowClick === next.onRowClick &&
+    prev.onRemove === next.onRemove &&
+    prev.onAlertClick === next.onAlertClick &&
+    a.item.id === b.item.id &&
+    a.item.symbol === b.item.symbol &&
+    a.item.exchange === b.item.exchange &&
+    a.ltp === b.ltp &&
+    a.chgPct === b.chgPct &&
+    a.oneWeek === b.oneWeek &&
+    a.oneMonth === b.oneMonth &&
+    a.threeMonth === b.threeMonth &&
+    a.sixMonth === b.sixMonth &&
+    a.oneYear === b.oneYear &&
+    a.twoYear === b.twoYear &&
+    a.threeYear === b.threeYear &&
+    a.fiveYear === b.fiveYear &&
+    a.yearHigh === b.yearHigh &&
+    a.yearLow === b.yearLow &&
+    a.fairValue === b.fairValue &&
+    a.alertCount === b.alertCount &&
+    a.symbolLoading === b.symbolLoading &&
+    a.rangesLoading === b.rangesLoading &&
+    a.fairValueLoading === b.fairValueLoading
+  );
+}
+
+const WatchRow = React.memo(function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemove, removing, flash, onAlertClick }: WatchRowProps) {
   const { item, ltp, chgPct, oneWeek, oneMonth, threeMonth, sixMonth, oneYear, twoYear, threeYear, fiveYear, yearHigh, yearLow, fairValue, alertCount, symbolLoading, rangesLoading, fairValueLoading } = rowData;
   const isUp = (chgPct ?? 0) >= 0;
   const dash = <span className="text-zinc-500">—</span>;
@@ -349,7 +427,7 @@ function WatchRow({ rowData, isActive, columns, resultDates, onRowClick, onRemov
       })}
     </tr>
   );
-}
+}, areWatchRowsEqual);
 
 async function searchSymbols(query: string): Promise<AutocompleteResult[]> {
   if (!query || query.length < 1) return [];
@@ -405,7 +483,6 @@ interface WatchAlertsModalProps {
 
 export function WatchAlertsModal({ symbol, watchlistId, onClose, onAlertDismissed }: WatchAlertsModalProps) {
   const [showAiSummary, setShowAiSummary] = useState(false);
-  const queryClient = useQueryClient();
   const [, setChartOverrides] = useAtom(chartSymbolOverridesAtom);
   const [, setCompanyOverrides] = useAtom(companySymbolOverridesAtom);
 
@@ -643,10 +720,9 @@ export function WatchWidget() {
   const [columnDropTarget, setColumnDropTarget] = useState<{ key: string; placement: ColumnDropPlacement } | null>(null);
   const suppressColumnClickRef = useRef(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showImportModal, setShowImportModal] = useAtom(showTradingViewImportModalAtom);
+  const [, setShowImportModal] = useAtom(showTradingViewImportModalAtom);
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const debounceRef = React.useRef<NodeJS.Timeout | null>(null);
-  const prevPricesRef = useRef<Map<string, number>>(new Map());
   const [flashStates, setFlashStates] = useState<Map<string, 'up' | 'down'>>(new Map());
 
   const { data: eventCalendar = [] } = useQuery({
@@ -722,64 +798,136 @@ export function WatchWidget() {
     if (watchlist.length === 0) return;
 
     const symbols = watchlist.map((i) => i.symbol).filter(Boolean);
+    const exchangeBySymbol = new Map(watchlist.map((i) => [i.symbol, i.exchange]));
+    const lastPrices = new Map<string, number>();
 
-    // Subscribe to change-ranges responses
-    const unsubRanges = marketDataService.onChangeRanges((symbol, data) => {
-      if (data) {
+    // Buffer partials and flush once per frame. A 100-symbol refresh can
+    // deliver dozens of partials in a burst; one render per frame keeps the
+    // table responsive instead of re-rendering every row per symbol.
+    let pendingRanges = new Map<string, ChangeRanges>();
+    let pendingSymbols = new Map<string, SymbolDataExtract>();
+    let flushHandle: number | null = null;
+    const flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    const flush = () => {
+      flushHandle = null;
+
+      if (pendingRanges.size > 0) {
+        const batch = pendingRanges;
+        pendingRanges = new Map();
         setChangeRangesMap((prev) => {
           const next = new Map(prev);
-          next.set(symbol, data);
+          for (const [symbol, data] of batch) next.set(symbol, data);
+          return next;
+        });
+        setChangeRangesReceived((prev) => {
+          const next = new Set(prev);
+          for (const symbol of batch.keys()) next.add(symbol);
           return next;
         });
       }
-      setChangeRangesReceived((prev) => {
-        if (prev.has(symbol)) return prev;
-        const next = new Set(prev);
-        next.add(symbol);
-        return next;
-      });
+
+      if (pendingSymbols.size > 0) {
+        const batch = pendingSymbols;
+        pendingSymbols = new Map();
+        const flashed = new Map<string, 'up' | 'down'>();
+
+        // Compute flashes before scheduling React updates. Mutating state
+        // inside an updater makes the result depend on when React runs it.
+        for (const [symbol, data] of batch) {
+          const previousPrice = lastPrices.get(symbol);
+          if (previousPrice !== undefined && previousPrice !== data.ltp) {
+            flashed.set(symbol, data.ltp > previousPrice ? 'up' : 'down');
+          }
+          lastPrices.set(symbol, data.ltp);
+        }
+
+        setSymbolDataMap((prev) => {
+          const next = new Map(prev);
+          for (const [symbol, data] of batch) next.set(symbol, data);
+          return next;
+        });
+
+        setSymbolDataReceived((prev) => {
+          const next = new Set(prev);
+          for (const symbol of batch.keys()) next.add(symbol);
+          return next;
+        });
+
+        setTickData((prev) => {
+          const next = { ...prev };
+          for (const [symbol, data] of batch) {
+            const exchange = exchangeBySymbol.get(symbol) ?? 'NSE';
+            next[`${symbol}.${exchange}`] = {
+              symbol,
+              exchange,
+              ltp: data.ltp,
+              pChange: data.pChange,
+              yearHigh: data.yearHigh,
+              yearLow: data.yearLow,
+              updatedAt: Date.now(),
+            };
+          }
+          return next;
+        });
+
+        if (flashed.size > 0) {
+          setFlashStates((prev) => {
+            const next = new Map(prev);
+            for (const [symbol, direction] of flashed) next.set(symbol, direction);
+            return next;
+          });
+          // Clear each symbol's flash independently. A single shared timer
+          // would be cancelled by a later tick and leave stale highlights.
+          for (const symbol of flashed.keys()) {
+            const existing = flashTimers.get(symbol);
+            if (existing) clearTimeout(existing);
+            const timer = setTimeout(() => {
+              setFlashStates((prev) => {
+                if (!prev.has(symbol)) return prev;
+                const next = new Map(prev);
+                next.delete(symbol);
+                return next;
+              });
+              flashTimers.delete(symbol);
+            }, 400);
+            flashTimers.set(symbol, timer);
+          }
+        }
+      }
+    };
+
+    const scheduleFlush = () => {
+      if (flushHandle !== null) return;
+      flushHandle = window.requestAnimationFrame(flush);
+    };
+
+    // Subscribe to change-ranges responses
+    const unsubRanges = marketDataService.onChangeRanges((symbol, data) => {
+      if (data) pendingRanges.set(symbol, data);
+      else if (!pendingRanges.has(symbol)) {
+        setChangeRangesReceived((prev) => {
+          if (prev.has(symbol)) return prev;
+          const next = new Set(prev);
+          next.add(symbol);
+          return next;
+        });
+      }
+      scheduleFlush();
     });
 
     // Subscribe to symbol-data responses — also populates global tickDataAtom
     const unsubSymbol = marketDataService.onSymbolData((symbol, data) => {
-      if (data) {
-        // Feed global tick data atom for OrderWidget / PosWidget consumers
-        const exchange = watchlist.find((i) => i.symbol === symbol)?.exchange ?? 'NSE';
-        setTickData((prev) => ({
-          ...prev,
-          [`${symbol}.${exchange}`]: { symbol, exchange, ltp: data.ltp, pChange: data.pChange, yearHigh: data.yearHigh, yearLow: data.yearLow, updatedAt: Date.now() },
-        }));
-
-        setSymbolDataMap((prev) => {
-          const prevData = prev.get(symbol);
-          const ltpChanged = prevData !== undefined && prevData.ltp !== data.ltp;
-          // Trigger flash on LTP change
-          if (ltpChanged) {
-            const direction = data.ltp > prevData!.ltp ? 'up' : 'down';
-            setFlashStates((fs) => {
-              const next = new Map(fs);
-              next.set(symbol, direction);
-              return next;
-            });
-            setTimeout(() => {
-              setFlashStates((fs) => {
-                const next = new Map(fs);
-                next.delete(symbol);
-                return next;
-              });
-            }, 400);
-          }
-          const next = new Map(prev);
-          next.set(symbol, data);
+      if (data) pendingSymbols.set(symbol, data);
+      else if (!pendingSymbols.has(symbol)) {
+        setSymbolDataReceived((prev) => {
+          if (prev.has(symbol)) return prev;
+          const next = new Set(prev);
+          next.add(symbol);
           return next;
         });
       }
-      setSymbolDataReceived((prev) => {
-        if (prev.has(symbol)) return prev;
-        const next = new Set(prev);
-        next.add(symbol);
-        return next;
-      });
+      scheduleFlush();
     });
 
     // Request data for all symbols in this watchlist
@@ -799,26 +947,65 @@ export function WatchWidget() {
       unsubSymbol();
       clearInterval(symbolDataInterval);
       clearInterval(changeRangesInterval);
+      if (flushHandle !== null) window.cancelAnimationFrame(flushHandle);
+      for (const timer of flashTimers.values()) clearTimeout(timer);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchlist.map((i) => i.symbol).join(',')]);
 
-  const symbolsList = watchlist.map((i) => i.symbol).filter(Boolean);
-  const fairValueBatchQuery = useQuery({
-    queryKey: ['morningstar/fairvalue-batch', symbolsList],
+  const symbolsList = React.useMemo(
+    () => Array.from(new Set(watchlist.map((i) => i.symbol.toUpperCase()).filter(Boolean))),
+    [watchlist],
+  );
+
+  // Primary source: the fair values already synced into StockUniverse.
+  // This returns immediately and avoids the slow Morningstar round-trip.
+  const fairValueBatchQuery = useQuery<FairValueBatchResponse>({
+    queryKey: ['stockuniverse/fair-values-batch', symbolsList],
     queryFn: async () => {
       if (symbolsList.length === 0) return {};
-      const res = await fetch(`/api/py/morningstar/fairvalue/batch`, {
+      const res = await fetch('/api/py/stockuniverse/fair-values/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbols: symbolsList }),
       });
-      if (!res.ok) return {};
-      const data = await res.json();
-      return data as Record<string, { fairValue: number | null }>;
+      if (!res.ok) throw new Error('Failed to load fair values');
+      return (await res.json()) as FairValueBatchResponse;
     },
     staleTime: 300_000,
     enabled: symbolsList.length > 0,
+    placeholderData: keepPreviousData,
+  });
+
+  // Safety net for symbols missing from the database. Keep the live
+  // request small so it cannot block the watchlist render.
+  const missingFairValueSymbols = React.useMemo(() => {
+    if (fairValueBatchQuery.isError) return symbolsList.slice(0, 25);
+    if (!fairValueBatchQuery.isSuccess) return [];
+    return symbolsList
+      .filter((symbol) => fairValueBatchQuery.data?.[symbol]?.fairValue == null)
+      .slice(0, 25);
+  }, [
+    symbolsList,
+    fairValueBatchQuery.isError,
+    fairValueBatchQuery.isSuccess,
+    fairValueBatchQuery.data,
+  ]);
+
+  const fairValueLiveQuery = useQuery<FairValueBatchResponse>({
+    queryKey: ['morningstar/fairvalue-live', missingFairValueSymbols.join(',')],
+    queryFn: async () => {
+      if (missingFairValueSymbols.length === 0) return {};
+      const res = await fetch('/api/py/morningstar/fairvalue/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: missingFairValueSymbols }),
+      });
+      if (!res.ok) throw new Error('Failed to load live fair values');
+      return (await res.json()) as FairValueBatchResponse;
+    },
+    staleTime: 600_000,
+    enabled: missingFairValueSymbols.length > 0,
     placeholderData: keepPreviousData,
   });
 
@@ -857,14 +1044,19 @@ export function WatchWidget() {
   );
 
   // Build derived row data
-  const rowDataList: WatchRowData[] = watchlist.map((item, idx) => {
+  const rowDataList: WatchRowData[] = watchlist.map((item) => {
     const quote = symbolDataMap.get(item.symbol);
     const ranges = changeRangesMap.get(item.symbol);
-    const fvRaw = fairValueBatchQuery.data?.[item.symbol]?.fairValue;
+    const symbolKey = item.symbol.toUpperCase();
+    const dbEntry = fairValueBatchQuery.data?.[symbolKey];
+    const liveEntry = fairValueLiveQuery.data?.[symbolKey];
+    const fvRaw = dbEntry?.fairValue ?? liveEntry?.fairValue;
     const fairValue = typeof fvRaw === 'number' ? fvRaw : typeof fvRaw === 'string' ? parseFloat(fvRaw) : null;
 
     const symbolLoading = !symbolDataReceived.has(item.symbol);
     const rangesLoading = !changeRangesReceived.has(item.symbol);
+    const fairValueLoading = fairValueBatchQuery.isLoading
+      || (dbEntry?.fairValue == null && fairValueLiveQuery.isLoading);
 
     return {
       item,
@@ -884,7 +1076,7 @@ export function WatchWidget() {
       alertCount: alertCountMap.get(item.symbol) ?? 0,
       symbolLoading,
       rangesLoading,
-      fairValueLoading: fairValueBatchQuery.isLoading,
+      fairValueLoading,
     };
   });
 
@@ -975,9 +1167,11 @@ export function WatchWidget() {
           bVal = b.fairValue;
           break;
         case 'results':
-          aVal = resultDates.get(a.item.symbol.toUpperCase()) ?? null;
-          bVal = resultDates.get(b.item.symbol.toUpperCase()) ?? null;
-          break;
+          return compareResults(
+            resultDates.get(a.item.symbol.toUpperCase()) ?? null,
+            resultDates.get(b.item.symbol.toUpperCase()) ?? null,
+            sortDirection,
+          );
         case 'alerts':
           aVal = a.alertCount;
           bVal = b.alertCount;
@@ -1120,10 +1314,14 @@ export function WatchWidget() {
     };
   }, []);
 
-  const handleRowClick = (item: WatchlistItem) => {
+  const handleRowClick = useCallback((item: WatchlistItem) => {
     setActiveSymbol(item.symbol);
     setActiveExchange(item.exchange);
-  };
+  }, [setActiveSymbol, setActiveExchange]);
+
+  const handleRemove = useCallback((id: number) => {
+    removeMutation.mutate(id);
+  }, [removeMutation]);
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1349,7 +1547,7 @@ export function WatchWidget() {
                       activeExchange === rowData.item.exchange
                     }
                     onRowClick={handleRowClick}
-                    onRemove={(id) => removeMutation.mutate(id)}
+                    onRemove={handleRemove}
                     removing={removeMutation.isPending && removeMutation.variables === rowData.item.id}
                     flash={flashStates.get(rowData.item.symbol) ?? null}
                     onAlertClick={handleAlertClick}
