@@ -233,7 +233,12 @@ def bootstrap_core(
 
 
 def promote_staged(staged_dir: Path) -> Path:
-    """Promote staged_dir to install_dir, preserving previous install in rollback_dir."""
+    """Promote staged_dir to install_dir, preserving the previous install in rollback_dir.
+
+    An install directory without a binary is not a previous version: the first
+    promotion often runs against the empty directory that ensure_dirs() created.
+    Copying that into rollback would leave a rollback that restores nothing.
+    """
     staged_bin = staged_dir / binary_name()
     if not staged_bin.is_file():
         raise FileNotFoundError(f"Staged binary not found at {staged_bin}")
@@ -242,11 +247,14 @@ def promote_staged(staged_dir: Path) -> Path:
     rb_dir = rollback_dir()
 
     moved_to_rollback = False
-    if inst_dir.exists():
+    if (inst_dir / binary_name()).is_file():
         if rb_dir.exists():
             shutil.rmtree(rb_dir, ignore_errors=True)
         shutil.move(str(inst_dir), str(rb_dir))
         moved_to_rollback = True
+    elif inst_dir.exists():
+        # Empty or incomplete install directory: nothing worth restoring.
+        shutil.rmtree(inst_dir, ignore_errors=True)
 
     try:
         shutil.move(str(staged_dir), str(inst_dir))
@@ -281,7 +289,6 @@ def rollback_install() -> bool:
     rb_bin = rb_dir / binary_name()
     if not rb_bin.is_file():
         return False
-
     inst_dir = install_dir()
     root = core_root()
     temp_dir = Path(tempfile.mkdtemp(dir=root, prefix="install_aside_"))
