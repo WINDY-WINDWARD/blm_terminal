@@ -258,6 +258,20 @@ def promote_staged(staged_dir: Path) -> Path:
                 logger.error("Failed to restore rollback_dir after promote failure: %s", restore_exc)
         raise
 
+    # A staged directory without metadata would leave the active install
+    # without a version. Rebuild it from the staged directory name so the
+    # updater and the UI always know which core is live.
+    if read_metadata(inst_dir) is None:
+        write_metadata(
+            CoreMetadata(
+                version=staged_dir.name,
+                asset_name=binary_name(),
+                installed_at=datetime.now(timezone.utc).isoformat(),
+                source="upstream",
+            ),
+            directory=inst_dir,
+        )
+
     return inst_dir
 
 

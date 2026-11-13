@@ -20,7 +20,7 @@ export interface CliproxyCoreStatus {
   supervisor_state: string;
 }
 
-export function CliproxyCoreCard() {
+export function CliproxyCoreCard({ isAdmin = false }: { isAdmin?: boolean } = {}) {
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -148,15 +148,24 @@ export function CliproxyCoreCard() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: checked ? 'true' : 'false' }),
     })
-      .then((res) => {
+      .then(async (res) => {
         if (!res.ok) {
-          // ignore failure silently
-          return;
+          let detail = `Could not save the automatic update setting (HTTP ${res.status})`;
+          try {
+            const errData = (await res.json()) as { detail?: string };
+            if (errData && typeof errData.detail === 'string') {
+              detail = errData.detail;
+            }
+          } catch {
+            // keep the fallback detail
+          }
+          throw new Error(detail);
         }
         void queryClient.invalidateQueries({ queryKey: ['cliproxy', 'status'] });
       })
-      .catch(() => {
-        // ignore failure silently
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'Could not save the automatic update setting';
+        setActionError(message);
       });
   };
 
@@ -238,18 +247,20 @@ export function CliproxyCoreCard() {
               </div>
             )}
 
-            <div className="pt-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  aria-label="Automatic updates for CLIProxyAPI core"
-                  checked={Boolean(status.auto_update)}
-                  onChange={(e) => handleToggleAutoUpdate(e.target.checked)}
-                  className="accent-terminal-amber cursor-pointer"
-                />
-                <span className="text-white/80 text-[11px]">Automatic updates</span>
-              </label>
-            </div>
+            {isAdmin && (
+              <div className="pt-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    aria-label="Automatic updates for CLIProxyAPI core"
+                    checked={Boolean(status.auto_update)}
+                    onChange={(e) => handleToggleAutoUpdate(e.target.checked)}
+                    className="accent-terminal-amber cursor-pointer"
+                  />
+                  <span className="text-white/80 text-[11px]">Automatic updates</span>
+                </label>
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-2 pt-1">
               <button

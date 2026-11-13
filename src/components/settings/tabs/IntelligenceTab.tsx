@@ -223,7 +223,7 @@ export function IntelligenceTab({
             </div>
           </BentoCard>
 
-          <CliproxyCoreCard />
+          <CliproxyCoreCard isAdmin={isAdmin} />
 
           {/* Background Worker Models */}
           <BentoCard
