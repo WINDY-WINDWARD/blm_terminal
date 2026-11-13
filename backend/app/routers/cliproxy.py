@@ -107,6 +107,9 @@ async def _build_status_dict(db: AsyncSession) -> dict[str, Any]:
         "auto_update": auto_update,
         "core_root": str(cliproxy_core.core_root()),
         "binary_path": str(managed_bin) if managed_bin is not None else None,
+        "rollback_available": (
+            cliproxy_core.rollback_dir() / cliproxy_core.binary_name()
+        ).is_file(),
         "supervisor_state": supervisor_status.get("state"),
     }
 

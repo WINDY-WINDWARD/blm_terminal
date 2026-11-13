@@ -198,6 +198,22 @@ def test_promote_staged(tmp_path: Path):
     assert read_metadata(rollback_dir()).version == "1.0.0"
 
 
+def test_promote_staged_without_previous_install_leaves_no_rollback(tmp_path: Path):
+    """The first promotion runs against the empty install dir that ensure_dirs() made."""
+    ensure_dirs()
+    assert install_dir().exists() and not (install_dir() / binary_name()).exists()
+
+    stage = staging_dir()
+    stage.mkdir(parents=True, exist_ok=True)
+    (stage / binary_name()).write_bytes(b"version 2.0")
+
+    promote_staged(stage)
+
+    assert (install_dir() / binary_name()).read_bytes() == b"version 2.0"
+    assert not (rollback_dir() / binary_name()).exists()
+    assert not rollback_install()
+
+
 def test_rollback_install(tmp_path: Path):
     # No rollback available
     assert not rollback_install()
