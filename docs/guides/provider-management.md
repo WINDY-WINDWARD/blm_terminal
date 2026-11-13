@@ -12,9 +12,10 @@
 | **Active Route Policy** | **Strictly one active route** at any given moment | Eliminates prompt/tool divergence across models; ensures predictable execution context for chat agents, hunter/verifier workflows, and Script Lab. |
 | **Model Namespacing** | `blm:<route_id>/<upstream_model>` | Fully disambiguates models across route families, prevents collision between upstream models of the same name, and preserves auditability. |
 | **Secret Storage** | **OS Keyring + AES-256-GCM** | Master key stored in platform credential manager (Windows Credential Manager, macOS Keychain, Linux SecretService); OAuth and custom-endpoint secrets are encrypted in an isolated vault (`provider_vault.enc`) with **no plaintext vault fallback**. Direct-provider API keys keep their existing `SystemConfig` storage path. |
-| **Proxy Supervision** | **Ephemeral sidecar (CLIProxyAPI v8.0.39)** | Managed purely by `ProxySupervisor` on loopback `127.0.0.1` on an ephemeral port. Wiped on shutdown. All inference requests go through the bundled sidecar at `127.0.0.1`. |
+| **Proxy Supervision** | **Ephemeral sidecar (CLIProxyAPI v8)** | Managed purely by `ProxySupervisor` on loopback `127.0.0.1` on an ephemeral port. Wiped on shutdown. All inference requests go through the sidecar at `127.0.0.1`. |
 | **Security Boundaries** | **Zero secret leakage** | No secrets in query strings, URLs, renderer responses, logs, diagnostics, or configuration dumps. Strict redaction (`[REDACTED]`). |
-| **Packaging & Licensing** | **Pinned v8.0.39 release binary** | Embedded with upstream MIT license notice in `resources/cliproxyapi/` and `electron-builder.json`. Fails closed on checksum mismatch. |
+| **Packaging & Licensing** | **Bootstrap release binary** | The bundled binary ships with the upstream MIT license notice in `resources/cliproxyapi/` and `electron-builder.json`. It is a bootstrap fallback only. |
+| **Core Versioning** | **Independently updated core** | The live core lives in a per-user managed directory outside the install path and updates itself from the upstream GitHub releases. An app release never changes the core version. See `docs/guides/cliproxy-core-updates.md`. |
 
 ---
 

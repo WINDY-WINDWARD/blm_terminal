@@ -245,7 +245,8 @@ if (!gotTheLock) {
     // child behind. That orphan keeps a lock on the installed binary, and the
     // NSIS upgrade then silently keeps the stale sidecar.
     try {
-      await killOrphanedSidecars();
+      const cliproxyCoreRoot = path.join(app.getPath('userData'), 'cliproxy-core');
+      await killOrphanedSidecars(cliproxyCoreRoot);
     } catch (err) {
       log(`[shutdown] sidecar sweep failed: ${err?.message || err}`);
     }
@@ -351,15 +352,28 @@ function cleanupProcesses() {
 // and NSIS then silently keeps the previous sidecar (2026-09-22 lesson). Sweep
 // only sidecars living inside the BLM Terminal tree — a user's own
 // cliproxyapi.exe is none of our business.
-function killOrphanedSidecars() {
+function killOrphanedSidecars(coreRoot = '') {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       resolve();
       return;
     }
+    const conditions = ["$_.ExecutablePath -like '*BLM Terminal*'"];
+    if (typeof coreRoot === 'string' && coreRoot.length > 0) {
+      // A backslash is not a wildcard in a PowerShell -like pattern, so the path
+      // is used as it is. Only the wildcard metacharacters and the quote that
+      // ends the string literal need escaping.
+      const escaped = coreRoot
+        .replace(/'/g, "''")
+        .replace(/\[/g, '`[')
+        .replace(/\]/g, '`]')
+        .replace(/\?/g, '`?')
+        .replace(/\*/g, '`*');
+      conditions.push(`$_.ExecutablePath -like '${escaped}*'`);
+    }
     const script = [
       "Get-CimInstance Win32_Process -Filter \"Name='cliproxyapi.exe'\"",
-      "| Where-Object { $_.ExecutablePath -like '*BLM Terminal*' }",
+      `| Where-Object { ${conditions.join(' -or ')} }`,
       "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
     ].join(' ');
     execFile(
@@ -494,6 +508,7 @@ async function startApp() {
 
     const cliproxyBin = resolveCliproxyBin();
     const cliproxyRuntimeRoot = path.join(userDataPath, 'cliproxy-runtime');
+    const cliproxyCoreRoot = path.join(userDataPath, 'cliproxy-core');
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
@@ -503,7 +518,8 @@ async function startApp() {
         ENV: isDev ? 'development' : 'production',
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin',
         SECRET_KEY: 'desktop_terminal_local_secret_key_123456789',
-        CLIPROXY_BIN: cliproxyBin,
+        CLIPROXY_CORE_ROOT: cliproxyCoreRoot,
+        CLIPROXY_BUNDLED_BIN: cliproxyBin,
         CLIPROXY_RUNTIME_ROOT: cliproxyRuntimeRoot,
         BLM_INTERNAL_TOKEN: serverInternalToken
       },

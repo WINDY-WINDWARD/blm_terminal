@@ -41,6 +41,8 @@ from app.workers.maintenance import VACUUM_CRON, _run_vacuum
 from app.workers.notification_cycles import (
     _notification_cycle_full,
 )
+from app.workers.cliproxy_update import run_cliproxy_update
+
 
 
 logger = logging.getLogger(__name__)
@@ -279,6 +281,15 @@ def register_all_jobs() -> None:
             category="analytics",
             cron_expression="0 17 * * *",
             callable=run_loop_3,
+            is_async=True,
+        ),
+        JobDefinition(
+            job_key="job.cliproxy_update",
+            name="cliproxy_update",
+            description="Checks upstream daily and stages a newer CLIProxyAPI core",
+            category="data_sync",
+            cron_expression=None,
+            callable=run_cliproxy_update,
             is_async=True,
         ),
     ]

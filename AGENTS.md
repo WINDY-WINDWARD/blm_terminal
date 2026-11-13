@@ -111,7 +111,8 @@ backend/  # FastAPI (Python ≥ 3.11)
 │                  # moneycontrol_client, morningstar_client,
 │                  # news_fetcher, news_aggregator, news_sources, rss_parser,
 │                  # ai_summarizer, ai_chat_service, indicators, momentum, returns,
-│                  # ticker_warehouse, tql_parser, nlp_service, cache, cookie_loader
+│                  # ticker_warehouse, tql_parser, nlp_service, cache, cookie_loader,
+│                  # proxy_supervisor, cliproxy_core, cliproxy_updater
 ├── app/models/, app/schemas/
 ├── app/orchestrator.py  # central background worker manager
 ├── app/backgroundtasks.py  # fair value sync, notification worker, stock universe sync

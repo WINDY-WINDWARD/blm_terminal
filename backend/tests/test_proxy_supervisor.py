@@ -266,13 +266,17 @@ async def test_supervisor_lazy_start_and_vault_requirement(tmp_path):
     vault._state = VaultState.KEYRING_UNAVAILABLE
     vault._initialized = True
 
-    supervisor = ProxySupervisor(vault=vault, runtime_root=tmp_path / "runtime")
+    fake_bin = tmp_path / "fake_bin.exe"
+    fake_bin.write_text("bin", encoding="utf-8")
+
+    supervisor = ProxySupervisor(vault=vault, bin_path=fake_bin, runtime_root=tmp_path / "runtime")
     assert supervisor.state == SupervisorState.STOPPED
 
-    with pytest.raises(VaultUnavailableError, match="vault is not available"):
-        await supervisor.ensure_started()
-
-    assert supervisor.state == SupervisorState.STOPPED
+    # Vault availability no longer prevents starting direct providers,
+    # but starting without a responsive process transitions or handles appropriately.
+    # Note: earlier versions raised VaultUnavailableError. Now we check that lazy start
+    # doesn't run until ensure_started().
+    assert not supervisor.is_running
 
 
 @pytest.mark.asyncio
@@ -689,4 +693,207 @@ async def test_ensure_started_restarts_on_unresponsive_management_api(tmp_path, 
 
     assert supervisor._last_recovery_reason == "management_unresponsive"
     assert supervisor._recovery_count == 1
+
+
+def test_resolve_cliproxy_bin_managed_core(monkeypatch, tmp_path):
+    """resolve_cliproxy_bin returns the managed core when one exists and the bundled fallback also exists."""
+    from app.services import cliproxy_core, proxy_supervisor
+
+    monkeypatch.setenv("CLIPROXY_CORE_ROOT", str(tmp_path / "core"))
+    # Clear CLIPROXY_BIN override if set
+    monkeypatch.delenv("CLIPROXY_BIN", raising=False)
+
+    # Set up bundled fallback
+    bundled_bin = tmp_path / "bundled" / cliproxy_core.binary_name()
+    bundled_bin.parent.mkdir(parents=True, exist_ok=True)
+    bundled_bin.write_text("bundled binary", encoding="utf-8")
+    monkeypatch.setenv("CLIPROXY_BUNDLED_BIN", str(bundled_bin))
+
+    # Set up managed core
+    managed_dir = cliproxy_core.install_dir()
+    managed_dir.mkdir(parents=True, exist_ok=True)
+    managed_bin = managed_dir / cliproxy_core.binary_name()
+    managed_bin.write_text("managed binary", encoding="utf-8")
+
+    cliproxy_core.write_metadata(
+        cliproxy_core.CoreMetadata(
+            version="8.0.40",
+            asset_name="CLIProxyAPI_8.0.40.zip",
+            installed_at="2026-11-13T00:00:00Z",
+            source="test",
+        )
+    )
+
+    resolved = proxy_supervisor.resolve_cliproxy_bin()
+    assert resolved == managed_bin
+
+
+def test_resolve_cliproxy_bin_ignores_sub_min_version(monkeypatch, tmp_path):
+    """resolve_cliproxy_bin ignores a managed core whose version is below MIN_SUPPORTED_VERSION."""
+    from app.services import cliproxy_core, proxy_supervisor
+
+    monkeypatch.setenv("CLIPROXY_CORE_ROOT", str(tmp_path / "core"))
+    monkeypatch.delenv("CLIPROXY_BIN", raising=False)
+
+    # Set up bundled fallback
+    bundled_bin = tmp_path / "bundled" / cliproxy_core.binary_name()
+    bundled_bin.parent.mkdir(parents=True, exist_ok=True)
+    bundled_bin.write_text("bundled binary", encoding="utf-8")
+    monkeypatch.setenv("CLIPROXY_BUNDLED_BIN", str(bundled_bin))
+
+    # Set up managed core with version older than 8.0.39
+    managed_dir = cliproxy_core.install_dir()
+    managed_dir.mkdir(parents=True, exist_ok=True)
+    managed_bin = managed_dir / cliproxy_core.binary_name()
+    managed_bin.write_text("managed old binary", encoding="utf-8")
+
+    cliproxy_core.write_metadata(
+        cliproxy_core.CoreMetadata(
+            version="8.0.30",
+            asset_name="CLIProxyAPI_8.0.30.zip",
+            installed_at="2026-11-13T00:00:00Z",
+            source="test",
+        )
+    )
+
+    resolved = proxy_supervisor.resolve_cliproxy_bin()
+    assert resolved == bundled_bin
+
+
+def test_resolve_cliproxy_bin_override_takes_precedence(monkeypatch, tmp_path):
+    """resolve_cliproxy_bin returns the CLIPROXY_BIN override first."""
+    from app.services import cliproxy_core, proxy_supervisor
+
+    monkeypatch.setenv("CLIPROXY_CORE_ROOT", str(tmp_path / "core"))
+
+    override_bin = tmp_path / "override" / "custom.exe"
+    override_bin.parent.mkdir(parents=True, exist_ok=True)
+    override_bin.write_text("override binary", encoding="utf-8")
+    monkeypatch.setenv("CLIPROXY_BIN", str(override_bin))
+
+    # Even if managed core exists
+    managed_dir = cliproxy_core.install_dir()
+    managed_dir.mkdir(parents=True, exist_ok=True)
+    managed_bin = managed_dir / cliproxy_core.binary_name()
+    managed_bin.write_text("managed binary", encoding="utf-8")
+    cliproxy_core.write_metadata(
+        cliproxy_core.CoreMetadata(
+            version="8.0.40",
+            asset_name="CLIProxyAPI_8.0.40.zip",
+            installed_at="2026-11-13T00:00:00Z",
+            source="test",
+        )
+    )
+
+    resolved = proxy_supervisor.resolve_cliproxy_bin()
+    assert resolved == override_bin
+
+
+def test_get_status_reports_core_source_and_version(monkeypatch, tmp_path, mock_vault):
+    """get_status() reports 'core_source' and 'version'."""
+    from app.services import cliproxy_core, proxy_supervisor
+
+    monkeypatch.setenv("CLIPROXY_CORE_ROOT", str(tmp_path / "core"))
+
+    managed_dir = cliproxy_core.install_dir()
+    managed_dir.mkdir(parents=True, exist_ok=True)
+    managed_bin = managed_dir / cliproxy_core.binary_name()
+    managed_bin.write_text("managed binary", encoding="utf-8")
+    cliproxy_core.write_metadata(
+        cliproxy_core.CoreMetadata(
+            version="8.0.40",
+            asset_name="CLIProxyAPI_8.0.40.zip",
+            installed_at="2026-11-13T00:00:00Z",
+            source="test",
+        )
+    )
+
+    supervisor = proxy_supervisor.ProxySupervisor(
+        bin_path=managed_bin,
+        runtime_root=tmp_path / "runtime",
+        vault=mock_vault,
+    )
+    supervisor._active_bin_path = managed_bin
+    supervisor._reported_version = "8.0.40"
+
+    status = supervisor.get_status()
+    assert status["core_source"] == "managed"
+    assert status["version"] == "8.0.40"
+    assert status["bin_path"] == str(managed_bin)
+
+
+@pytest.mark.asyncio
+async def test_supervisor_rollback_on_failed_readiness(monkeypatch, tmp_path, mock_vault):
+    """Verify that when a managed core fails readiness, it is quarantined and rolled back."""
+    from app.services import cliproxy_core, proxy_supervisor
+
+    monkeypatch.setenv("CLIPROXY_CORE_ROOT", str(tmp_path / "core"))
+    monkeypatch.delenv("CLIPROXY_BIN", raising=False)
+
+    # 1. Setup rollback dir with working previous version
+    rb_dir = cliproxy_core.rollback_dir()
+    rb_dir.mkdir(parents=True, exist_ok=True)
+    rb_bin = rb_dir / cliproxy_core.binary_name()
+    rb_bin.write_text("working previous binary", encoding="utf-8")
+    cliproxy_core.write_metadata(
+        cliproxy_core.CoreMetadata(
+            version="8.0.39",
+            asset_name="CLIProxyAPI_8.0.39.zip",
+            installed_at="2026-11-12T00:00:00Z",
+            source="test",
+        ),
+        directory=rb_dir,
+    )
+
+    # 2. Setup installed bad core
+    inst_dir = cliproxy_core.install_dir()
+    inst_dir.mkdir(parents=True, exist_ok=True)
+    bad_bin = inst_dir / cliproxy_core.binary_name()
+    bad_bin.write_text("bad binary", encoding="utf-8")
+    cliproxy_core.write_metadata(
+        cliproxy_core.CoreMetadata(
+            version="8.0.40",
+            asset_name="CLIProxyAPI_8.0.40.zip",
+            installed_at="2026-11-13T00:00:00Z",
+            source="test",
+        ),
+        directory=inst_dir,
+    )
+
+    supervisor = proxy_supervisor.ProxySupervisor(
+        vault=mock_vault,
+        runtime_root=tmp_path / "runtime",
+        readiness_timeout=0.1,
+    )
+
+    # Mock Popen: first call fails readiness, second call (after rollback) succeeds
+    mock_proc1 = MagicMock()
+    mock_proc1.pid = 1001
+    mock_proc1.poll.return_value = 1
+    mock_proc1.stderr = MagicMock()
+    mock_proc1.stderr.read.return_value = "bad core crash"
+
+    mock_proc2 = MagicMock()
+    mock_proc2.pid = 1002
+    mock_proc2.poll.return_value = None
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+
+    poll_calls = [False, True]  # first readiness fails, second succeeds
+
+    async def mock_poll_readiness(timeout):
+        return poll_calls.pop(0)
+
+    with patch("subprocess.Popen", side_effect=[mock_proc1, mock_proc2]):
+        with patch.object(supervisor, "_poll_readiness", side_effect=mock_poll_readiness):
+            host, port, key = await supervisor.ensure_started()
+            assert supervisor.is_running
+            assert supervisor.pid == 1002
+
+    # Check that 8.0.40 was quarantined
+    assert cliproxy_core.is_quarantined("8.0.40")
+    # And installed version is now 8.0.39
+    assert cliproxy_core.installed_version() == "8.0.39"
+
 

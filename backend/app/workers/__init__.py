@@ -70,4 +70,8 @@ from app.workers.ai_picks_worker import (  # noqa: E402,F401
     ai_picks_morning_worker,
     ai_picks_evening_worker,
 )
+from app.workers.cliproxy_update import (  # noqa: E402,F401
+    cliproxy_update_worker,
+    run_cliproxy_update,
+)
 
