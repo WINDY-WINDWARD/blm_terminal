@@ -155,6 +155,8 @@ ALLOWED_STRING_KEYS: set[str] = {
     "ai.codex_refresh_token",
     "ai.hunter_model",
     "ai.verifier_model",
+    "cliproxy.auto_update",
+    "cliproxy.download_mirrors",
 }
 
 SYSTEM_CONFIG_SECRET_KEYS: set[str] = {

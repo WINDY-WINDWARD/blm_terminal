@@ -1,5 +1,10 @@
 # CLIProxyAPI Third-Party Provenance
 
+This file records the bootstrap core that ships inside the installer.
+The running core is managed separately under the per-user core root.
+The core updates itself from the upstream GitHub releases.
+This file is the single source of truth that scripts/stage_cliproxyapi.ps1 and scripts/stage_cliproxyapi.sh read.
+
 - **Package**: CLIProxyAPI
 - **Upstream Repository**: https://github.com/router-for-me/CLIProxyAPI
 - **Release Version**: v8.0.39

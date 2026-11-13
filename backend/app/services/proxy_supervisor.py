@@ -18,6 +18,8 @@ import copy
 import json
 import logging
 import os
+import platform as _platform
+import re
 import secrets
 import shutil
 import socket
@@ -35,6 +37,8 @@ import yaml
 from app.services.private_files import restrict_access
 from app.services.redaction import SENSITIVE_FIELD_NAMES, redact_mapping
 from app.services.route_registry import compute_oauth_proxy_prefix, OAUTH_PROVIDERS
+from app.services import cliproxy_core
+from app.services.cliproxy_updater import MIN_SUPPORTED_VERSION, compare_versions
 
 from app.config import settings
 from app.services.provider_vault import (
@@ -100,8 +104,135 @@ def find_free_loopback_port() -> int:
         return int(s.getsockname()[1])
 
 
+_VERSION_BANNER_RE = re.compile(r"CLIProxyAPI Version:\s*([0-9][^\s,]*)")
+
+
+def _bundled_provenance() -> dict | None:
+    """Read PROVENANCE.json for the bundled core.
+
+    Look at these candidates in order and return the parsed JSON of the first one that exists:
+    - Path(os.environ["RESOURCES_PATH"]) / "resources" / "cliproxyapi" / "PROVENANCE.json"
+    - Path(os.environ["RESOURCES_PATH"]) / "cliproxyapi" / "PROVENANCE.json" (only when the env var is set)
+    - repo_root / "resources" / "cliproxyapi" / "PROVENANCE.json"
+    Return None when nothing is found or the file is unreadable. Never raise.
+    """
+    candidates: list[Path] = []
+    res_path = os.environ.get("RESOURCES_PATH")
+    if res_path:
+        candidates.append(Path(res_path) / "resources" / "cliproxyapi" / "PROVENANCE.json")
+        candidates.append(Path(res_path) / "cliproxyapi" / "PROVENANCE.json")
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    candidates.append(repo_root / "resources" / "cliproxyapi" / "PROVENANCE.json")
+
+    for cand in candidates:
+        if cand.is_file():
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                # A corrupt provenance file must not stop the search. Try the
+                # next candidate.
+                continue
+    return None
+
+
+def _bundled_core_info() -> tuple[Path | None, str, str | None]:
+    """Return (binary_path, version, binary_sha256) for the bundled fallback.
+
+    - binary_path: first existing candidate among: os.environ "CLIPROXY_BUNDLED_BIN",
+      repo_root / "vendor" / "cliproxyapi" / "runtime" / bin_name, then the RESOURCES_PATH
+      candidates "resources/cliproxyapi/<bin>" and "cliproxyapi/<bin>".
+      bin_name is "cliproxyapi.exe" on win32 else "cliproxyapi".
+    - version: from the provenance dict, the "version" key without a leading "v" (the file holds "v8.0.39").
+      Empty string when there is no provenance.
+    - binary_sha256: from the provenance dict, the entry under "architectures" whose "platform" equals
+      sys.platform and whose "arch" equals "x64" for machine AMD64/x86_64 or "arm64" for machine ARM64/aarch64.
+      Use that entry's "binary_sha256". None when there is no match.
+    """
+    bin_name = "cliproxyapi.exe" if sys.platform == "win32" else "cliproxyapi"
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+
+    # Resolve binary_path
+    binary_path: Path | None = None
+    bundled_env = os.environ.get("CLIPROXY_BUNDLED_BIN")
+    if bundled_env:
+        p = Path(bundled_env).resolve()
+        if p.is_file():
+            binary_path = p
+
+    if binary_path is None:
+        candidate = repo_root / "vendor" / "cliproxyapi" / "runtime" / bin_name
+        if candidate.is_file():
+            binary_path = candidate
+
+    if binary_path is None:
+        res_path = os.environ.get("RESOURCES_PATH")
+        if res_path:
+            cand1 = Path(res_path) / "resources" / "cliproxyapi" / bin_name
+            if cand1.is_file():
+                binary_path = cand1
+            else:
+                cand2 = Path(res_path) / "cliproxyapi" / bin_name
+                if cand2.is_file():
+                    binary_path = cand2
+
+    # Parse provenance
+    prov = _bundled_provenance()
+    version = ""
+    binary_sha256: str | None = None
+
+    if isinstance(prov, dict):
+        raw_version = str(prov.get("version", ""))
+        version = raw_version.lstrip("vV")
+        machine = _platform.machine().lower()
+        if machine in ("amd64", "x86_64"):
+            target_arch = "x64"
+        elif machine in ("arm64", "aarch64"):
+            target_arch = "arm64"
+        else:
+            target_arch = machine
+
+        architectures = prov.get("architectures")
+        if isinstance(architectures, dict):
+            for entry in architectures.values():
+                if isinstance(entry, dict):
+                    if entry.get("platform") == sys.platform and entry.get("arch") == target_arch:
+                        sha = entry.get("binary_sha256")
+                        if sha:
+                            binary_sha256 = str(sha)
+                        break
+
+    return binary_path, version, binary_sha256
+
+
+def _version_is_supported(version: str | None) -> bool:
+    """Return True when version is None/empty, or >= MIN_SUPPORTED_VERSION.
+
+    Catch ValueError from compare_versions and return True, logging a warning.
+    """
+    if not version:
+        return True
+    try:
+        return compare_versions(version, MIN_SUPPORTED_VERSION) >= 0
+    except ValueError as exc:
+        logger.warning("ProxySupervisor: malformed version %r (%s); treating as supported", version, exc)
+        return True
+
+
 def resolve_cliproxy_bin() -> Path:
-    """Resolve the CLIProxyAPI binary across environment and repository locations."""
+    """Resolve the CLIProxyAPI binary across environment and repository locations.
+
+    Order:
+    a. os.environ "CLIPROXY_BIN" when the path exists and is a file.
+    b. The managed core: cliproxy_core.managed_binary(). Accept it unless its version
+       is known and older than MIN_SUPPORTED_VERSION. When the version is older, log a
+       warning naming both versions and fall through. When installed_version() returns
+       None (unknown version), accept the managed core.
+    c. os.environ "CLIPROXY_BUNDLED_BIN" when the path exists and is a file.
+    d. The vendor staging directory (repo_root / "vendor" / "cliproxyapi" / "runtime" / bin_name).
+    e. The existing RESOURCES_PATH candidates.
+    """
+    # a. os.environ "CLIPROXY_BIN"
     env_bin = os.environ.get("CLIPROXY_BIN")
     if env_bin:
         p = Path(env_bin).resolve()
@@ -111,13 +242,34 @@ def resolve_cliproxy_bin() -> Path:
     is_win = sys.platform == "win32"
     bin_name = "cliproxyapi.exe" if is_win else "cliproxyapi"
 
-    # 1. Local vendor staging directory
+    # b. The managed core: cliproxy_core.managed_binary()
+    managed = cliproxy_core.managed_binary()
+    if managed is not None and managed.is_file():
+        installed_ver = cliproxy_core.installed_version()
+        if installed_ver is None:
+            return managed
+        if _version_is_supported(installed_ver):
+            return managed
+        logger.warning(
+            "ProxySupervisor: managed core version %s is older than MIN_SUPPORTED_VERSION %s; falling through to bundled fallback",
+            installed_ver,
+            MIN_SUPPORTED_VERSION,
+        )
+
+    # c. os.environ "CLIPROXY_BUNDLED_BIN"
+    bundled_env = os.environ.get("CLIPROXY_BUNDLED_BIN")
+    if bundled_env:
+        p = Path(bundled_env).resolve()
+        if p.exists() and p.is_file():
+            return p
+
+    # d. The vendor staging directory
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     candidate = repo_root / "vendor" / "cliproxyapi" / "runtime" / bin_name
     if candidate.exists() and candidate.is_file():
         return candidate
 
-    # 2. Packaged electron resources
+    # e. The existing RESOURCES_PATH candidates
     res_path = os.environ.get("RESOURCES_PATH")
     if res_path:
         cand1 = Path(res_path) / "resources" / "cliproxyapi" / bin_name
@@ -693,6 +845,8 @@ class ProxySupervisor:
         self._last_recovery_reason: str = ""
         self._last_suppressed_reason: str = ""
         self._recovery_count: int = 0
+        self._active_bin_path: Path | None = None
+        self._reported_version: str | None = None
 
     def hold_oauth_flow(self, seconds: float = 600.0) -> None:
         self._oauth_flow_deadline = time.monotonic() + seconds
@@ -778,8 +932,52 @@ class ProxySupervisor:
             )
             return False
 
+    def _is_managed_binary(self, path: Path) -> bool:
+        """Return True when path is inside the managed install directory."""
+        try:
+            return path.resolve().is_relative_to(cliproxy_core.install_dir().resolve())
+        except Exception:
+            return False
+
+    async def _ensure_managed_core(self) -> None:
+        """Ensure managed core exists; bootstrap from bundled binary if not present."""
+        if cliproxy_core.managed_binary() is not None:
+            return
+        binary_path, version, sha = _bundled_core_info()
+        if binary_path is None:
+            return
+        try:
+            res = cliproxy_core.bootstrap_core(binary_path, version=version, expected_sha256=sha)
+            logger.info("ProxySupervisor: bootstrapped managed core: %s", res)
+        except Exception as exc:
+            logger.warning("ProxySupervisor: failed to bootstrap managed core: %s", exc)
+
+    def _parse_version_banner(self) -> str | None:
+        """Read at most 8192 bytes of self._log_path, match version banner, and return version."""
+        if not self._log_path:
+            return None
+        try:
+            if not self._log_path.exists():
+                return None
+            with self._log_path.open("r", encoding="utf-8", errors="replace") as f:
+                content = f.read(8192)
+            match = _VERSION_BANNER_RE.search(content)
+            if match:
+                return match.group(1)
+        except Exception as exc:
+            logger.debug("ProxySupervisor: error parsing version banner: %s", exc)
+        return None
+
     def get_status(self) -> dict[str, Any]:
         """Return non-secret status summary."""
+        core_source = "bundled"
+        if self._active_bin_path:
+            env_override = os.environ.get("CLIPROXY_BIN")
+            if env_override and Path(env_override).resolve() == self._active_bin_path.resolve():
+                core_source = "override"
+            elif self._is_managed_binary(self._active_bin_path):
+                core_source = "managed"
+
         return {
             "state": self._state.value,
             "host": self._host,
@@ -788,6 +986,9 @@ class ProxySupervisor:
             "restart_count": self._restart_count,
             "last_error": self._last_error,
             "is_running": self.is_running,
+            "version": self._reported_version or cliproxy_core.installed_version(),
+            "bin_path": str(self._active_bin_path) if self._active_bin_path is not None else None,
+            "core_source": core_source,
         }
 
     @property
@@ -936,7 +1137,7 @@ class ProxySupervisor:
         """Start the supervisor process."""
         await self.ensure_started()
 
-    async def _start_unlocked(self) -> None:
+    async def _start_unlocked(self, allow_rollback: bool = True) -> None:
         self._invalidate_model_cache()
         # Clean up any leftover runtime directory before creating a fresh one
         if self._runtime_dir and self._runtime_dir.exists():
@@ -952,7 +1153,9 @@ class ProxySupervisor:
         set_dir_permissions_0700(runtime_root)
         cleanup_stale_runtimes(runtime_root, active_runtime_dir=self._runtime_dir)
 
+        await self._ensure_managed_core()
         bin_path = self.get_bin_path()
+        self._active_bin_path = bin_path
         if not bin_path.exists() or not bin_path.is_file():
             self._state = SupervisorState.CRASHED
             self._last_error = f"Binary missing at {bin_path}"
@@ -1089,12 +1292,25 @@ class ProxySupervisor:
             # Terminate unresponsive child first so stderr pipe reaches EOF and cannot hang
             await self._cleanup_process()
             err_msg = await self._collect_process_error()
+
+            if allow_rollback and self._is_managed_binary(bin_path):
+                ver = cliproxy_core.installed_version()
+                if ver:
+                    cliproxy_core.quarantine_version(ver)
+                if cliproxy_core.rollback_install():
+                    logger.warning(
+                        "ProxySupervisor: managed core failed readiness check; rolling back install and retrying"
+                    )
+                    await self._start_unlocked(allow_rollback=False)
+                    return
+
             self._state = SupervisorState.CRASHED
             self._last_error = err_msg
             raise ReadinessTimeoutError(f"CLIProxyAPI failed readiness check: {err_msg}")
 
         self._state = SupervisorState.RUNNING
         self._restart_count = 0
+        self._reported_version = self._parse_version_banner()
         logger.info("ProxySupervisor: CLIProxyAPI is RUNNING (child pid=%d)", self._process.pid)
 
     async def _poll_readiness(self, timeout: float) -> bool:

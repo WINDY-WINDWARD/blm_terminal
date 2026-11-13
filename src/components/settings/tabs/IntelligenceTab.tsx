@@ -5,6 +5,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import type { RouteModelCatalogResponse, RouteModelCatalogEntry } from '@/types/aiRoutes';
 import { RouteModelSelect } from '@/components/ai/RouteModelSelect';
 import { BentoCard } from './BentoCard';
+import { CliproxyCoreCard } from './CliproxyCoreCard';
 import type { BrowserProvision } from './types';
 
 export interface IntelligenceTabProps {
@@ -221,6 +222,8 @@ export function IntelligenceTab({
               </button>
             </div>
           </BentoCard>
+
+          <CliproxyCoreCard />
 
           {/* Background Worker Models */}
           <BentoCard

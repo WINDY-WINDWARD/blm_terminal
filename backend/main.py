@@ -55,6 +55,7 @@ from app.routers import (
     auth_router,
     users_router,
 )
+from app.routers.cliproxy import router as cliproxy_router
 from app.workers.lifecycle import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
@@ -863,6 +864,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     asyncio.create_task(_start_warm_browser_bg())
 
+    # A CLIProxyAPI core staged by a previous run becomes live now. The core is
+    # updated on its own channel, so it must not wait for an app release.
+    try:
+        from app.services import cliproxy_core
+        promoted = cliproxy_core.promote_pending_core()
+        if promoted:
+            logger.info("CLIProxyAPI core %s promoted to the active install", promoted)
+    except Exception as exc:
+        logger.warning("CLIProxyAPI core promotion at startup failed: %s", exc)
+
     # Start all workers, schedulers, and the startup pipeline via the orchestrator.
     # This replaces the previous scattered calls to start_all_workers(),
     # init_client(), _run_watchlist_scheduler(), _run_nightly_scheduler(), and
@@ -1094,6 +1105,7 @@ from app.routers.ticker import router as ticker_router
 app.include_router(ticker_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
+app.include_router(cliproxy_router, prefix="/api")
 
 if settings.is_development:
     from app.routers.notifications import _dev_router

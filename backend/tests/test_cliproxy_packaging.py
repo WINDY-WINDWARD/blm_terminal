@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ PROVENANCE_JSON = REPO_ROOT / "resources" / "cliproxyapi" / "PROVENANCE.json"
 PROVENANCE_MD = REPO_ROOT / "resources" / "cliproxyapi" / "PROVENANCE.md"
 LICENSE_FILE = REPO_ROOT / "resources" / "cliproxyapi" / "LICENSE"
 STAGE_PS1 = REPO_ROOT / "scripts" / "stage_cliproxyapi.ps1"
+STAGE_SH = REPO_ROOT / "scripts" / "stage_cliproxyapi.sh"
 STAGED_WIN_BIN = REPO_ROOT / "vendor" / "cliproxyapi" / "runtime" / "cliproxyapi.exe"
 
 
@@ -25,39 +27,55 @@ def test_provenance_files_exist():
 
 
 def test_provenance_pinned_version_and_checksums():
-    """Ensure PROVENANCE.json contains pinned v8.0.39 release assets, archive hashes, and binary hashes."""
+    """Ensure PROVENANCE.json contains valid semantic version release assets, archive hashes, and binary hashes."""
     data = json.loads(PROVENANCE_JSON.read_text(encoding="utf-8"))
-    assert data["version"] == "v8.0.39"
-    assert data["license"] == "MIT"
-    assert "router-for-me/CLIProxyAPI" in data["upstream_repository"]
+    version = data.get("version", "")
+    assert re.match(r"^v\d+\.\d+\.\d+$", version), f"Invalid version pattern: {version}"
+    assert data.get("release_tag") == version
+    assert data.get("license") == "MIT"
+    assert "router-for-me/CLIProxyAPI" in data.get("upstream_repository", "")
 
-    archs = data["architectures"]
+    archs = data.get("architectures", {})
     assert "windows_amd64" in archs
     assert "darwin_arm64" in archs
     assert "darwin_amd64" in archs
 
-    # Windows x64
-    win = archs["windows_amd64"]
-    assert win["sha256"] == "41ab6cdde60e9c190ded5f7fce27e5b3090a83b75895d7fbb879675f563936e0"
-    assert win["binary_sha256"] == "42574a2a028058ab0e7473e15b99cbb5e5370a46c70839c830758ee549b7a052"
-    assert win["asset_name"] == "CLIProxyAPI_8.0.39_windows_amd64.zip"
-    assert win["target_binary_name"] == "cliproxyapi.exe"
+    hex64_re = re.compile(r"^[0-9a-f]{64}$")
+    version_no_v = version.lstrip("v")
 
-    # macOS arm64
-    mac_arm = archs["darwin_arm64"]
-    assert mac_arm["sha256"] == "1febf0f15bef7cc70630496a4f5b145d1faafedf2c8bf0ae4d5648f0972b24be"
-    assert mac_arm["binary_sha256"] == "510a1f974a5b409bd9ee016d6f9ebcf6eb0b0f2a562858543d15af0e8deb5275"
-    assert mac_arm["asset_name"] == "CLIProxyAPI_8.0.39_darwin_aarch64.tar.gz"
+    for key in ("windows_amd64", "darwin_arm64", "darwin_amd64"):
+        entry = archs[key]
+        asset_name = entry.get("asset_name", "")
+        download_url = entry.get("download_url", "")
+        sha256 = entry.get("sha256", "")
+        binary_sha256 = entry.get("binary_sha256", "")
 
-    # macOS x64
-    mac_intel = archs["darwin_amd64"]
-    assert mac_intel["sha256"] == "1cb6ab8893811b5838d59b22a11bf4c9332cdbc40e66de18edbd4c926f2635ea"
-    assert mac_intel["binary_sha256"] == "f1fef944619f05781f06d2286610291565a5924c10a1beda650774e473555bb2"
-    assert mac_intel["asset_name"] == "CLIProxyAPI_8.0.39_darwin_amd64.tar.gz"
+        assert version_no_v in asset_name, f"Asset name {asset_name} missing {version_no_v}"
+        assert asset_name in download_url, f"Download URL {download_url} missing asset {asset_name}"
+        assert version in download_url, f"Download URL {download_url} missing version {version}"
+        assert hex64_re.match(sha256), f"Invalid sha256 in {key}: {sha256}"
+        assert hex64_re.match(binary_sha256), f"Invalid binary_sha256 in {key}: {binary_sha256}"
+        assert "archive_binary_name" in entry and entry["archive_binary_name"]
+        assert "target_binary_name" in entry and entry["target_binary_name"]
 
     # Windows ARM64 rejected
     unsupported = data.get("unsupported_architectures", [])
     assert any(u.get("platform") == "win32" and u.get("arch") == "arm64" for u in unsupported)
+
+
+def test_staging_scripts_read_provenance_without_hardcoded_version():
+    """Ensure staging scripts read PROVENANCE.json and do not hard-code 8.0.39."""
+    assert STAGE_PS1.exists(), "stage_cliproxyapi.ps1 missing"
+    assert STAGE_SH.exists(), "stage_cliproxyapi.sh missing"
+
+    ps1_text = STAGE_PS1.read_text(encoding="utf-8")
+    sh_text = STAGE_SH.read_text(encoding="utf-8")
+
+    assert "8.0.39" not in ps1_text, "Hard-coded version 8.0.39 found in stage_cliproxyapi.ps1"
+    assert "8.0.39" not in sh_text, "Hard-coded version 8.0.39 found in stage_cliproxyapi.sh"
+
+    assert "PROVENANCE.json" in ps1_text, "stage_cliproxyapi.ps1 must mention PROVENANCE.json"
+    assert "PROVENANCE.json" in sh_text, "stage_cliproxyapi.sh must mention PROVENANCE.json"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="PowerShell staging script verification on Windows")
@@ -109,7 +127,8 @@ def test_staging_script_rejects_tampered_or_oversized_binary(tmp_path):
 @pytest.mark.skipif(sys.platform != "win32", reason="PowerShell staging script verification on Windows")
 def test_staging_script_verifies_valid_binary(tmp_path):
     """Pass verify-only when the staged binary matches the pinned binary SHA-256."""
-    assert STAGED_WIN_BIN.exists(), "Staged Windows binary must exist at vendor/cliproxyapi/runtime/cliproxyapi.exe"
+    if not STAGED_WIN_BIN.exists():
+        pytest.skip(f"Staged Windows binary not present at {STAGED_WIN_BIN}")
     target = tmp_path / "cliproxyapi.exe"
     shutil.copyfile(STAGED_WIN_BIN, target)
 
@@ -136,6 +155,7 @@ def test_license_file_content():
     license_text = LICENSE_FILE.read_text(encoding="utf-8")
     assert "MIT License" in license_text
     assert "Router-For.ME" in license_text
+
 
 def test_electron_builder_packages_cliproxyapi_and_notice():
     """Validate electron-builder.json configuration mapping (not built artifacts) packages CLIProxyAPI binary and notices for both Windows and macOS."""

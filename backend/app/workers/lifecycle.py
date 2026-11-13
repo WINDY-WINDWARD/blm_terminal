@@ -106,6 +106,7 @@ async def start_all_workers() -> list[threading.Thread]:
     from app.workers.ai_picks_worker import ai_picks_morning_worker, ai_picks_evening_worker
     from app.workers.deals import watchlist_deals_worker
     from app.workers.fundamentals import fundamentals_worker
+    from app.workers.cliproxy_update import cliproxy_update_worker
 
     reset_async_shutdown_event()
     register_all_jobs()
@@ -130,6 +131,7 @@ async def start_all_workers() -> list[threading.Thread]:
         vacuum_worker,                               # 13 — weekly VACUUM (Sunday 04:00)
         ai_picks_morning_worker,                     # 14 — AI Picks (8am)
         ai_picks_evening_worker,                     # 15 — AI Picks (5pm)
+        cliproxy_update_worker,                      # 16 — daily CLIProxyAPI core check
     ]
     for target in targets:
         t = threading.Thread(target=target, daemon=True, name=target.__name__)

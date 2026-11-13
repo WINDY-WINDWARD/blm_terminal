@@ -1,5 +1,5 @@
 # Pinned CLIProxyAPI downloader and staging script for Windows.
-# Stages official CLIProxyAPI v8.0.39 to vendor/cliproxyapi/runtime/cliproxyapi.exe.
+# Stages official CLIProxyAPI from resources/cliproxyapi/PROVENANCE.json to vendor/cliproxyapi/runtime/cliproxyapi.exe.
 param(
     [string]$TargetDir,
     [switch]$VerifyOnly,
@@ -12,16 +12,51 @@ Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+
+$ProvenancePath = Join-Path $RepoRoot "resources\cliproxyapi\PROVENANCE.json"
+if (-not (Test-Path -LiteralPath $ProvenancePath)) {
+    Write-Error "PROVENANCE.json is missing at: $ProvenancePath"
+    exit 1
+}
+
+try {
+    $ProvenanceRaw = Get-Content -Raw -LiteralPath $ProvenancePath -Encoding UTF8
+    $Provenance = $ProvenanceRaw | ConvertFrom-Json
+} catch {
+    Write-Error "Failed to parse PROVENANCE.json: $_"
+    exit 1
+}
+
+if (-not $Provenance.version) {
+    Write-Error "PROVENANCE.json is missing the required 'version' field."
+    exit 1
+}
+
+$WinArch = $Provenance.architectures.windows_amd64
+if (-not $WinArch) {
+    Write-Error "PROVENANCE.json is missing the required 'architectures.windows_amd64' entry."
+    exit 1
+}
+
+$Version = [string]$Provenance.version
+$AssetName = [string]$WinArch.asset_name
+$DownloadUrl = [string]$WinArch.download_url
+$ExpectedSha256 = [string]$WinArch.sha256
+$ExpectedBinarySha256 = [string]$WinArch.binary_sha256
+$ArchiveBinaryName = [string]$WinArch.archive_binary_name
+$TargetBinaryName = [string]$WinArch.target_binary_name
+
+if (-not $TargetBinaryName) {
+    $TargetBinaryName = "cliproxyapi.exe"
+}
+if (-not $ArchiveBinaryName) {
+    $ArchiveBinaryName = "cli-proxy-api.exe"
+}
+
 if (-not $TargetDir) {
     $TargetDir = Join-Path $RepoRoot "vendor\cliproxyapi\runtime"
 }
-
-$Version = "v8.0.39"
-$AssetName = "CLIProxyAPI_8.0.39_windows_amd64.zip"
-$ExpectedSha256 = "41ab6cdde60e9c190ded5f7fce27e5b3090a83b75895d7fbb879675f563936e0"
-$ExpectedBinarySha256 = "42574a2a028058ab0e7473e15b99cbb5e5370a46c70839c830758ee549b7a052"
-$DownloadUrl = "https://github.com/router-for-me/CLIProxyAPI/releases/download/$Version/$AssetName"
-$TargetExe = Join-Path $TargetDir "cliproxyapi.exe"
+$TargetExe = Join-Path $TargetDir $TargetBinaryName
 
 # Architecture check: reject Windows ARM64 explicitly
 $Arch = $env:PROCESSOR_ARCHITECTURE
@@ -61,21 +96,21 @@ function Test-StagedBinary {
 
 if ($VerifyOnly) {
     if (Test-StagedBinary) {
-        Write-Host "CLIProxyAPI binary verified at: $TargetExe"
+        Write-Host "CLIProxyAPI $Version binary verified at: $TargetExe"
         exit 0
     } else {
         if (-not (Test-Path -LiteralPath $TargetExe)) {
-            Write-Error "CLIProxyAPI binary is missing at: $TargetExe. Run scripts/stage_cliproxyapi.ps1 to stage it."
+            Write-Error "CLIProxyAPI $Version binary is missing at: $TargetExe. Run scripts/stage_cliproxyapi.ps1 to stage it from PROVENANCE.json."
         } else {
             $currentHash = Get-Sha256Hash $TargetExe
-            Write-Error "CLIProxyAPI binary failed checksum verification at: $TargetExe. Expected: $ExpectedBinarySha256, Actual: $currentHash. Run scripts/stage_cliproxyapi.ps1 -Force to re-stage."
+            Write-Error "CLIProxyAPI $Version binary failed checksum verification at: $TargetExe. Expected: $ExpectedBinarySha256, Actual: $currentHash. Run scripts/stage_cliproxyapi.ps1 -Force to re-stage."
         }
         exit 1
     }
 }
 
 if ((Test-StagedBinary) -and (-not $Force)) {
-    Write-Host "CLIProxyAPI binary already staged and verified at: $TargetExe (use -Force to re-stage)"
+    Write-Host "CLIProxyAPI $Version binary already staged and verified at: $TargetExe (use -Force to re-stage)"
     exit 0
 }
 
@@ -103,16 +138,16 @@ try {
     }
     Write-Host "Archive checksum verified: $ActualArchiveHash"
 
-    Write-Host "Extracting cli-proxy-api.exe..."
+    Write-Host "Extracting $ArchiveBinaryName..."
     $ExtractSubdir = Join-Path $TargetDir "extract-tmp"
     if (Test-Path -LiteralPath $ExtractSubdir) {
         Remove-Item -LiteralPath $ExtractSubdir -Recurse -Force
     }
     Expand-Archive -LiteralPath $TempZip -DestinationPath $ExtractSubdir -Force
     try {
-        $ExtractedExe = Join-Path $ExtractSubdir "cli-proxy-api.exe"
+        $ExtractedExe = Join-Path $ExtractSubdir $ArchiveBinaryName
         if (-not (Test-Path -LiteralPath $ExtractedExe)) {
-            throw "Archive does not contain cli-proxy-api.exe!"
+            throw "Archive does not contain $ArchiveBinaryName!"
         }
         $ActualBinHash = Get-Sha256Hash $ExtractedExe
         if ($ActualBinHash -ne $ExpectedBinarySha256.ToLowerInvariant()) {
@@ -128,7 +163,7 @@ try {
         }
     }
 
-    Write-Host "Successfully staged CLIProxyAPI at: $TargetExe"
+    Write-Host "Successfully staged CLIProxyAPI $Version at: $TargetExe"
 } finally {
     if (Test-Path -LiteralPath $TempZip) {
         Remove-Item -LiteralPath $TempZip -Force -ErrorAction SilentlyContinue
