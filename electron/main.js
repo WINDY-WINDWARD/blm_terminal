@@ -521,6 +521,9 @@ async function startApp() {
         CLIPROXY_CORE_ROOT: cliproxyCoreRoot,
         CLIPROXY_BUNDLED_BIN: cliproxyBin,
         CLIPROXY_RUNTIME_ROOT: cliproxyRuntimeRoot,
+        // The backend reads the bundled core provenance (version and binary
+        // checksum) from <resourcesPath>/resources/cliproxyapi/PROVENANCE.json.
+        RESOURCES_PATH: process.resourcesPath,
         BLM_INTERNAL_TOKEN: serverInternalToken
       },
       stdio: ['pipe', 'pipe', 'pipe'],
