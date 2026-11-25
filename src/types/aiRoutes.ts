@@ -37,6 +37,15 @@ export interface RouteConfigSummary {
   [key: string]: unknown;
 }
 
+export interface ProviderRiskInfo {
+  level: 'high' | string;
+  title: string;
+  message: string;
+  acknowledged: boolean;
+  gate_version: string;
+  auto_disabled: boolean;
+}
+
 export interface RouteSummary {
   id: string;
   kind: 'oauth' | 'endpoint' | 'direct';
@@ -50,7 +59,19 @@ export interface RouteSummary {
   keys: CredentialSummary[];
   config: RouteConfigSummary;
   models: string[];
+  risk?: ProviderRiskInfo | null;
   recovery_state: string | null;
+}
+
+export interface RiskAckRequest {
+  accepted: boolean;
+}
+
+export interface RiskAckResponse {
+  status: 'acknowledged' | string;
+  route_id: string;
+  accepted_at: string;
+  risk: ProviderRiskInfo | null;
 }
 
 export interface ProxyStatus {

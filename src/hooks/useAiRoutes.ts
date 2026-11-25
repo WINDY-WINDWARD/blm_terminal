@@ -56,6 +56,16 @@ export function useSetRouteEnabledMutation() {
   });
 }
 
+export function useAcknowledgeRouteRiskMutation() {
+  const invalidate = useInvalidateAiCaches();
+  return useMutation({
+    mutationFn: (routeId: string) => aiRoutesClient.acknowledgeRouteRisk(routeId),
+    onSuccess: () => {
+      invalidate();
+    },
+  });
+}
+
 export function useUpdateRouteSettingsMutation() {
   const invalidate = useInvalidateAiCaches();
   return useMutation({

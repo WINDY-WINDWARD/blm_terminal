@@ -98,6 +98,28 @@ OAuth routes allow users to connect multiple accounts per provider. The CLIProxy
   - Cooldown states are backed up into the `ProviderVault` cooldown snapshot table (`save-cooldown-status: true`).
   - **Manual Cooldown Reset:** Users can clear an account's cooldown immediately using `POST /api/ai/routes/accounts/{account_id}/reset-cooldown`. This invokes CLIProxyAPI's `/v8/management/routing/cooldown/reset` and removes the snapshot from the vault.
 
+### 2.3 High-Risk OAuth Routes (Gemini and Claude)
+
+The `oauth:antigravity` route is the Gemini route. The UI label is "Gemini (Antigravity)". The `oauth:claude` route is the Claude route. These two routes reuse a personal subscription through an unofficial client. This is not an approved API integration. The provider can detect this use and suspend or permanently ban the account. A ban can also block other services tied to that account. BLM Terminal cannot recover a banned account.
+
+Policy rules:
+
+- **Disabled by default:** The backend disables both routes, every account under them, and the risky default selection.
+- **One-time gate:** `apply_risk_gate()` runs during the FastAPI lifespan after route seeding and legacy migration. It writes `ai.provider_risk_gate = 2026.11.25` and does not run again for that version.
+- **Re-acceptance:** Change `RISK_GATE_VERSION` in `backend/app/services/provider_risk_gate.py` only when the warning text or policy changes. The next startup disables both routes and requires a new acceptance.
+- **Per-provider acceptance:** The user accepts the risk for Gemini and Claude separately. The acknowledgement store is the `ai.risky_provider_ack` key in `system_config`. The acknowledgement is installation-wide and records the gate version, the UTC timestamp, and the accepting user.
+- **Backend enforcement:** Risky actions return HTTP 409 with detail `risk_ack_required:<route_id>` until the current version is accepted. The guarded actions are route enable, route activation, OAuth start, account enable, account re-authentication, and admin writes of `ai.provider`, `ai.hunter_model`, or `ai.verifier_model` that target a risky route. Disabling is always allowed.
+- **Direct API-key providers are unaffected:** `direct:aistudio` (Google AI Studio), `direct:anthropic` (Anthropic API), and all other providers stay enabled.
+- **No UI bypass:** The backend checks the acknowledgement on every guarded action. A direct API call cannot skip the gate.
+
+Acceptance flow:
+
+1. Open **PROVIDERS**.
+2. Find the red **DO NOT USE - HIGH RISK OF ACCOUNT BAN** section.
+3. Click **REVIEW RISK** or attempt an enable action.
+4. Read the warning, tick the checkbox, and press **I ACCEPT THE RISK**.
+5. The client calls `POST /api/ai/routes/{route_id}/acknowledge-risk` with `{"accepted": true}`. Then the blocked action continues.
+
 ---
 
 ## 3. Custom Endpoint Setup & Security
@@ -230,7 +252,7 @@ Upgrading from earlier BLM Terminal releases automatically migrates legacy model
 
 ### 6.2 Resilient Model Discovery
 - **OAuth routes:** BLM queries model lists for enabled OAuth credentials concurrently, with a five-second timeout per credential. Successful results have proxy/provider prefixes removed, are deduplicated, and are best-effort cached in the route configuration.
-- **Fallback order when live discovery yields no models:** use `cached_models` from the route configuration; then model-ID hints from that route's local auth files (without using or returning tokens); then the built-in static model list for Antigravity only; otherwise return an empty list with a safe warning (`model_list_timeout` or `model_list_unavailable`).
+- **Fallback order when live discovery yields no models:** use `cached_models` from the route configuration; then model-ID hints from that route's local auth files (without using or returning tokens); then the built-in static model list for an enabled Antigravity route; otherwise return an empty list with a safe warning (`model_list_timeout` or `model_list_unavailable`). A disabled Antigravity route returns no static models.
 - **Other routes:** Custom endpoints use their configured `models`, falling back to `cached_models`; direct providers are queried through their catalog APIs via the sidecar.
 - **Partial catalogs:** `GET /api/ai/routes/models` returns available routes even when another route fails, and includes warnings for unavailable route catalogs. Chat model discovery reuses the resilient route resolver, so a slow OAuth model endpoint does not turn the model-list request into an HTTP 500.
 
@@ -249,6 +271,7 @@ Upgrading from earlier BLM Terminal releases automatically migrates legacy model
 | **OAuth start returns `callback_port_unavailable`** | Another local process occupies the provider's loopback callback port | Close the process using that port, then restart browser authorization. The callback listener binds loopback only. |
 | **OAuth dialog asks for a callback URL** | The provider redirect cannot be safely registered as a local loopback callback | Complete browser authorization and paste the full redirect URL into the manual fallback field; do not copy it into logs or diagnostics. |
 | **`ReadinessTimeoutError` on startup** | Port conflict or missing CLIProxyAPI binary | Production allocates an ephemeral loopback port; read the bound port from logs or `/api/ai/routes/diagnostics`; verify `vendor/cliproxyapi/runtime/cliproxyapi.exe` exists and has execute permissions. |
+| **HTTP 403 / 409 `risk_ack_required:<route_id>`** | The risk gate is active for Gemini (Antigravity) or Claude | Open **PROVIDERS**, find the red high-risk section, click **REVIEW RISK**, and accept the warning. The backend then permits the action for gate version `2026.11.25`. |
 | **HTTP 401 / 429 on OAuth Route** | OAuth token expired or upstream rate limit | Open `AiProvidersModal`, click **Re-authenticate** for the affected account, or click **Reset Cooldown** if the limit has elapsed. |
 | **Tool calls not executing** | Active route model does not support tool calling | Ensure active route is set to a model with function calling support (e.g. `gpt-4o`, `claude-3.5-sonnet`). |
 | **Missing trace attribution in diagnostics** | Upstream or proxy omitted trace header | Verify proxy response includes `X-CPA-TRACE-ID`; check `GET /api/ai/routes/diagnostics` for recorded trace ring entries. |

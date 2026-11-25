@@ -825,6 +825,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as mig_exc:
         logger.warning("Startup legacy migration warning: %s", mig_exc)
 
+    # One-time high-risk OAuth gate. Runs after legacy migration so re-imported
+    # Gemini (Antigravity) and Claude credentials cannot bypass the disable.
+    try:
+        from app.database import AsyncSessionLocal
+        from app.services.provider_risk_gate import RISK_GATE_VERSION, apply_risk_gate
+        async with AsyncSessionLocal() as session:
+            gated = await apply_risk_gate(session)
+            if gated:
+                logger.warning(
+                    "Applied high-risk OAuth provider gate (version %s)",
+                    RISK_GATE_VERSION,
+                )
+    except Exception:
+        logger.exception(
+            "Startup provider risk gate failed; the gate retries on the next startup"
+        )
+
     # Start the priority write queue writer thread (serialises non-critical writes)
     from app.services.write_queue import start_writer
     start_writer()

@@ -109,6 +109,19 @@ class CredentialSummary(BaseModel):
     updated_at: datetime | None = None
 
 
+class ProviderRiskInfo(BaseModel):
+    level: str = "high"
+    title: str
+    message: str
+    acknowledged: bool = False
+    gate_version: str
+    auto_disabled: bool = False
+
+
+class RiskAckRequest(BaseModel):
+    accepted: bool = False
+
+
 class RouteSummary(BaseModel):
     id: str
     kind: str  # "oauth" | "endpoint" | "direct"
@@ -122,6 +135,7 @@ class RouteSummary(BaseModel):
     keys: list[CredentialSummary] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
     models: list[str] = Field(default_factory=list)
+    risk: ProviderRiskInfo | None = None
     recovery_state: str | None = None
 
 

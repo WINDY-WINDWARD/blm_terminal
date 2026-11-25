@@ -352,15 +352,18 @@ async def get_route_models(route_id: str, session=None, *, live_timeout: float =
             from app.database import AsyncSessionLocal
             async with AsyncSessionLocal() as database:
                 return await get_route_models(route_id, database, live_timeout=live_timeout)
+        except ValueError:
+            # The route exists but is disabled. Do not fall back to models.
+            raise
         except Exception:
+            # A missing database or unavailable route table must not blank the
+            # provider model picker.
             if route_id == "oauth:antigravity":
                 return _filter_chat_models(list(ANTIGRAVITY_STATIC_MODELS))
             raise
 
     route = (await session.execute(select(AIProviderRoute).where(AIProviderRoute.id == route_id))).scalar_one_or_none()
     if route is None or not route.enabled:
-        if route_id == "oauth:antigravity":
-            return _filter_chat_models(list(ANTIGRAVITY_STATIC_MODELS))
         raise ValueError("Selected provider route is unavailable")
 
     if route.kind == "endpoint":
