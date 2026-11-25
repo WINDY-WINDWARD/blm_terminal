@@ -13,10 +13,12 @@ The async wrapper `fetch_candles_async` is provided for use from FastAPI routes.
 """
 
 import asyncio
+import base64
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -42,17 +44,56 @@ _REQUEST_DELAY_SECONDS = 1.0
 # Series suffix fallback order — mirrors NSEClient.SERIES_PREFERENCE
 _SERIES_FALLBACK: list[str] = ["EQ", "BE", "SM", "ST"]
 
-# Interval → (chartType, timeInterval) mapping
+# Interval → (chartType, timeInterval) mapping.
+# NSE contract change (2026-11-13): intraday chartType "I" requires timeInterval
+# in SECONDS, not minutes. Daily/weekly/monthly stay at "1".
 INTERVAL_PARAMS: dict[str, tuple[str, str]] = {
-    "1m":  ("I", "1"),
-    "5m":  ("I", "5"),
-    "15m": ("I", "15"),
-    "30m": ("I", "30"),
-    "1h":  ("I", "60"),
+    "1m":  ("I", "60"),
+    "5m":  ("I", "300"),
+    "15m": ("I", "900"),
+    "30m": ("I", "1800"),
+    "1h":  ("I", "3600"),
     "D":   ("D", "1"),
     "W":   ("W", "1"),
     "M":   ("M", "1"),
 }
+
+# ---------------------------------------------------------------------------
+# NSE API time/token helpers
+#
+# NSE contract change (2026-11-13): symbolHistoricalData requires
+#   - token = base64("{scripcode}-{DDMMYYYY}") with today's IST date,
+#   - fromDate/toDate as epoch seconds shifted by +5h30m (IST wall clock
+#     expressed as epoch seconds).
+# Returned candle `time` values are also IST-shifted epoch ms; they are stored
+# unchanged (pass-through).
+# ---------------------------------------------------------------------------
+
+_IST_OFFSET_S = 19800  # UTC+5:30 in seconds
+
+
+def api_now_s() -> int:
+    """Current time in the API's IST frame (unix seconds)."""
+    return int(datetime.now(timezone.utc).timestamp()) + _IST_OFFSET_S
+
+
+def to_api_s(ts: int) -> int:
+    """Convert a true-UTC unix seconds value into the API's IST frame."""
+    return ts + _IST_OFFSET_S
+
+
+def to_api_ms(ts_ms: int) -> int:
+    """Convert a true-UTC unix milliseconds value into the API's IST frame."""
+    return ts_ms + _IST_OFFSET_S * 1000
+
+
+def _api_token(scripcode: str, now_ist: datetime | None = None) -> str:
+    """Build the base64 scripcode-and-date token the API now expects."""
+    if now_ist is None:
+        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    date_str = now_ist.strftime("%d%m%Y")
+    return base64.b64encode(f"{scripcode}-{date_str}".encode()).decode()
+
 
 # ---------------------------------------------------------------------------
 # Module-level scripcode cache: symbol → (scripcode, series) or None (known-bad)
@@ -206,8 +247,11 @@ def fetch_candles(
     Args:
         symbol:   NSE ticker (e.g. "RELIANCE").
         interval: One of the INTERVAL_PARAMS keys ("1h", "W", "M", etc.).
-        from_ts:  Start time as Unix *seconds* (0 = all available history).
-        to_ts:    End time as Unix *seconds* (None → current time).
+        from_ts:  Start time as Unix *seconds* in the API's IST frame
+                  (0 = all available history). Use api_now_s() / to_api_s()
+                  to build true-UTC values into this frame.
+        to_ts:    End time as Unix *seconds* in the API's IST frame
+                  (None → current time in that frame).
         series:   NSE series hint (e.g. "EQ", "BE"). If None, tries EQ first
                   then falls back through BE, SM, ST automatically.
 
@@ -224,13 +268,18 @@ def fetch_candles(
     chart_type, time_interval = INTERVAL_PARAMS[interval]
 
     if to_ts is None:
-        to_ts = int(datetime.now(timezone.utc).timestamp())
+        to_ts = api_now_s()
 
     scripcode, resolved_series = get_scripcode(symbol, series=series)
 
     url = f"{_BASE_URL}{_HISTORY_ENDPOINT}"
+    # from_ts/to_ts arrive in the API's IST frame (unix seconds). Use
+    # api_now_s() / to_api_s() at the call site to build them. Sending raw
+    # values keeps from_ts=0 (full history) meaningful and avoids a double
+    # shift. Every caller converts true-UTC bounds before this call (the
+    # router, warehouse intraday, and warehouse daily backfill).
     params = {
-        "token": scripcode,
+        "token": _api_token(scripcode),
         "fromDate": str(from_ts),
         "toDate": str(to_ts),
         "symbol": f"{symbol}-{resolved_series}",
@@ -251,6 +300,12 @@ def fetch_candles(
         raise ValueError(f"[nse_charting] API returned status=false for {symbol}/{interval}")
 
     raw_candles: list[dict] = payload.get("data", [])
+
+    if not raw_candles:
+        logger.warning(
+            "[nse_charting] %s/%s returned 0 candles for window %s..%s (contract change or no data)",
+            symbol, interval, from_ts, to_ts,
+        )
 
     result = []
     for c in raw_candles:

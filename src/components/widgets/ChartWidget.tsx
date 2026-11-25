@@ -383,7 +383,7 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
         locale: 'en-IN',
         timeFormatter: (t: number) =>
           new Date(t * 1000).toLocaleTimeString('en-IN', {
-            timeZone: 'Asia/Kolkata',
+            timeZone: 'UTC',
             hour: '2-digit',
             minute: '2-digit',
             hour12: false,
@@ -644,7 +644,7 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
     if (!intradayData?.candles?.length || intradayData._symbol !== symbol) return null;
     const last = intradayData.candles[intradayData.candles.length - 1];
     const label = new Date(last.timestamp).toLocaleString('en-IN', {
-      timeZone: 'Asia/Kolkata',
+      timeZone: 'UTC',
       day: '2-digit',
       month: 'short',
       hour: '2-digit',
@@ -660,6 +660,11 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
   // the chart falls back to pure server data instead of a frozen live bar.
   const tickLive = tick != null && tickAgeMs <= LIVE_STALE_MS && isMarketHours();
   const isStale = isDaily ? histData?.is_stale === true : false;
+  // Blank-state: the intraday window returned no candles. The brew effect
+  // returns early when server bars are empty (it can never paint from a
+  // tick alone), so no candle can exist here.
+  const showEmptyBadge = isIntraday && !isLoading && !isError && !intradayData?.candles?.length;
+
   const liveVsEodPct =
     tickFresh && tick && eodInfo && eodInfo.close !== 0
       ? ((tick.ltp - eodInfo.close) / eodInfo.close) * 100
@@ -1330,6 +1335,11 @@ export function ChartWidget({ panelId, symbolOverride }: ChartWidgetProps) {
 
         {/* Chart canvas */}
         <div ref={chartContainerRef} className="flex-1 w-full min-h-0 relative">
+          {showEmptyBadge && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <span className="text-white/40 text-[10px] font-mono">No candles returned</span>
+            </div>
+          )}
         </div>
       </div>
     );
