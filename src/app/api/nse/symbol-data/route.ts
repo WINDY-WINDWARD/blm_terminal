@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { NSE_MAX_SYMBOLS_PER_REQUEST } from '@/lib/nseTypes';
 import { fetchSymbolDataWithFallback } from '@/lib/marketWsStreamer';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +20,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean),
     ),
-  ).slice(0, NSE_MAX_SYMBOLS_PER_REQUEST);
+  );
 
   if (symbols.length === 0) {
     return NextResponse.json({ data: {} });

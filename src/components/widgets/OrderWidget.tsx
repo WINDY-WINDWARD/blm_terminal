@@ -311,7 +311,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
               </div>
 
               {/* Symbol Picker Pills */}
-              <div className="mb-3">
+              <div className="mb-3" data-widget-tour="order-instrument-setup">
                 <div className="text-[10px] uppercase font-mono tracking-wider text-zinc-400 font-bold mb-1.5 flex items-center justify-between">
                   <span>SELECT INSTRUMENT</span>
                   <span className="text-[10px] text-zinc-400 font-mono">BROKER: OPENALGO ACTIVE</span>
@@ -406,7 +406,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
               </div>
 
               {/* Parameters Grid (Order Type & Product Pills) */}
-              <div className="grid grid-cols-1 @md:grid-cols-2 gap-2 mb-2.5">
+              <div className="grid grid-cols-1 @md:grid-cols-2 gap-2 mb-2.5" data-widget-tour="order-type-lot-selector">
                 {/* Order Type Pills (MKT, LMT, SL, SL-M) */}
                 <div className="bg-[#121216] border border-[#27272a] rounded p-1.5">
                   <span className="text-[10px] font-mono text-zinc-300 uppercase tracking-wider block mb-1 font-bold">
@@ -427,6 +427,8 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                           key={t.key}
                           type="button"
                           onClick={() => setOrderType(t.key)}
+                          data-widget-tour-click={`type-${t.key.toLowerCase()}`}
+                          data-tour-active={isActive}
                           className={`py-1 text-[10px] font-mono font-bold rounded transition-all text-center border ${
                             isActive
                               ? 'bg-terminal-amber text-black border-terminal-amber shadow-sm'
@@ -441,7 +443,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                 </div>
 
                 {/* Product Pills (MIS, CNC, NRML) */}
-                <div className="bg-[#121216] border border-[#27272a] rounded p-1.5">
+                <div className="bg-[#121216] border border-[#27272a] rounded p-1.5" data-widget-tour="order-product-selector">
                   <span className="text-[10px] font-mono text-zinc-300 uppercase tracking-wider block mb-1 font-bold">
                     PRODUCT
                   </span>
@@ -460,6 +462,8 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
                           type="button"
                           title={p.desc}
                           onClick={() => setProduct(p.key)}
+                          data-widget-tour-click={`product-${p.key.toLowerCase()}`}
+                          data-tour-active={isActive}
                           className={`py-1 text-[10px] font-mono font-bold rounded transition-all text-center border ${
                             isActive
                               ? 'bg-terminal-amber text-black border-terminal-amber shadow-sm'
@@ -614,7 +618,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
             </div>
 
             {/* Prominent F1 BUY and F2 SELL Buttons */}
-            <div>
+            <div data-widget-tour="order-execution-buttons">
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <button
                   type="button"
@@ -660,7 +664,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
           </div>
 
           {/* 2. ACCOUNT MARGINS & FUNDS KPI CARD (Col 3-4) */}
-          <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 flex flex-col justify-between shadow-md">
+          <div className="col-span-1 @md:col-span-1 @4xl:col-span-2 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 flex flex-col justify-between shadow-md" data-widget-tour="order-risk-kpi-deck">
             <div>
               {/* Bento Card Header */}
               <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-[#27272a]">
@@ -814,7 +818,7 @@ export function OrderWidget({ panelId }: OrderWidgetProps) {
           </div>
 
           {/* 3. RECENT EXECUTIONS & ORDER BOOK (Col 1-4) */}
-          <div className="col-span-1 @md:col-span-2 @4xl:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 shadow-md">
+          <div className="col-span-1 @md:col-span-2 @4xl:col-span-4 bg-[#0c0c0f] border border-[#27272a] hover:border-zinc-700/60 transition-colors rounded-md p-3 shadow-md" data-widget-tour="order-book-table">
             {/* Card Header & Filter Chips */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-[#27272a]">
               <div className="flex items-center gap-2">

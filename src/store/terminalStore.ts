@@ -3,6 +3,7 @@ import { atomWithStorage } from 'jotai/utils';
 import type { FundsData } from '@/lib/openalgo';
 import type { NewsArticle } from '@/lib/newsSocket';
 import type { ActiveIndicator } from '@/lib/indicators/types';
+import type { WidgetTourRequest } from '@/lib/widgetTours/types';
 import { DEFAULT_MOVERS_COLUMN_ORDER } from '@/lib/moversColumns';
 
 /** Live tick data shape — LTP-centric, populated by marketWs SymbolData */
@@ -125,6 +126,9 @@ export const tutorialStatusAtom = atomWithStorage<TutorialStatus>(
   'terminal.tutorial.v1',
   'pending',
 );
+
+export const widgetTourQueueAtom = atom<WidgetTourRequest[]>([]);
+export const activeWidgetTourAtom = atom<WidgetTourRequest | null>(null);
 
 // ─── Existing Atoms ───────────────────────────────────────────────────────────
 
@@ -387,6 +391,17 @@ export const moversColumnOrderAtom = atomWithStorage<string[]>(
 
 /** Currently selected category for top-gainers/top-losers (e.g. "allSec", "NIFTY") */
 export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCategory', 'allSec');
+
+// ─── AI Chat ─────────────────────────────────────────────────────────────────
+
+/** Last model picked in the AI widget. Reused for new chats and after a restart. */
+export const aiChatModelAtom = atomWithStorage<string>('terminal.aiChatModel', '');
+
+// ─── Local MCP Server ────────────────────────────────────────────────────────
+
+/** Fixed port opt-in for external MCP clients (Claude Code, Codex, Antigravity) */
+export const mcpServerEnabledAtom = atomWithStorage<boolean>('terminal.mcpServerEnabled', false);
+export const mcpServerPortAtom = atomWithStorage<number>('terminal.mcpServerPort', 4747);
 
 // ─── Ticker Bar ──────────────────────────────────────────────────────────────
 

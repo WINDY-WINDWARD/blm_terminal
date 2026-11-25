@@ -28,6 +28,11 @@ def test_main_imports():
         ("POST", "/api/scripts/validate"),
         ("GET", "/api/chart-state"),
         ("POST", "/api/scripts/import"),
+        ("GET", "/api/ai/workflows"),
+        ("POST", "/api/ai/workflows/preview"),
+        ("GET", "/api/ai/workflows/summary"),
+        ("GET", "/api/ai/workflow-runs"),
+        ("GET", "/api/ai/prompts"),
     ],
 )
 async def test_scripts_router_mounted(method: str, path: str):

@@ -88,44 +88,77 @@ class TestMCPToolDiscovery:
         tool_names = {t["name"] for t in result["result"]["tools"]}
 
         expected_tools = {
-            "health_check",
+            "add_position_leg",
+            "add_watchlist_item",
+            "bulk_replace_watchlist",
+            "company_fdm",
+            "create_watchlist",
+            "delete_position",
+            "delete_position_leg",
+            "describe_csv",
+            "get_52week_high_stocks",
+            "get_52week_low_stocks",
+            "get_block_deals",
+            "get_bulk_deals",
+            "get_change_ranges",
+            "get_company_news",
+            "get_global_news",
+            "get_global_notifications",
+            "get_industry_stocks",
+            "get_largedeal_snapshot",
+            "get_market_fii_dii_activity",
+            "get_morningstar_fairvalue",
+            "get_notifications",
+            "get_pdf_outline",
+            "get_positions",
+            "get_recent_announcements",
+            "get_sector_stocks",
+            "get_stock_universe",
+            "get_symbol_data",
             "get_top_gainers",
             "get_top_losers",
-            "get_bulk_deals",
-            "get_block_deals",
-            "get_high_short_interest",
-            "get_largedeal_snapshot",
-            "get_change_ranges",
-            "get_symbol_data",
-            "get_52week_low_stocks",
-            "get_52week_high_stocks",
+            "get_upcoming_events",
             "get_volume_gainers",
-            "get_corporate_filings",
-            "screener_search",
-            "screener_company",
-            "screener_trades",
-            "get_company_quarterly_results",
-            "list_stock_universe",
-            "get_stock_universe",
-            "search_stock_universe",
-            "list_watchlist",
-            "get_watchlist_symbols",
-            "add_watchlist_item",
-            "remove_watchlist_item",
-            "list_watchlists",
             "get_watchlist_items",
-            "get_notifications",
-            "get_global_notifications",
-            "get_morningstar_fairvalue",
-            "get_global_news",
-            "get_company_news",
+            "get_watchlist_symbols",
+            "health_check",
+            "iinvest_all",
+            "iinvest_get_announcements",
+            "iinvest_get_auditors",
+            "iinvest_get_block_deals",
+            "iinvest_get_board_meetings",
+            "iinvest_get_capital_history",
+            "iinvest_get_corporate_actions",
+            "iinvest_get_financial_peer_filters",
+            "iinvest_get_financial_peers",
+            "iinvest_get_index_of_charges",
+            "iinvest_get_insider_trading",
+            "iinvest_get_key_shareholders",
+            "iinvest_get_legal_cases",
+            "iinvest_get_marketdata_timeseries",
+            "iinvest_get_pledged_shares",
+            "iinvest_get_sast",
+            "iinvest_get_tribunals",
+            "iinvest_overview",
+            "iinvest_path",
             "list_industries",
             "list_sectors",
-            "get_industry_stocks",
-            "get_sector_stocks",
-            "get_market_fii_dii_activity",
+            "list_stock_universe",
+            "list_watchlist",
+            "list_watchlists",
+            "open_position",
+            "optimize_portfolio",
+            "query_csv",
+            "read_pdf_pages",
+            "remove_watchlist_item",
+            "run_tql_screener",
+            "screener_search",
+            "screener_trades",
+            "search_pdf",
+            "search_stock_universe",
+            "update_position_leg",
         }
-        assert expected_tools.issubset(tool_names)
+        assert expected_tools == tool_names
 
 
 class TestMCPToolsList:
@@ -214,19 +247,6 @@ class TestMCPScreenerTools:
         )
         assert "error" in result or "result" in result
 
-    def test_screener_company_without_auth(self):
-        """Screener company returns either data (if authenticated) or an auth error."""
-        result = mcp_request(
-            "tools/call",
-            {"name": "screener_company", "arguments": {"symbol": KNOWN_SYMBOL}},
-        )
-        # Either a top-level JSON-RPC error, or a result (success or isError)
-        assert "result" in result or "error" in result
-        if "result" in result:
-            content = result["result"]["content"]
-            assert len(content) > 0
-            assert content[0]["type"] == "text"
-
 
 @pytest.mark.slow
 class TestMCPMarketTools:
@@ -256,22 +276,6 @@ class TestMCPMarketTools:
         assert isinstance(content, list)
 
 
-@pytest.mark.slow
-class TestMCPCorporateFilings:
-    """Test corporate filings MCP tool."""
-
-    def test_get_corporate_filings(self):
-        """Get corporate filings should return structured data."""
-        result = mcp_request(
-            "tools/call",
-            {"name": "get_corporate_filings", "arguments": {"symbol": KNOWN_SYMBOL}},
-        )
-        assert "result" in result or "error" in result
-        if "result" in result:
-            content = result["result"]["content"]
-            assert len(content) > 0
-
-
 class TestMCPErrorHandling:
     """Test MCP error handling."""
 
@@ -298,35 +302,30 @@ class TestMCPErrorHandling:
         assert "error" in result or "result" in result
 
 
-class TestMCPScreenerQuarterly:
-    """Tests for the get_company_quarterly_results MCP tool."""
+@pytest.mark.slow
+class TestMCPCompanyFDM:
+    """Tests for the company_fdm MCP tool."""
 
     def test_tool_is_listed(self):
-        """get_company_quarterly_results must appear in the tools list."""
+        """company_fdm must appear in the tools list."""
         result = mcp_request("tools/list")
         tool_names = {t["name"] for t in result["result"]["tools"]}
-        assert "get_company_quarterly_results" in tool_names
+        assert "company_fdm" in tool_names
 
     def test_tool_has_description(self):
         """Tool must carry a non-empty description."""
         result = mcp_request("tools/list")
         tools = {t["name"]: t for t in result["result"]["tools"]}
-        tool = tools.get("get_company_quarterly_results", {})
-        assert tool.get("description"), (
-            "get_company_quarterly_results has no description"
-        )
+        tool = tools.get("company_fdm", {})
+        assert tool.get("description"), "company_fdm has no description"
 
     def test_call_returns_result_or_auth_error(self):
-        """
-        Returns a successful result when authenticated, or an isError content
-        entry (RuntimeError) when no screener.in session is available.
-        Either outcome is valid — the important thing is the tool is callable.
-        """
+        """Returns a result when called for a known symbol."""
         result = mcp_request(
             "tools/call",
             {
-                "name": "get_company_quarterly_results",
-                "arguments": {"symbol": KNOWN_SYMBOL},
+                "name": "company_fdm",
+                "arguments": {"symbol": KNOWN_SYMBOL, "sections": ["valuation"]},
             },
         )
         assert "result" in result or "error" in result
@@ -335,60 +334,13 @@ class TestMCPScreenerQuarterly:
             assert len(content) > 0
             assert content[0]["type"] == "text"
 
-    def test_success_response_schema(self):
-        """On 200, the tool response must include symbol, consolidated, quarterly_results."""
+    def test_invalid_sections_is_error(self):
+        """Invalid sections must produce an error result."""
         result = mcp_request(
             "tools/call",
             {
-                "name": "get_company_quarterly_results",
-                "arguments": {"symbol": KNOWN_SYMBOL},
-            },
-        )
-        if "error" in result:
-            pytest.skip("JSON-RPC level error — server may be unavailable")
-        content = result["result"]["content"]
-        if result["result"].get("isError"):
-            pytest.skip("screener.in session not available (auth error)")
-        import json as _json
-
-        data = _json.loads(content[0]["text"])
-        assert "symbol" in data
-        assert "consolidated" in data
-        assert "quarterly_results" in data
-
-    def test_quarterly_results_nested_structure(self):
-        """quarterly_results must be year → month → {metric: value}."""
-        result = mcp_request(
-            "tools/call",
-            {
-                "name": "get_company_quarterly_results",
-                "arguments": {"symbol": KNOWN_SYMBOL},
-            },
-        )
-        if "error" in result:
-            pytest.skip("server unavailable")
-        if result["result"].get("isError"):
-            pytest.skip("screener.in session not available")
-        import json as _json
-
-        data = _json.loads(result["result"]["content"][0]["text"])
-        qr = data.get("quarterly_results", {})
-        if not qr:
-            pytest.skip("quarterly_results is empty")
-        for year_key, months in qr.items():
-            assert isinstance(months, dict), f"Expected dict under year '{year_key}'"
-            for month_key, metrics in months.items():
-                assert isinstance(metrics, dict), (
-                    f"Expected dict under '{year_key}.{month_key}'"
-                )
-
-    def test_invalid_symbol_is_error(self):
-        """Invalid symbol format must produce an error result."""
-        result = mcp_request(
-            "tools/call",
-            {
-                "name": "get_company_quarterly_results",
-                "arguments": {"symbol": "INVALID@@@"},
+                "name": "company_fdm",
+                "arguments": {"symbol": KNOWN_SYMBOL, "sections": ["invalid_section"]},
             },
         )
         assert "error" in result or (
@@ -413,14 +365,16 @@ class TestMCPWatchlistTools:
     def test_list_watchlist_returns_array(self):
         """list_watchlist should return a JSON array."""
         result = mcp_request("tools/call", {"name": "list_watchlist", "arguments": {}})
-        
-        # Use structuredContent for structured data (list of items)
-        data = result["result"]["structuredContent"]["result"]
-        assert isinstance(data, list)
-        if data:
-            assert "id" in data[0]
-            assert "symbol" in data[0]
-            assert "exchange" in data[0]
+        assert "result" in result
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert "data" in data
+        assert isinstance(data["data"], list)
+        if data["data"]:
+            assert "id" in data["data"][0]
+            assert "symbol" in data["data"][0]
+            assert "exchange" in data["data"][0]
 
     def test_get_watchlist_symbols(self):
         """get_watchlist_symbols should return just the symbols."""
@@ -428,10 +382,12 @@ class TestMCPWatchlistTools:
             "tools/call", {"name": "get_watchlist_symbols", "arguments": {}}
         )
         assert "result" in result
-        # Use structuredContent for structured data
-        data = result["result"]["structuredContent"]["result"]
-        assert isinstance(data, list)
-        assert all(isinstance(s, str) for s in data)
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert "data" in data
+        assert isinstance(data["data"], list)
+        assert all(isinstance(s, str) for s in data["data"])
 
     def test_add_watchlist_item(self):
         """add_watchlist_item should create a new item."""
@@ -439,12 +395,13 @@ class TestMCPWatchlistTools:
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {"symbol": "WATCH", "exchange": "NSE"},
+                "arguments": {"watchlist_id": 1, "symbol": "WATCH", "exchange": "NSE"},
             },
         )
+        assert "result" in result
+        import json
 
-        # Dict-returning tools have structuredContent directly
-        data = result["result"]["structuredContent"]
+        data = json.loads(result["result"]["content"][0]["text"])
         assert "id" in data
         assert data["symbol"] == "WATCH"
         assert data["exchange"] == "NSE"
@@ -455,21 +412,21 @@ class TestMCPWatchlistTools:
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {"symbol": "WATCH", "exchange": "NSE"},
+                "arguments": {"watchlist_id": 1, "symbol": "WATCH", "exchange": "NSE"},
             },
         )
+        import json
 
-        data1 = result1["result"]["structuredContent"]
+        data1 = json.loads(result1["result"]["content"][0]["text"])
 
         result2 = mcp_request(
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {"symbol": "WATCH", "exchange": "NSE"},
+                "arguments": {"watchlist_id": 1, "symbol": "WATCH", "exchange": "NSE"},
             },
         )
-
-        data2 = result2["result"]["structuredContent"]
+        data2 = json.loads(result2["result"]["content"][0]["text"])
         assert data1["id"] == data2["id"]
 
     def test_add_watchlist_item_normalizes_input(self):
@@ -478,12 +435,12 @@ class TestMCPWatchlistTools:
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {"symbol": "test", "exchange": "nse"},
+                "arguments": {"watchlist_id": 1, "symbol": "test", "exchange": "nse"},
             },
         )
+        import json
 
-        # Dict-returning tools have structuredContent directly
-        data = result["result"]["structuredContent"]
+        data = json.loads(result["result"]["content"][0]["text"])
         assert data["symbol"] == "TEST"
         assert data["exchange"] == "NSE"
 
@@ -504,11 +461,12 @@ class TestMCPWatchlistTools:
             "tools/call",
             {
                 "name": "add_watchlist_item",
-                "arguments": {"symbol": "DELTEST", "exchange": "NSE"},
+                "arguments": {"watchlist_id": 1, "symbol": "DELTEST", "exchange": "NSE"},
             },
         )
+        import json
 
-        item = add_result["result"]["structuredContent"]
+        item = json.loads(add_result["result"]["content"][0]["text"])
         item_id = item["id"]
 
         # Now delete it
@@ -517,8 +475,7 @@ class TestMCPWatchlistTools:
             {"name": "remove_watchlist_item", "arguments": {"item_id": item_id}},
         )
         assert "result" in result
-        # remove_watchlist_item returns a dict
-        data = result["result"]["structuredContent"]
+        data = json.loads(result["result"]["content"][0]["text"])
         assert data.get("ok") is True
 
     def test_remove_watchlist_item_not_found(self):
@@ -536,11 +493,13 @@ class TestMCPNewWatchlistTools:
     """Tests for list_watchlists and get_watchlist_items."""
 
     def test_list_watchlists_returns_array(self):
-        """list_watchlists should return an array in structuredContent."""
+        """list_watchlists should return an array."""
         result = mcp_request("tools/call", {"name": "list_watchlists", "arguments": {}})
         assert "result" in result
-        data = result["result"]["structuredContent"]["result"]
-        assert isinstance(data, list)
+        import json
+
+        data = json.loads(result["result"]["content"][0]["text"])
+        assert isinstance(data.get("data"), list)
 
     def test_get_watchlist_items_nonexistent_is_error(self):
         """get_watchlist_items with nonexistent id should error."""
@@ -735,8 +694,9 @@ class TestMCPGlobalNews:
         if len(data["data"]) > 0:
             for article in data["data"]:
                 if article.get("sentiment"):
-                    assert article["sentiment"].upper() in ("POSITIVE", "NEGATIVE", "NEUTRAL"), \
-                        f"Unexpected sentiment: {article['sentiment']}"
+                    assert article["sentiment"].upper() in (
+                        "POSITIVE", "NEGATIVE", "NEUTRAL", "BULLISH", "BEARISH"
+                    ), f"Unexpected sentiment: {article['sentiment']}"
 
     def test_filter_by_source(self):
         """get_global_news with sources filter returns filtered results."""
@@ -791,15 +751,18 @@ class TestMCPIndustrySector:
         result = mcp_request("tools/call", {"name": "list_sectors", "arguments": {}})
         assert "result" in result
         content = result["result"]["content"]
-        # Sectors may be empty in test DB - just verify it's a list
-        data = result["result"]["structuredContent"]["result"]
-        assert isinstance(data, list)
+        assert isinstance(content, list)
+        if len(content) > 0:
+            import json
+
+            first = json.loads(content[0]["text"])
+            assert "slug" in first
 
     def test_get_industry_stocks_valid_slug(self):
         """get_industry_stocks with valid slug returns list (possibly empty)."""
         result = mcp_request(
             "tools/call",
-            {"name": "get_industry_stocks", "arguments": {"slug": "bank-private"}},
+            {"name": "get_industry_stocks", "arguments": {"slug": "private-sector-bank"}},
         )
         assert "result" in result
         assert result["result"].get("isError") is not True
@@ -975,77 +938,6 @@ class TestMCPBulkSymbolTools:
             "result" in result and result["result"].get("isError") is True
         )
 
-    def test_get_corporate_filings_bulk_returns_dict(self):
-        """get_corporate_filings with symbols returns dict keyed by symbol."""
-        result = mcp_request(
-            "tools/call",
-            {"name": "get_corporate_filings", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
-        )
-        assert "result" in result
-        import json
-
-        data = json.loads(result["result"]["content"][0]["text"])
-        assert isinstance(data, dict)
-        assert "RELIANCE" in data
-        assert "TCS" in data
-
-    def test_get_corporate_filings_neither_param_is_error(self):
-        """get_corporate_filings with neither param returns error."""
-        result = mcp_request(
-            "tools/call", {"name": "get_corporate_filings", "arguments": {}}
-        )
-        assert "error" in result or (
-            "result" in result and result["result"].get("isError") is True
-        )
-
-    def test_get_corporate_filings_both_params_is_error(self):
-        """get_corporate_filings with both params returns error."""
-        result = mcp_request(
-            "tools/call",
-            {
-                "name": "get_corporate_filings",
-                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
-            },
-        )
-        assert "error" in result or (
-            "result" in result and result["result"].get("isError") is True
-        )
-
-    def test_screener_company_bulk_returns_dict(self):
-        """screener_company with symbols returns dict keyed by symbol."""
-        result = mcp_request(
-            "tools/call",
-            {"name": "screener_company", "arguments": {"symbols": ["RELIANCE", "TCS"]}},
-        )
-        assert "result" in result or "error" in result
-        if "result" in result and not result["result"].get("isError"):
-            import json
-
-            data = json.loads(result["result"]["content"][0]["text"])
-            assert isinstance(data, dict)
-
-    def test_screener_company_neither_param_is_error(self):
-        """screener_company with neither param returns error."""
-        result = mcp_request(
-            "tools/call", {"name": "screener_company", "arguments": {}}
-        )
-        assert "error" in result or (
-            "result" in result and result["result"].get("isError") is True
-        )
-
-    def test_screener_company_both_params_is_error(self):
-        """screener_company with both params returns error."""
-        result = mcp_request(
-            "tools/call",
-            {
-                "name": "screener_company",
-                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
-            },
-        )
-        assert "error" in result or (
-            "result" in result and result["result"].get("isError") is True
-        )
-
     def test_screener_trades_bulk_returns_dict(self):
         """screener_trades with symbols returns dict keyed by symbol."""
         result = mcp_request(
@@ -1074,44 +966,6 @@ class TestMCPBulkSymbolTools:
             "tools/call",
             {
                 "name": "screener_trades",
-                "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
-            },
-        )
-        assert "error" in result or (
-            "result" in result and result["result"].get("isError") is True
-        )
-
-    def test_get_company_quarterly_results_bulk_returns_dict(self):
-        """get_company_quarterly_results with symbols returns dict keyed by symbol."""
-        result = mcp_request(
-            "tools/call",
-            {
-                "name": "get_company_quarterly_results",
-                "arguments": {"symbols": ["RELIANCE", "TCS"]},
-            },
-        )
-        assert "result" in result or "error" in result
-        if "result" in result and not result["result"].get("isError"):
-            import json
-
-            data = json.loads(result["result"]["content"][0]["text"])
-            assert isinstance(data, dict)
-
-    def test_get_company_quarterly_results_neither_param_is_error(self):
-        """get_company_quarterly_results with neither param returns error."""
-        result = mcp_request(
-            "tools/call", {"name": "get_company_quarterly_results", "arguments": {}}
-        )
-        assert "error" in result or (
-            "result" in result and result["result"].get("isError") is True
-        )
-
-    def test_get_company_quarterly_results_both_params_is_error(self):
-        """get_company_quarterly_results with both params returns error."""
-        result = mcp_request(
-            "tools/call",
-            {
-                "name": "get_company_quarterly_results",
                 "arguments": {"symbol": "RELIANCE", "symbols": ["TCS"]},
             },
         )

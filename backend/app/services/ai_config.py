@@ -18,7 +18,9 @@ from sqlalchemy import select
 from app.config import settings
 from app.services.route_registry import (
     DEFAULT_ROUTE_ID,
+    format_route_model_id,
     map_legacy_model_to_route,
+    parse_route_model_id,
     provider_to_route_id,
     resolve_active_route_id,
 )
@@ -237,3 +239,56 @@ async def get_configured_hunter_model() -> str:
         logger.warning("Failed to read ai.hunter_model from db: %s", e)
 
     return map_legacy_model_to_route(hunter_model, active_route, preserve_qualified=True)
+
+
+async def resolve_workflow_model(workflow_model: str | None, session=None) -> str:
+    """Resolve the model for a workflow run.
+
+    Order: the workflow's pinned model, then the configured hunter model, then
+    the first model the active route actually serves. Every candidate is checked
+    against the live route catalog, so a retired id can no longer fail the run.
+    """
+    from app.services.route_catalog import get_route_models
+
+    route_id = await resolve_active_route_id(session)
+
+    try:
+        catalog = await get_route_models(route_id, session)
+    except Exception as exc:
+        logger.warning("Could not read the model catalog for route %s: %s", route_id, exc)
+        catalog = []
+
+    def usable(candidate: str | None) -> str | None:
+        if not candidate:
+            return None
+        try:
+            candidate_route, upstream = parse_route_model_id(candidate)
+        except ValueError:
+            return None
+        if candidate_route != route_id:
+            return None
+        if catalog and upstream not in catalog and candidate not in catalog:
+            return None
+        return candidate
+
+    if workflow_model and workflow_model.strip():
+        pinned = map_legacy_model_to_route(workflow_model, route_id, preserve_qualified=False)
+        resolved = usable(pinned)
+        if resolved:
+            return resolved
+        logger.warning(
+            "Workflow model %r is not served by route %s; using the default model",
+            workflow_model,
+            route_id,
+        )
+
+    hunter = await get_configured_hunter_model()
+    resolved = usable(hunter)
+    if resolved:
+        return resolved
+    logger.warning("Hunter model %r is not served by route %s; using the route default", hunter, route_id)
+
+    if catalog:
+        return format_route_model_id(route_id, catalog[0])
+
+    return map_legacy_model_to_route(None, route_id, preserve_qualified=True)

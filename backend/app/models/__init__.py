@@ -2,8 +2,9 @@
 
 from app.models import (  # noqa: F401
     ai_chat,
-    ai_provider,
     ai_picks,
+    ai_provider,
+    ai_workflow,
     api_cache,
     breakout_snapshot,
     corporatefilings,
@@ -19,5 +20,6 @@ from app.models import (  # noqa: F401
     ticker,
     user,
     watchlist,
+    widget_tour,
 )
 from app.models.job import Job  # noqa: F401

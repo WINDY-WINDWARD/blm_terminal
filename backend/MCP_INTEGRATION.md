@@ -1,240 +1,186 @@
-# Integrating BLM Analytics MCP with Desktop Clients
+# MCP Server Integration Guide
 
-The BLM Analytics backend exposes a powerful Model Context Protocol (MCP) server that provides AI agents with direct access to NSE market data, corporate filings, screener data, and the stock universe.
-
-There are **two ways** to connect Claude Desktop to BLM Analytics:
-
-1. **MCP Bundle (Recommended)**: A pre-built `.mcpb` plugin that requires no configuration — just build and install
-2. **Direct Integration**: Configure Claude Desktop to run the Python stdio server directly
+The BLM Analytics backend provides an embedded Model Context Protocol (MCP) server. External AI agents can connect over Streamable HTTP to query market data, fundamentals, filings, watchlists, positions, and analytics.
 
 ---
 
-## Option 1: MCP Bundle (Recommended)
+## 1. Overview & Connection Architecture
 
-The easiest way to use BLM Analytics with Claude Desktop. Build once, install with one click.
+The server uses the Streamable HTTP transport in stateless mode with direct JSON responses. It mounts under the `/api/mcp` prefix. The full endpoint URL is `/api/mcp/mcp`.
 
-### Build
-
-```bash
-# Install mcpb CLI (one-time)
-npm install -g @anthropic-ai/mcpb
-
-# Build the bundle
-cd blm-mcp-bundle
-node build.js                    # Uses localhost:4455
-node build.js --port 8000       # Custom port
-PYTHON_BACKEND_URL=http://host:4455 node build.js  # From env
-```
-
-This creates `blm-mcp-proxy.mcpb` in the `blm-mcp-bundle/` directory.
-
-### Install
-
-1. Open Claude Desktop
-2. Go to **Developer → Extensions → Install Extension**
-3. Select the `.mcpb` file
-4. Enter the backend host/port in the settings UI
-5. Enable the extension
-
-**Benefits:**
-- Zero configuration
-- Works cross-platform (Windows, macOS)
-- Auto-updates when reinstalled
-- 37 tools available immediately
-
-The bundle and direct MCP server both expose portfolio optimization plus watchlist mutation tools, so Claude can create a new portfolio, optimize it, and save the resulting symbols into a new or existing watchlist.
-
-See [`blm-mcp-bundle/README.md`](../blm-mcp-bundle/README.md) for full documentation.
+- **Development endpoint**: `http://127.0.0.1:4455/api/mcp/mcp`
+- **Desktop endpoint**: `http://127.0.0.1:4747/api/mcp/mcp` (once enabled)
+- **Binding**: Loopback only (`127.0.0.1`).
+- **Authentication**: No authentication token is required. The launch-token guard exempts `/api/mcp`.
 
 ---
 
-### Option 1b: Manual Config (Windows Workaround)
+## 2. Server Setup
 
-If the MCP bundle extension doesn't work due to a Claude Desktop bug on Windows, you can configure the MCP server manually using the Node.js proxy.
+### Development Mode
 
-**Location:**
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+To run the backend directly from source:
 
-**Steps:**
-
-1. Open the config file in a text editor
-2. Add the `mcpServers` section (merge with existing content if present):
-
-```json
-{
-  "mcpServers": {
-    "blm-mcp-proxy": {
-      "command": "node",
-      "args": ["D:\\500GB\\p1\\Projects\\blm_terminal\\blm-mcp-bundle\\server\\index.js"],
-      "env": {
-        "REMOTE_HOST": "192.168.1.68",
-        "REMOTE_PORT": "4455",
-        "REMOTE_PATH": "/api/mcp/mcp"
-      }
-    }
-  }
-}
-```
-
-**Important notes for Windows:**
-- Use double backslashes (`\\`) in file paths
-- The `REMOTE_PATH` must be `/api/mcp/mcp` (FastMCP's default `/mcp` nested under `/api/mcp`)
-- Restart Claude Desktop after editing the config
-
----
-
-## Option 2: Direct Integration
-
-While the FastAPI application hosts the MCP server over **HTTP (Stateless Mode)** at `http://127.0.0.1:8000/api/mcp/mcp`, most desktop AI applications (like Claude Desktop and Perplexity Desktop) require the **stdio (Standard I/O) transport**.
-
-This guide explains how to connect your desktop AI assistants to the BLM Analytics MCP server using `stdio`.
-
-## Prerequisites
-
-1. **Python Environment**: Ensure the backend virtual environment is fully set up.
+1. Navigate to the backend directory:
    ```bash
    cd backend
-   python -m venv .venv
+   ```
+2. Activate your virtual environment:
+   ```bash
    source .venv/bin/activate
+   # On Windows: .venv\Scripts\activate
+   ```
+3. Install dependencies:
+   ```bash
    pip install -e ".[dev]"
    ```
-2. **Database**: Ensure your database is migrated (normally handled automatically when you run the backend).
+4. Start the FastAPI server:
+   ```bash
+   uvicorn main:app --port 4455
+   ```
+
+### Desktop Application
+
+In the desktop application, the MCP server is optional and disabled by default.
+
+To enable the server:
+
+1. Open **Settings > Intelligence** in the desktop application.
+2. Toggle **Local MCP Server** to enabled.
+3. Configure your desired port (default: `4747`, allowed range: `1024-65535`).
+4. Restart the desktop application to apply the change.
 
 ---
 
-## 1. The Stdio Entrypoint
+## 3. Protocol & JSON-RPC Requests
 
-We have provided a dedicated script to run the MCP server in `stdio` mode without needing to start the full FastAPI web server. This script is located at:
+The server accepts standard JSON-RPC 2.0 requests over HTTP POST.
 
-```
-backend/run_mcp_stdio.py
-```
+### Required Headers
 
-It simply imports the `mcp` instance and runs it:
-```python
-from app.mcp_server import mcp
+Clients must send the following headers:
+- `Content-Type: application/json`
+- `Accept: application/json, text/event-stream`
 
-if __name__ == "__main__":
-    mcp.run()
-```
-
----
-
-## 2. Claude Desktop Integration
-
-Claude Desktop natively supports MCP servers via `stdio`. You need to add the BLM Analytics server to its configuration file.
-
-### Locate the Configuration File
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-If the file does not exist, create it.
-
-### Update the Configuration
-
-Add the following JSON snippet to your configuration file. **Important:** Replace `/path/to/blm_terminal` with the actual absolute path to your cloned repository.
-
-```json
-{
-  "mcpServers": {
-    "blm-analytics": {
-      "command": "/path/to/blm_terminal/backend/.venv/bin/python",
-      "args": [
-        "/path/to/blm_terminal/backend/run_mcp_stdio.py"
-      ],
-      "env": {
-        "PYTHONPATH": "/path/to/blm_terminal/backend"
-      }
-    }
-  }
-}
-```
-
-### Restart Claude Desktop
-Completely quit Claude Desktop (Cmd+Q / Ctrl+Q) and relaunch it. You should now see a new **hammer (tools)** icon in the Claude interface indicating that the `blm-analytics` tools are available. You can ask Claude: *"What are the top gainers on NSE today?"* and it will query your local server.
-
----
-
-## 3. Perplexity Desktop Integration
-
-*Note: Perplexity Desktop's support for local MCP servers is evolving. If it uses a standard `mcpServers` JSON configuration (similar to Claude or Cursor), the setup is identical.*
-
-If Perplexity Desktop supports a UI-based MCP configuration:
-1. Open **Settings** -> **Advanced** / **Developer** -> **MCP Servers**
-2. Click **Add Server**
-3. Configure the following fields:
-   - **Name**: `BLM Analytics`
-   - **Type / Transport**: `stdio`
-   - **Command**: `/path/to/blm_terminal/backend/.venv/bin/python`
-   - **Arguments**: `/path/to/blm_terminal/backend/run_mcp_stdio.py`
-   - **Environment Variables**: Add `PYTHONPATH` with the value `/path/to/blm_terminal/backend`
-
-### Alternative: Using the HTTP Stateless Endpoint
-
-If Perplexity Desktop eventually supports connecting to **Stateless HTTP** MCP endpoints natively, you can point it directly to your running FastAPI server instead of using `stdio`:
-
-- **Endpoint URL**: `http://127.0.0.1:8000/api/mcp/mcp`
-- **Requirements**: Requires sending the `mcp-protocol-version: 2025-03-26` header. Ensure the FastAPI backend is currently running (`uvicorn main:app`).
-
----
-
-## 4. LM Studio Integration
-
-LM Studio (v0.3.17+) supports both `stdio` and remote HTTP MCP servers via an `mcp.json` file.
-
-### Option A — Stateless HTTP (recommended, no subprocess)
-
-This uses the running FastAPI backend directly. **Start the backend first:**
+### Example Request (`tools/list`)
 
 ```bash
-cd backend
-source .venv/bin/activate
-uvicorn main:app --host 127.0.0.1 --port 8000
+curl -X POST http://127.0.0.1:4455/api/mcp/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
 
-Open LM Studio → **Program** tab (right-hand sidebar) → **Install ▸ Edit mcp.json**, then add:
+### Python Example
 
-```json
-{
-  "mcpServers": {
-    "blm-analytics": {
-      "url": "http://127.0.0.1:8000/api/mcp/mcp"
-    }
-  }
+```python
+import requests
+
+url = "http://127.0.0.1:4455/api/mcp/mcp"
+headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
 }
-```
-
-Save the file. LM Studio will pick up the server immediately — no restart required. The FastAPI server already runs in `stateless_http=True` / `json_response=True` mode, so LM Studio's HTTP transport connects without any handshake.
-
-### Option B — Stdio (no backend server required)
-
-If you prefer not to keep the FastAPI process running, use the stdio entrypoint instead:
-
-```json
-{
-  "mcpServers": {
-    "blm-analytics": {
-      "command": "/path/to/blm_terminal/backend/.venv/bin/python",
-      "args": [
-        "/path/to/blm_terminal/backend/run_mcp_stdio.py"
-      ],
-      "env": {
-        "PYTHONPATH": "/path/to/blm_terminal/backend"
-      }
-    }
-  }
+payload = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
 }
+
+response = requests.post(url, json=payload, headers=headers, timeout=30)
+data = response.json()
+print(f"Discovered {len(data['result']['tools'])} tools")
 ```
-
-Replace `/path/to/blm_terminal` with the absolute path to your cloned repository.
-
-> **Tip:** LM Studio's `mcp.json` follows [Cursor's notation](https://docs.cursor.com/context/model-context-protocol). Copy only the content inside `"mcpServers": { … }` if LM Studio prompts you to paste a snippet.
 
 ---
 
-## 5. Troubleshooting
+## 4. Client Configurations
 
-- **Server Disconnected / Tool Execution Failed**: This usually means the Python executable path is incorrect or the virtual environment is missing dependencies. Verify the absolute paths in your `command` and `args`.
-- **Database Locked / Access Errors**: Because the `stdio` process runs independently of the FastAPI process, it connects to the same SQLite database. SQLite allows concurrent reads, but if you do heavy concurrent writes, you might see locking. Some MCP tools now write portfolio/watchlist data, so save operations are expected here.
-- **Logs**: To debug the `stdio` server, you can manually run the command in your terminal. It communicates over stdout, so any Python tracebacks will be printed directly to the console if it crashes on startup.
+If you changed the port from `4747`, replace `4747` with your configured port.
+
+### Claude Code
+
+Run this command in your terminal:
+
+```bash
+claude mcp add --transport http blm http://127.0.0.1:4747/api/mcp/mcp
+```
+
+### Codex
+
+Add this configuration to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.blm]
+url = "http://127.0.0.1:4747/api/mcp/mcp"
+```
+
+### Antigravity
+
+Add this configuration to `mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "blm": {
+      "serverUrl": "http://127.0.0.1:4747/api/mcp/mcp"
+    }
+  }
+}
+```
+
+---
+
+## 5. Tools & Capabilities
+
+The server registers 69 tools. Call `tools/list` to inspect the full tool schemas.
+
+The tools cover five functional categories:
+1. **Health & Status**: Verify backend connectivity and system health.
+2. **Watchlists & Positions**: Manage watchlists and track user positions.
+3. **Market Data & Screeners**: Query NSE quotes, movers, Screener fundamentals, and run TQL queries.
+4. **Filings & News**: Read corporate filings, announcements, and sentiment-tagged news.
+5. **Documents & Analytics**: Parse PDFs, analyze CSV data, view company FDM profiles, and optimize portfolios.
+
+---
+
+## 6. Implementation Details & Lifespan Architecture
+
+The backend uses the official MCP Python SDK (`mcp>=2,<3`). It instantiates the `MCPServer` class in `app/mcp_server.py`.
+
+FastAPI does not run sub-app lifespans when an application mounts via `app.mount("/api/mcp", ...)`. To ensure the MCP session manager starts correctly, `main.py` enters the session manager explicitly within its main lifespan context:
+
+```python
+async with mcp_server.mcp._lowlevel_server._session_manager.run():
+    yield
+```
+
+This workaround uses a private SDK API (`_lowlevel_server._session_manager`).
+
+### Testing
+
+The test suite in `backend/tests/test_mcp.py` covers this private API integration and verifies tool discovery.
+
+Before running the test suite, start the server on port 4455:
+
+```bash
+uvicorn main:app --port 4455
+```
+
+Then run pytest from the backend directory:
+
+```bash
+pytest tests/test_mcp.py
+```
+
+To run only non-NSE tests:
+
+```bash
+pytest -m "not slow" tests/test_mcp.py
+```
+
+---
+
+## 7. History
+
+The backend previously used a stdio transport (`run_mcp_stdio.py`) and a Claude Desktop extension bundle (`blm-mcp-bundle`). Both were removed intentionally in commit `10b22408` during desktop app conversion. Modern clients support direct Streamable HTTP connections, and the HTTP mount was restored to provide native loopback connectivity.

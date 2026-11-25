@@ -34,9 +34,9 @@ if USE_ASYNC_NSE:
 else:
     from app.services.nse_client import nse_client as _active_client
 
-_MAX_SYMBOLS_PER_REQUEST = 50
-_MAX_CONCURRENT_NSE_FETCHES = 10
+_MAX_CONCURRENT_NSE_FETCHES = 20
 _nse_fetch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_NSE_FETCHES)
+MAX_BATCH_SYMBOLS = 200
 
 
 def clean_nan(obj):
@@ -114,7 +114,9 @@ async def bounded_symbol_data(symbol: str) -> tuple[str, object]:
 
 async def fetch_change_ranges_batch(symbols: list[str]) -> dict[str, object]:
     """Fetch change-ranges for a list of symbols concurrently. Returns {sym: value | null}."""
-    symbols = [s for s in (symbols or []) if s][:_MAX_SYMBOLS_PER_REQUEST]
+    symbols = list(dict.fromkeys(s for s in (symbols or []) if s))
+    if len(symbols) > MAX_BATCH_SYMBOLS:
+        raise ValueError(f"At most {MAX_BATCH_SYMBOLS} symbols are allowed per batch")
     if not symbols:
         return {}
     results = await asyncio.gather(
@@ -126,7 +128,9 @@ async def fetch_change_ranges_batch(symbols: list[str]) -> dict[str, object]:
 
 async def fetch_symbol_data_batch(symbols: list[str]) -> dict[str, object]:
     """Fetch symbol-data for a list of symbols concurrently. Returns {sym: value | null}."""
-    symbols = [s for s in (symbols or []) if s][:_MAX_SYMBOLS_PER_REQUEST]
+    symbols = list(dict.fromkeys(s for s in (symbols or []) if s))
+    if len(symbols) > MAX_BATCH_SYMBOLS:
+        raise ValueError(f"At most {MAX_BATCH_SYMBOLS} symbols are allowed per batch")
     if not symbols:
         return {}
     results = await asyncio.gather(

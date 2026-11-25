@@ -2,6 +2,8 @@
  * Shared types and pure utility functions for AiWidget and AI hooks.
  */
 
+import type { WorkflowCardPayload, PromptCardPayload } from './aiWorkflowTypes';
+
 export type AiMode = 'research' | 'script';
 
 export interface ScriptCard {
@@ -19,6 +21,8 @@ export interface ChatMessage {
   toolCalls?: string[];
   isError?: boolean;
   card?: ScriptCard;
+  workflowCard?: WorkflowCardPayload;
+  promptCard?: PromptCardPayload;
   attachments?: number[];
 }
 
@@ -76,6 +80,8 @@ export type StreamEvent =
   | { type: 'tool_call'; name: string; args: Record<string, unknown> }
   | { type: 'tool_result'; name: string; preview: string }
   | { type: 'script_card'; action: 'created' | 'revised'; script_id: number; name: string; rev_no: number }
+  | ({ type: 'workflow_card' } & WorkflowCardPayload)
+  | ({ type: 'prompt_card' } & PromptCardPayload)
   | { type: 'error'; message: string }
   | { type: 'done' };
 

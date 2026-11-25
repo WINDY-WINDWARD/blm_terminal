@@ -69,7 +69,7 @@ DEFAULT_ROUTE_ID = "direct:aistudio"
 # Default upstream model fallbacks per route kind/provider
 DEFAULT_ROUTE_MODELS: dict[str, str] = {
     "oauth:codex": "gpt-4o",
-    "oauth:antigravity": "gemini-3.8-flash-low",
+    "oauth:antigravity": "gemini-3.8-flash-high",
     "oauth:claude": "claude-3-5-haiku-latest",
     "oauth:xai": "grok-2-latest",
     "oauth:kimi": "moonshot-v1-8k",

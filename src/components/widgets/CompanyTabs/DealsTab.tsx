@@ -390,7 +390,7 @@ export function DealsTab({ symbol }: { symbol: string }) {
 
       {/* ─── Bento Category Tab Bar & Filter Controls ───────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-2 shrink-0 bg-[#0c0c0f] border border-[#27272a] p-1.5 rounded-lg">
-        <div className="flex items-center gap-1" role="tablist">
+        <div data-widget-tour="company-deals" className="flex items-center gap-1" role="tablist">
           {(
             [
               { id: 'bulk', label: 'BULK DEALS', count: allBulk.length },
@@ -404,6 +404,7 @@ export function DealsTab({ symbol }: { symbol: string }) {
               type="button"
               role="tab"
               aria-selected={activeTab === t.id}
+              data-widget-tour-click={`deals-${t.id}`}
               onClick={() => setActiveTab(t.id)}
               className={`px-2.5 py-1 rounded text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === t.id

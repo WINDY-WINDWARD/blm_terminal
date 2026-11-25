@@ -6,6 +6,7 @@ import logging.config
 import logging.handlers
 import re
 import time
+import traceback
 from contextlib import asynccontextmanager
 from typing import Annotated
 from fastapi import Depends
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -50,12 +52,14 @@ from app.routers import (
     portfolio_router,
     watchlist_router,
     layout_router,
+    widget_tours_router,
     scripts_router,
     jobs_router,
     auth_router,
     users_router,
 )
 from app.routers.cliproxy import router as cliproxy_router
+from app.routers.ai_workflows import router as ai_workflows_router
 from app.workers.lifecycle import start_cache_cleanup
 from app.services.ai_summarizer import ai_summarizer
 from app.services.nse_client import nse_client
@@ -63,6 +67,7 @@ from app.services.screener_client import screener_client
 from app.services.news_fetcher import news_fetcher
 from app.services.nse_rate_limiter import NSEServiceUnavailableError
 from app.orchestrator import orchestrator
+from app import mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -106,16 +111,20 @@ def _get_current_revision() -> str | None:
         engine.dispose()
 
 
-def _extract_revision_from_error(exc: Exception) -> str | None:
+def _extract_revision_from_error(exc: Exception | str) -> str | None:
     """Try to extract an Alembic revision ID from a migration error string.
 
-    Looks for 12+ character hex strings (Alembic revision IDs).
-    Falls back to reading alembic_version directly if no match found.
+    Parses alembic/versions/<rev>_ (or alembic\\versions\\<rev>_) out of the exception text.
+    Returns None when it cannot be determined.
     """
-    match = re.search(r"\b([0-9a-f]{12,})\b", str(exc))
+    if isinstance(exc, BaseException):
+        text = "".join(traceback.format_exception(exc))
+    else:
+        text = str(exc)
+    match = re.search(r"alembic[/\\]versions[/\\]([a-zA-Z0-9]+)_", text, re.IGNORECASE)
     if match:
         return match.group(1)
-    return _get_current_revision()
+    return None
 
 
 def _run_migrations_sync() -> None:
@@ -150,123 +159,118 @@ def _run_migrations_sync() -> None:
         logger.info("migrations: legacy DB detected — stamping to initial revision")
         alembic_command.stamp(alembic_cfg, _INITIAL_REVISION)
 
-    try:
-        alembic_command.upgrade(alembic_cfg, "head")
-    except Exception as exc:
-        err = str(exc).lower()
+    # Pre-flight guard: prevent running against a DB created or upgraded by a newer build.
+    current_rev = _get_current_revision()
+    if current_rev is not None:
+        script = ScriptDirectory.from_config(alembic_cfg)
+        known_revisions = {rev.revision for rev in script.walk_revisions()}
+        if current_rev not in known_revisions:
+            msg = (
+                f"Database at '{settings.db_path}' is stamped with unknown revision '{current_rev}'. "
+                "This database may have been created or upgraded by a newer build of the application. "
+                "Please install the newer build or restore a database backup."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
 
-        if "duplicate column" in err:
-            # A migration partially ran before (column added manually or by a
-            # previous run) but the revision wasn't recorded.  Stamp at the
-            # current revision and retry so Alembic picks up where it left off.
-            revision = _extract_revision_from_error(exc)
-            if revision:
+    last_stamped = None
+    for attempt in range(10):
+        try:
+            alembic_command.upgrade(alembic_cfg, "head")
+            break
+        except Exception as exc:
+            err = str(exc).lower()
+
+            if "duplicate column" in err:
+                # A migration partially ran before (column added manually or by a
+                # previous run) but the revision wasn't recorded. Stamp at the
+                # failing revision and retry so Alembic picks up where it left off.
+                revision = _extract_revision_from_error(exc)
+                if not revision or revision == last_stamped:
+                    msg = (
+                        f"migrations: duplicate column detected ({exc}) but failing revision "
+                        f"({'could not be determined' if not revision else f'already stamped: {revision}'}). "
+                        f"The database at '{settings.db_path}' is in an unrecoverable partial state and needs a backup restore."
+                    )
+                    logger.error(msg)
+                    raise RuntimeError(msg) from exc
                 logger.warning(
                     "migrations: duplicate column detected — stamping at %s and retrying",
                     revision,
                 )
                 alembic_command.stamp(alembic_cfg, revision)
-                alembic_command.upgrade(alembic_cfg, "head")
-            else:
-                logger.error(
-                    "migrations: duplicate column but could not identify current revision. "
-                    "Run 'alembic upgrade head' manually to diagnose. Error: %s",
+                last_stamped = revision
+                continue
+
+            elif "overlap" in err or "multiple head" in err:
+                # Multiple Alembic branches with overlapping migrations.
+                # Upgrade each head independently to avoid the merge conflict.
+                logger.warning("migrations: overlapping branches — upgrading each head individually")
+                heads = alembic_command.heads(alembic_cfg) or []
+                for head in heads:
+                    logger.info("migrations: upgrading to %s", head)
+                    alembic_command.upgrade(alembic_cfg, head)
+                break
+
+            elif "already exists" in err:
+                # Double-boot race: two backends on one DB_PATH ran check-then-
+                # create migrations concurrently and the loser hit an existing
+                # index/table. The winner already applied it — stamp at HEAD and
+                # continue instead of failing this instance's startup.
+                logger.warning(
+                    "migrations: concurrent-boot collision (%s) — stamping at HEAD and continuing",
                     exc,
                 )
+                alembic_command.stamp(alembic_cfg, "head")
+                break
+
+            elif "syntax error" in err or "operationalerror" in err:
+                # The squash migration's string-default rendering is incompatible
+                # with the local SQLite build (e.g. `DEFAULT (New Chat)` instead of
+                # `DEFAULT 'New Chat'`). Fall back to Base.metadata.create_all() to
+                # ensure all ORM tables exist, then stamp at HEAD so subsequent
+                # migrations run normally. This is safe because create_all is
+                # idempotent and only adds missing tables.
+                logger.warning(
+                    "migrations: alembic SQL error (%s) — falling back to Base.metadata.create_all",
+                    exc,
+                )
+                from app.models import __init__ as _models_init  # noqa: F401
+                from app.database import Base, _apply_sqlite_pragmas
+                sync_url2 = f"sqlite:///{settings.db_path}"
+                sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False, "timeout": 15})
+                @sa_event.listens_for(sync_engine2, "connect")
+                def _set_pragma3(dbapi_conn, connection_record):
+                    cur = dbapi_conn.cursor()
+                    _apply_sqlite_pragmas(cur)
+                    cur.close()
+                try:
+                    Base.metadata.create_all(sync_engine2)
+                    logger.info("migrations: Base.metadata.create_all() completed")
+                    # Run the seed functions inline so the watchlist data
+                    # gets created (these normally run later in the lifespan, but
+                    # only if migrations succeed). Admin creation is owned by
+                    # POST /api/auth/setup — _ensure_admin_user only logs.
+                    _ensure_admin_user()
+                    _ensure_watchlist_data()
+                    logger.info("migrations: seed functions (watchlist) applied")
+                    # Stamp at HEAD so the database is marked as up-to-date
+                    # with the latest migration, permanently breaking any infinite loop.
+                    alembic_command.stamp(alembic_cfg, "head")
+                finally:
+                    sync_engine2.dispose()
+                break
+
+            else:
+                logger.error("migrations: unhandled migration error: %s", exc)
                 raise
-
-        elif "overlap" in err or "multiple head" in err:
-            # Multiple Alembic branches with overlapping migrations.
-            # Upgrade each head independently to avoid the merge conflict.
-            logger.warning("migrations: overlapping branches — upgrading each head individually")
-            heads = alembic_command.heads(alembic_cfg) or []
-            for head in heads:
-                logger.info("migrations: upgrading to %s", head)
-                alembic_command.upgrade(alembic_cfg, head)
-
-        elif "can't locate revision" in err or "no such revision" in err:
-            # The DB is stamped at a revision that was archived (moved out of
-            # the active versions/ directory).  We can't use alembic's own
-            # stamp/upgrade commands because they also read the stale version.
-            # Strategy: clear stale version, use Base.metadata.create_all()
-            # to ensure all ORM-defined tables exist (idempotent — creates
-            # missing tables, skips existing), then stamp at HEAD.
-            logger.warning(
-                "migrations: stale/archived revision detected — "
-                "recreating missing tables and stamping at HEAD"
-            )
-            from app.models import __init__ as _models_init  # noqa: F401 — ensure models loaded
-            from app.database import Base, _apply_sqlite_pragmas
-            sync_url2 = f"sqlite:///{settings.db_path}"
-            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False, "timeout": 15})
-            @sa_event.listens_for(sync_engine2, "connect")
-            def _set_pragma2(dbapi_conn, connection_record):
-                cur = dbapi_conn.cursor()
-                _apply_sqlite_pragmas(cur)
-                cur.close()
-            try:
-                # 1. Create any missing tables (idempotent).
-                Base.metadata.create_all(sync_engine2)
-                logger.info("migrations: Base.metadata.create_all() completed")
-                # 2. Clear stale version and stamp at HEAD.
-                with sync_engine2.begin() as conn:
-                    conn.execute(sa_text("DELETE FROM alembic_version"))
-                logger.info("migrations: cleared stale alembic_version")
-                alembic_command.stamp(alembic_cfg, "head")
-                logger.info("migrations: stamped at HEAD")
-            finally:
-                sync_engine2.dispose()
-
-        elif "syntax error" in err or "operationalerror" in err:
-            # The squash migration's string-default rendering is incompatible
-            # with the local SQLite build (e.g. `DEFAULT (New Chat)` instead of
-            # `DEFAULT 'New Chat'`). Fall back to Base.metadata.create_all() to
-            # ensure all ORM tables exist, then stamp at HEAD so subsequent
-            # migrations run normally. This is safe because create_all is
-            # idempotent and only adds missing tables.
-            logger.warning(
-                "migrations: alembic SQL error (%s) — falling back to Base.metadata.create_all",
-                exc,
-            )
-            from app.models import __init__ as _models_init  # noqa: F401
-            from app.database import Base, _apply_sqlite_pragmas
-            sync_url2 = f"sqlite:///{settings.db_path}"
-            sync_engine2 = create_engine(sync_url2, connect_args={"check_same_thread": False, "timeout": 15})
-            @sa_event.listens_for(sync_engine2, "connect")
-            def _set_pragma3(dbapi_conn, connection_record):
-                cur = dbapi_conn.cursor()
-                _apply_sqlite_pragmas(cur)
-                cur.close()
-            try:
-                Base.metadata.create_all(sync_engine2)
-                logger.info("migrations: Base.metadata.create_all() completed")
-                # Run the seed functions inline so the watchlist data
-                # gets created (these normally run later in the lifespan, but
-                # only if migrations succeed). Admin creation is owned by
-                # POST /api/auth/setup — _ensure_admin_user only logs.
-                _ensure_admin_user()
-                _ensure_watchlist_data()
-                logger.info("migrations: seed functions (watchlist) applied")
-                # Stamp at HEAD so the database is marked as up-to-date
-                # with the latest migration, permanently breaking any infinite loop.
-                alembic_command.stamp(alembic_cfg, "head")
-            finally:
-                sync_engine2.dispose()
-
-        elif "already exists" in err:
-            # Double-boot race: two backends on one DB_PATH ran check-then-
-            # create migrations concurrently and the loser hit an existing
-            # index/table. The winner already applied it — stamp at HEAD and
-            # continue instead of failing this instance's startup.
-            logger.warning(
-                "migrations: concurrent-boot collision (%s) — stamping at HEAD and continuing",
-                exc,
-            )
-            alembic_command.stamp(alembic_cfg, "head")
-
-        else:
-            logger.error("migrations: unhandled migration error: %s", exc)
-            raise
+    else:
+        msg = (
+            f"migrations: exceeded maximum retry attempts (10) for database at '{settings.db_path}'. "
+            "The database is in an unrecoverable partial state and needs a backup restore."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     # Safety net: ensure all ORM-defined tables exist.  If a previous
     # handler run stamped at the squash base without actually running the
@@ -899,7 +903,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.warning("ProxySupervisor: startup stale cleanup error: %s", exc)
 
-    yield
+    async with mcp_server.mcp._lowlevel_server._session_manager.run():
+        yield
 
     try:
         from app.services.proxy_supervisor import get_proxy_supervisor, SupervisorState
@@ -1048,7 +1053,7 @@ if INTERNAL_TOKEN:
 @app.middleware("http")
 async def launch_token_guard(request: Request, call_next) -> Response:  # type: ignore[type-arg]
     """Reject token-less local API calls (401). /health stays open."""
-    if request.url.path != "/health":
+    if request.url.path != "/health" and not request.url.path.startswith("/api/mcp"):
         has_launch_token = bool(
             LAUNCH_TOKEN
             and _secrets.compare_digest(
@@ -1071,6 +1076,7 @@ async def launch_token_guard(request: Request, call_next) -> Response:  # type: 
 # ---------------------------------------------------------------------------
 
 app.include_router(ai_chat_router, prefix="/api")
+app.include_router(ai_workflows_router, prefix="/api")
 app.include_router(ai_routes_router, prefix="/api")
 app.include_router(ai_routes_router)
 app.include_router(ai_picks_router, prefix="/api")
@@ -1095,6 +1101,7 @@ app.include_router(stockuniverse_router, prefix="/api")
 app.include_router(stockuniverse_errors_router, prefix="/api")
 app.include_router(watchlist_router, prefix="/api")
 app.include_router(layout_router, prefix="/api")
+app.include_router(widget_tours_router, prefix="/api")
 app.include_router(scripts_router, prefix="/api")
 app.include_router(valuation_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -1110,6 +1117,9 @@ app.include_router(cliproxy_router, prefix="/api")
 if settings.is_development:
     from app.routers.notifications import _dev_router
     app.include_router(_dev_router, prefix="/api")
+
+# Mount MCP server under /api/mcp
+app.mount("/api/mcp", mcp_server.mcp.streamable_http_app(json_response=True, stateless_http=True))
 
 
 @app.get("/health", tags=["meta"])

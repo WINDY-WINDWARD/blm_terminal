@@ -43,6 +43,25 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe('GET /api/nse/change-ranges — response shape tolerance', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
+  /**
+   * The route is Python-first. Serve Python as unavailable so these
+   * tests exercise the NSE fallback's response-shape handling.
+   */
+  function mockNsePayloads(payloads: unknown[]): void {
+    let index = 0;
+    fetchSpy.mockImplementation(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/markets/change-ranges')) {
+        return new Response('python down', { status: 503 });
+      }
+      const payload = payloads[index++];
+      if (payload === undefined) {
+        throw new Error(`unexpected NSE call: ${url}`);
+      }
+      return jsonResponse(payload);
+    });
+  }
+
   beforeEach(() => {
     cache.clear();
     fetchSpy = vi.fn();
@@ -55,14 +74,14 @@ describe('GET /api/nse/change-ranges — response shape tolerance', () => {
   });
 
   it('parses bare array payloads', async () => {
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse([
+    mockNsePayloads([
+      [
         {
           one_week_chng_per: '2.5',
           one_month_chng_per: '5.0',
         },
-      ]),
-    );
+      ],
+    ]);
 
     const resp = await GET(buildRequest(['RELIANCE']));
     const body = (await resp.json()) as { data: Record<string, unknown> };
@@ -81,11 +100,11 @@ describe('GET /api/nse/change-ranges — response shape tolerance', () => {
   });
 
   it('parses { data: [...] } envelopes', async () => {
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse({
+    mockNsePayloads([
+      {
         data: [{ one_week_chng_per: '1.1' }],
-      }),
-    );
+      },
+    ]);
 
     const resp = await GET(buildRequest(['TCS']));
     const body = (await resp.json()) as { data: Record<string, { oneWeekPercent: number | null }> };
@@ -97,9 +116,7 @@ describe('GET /api/nse/change-ranges — response shape tolerance', () => {
     // NSE returns an object body for symbols it doesn't have yearwise
     // data for. The route must treat that as a soft miss, not a hard
     // error that trips the circuit breaker.
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse({ message: 'No data', errorCode: 'NO_DATA' }),
-    );
+    mockNsePayloads([{ message: 'No data', errorCode: 'NO_DATA' }]);
 
     const resp = await GET(buildRequest(['ARROWGREEN']));
     const body = (await resp.json()) as { data: Record<string, unknown> };
@@ -109,7 +126,7 @@ describe('GET /api/nse/change-ranges — response shape tolerance', () => {
   });
 
   it('returns null for empty arrays', async () => {
-    fetchSpy.mockResolvedValueOnce(jsonResponse([]));
+    mockNsePayloads([[]]);
 
     const resp = await GET(buildRequest(['NEWSTOCK']));
     const body = (await resp.json()) as { data: Record<string, unknown> };
@@ -122,12 +139,10 @@ describe('GET /api/nse/change-ranges — response shape tolerance', () => {
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     process.on('unhandledRejection', onUnhandled);
 
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse({ message: 'No data' }), // ARROWGREEN: bad shape
-    );
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse([{ one_week_chng_per: '3.0' }]), // TCS: valid
-    );
+    mockNsePayloads([
+      { message: 'No data' }, // ARROWGREEN: bad shape
+      [{ one_week_chng_per: '3.0' }], // TCS: valid
+    ]);
 
     const resp = await GET(buildRequest(['ARROWGREEN', 'TCS']));
     await resp.json();

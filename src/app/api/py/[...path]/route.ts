@@ -1,9 +1,13 @@
 /**
  * Universal catch-all proxy route: /api/py/[...path]
  *
- * Forwards GET and POST requests to the Python FastAPI backend, preserving
- * the path and query string. The backend URL is kept server-side only via
- * the PYTHON_BACKEND_URL environment variable.
+ * Forwards GET, POST, PUT, PATCH, and DELETE requests to the Python FastAPI
+ * backend, preserving the path and query string. The backend URL is kept
+ * server-side only via the PYTHON_BACKEND_URL environment variable.
+ *
+ * Every method the UI can send must be exported here. Next.js answers an
+ * unexported method with 405 before the backend is reached, which is how
+ * workflow pause, workflow edit, and prompt edit all broke at once.
  *
  * Example:
  *   GET  /api/py/circulars?dept=TRADING
@@ -138,6 +142,15 @@ async function proxyRequest(
     // receives it (critical for login cookie to work through the proxy).
     const upstreamSetCookie = upstream.headers.get('set-cookie')
 
+    // 204, 205, and 304 are null-body statuses. Passing a body to the Response
+    // constructor throws a TypeError, so the proxy answered 500 for a DELETE
+    // that the backend had already completed with 204.
+    if (upstream.status === 204 || upstream.status === 205 || upstream.status === 304) {
+      const res = new Response(null, { status: upstream.status })
+      if (upstreamSetCookie) res.headers.set('set-cookie', upstreamSetCookie)
+      return res
+    }
+
     const rawBody = await upstream.text()
 
     if (!upstream.ok) {
@@ -218,6 +231,13 @@ export async function POST(
 }
 
 export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return proxyRequest(request, await params)
+}
+
+export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {

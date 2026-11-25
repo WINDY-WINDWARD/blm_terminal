@@ -8,7 +8,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,17 @@ router = APIRouter()
 
 ERROR_STATUSES = frozenset({"delisted", "illiquid", "suspended", "not_tradable", "unknown", "ticker_error"})
 REVIEW_STATUS_REMOVED = "removed"
+FAIR_VALUE_BATCH_MAX_SYMBOLS = 500
+
+
+class FairValueBatchRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=list, max_length=FAIR_VALUE_BATCH_MAX_SYMBOLS)
+
+
+class FairValueEntry(BaseModel):
+    fairValue: float | None = None
+    fairValueUpdatedAt: datetime | None = None
+    morningstarId: str | None = None
 
 
 def _orm_to_schema(obj: StockUniverseModel) -> StockUniverseSchema:
@@ -113,6 +124,36 @@ async def search_stock_universe(
     res = await db.execute(q)
     rows = res.scalars().all()
     return [_orm_to_schema(r) for r in rows]
+
+
+@router.post(
+    "/stockuniverse/fair-values/batch",
+    response_model=dict[str, FairValueEntry],
+    tags=["stockuniverse"],
+)
+async def get_fair_values_batch(
+    request: FairValueBatchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, FairValueEntry]:
+    """Return the synced Morningstar fair value for each requested symbol."""
+    symbols = list(dict.fromkeys(s.strip().upper() for s in request.symbols if s.strip()))
+    if not symbols:
+        return {}
+    q = select(
+        StockUniverseModel.symbol,
+        StockUniverseModel.fair_value,
+        StockUniverseModel.fair_value_updated_at,
+        StockUniverseModel.morningstar_id,
+    ).where(StockUniverseModel.symbol.in_(symbols))
+    res = await db.execute(q)
+    return {
+        row.symbol: FairValueEntry(
+            fairValue=row.fair_value,
+            fairValueUpdatedAt=row.fair_value_updated_at,
+            morningstarId=row.morningstar_id,
+        )
+        for row in res
+    }
 
 
 @router.post(

@@ -52,9 +52,6 @@ from app.services.news_fetcher import SOURCE_NAME, news_fetcher
 
 logger = logging.getLogger(__name__)
 
-# MCP tool registry. Transport options (stateless_http, json_response, host)
-# were removed in mcp 2.x: they moved to the run()/app methods, and nothing in
-# this repo serves the MCP app over HTTP. Tools here are called in-process.
 mcp = MCPServer("BLM Analytics")
 
 # Symbol validation regex (same as in screener router)

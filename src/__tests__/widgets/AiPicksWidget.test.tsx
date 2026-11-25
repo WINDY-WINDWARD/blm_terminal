@@ -60,7 +60,7 @@ describe('AiPicksWidget', () => {
     render(<AiPicksWidget />);
 
     await screen.findByTestId('pick-ticket-1');
-    fireEvent.click(screen.getByRole('button', { name: 'ACTIVE' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ACTIVE' }));
 
     expect(screen.getByText('NO ACTIVE PICKS')).toBeInTheDocument();
   });

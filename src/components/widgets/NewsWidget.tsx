@@ -464,7 +464,7 @@ function ArticleRow({
         people.length > 0 ||
         countries.length > 0 ||
         impactNote) && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-zinc-300">
+        <div data-widget-tour="news-entity-chips" className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-zinc-300">
           <EntityChips
             label="T"
             values={tickers}
@@ -556,7 +556,7 @@ function SourceFilterChips({
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div data-widget-tour="news-source-filters" className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-400 mr-1">
           SOURCES:
@@ -875,7 +875,7 @@ export function NewsWidget() {
             </span>
           </div>
 
-          <div className="flex w-full min-w-0 flex-wrap items-center justify-start gap-2 @3xl:w-auto @3xl:flex-1 @3xl:justify-end">
+          <div data-widget-tour="news-filter-bar" className="flex w-full min-w-0 flex-wrap items-center justify-start gap-2 @3xl:w-auto @3xl:flex-1 @3xl:justify-end">
             <div className="flex items-center gap-1">
               {(['BULLISH', 'BEARISH', 'NEUTRAL'] as const).map((sent) => {
                 const isActive = filters.sentiment === sent;
@@ -938,7 +938,7 @@ export function NewsWidget() {
       </div>
 
       {/* FULL PANEL LIVE WIRE FEED */}
-      <div className="flex-1 overflow-y-auto pr-0.5">
+      <div data-widget-tour="news-feed-list" className="flex-1 overflow-y-auto pr-0.5">
         <div className="min-h-full bg-[#0c0c0f] border border-[#27272a] rounded p-2.5 @3xl:p-3 flex flex-col justify-between transition-colors shadow-md">
             <div>
               <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#27272a] flex-wrap gap-2">
@@ -993,7 +993,7 @@ export function NewsWidget() {
             </div>
 
             {/* Pagination Footer */}
-            <div className="mt-2.5 pt-2 border-t border-[#27272a] flex items-center justify-between text-xs text-zinc-300 font-mono">
+            <div data-widget-tour="news-pagination" className="mt-2.5 pt-2 border-t border-[#27272a] flex items-center justify-between text-xs text-zinc-300 font-mono">
               <button
                 type="button"
                 onClick={handlePrevPage}

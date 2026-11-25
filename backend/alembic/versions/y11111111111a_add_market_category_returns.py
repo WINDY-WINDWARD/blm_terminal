@@ -16,10 +16,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    existing = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("market_categories")}
     with op.batch_alter_table('market_categories', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('return_1w', sa.Float(), nullable=True))
-        batch_op.add_column(sa.Column('return_1m', sa.Float(), nullable=True))
-        batch_op.add_column(sa.Column('return_6m', sa.Float(), nullable=True))
+        if 'return_1w' not in existing:
+            batch_op.add_column(sa.Column('return_1w', sa.Float(), nullable=True))
+        if 'return_1m' not in existing:
+            batch_op.add_column(sa.Column('return_1m', sa.Float(), nullable=True))
+        if 'return_6m' not in existing:
+            batch_op.add_column(sa.Column('return_6m', sa.Float(), nullable=True))
 
 
 def downgrade() -> None:
