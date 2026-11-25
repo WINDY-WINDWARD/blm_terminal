@@ -532,7 +532,6 @@ async function startApp() {
       log('MCP fixed port: disabled (ephemeral)');
     }
 
->>>>>>> origin/main
     pythonProcess = spawn(pythonCmd, pythonArgs, {
       env: {
         ...process.env,
