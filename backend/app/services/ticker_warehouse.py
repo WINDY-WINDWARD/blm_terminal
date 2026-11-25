@@ -185,7 +185,7 @@ def _backfill_symbol_charting(symbol: str, days: int) -> int:
     Returns:
         Number of rows inserted/updated (0 on failure).
     """
-    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+    from app.services.nse_charting_client import fetch_candles, to_api_s  # avoid circular at module level
 
     # Look up the correct series from stock_universe (e.g. 'BE' for BODALCHEM)
     discovered_series: str | None = None
@@ -207,7 +207,11 @@ def _backfill_symbol_charting(symbol: str, days: int) -> int:
     )
 
     try:
-        candles = fetch_candles(symbol, "D", from_ts=from_ts, to_ts=to_ts, series=discovered_series)
+        # Date-derived bounds are true UTC; convert them to the API's IST
+        # frame (see nse_charting_client for the frame contract).
+        candles = fetch_candles(
+            symbol, "D", from_ts=to_api_s(from_ts), to_ts=to_api_s(to_ts), series=discovered_series,
+        )
     except Exception as exc:
         logger.warning(f"backfill_symbol_charting: charting API failed for {symbol}: {exc}")
         return 0
@@ -1500,17 +1504,17 @@ def backfill_intraday_symbol(
     Returns:
         Dict mapping interval → number of rows upserted.
     """
-    from app.services.nse_charting_client import fetch_candles  # avoid circular at module level
+    from app.services.nse_charting_client import api_now_s, fetch_candles  # avoid circular at module level
 
     if intervals is None:
         intervals = ["1h", "W", "M"]
 
-    now_ts = int(datetime.now(timezone.utc).timestamp())
+    now_ts = api_now_s()
     counts: dict[str, int] = {}
 
     for iv in intervals:
         if iv == "1h":
-            from_ts = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+            from_ts = now_ts - 90 * 86400
         else:
             from_ts = 0  # all history
 

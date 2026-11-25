@@ -35,7 +35,7 @@ from app.services import returns as returns_service
 from app.services import momentum as momentum_service
 from app.services import indicators as indicators_service
 from app.services import screener as screener_service
-from app.services.nse_charting_client import fetch_candles_async
+from app.services.nse_charting_client import api_now_s, fetch_candles_async, to_api_ms, to_api_s
 from app.jobs.runner import trigger_job
 
 router = APIRouter(prefix="/ticker", tags=["ticker"])
@@ -137,8 +137,8 @@ async def get_ohlcv(
                 if span_from < clamp:
                     span_from = clamp
                 span_to = earliest_stored - timedelta(days=1)
-                f_from = int(datetime.combine(span_from, datetime.min.time(), tzinfo=timezone.utc).timestamp())
-                f_to = int(datetime.combine(span_to, datetime.max.time(), tzinfo=timezone.utc).timestamp())
+                f_from = to_api_s(int(datetime.combine(span_from, datetime.min.time(), tzinfo=timezone.utc).timestamp()))
+                f_to = to_api_s(int(datetime.combine(span_to, datetime.max.time(), tzinfo=timezone.utc).timestamp()))
                 if f_to >= f_from:
                     raw_old = await _fetch_nse_chunked(symbol, "D", f_from, f_to, "daily")
                     seen_dates = {c["date"] for c in candles}
@@ -666,7 +666,16 @@ async def get_intraday_ohlcv(
     valid_from_ts: Optional[int] = from_ts if isinstance(from_ts, (int, float)) else None
     valid_to_ts: Optional[int] = to_ts if isinstance(to_ts, (int, float)) else None
 
-    now_ts = int(datetime.now(timezone.utc).timestamp())
+    # Client windows arrive as true-UTC epoch ms: shift them once here so
+    # every downstream NSE window and DB read uses the API's IST frame.
+    # 0 stays falsy: it means "no explicit window" (default lookback), the
+    # same as the pre-contract behavior.
+    if valid_from_ts:
+        valid_from_ts = to_api_ms(valid_from_ts)
+    if valid_to_ts:
+        valid_to_ts = to_api_ms(valid_to_ts)
+
+    now_ts = api_now_s()
     req_to_ts = int(valid_to_ts / 1000) if valid_to_ts else now_ts
 
     if interval in _PASS_THROUGH_INTERVALS:
@@ -679,7 +688,7 @@ async def get_intraday_ohlcv(
         else:
             # Default sensible lookbacks if not provided
             days = 5 if interval == "1m" else 15 if interval == "5m" else 30
-            fetch_from = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+            fetch_from = now_ts - days * 86400
 
         try:
             if valid_from_ts and req_to_ts - fetch_from > _NOSTORE_CHUNK_SPAN_S[interval]:
@@ -715,6 +724,7 @@ async def get_intraday_ohlcv(
         
         latest_ts = 0
         if latest_candle_list:
+            # DB timestamps are already in the API frame: do not shift them.
             dt_utc = latest_candle_list[0].timestamp.replace(tzinfo=timezone.utc)
             latest_ts = int(dt_utc.timestamp())
 
@@ -722,7 +732,7 @@ async def get_intraday_ohlcv(
         if latest_ts > 0:
             fetch_from = latest_ts
         elif interval == "1h":
-            fetch_from = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp())
+            fetch_from = now_ts - 90 * 86400
         else:
             fetch_from = 0
 
@@ -740,11 +750,11 @@ async def get_intraday_ohlcv(
         # Extended history is memory-only on the client, never persisted.
         nostore_rows: list = []
         if interval == "1h" and valid_from_ts:
-            seed_cutoff_ms = int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000)
+            seed_cutoff_ms = (now_ts - 90 * 86400) * 1000
             if valid_from_ts < seed_cutoff_ms:
                 try:
                     back_from_s = int(valid_from_ts / 1000)
-                    floor_s = int((datetime.now(timezone.utc) - timedelta(days=3 * 365)).timestamp())
+                    floor_s = now_ts - 3 * 365 * 86400
                     back_from = max(back_from_s, floor_s)
                     # Cap at the seed cutoff: the DB-backed delta above
                     # already covers everything newer, so only fetch the
@@ -785,7 +795,7 @@ async def get_intraday_ohlcv(
         # WITHOUT upserting. Chunked (365d).
         if interval == "W" and valid_from_ts:
             try:
-                w_floor_s = int((datetime.now(timezone.utc) - timedelta(days=3 * 365)).timestamp())
+                w_floor_s = now_ts - 3 * 365 * 86400
                 w_back_from = max(int(valid_from_ts / 1000), w_floor_s)
                 w_back_to = int(valid_to_ts / 1000) if valid_to_ts else now_ts
                 if w_back_to > w_back_from:

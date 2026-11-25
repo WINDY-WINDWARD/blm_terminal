@@ -392,6 +392,7 @@ class Orchestrator:
         from app.services.data_sync.market_caps import _market_caps_sync
         from app.services.data_sync.scores import _ticker_scores_sync
         from app.services.data_sync.universe import _stock_universe_sync
+        from app.services.nse_charting_client import api_now_s
 
         pipeline_job_key = (
             "job.pipeline.startup" if mode == PipelineMode.STARTUP else "job.pipeline.nightly"
@@ -483,10 +484,9 @@ class Orchestrator:
 
             # ── Stage 5a: W/M candle refresh (nightly only) ───────────────
             if mode == PipelineMode.NIGHTLY:
-                now_utc = datetime.now(timezone.utc)
                 wm_from_ts_overrides = {
-                    "W": int((now_utc - timedelta(days=30)).timestamp()),
-                    "M": int((now_utc - timedelta(days=90)).timestamp()),
+                    "W": api_now_s() - 30 * 86400,
+                    "M": api_now_s() - 90 * 86400,
                 }
                 if not await _run_or_bail(dict(
                     stage_name="ticker_weekly_monthly_update (all universe)",

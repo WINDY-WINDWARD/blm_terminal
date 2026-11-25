@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.services.ticker_warehouse as warehouse
+from app.services.nse_charting_client import _IST_OFFSET_S, api_now_s, to_api_ms
 
 
 def _ms(dt: datetime) -> int:
@@ -132,6 +133,7 @@ class TestDailyNoStore:
 
 class TestIntraday1hNoStore:
     def test_backward_fill_skips_upsert(self, client, monkeypatch):
+        # Client windows are true UTC; NSE candle times come back in the API frame.
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         old_ts = now_ms - 200 * 86400 * 1000  # ~200d back, older than 90d seed
 
@@ -146,9 +148,9 @@ class TestIntraday1hNoStore:
         )
 
         async def _fake_fetch(symbol, interval, from_ts=0, to_ts=0):
-            now_s = int(datetime.now(timezone.utc).timestamp())
+            now_s = api_now_s()
             if from_ts < now_s - 100 * 86400:
-                return [_nse_row(old_ts, 77.0)]
+                return [_nse_row(to_api_ms(old_ts), 77.0)]
             return []
 
         monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _fake_fetch)
@@ -186,7 +188,7 @@ class TestIntraday1hNoStore:
         # The no-store call is the one reaching into the pre-seed window;
         # its upper bound must not exceed the ~90d seed cutoff even though
         # the request asked up to now (the DB delta covers the recent part).
-        cutoff_s = int(datetime.now(timezone.utc).timestamp()) - 90 * 86400
+        cutoff_s = api_now_s() - 90 * 86400
         old_calls = [c for c in calls if c[0] < cutoff_s - 86400]
         assert old_calls, f"expected a pre-seed fetch, got {calls}"
         for _, to_ts in old_calls:
@@ -200,14 +202,14 @@ class TestIntraday1hNoStore:
         monkeypatch.setattr(warehouse, "get_intraday", lambda s, i, **k: [])
 
         async def _mixed_fetch(symbol, interval, from_ts=0, to_ts=0):
-            now_s = int(datetime.now(timezone.utc).timestamp())
+            now_s = api_now_s()
             if from_ts < now_s - 100 * 86400:
                 return [
-                    {"time_ms": old_ts},  # missing OHLC -> zero-filled
+                    {"time_ms": to_api_ms(old_ts)},  # missing OHLC -> zero-filled
                     {"time_ms": None, "open": 1},  # skipped
                     {"nope": 1},  # skipped
                     None,  # skipped, not a crash
-                    _nse_row(old_ts + 3600000, 44.0),
+                    _nse_row(to_api_ms(old_ts + 3600000), 44.0),
                 ]
             return []
 
@@ -257,6 +259,18 @@ class TestChunkedNoStore:
         to_d = today.strftime("%d-%m-%Y")
         r = client.get(f"/api/ticker/ohlcv/RELIANCE?from_date={from_d}&to_date={to_d}")
         assert r.status_code == 200, r.text
+        # Date bounds are true UTC at the API edge: the router must convert
+        # them into the charting API's IST frame before the first chunk.
+        raw_midnight_utc = int(
+            datetime.combine(today - timedelta(days=730), datetime.min.time(), tzinfo=timezone.utc).timestamp()
+        )
+        assert calls[0][0] == raw_midnight_utc + _IST_OFFSET_S
+        # The chunk loop must end at the converted window end as well
+        # (earliest stored bar = today, so the no-store span ends yesterday).
+        raw_window_end_utc = int(
+            datetime.combine(today - timedelta(days=1), datetime.max.time(), tzinfo=timezone.utc).timestamp()
+        )
+        assert calls[-1][1] == raw_window_end_utc + _IST_OFFSET_S
         # 700d span must arrive as multiple capped (<=366d) chunks, not one shot.
         assert len(calls) >= 2, f"expected chunked fetches, got {calls}"
         for c_from, c_to in calls:
@@ -293,7 +307,10 @@ class TestChunkedNoStore:
             "open": 1.0, "high": 1.0, "low": 1.0, "close": 2.0, "volume": 10,
         }
         from types import SimpleNamespace
-        recent_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5)
+        # DB timestamps are stored in the API frame, so mirror that here.
+        recent_dt = datetime.fromtimestamp(
+            api_now_s() - 5 * 86400, timezone.utc
+        ).replace(tzinfo=None)
         monkeypatch.setattr(
             warehouse,
             "get_intraday_latest",
@@ -307,9 +324,9 @@ class TestChunkedNoStore:
         )
 
         async def _fake_w(symbol, interval, from_ts=0, to_ts=0):
-            now_s = int(datetime.now(timezone.utc).timestamp())
+            now_s = api_now_s()
             if from_ts < now_s - 100 * 86400:
-                return [_nse_row(old_ts, 33.0)]
+                return [_nse_row(to_api_ms(old_ts), 33.0)]
             return []
 
         monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _fake_w)
@@ -323,3 +340,46 @@ class TestChunkedNoStore:
         assert 2.0 in closes  # DB row kept
         # Delta fetch returned [] so nothing persisted: proof of no-store.
         assert upserts == []
+
+
+class TestApiFrameShift:
+    """Client windows are true UTC and must be shifted to the API frame once."""
+
+    def test_passthrough_window_shifted_once(self, client, monkeypatch):
+        calls: list = []
+
+        async def _recording(symbol, interval, from_ts=0, to_ts=0):
+            calls.append((symbol, from_ts, to_ts))
+            return []
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _recording)
+
+        r = client.get(
+            "/api/ticker/intraday/RELIANCE?interval=5m&from_ts=1000000&to_ts=2000000"
+        )
+        assert r.status_code == 200, r.text
+        assert calls == [
+            ("RELIANCE", 1000000 // 1000 + _IST_OFFSET_S, 2000000 // 1000 + _IST_OFFSET_S)
+        ]
+
+    def test_cached_db_read_uses_shifted_window(self, client, monkeypatch):
+        monkeypatch.setattr(warehouse, "get_intraday_latest", lambda s, i, n: {})
+
+        db_calls: list = []
+
+        def _recording_db(symbol, interval, from_ts=None, to_ts=None, db=None):
+            db_calls.append((from_ts, to_ts))
+            return []
+
+        monkeypatch.setattr(warehouse, "get_intraday", _recording_db)
+
+        async def _no_rows(symbol, interval, from_ts=0, to_ts=0):
+            return []
+
+        monkeypatch.setattr("app.routers.ticker.fetch_candles_async", _no_rows)
+
+        r = client.get(
+            "/api/ticker/intraday/RELIANCE?interval=1h&from_ts=1000000&to_ts=2000000"
+        )
+        assert r.status_code == 200, r.text
+        assert db_calls == [(to_api_ms(1000000), to_api_ms(2000000))]
