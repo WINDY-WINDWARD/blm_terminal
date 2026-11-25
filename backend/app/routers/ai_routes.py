@@ -31,6 +31,7 @@ from app.schemas.ai_provider import (
     OAuthCallbackRequest,
     OAuthCancelRequest,
     OAuthStartRequest,
+    RiskAckRequest,
     RouteEnabledUpdate,
     RouteSettingsUpdate,
     RouteSummary,
@@ -45,6 +46,16 @@ from app.services.endpoint_validator import (
 )
 from app.services.llm_provider import get_proxy_traces
 from app.services.oauth_session_manager import OAuthPortConflictError, get_oauth_session_manager
+from app.services.provider_risk_gate import (
+    RISK_GATE_VERSION,
+    ack_is_current,
+    build_risk_info,
+    get_risk_ack_map,
+    is_risk_acknowledged,
+    is_risky_route,
+    record_risk_acknowledgement,
+    risky_route_id_for_provider,
+)
 from app.services.provider_vault import (
     ProviderVault,
     VaultState,
@@ -200,6 +211,20 @@ async def ensure_usable_active_route(db: AsyncSession) -> str | None:
     return curr_route
 
 
+async def _require_risk_ack(db: AsyncSession, route_id: str | None) -> None:
+    """Reject a risky route action until the user accepts the current risk notice."""
+    if not is_risky_route(route_id):
+        return
+    if await is_risk_acknowledged(db, route_id or ""):
+        return
+
+    clean_id = (route_id or "").strip()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"risk_ack_required:{clean_id}",
+    )
+
+
 def _serialize_credential(cred: AIProviderCredential) -> CredentialSummary:
     """Format credential into redacted CredentialSummary."""
     return CredentialSummary(
@@ -244,6 +269,7 @@ def _oauth_route_summary(
     proxy_status: dict[str, Any],
     vault: ProviderVault,
     recovery_state: str | None,
+    risk_acknowledged: bool = True,
 ) -> RouteSummary:
     """Build RouteSummary for an OAuth provider route."""
     creds = r.credentials or []
@@ -271,6 +297,11 @@ def _oauth_route_summary(
         keys=[],
         config={},
         models=models,
+        risk=build_risk_info(
+            r.id,
+            acknowledged=risk_acknowledged,
+            auto_disabled=not risk_acknowledged and not r.enabled,
+        ),
         recovery_state=recovery_state if not vault.is_available else None,
     )
 
@@ -458,10 +489,20 @@ async def list_routes(
         logger.warning("Failed querying ai_provider_routes: %s", exc)
 
     routes_out: list[RouteSummary] = []
+    risk_acks = await get_risk_ack_map(db)
     for r in db_routes:
         is_active = (r.id == active_route_id)
         if r.kind == "oauth":
-            routes_out.append(_oauth_route_summary(r, is_active, proxy_status, vault, recovery_state))
+            routes_out.append(
+                _oauth_route_summary(
+                    r,
+                    is_active,
+                    proxy_status,
+                    vault,
+                    recovery_state,
+                    risk_acknowledged=ack_is_current(risk_acks.get(r.id)),
+                )
+            )
         elif r.kind == "endpoint":
             routes_out.append(_custom_route_summary(r, is_active, proxy_status, vault, recovery_state))
 
@@ -492,6 +533,38 @@ async def list_routes(
         recovery_state=recovery_state,
         settings=settings_dict,
     )
+
+
+@router.post("/{route_id}/acknowledge-risk")
+async def acknowledge_route_risk(
+    route_id: str,
+    body: RiskAckRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Record the user's acceptance of the high-risk notice for a risky OAuth route."""
+    clean_id = route_id.strip()
+    if not is_risky_route(clean_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Route '{clean_id}' is not a risky OAuth route.",
+        )
+    if not body.accepted:
+        raise HTTPException(
+            status_code=400,
+            detail="Risk acceptance requires accepted=true.",
+        )
+
+    await record_risk_acknowledgement(db, clean_id, str(user.id))
+    acks = await get_risk_ack_map(db)
+    entry = acks.get(clean_id) or {}
+    return {
+        "status": "acknowledged",
+        "route_id": clean_id,
+        "accepted_at": entry.get("accepted_at") or datetime.now(timezone.utc).isoformat(),
+        "gate_version": RISK_GATE_VERSION,
+        "risk": build_risk_info(clean_id, acknowledged=True),
+    }
 
 
 class RouteModelItem(BaseModel):
@@ -568,6 +641,8 @@ async def activate_route(
             detail=f"Invalid route_id '{clean_id}'. Must start with 'oauth:', 'endpoint:', or 'direct:'.",
         )
 
+    await _require_risk_ack(db, clean_id)
+
     if not await is_route_enabled(db, clean_id):
         raise HTTPException(
             status_code=409,
@@ -606,6 +681,8 @@ async def update_route_enabled(
     from app.services.direct_proxy_routes import SUPPORTED_ROUTE_IDS, get_direct_route, is_supported_direct_route
 
     clean_id = route_id.strip()
+    if body.enabled:
+        await _require_risk_ack(db, clean_id)
     if clean_id.startswith("oauth:"):
         prov = clean_id.split(":", 1)[1]
         if prov not in OAUTH_PROVIDERS:
@@ -748,6 +825,9 @@ async def start_oauth(
             status_code=400,
             detail="Device flow is not supported; use browser OAuth.",
         )
+    risky_id = risky_route_id_for_provider(body.provider)
+    if risky_id:
+        await _require_risk_ack(db, risky_id)
     mgr = get_oauth_session_manager()
     try:
         return await mgr.start_session(
@@ -853,6 +933,9 @@ async def patch_account(
     cred = res.scalar_one_or_none()
     if cred is None:
         raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found.")
+
+    if body.enabled is True:
+        await _require_risk_ack(db, cred.route_id)
 
     if body.priority is not None:
         cred.priority = body.priority
@@ -1051,6 +1134,8 @@ async def reauth_account(
             status_code=400,
             detail=f"Account '{account_id}' has kind '{cred.kind}', only OAuth accounts can be reauthenticated.",
         )
+
+    await _require_risk_ack(db, cred.route_id)
 
     prov = cred.route_id.split(":", 1)[1] if cred.route_id.startswith("oauth:") else cred.route_id
     mgr = get_oauth_session_manager()

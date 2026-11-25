@@ -26,6 +26,8 @@ interface OAuthAccountCardProps {
   account: CredentialSummary;
   providerLabel: string;
   onReauth: (accountId: string, identity: string) => void;
+  riskAcknowledged?: boolean;
+  onBlockedEnable?: () => void;
 }
 
 function clampRoutingValue(value: number | null | undefined): number {
@@ -33,7 +35,7 @@ function clampRoutingValue(value: number | null | undefined): number {
   return Math.max(1, Math.min(100, Math.floor(value ?? 1)));
 }
 
-export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAccountCardProps) {
+export function OAuthAccountCard({ account, providerLabel, onReauth, riskAcknowledged = true, onBlockedEnable }: OAuthAccountCardProps) {
   const patchAccount = usePatchAccountMutation();
   const refreshAccount = useRefreshAccountMutation();
   const testAccount = useTestAccountMutation();
@@ -58,6 +60,7 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
   const isCooldown = Boolean(account.cooldown) || account.status === 'cooldown';
   const isError = account.status === 'error' || Boolean(account.last_redacted_error);
   const isDisabled = !account.enabled;
+  const enableBlocked = isDisabled && riskAcknowledged === false && Boolean(onBlockedEnable);
 
   const handlePriorityChange = (newVal: number) => {
     if (!Number.isFinite(newVal)) {
@@ -94,6 +97,10 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
   };
 
   const handleToggleEnabled = () => {
+    if (enableBlocked && onBlockedEnable) {
+      onBlockedEnable();
+      return;
+    }
     patchAccount.mutate({ accountId: account.id, patch: { enabled: !account.enabled } });
   };
 
@@ -204,8 +211,20 @@ export function OAuthAccountCard({ account, providerLabel, onReauth }: OAuthAcco
             type="button"
             onClick={handleToggleEnabled}
             disabled={patchAccount.isPending}
-            aria-label={account.enabled ? 'Disable account' : 'Enable account'}
-            title={account.enabled ? 'Disable account' : 'Enable account'}
+            aria-label={
+              account.enabled
+                ? 'Disable account'
+                : enableBlocked
+                ? 'Review risk to enable account'
+                : 'Enable account'
+            }
+            title={
+              account.enabled
+                ? 'Disable account'
+                : enableBlocked
+                ? 'Review the high-risk warning before enabling'
+                : 'Enable account'
+            }
             className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border transition-colors cursor-pointer ${
               account.enabled
                 ? 'bg-emerald-900/30 border-emerald-700/60 text-emerald-300 hover:bg-emerald-800/40'

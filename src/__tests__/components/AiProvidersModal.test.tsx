@@ -666,6 +666,114 @@ describe('AiProvidersModal', () => {
     });
   });
 
+  it('blocks a risky OAuth route until the risk is accepted', async () => {
+    const riskInfo = {
+      level: 'high',
+      title: 'DO NOT USE - HIGH RISK OF ACCOUNT BAN',
+      message: 'The provider can suspend or permanently ban the account.',
+      acknowledged: false,
+      gate_version: '2026.11.25',
+      auto_disabled: true,
+    };
+    const acknowledgedRoutes: string[] = [];
+    const enabledBodies: Array<{ enabled: boolean }> = [];
+    server.use(
+      http.get('/api/py/ai/routes', () => {
+        return HttpResponse.json({
+          ...baseMockRoutesResponse,
+          routes: baseMockRoutesResponse.routes.map((r) =>
+            r.id === 'oauth:claude' || r.id === 'oauth:antigravity'
+              ? { ...r, enabled: false, risk: { ...riskInfo } }
+              : r,
+          ),
+        });
+      }),
+      http.post('/api/py/ai/routes/:routeId/acknowledge-risk', ({ params }) => {
+        acknowledgedRoutes.push(String(params.routeId));
+        return HttpResponse.json({
+          status: 'acknowledged',
+          route_id: params.routeId,
+          accepted_at: '2026-11-25T00:00:00Z',
+          risk: { ...riskInfo, acknowledged: true, auto_disabled: false },
+        });
+      }),
+      http.patch('/api/py/ai/routes/:routeId/enabled', async ({ request }) => {
+        enabledBodies.push((await request.json()) as { enabled: boolean });
+        return HttpResponse.json({
+          status: 'enabled',
+          route_id: 'oauth:claude',
+          active_route_id: 'direct:aistudio',
+        });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    expect(screen.getByTestId('risk-badge-claude')).toBeInTheDocument();
+    expect(screen.getByTestId('risk-auto-disabled-claude')).toBeInTheDocument();
+
+    fireEvent.click(
+      screen
+        .getByTestId('route-active-toggle-claude')
+        .querySelector('button[aria-label="Activate provider"]')!,
+    );
+
+    expect(await screen.findByTestId('provider-risk-modal')).toBeInTheDocument();
+    expect(acknowledgedRoutes).toEqual([]);
+    expect(enabledBodies).toEqual([]);
+
+    const acceptButton = screen.getByTestId('provider-risk-accept');
+    expect(acceptButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(acceptButton).not.toBeDisabled();
+    fireEvent.click(acceptButton);
+
+    await waitFor(() => expect(acknowledgedRoutes).toEqual(['oauth:claude']));
+    await waitFor(() => expect(enabledBodies).toEqual([{ enabled: true }]));
+  });
+
+  it('blocks enabling a risky account until the risk is accepted', async () => {
+    const riskInfo = {
+      level: 'high',
+      title: 'DO NOT USE - HIGH RISK OF ACCOUNT BAN',
+      message: 'The provider can suspend or permanently ban the account.',
+      acknowledged: false,
+      gate_version: '2026.11.25',
+      auto_disabled: true,
+    };
+    server.use(
+      http.get('/api/py/ai/routes', () => {
+        return HttpResponse.json({
+          ...baseMockRoutesResponse,
+          routes: baseMockRoutesResponse.routes.map((r) =>
+            r.id === 'oauth:claude'
+              ? {
+                  ...r,
+                  risk: { ...riskInfo },
+                  accounts: r.accounts.map((acc) =>
+                    acc.id === 'acc-claude-err' ? { ...acc, enabled: false } : acc,
+                  ),
+                }
+              : r,
+          ),
+        });
+      }),
+    );
+
+    render(<AiProvidersModal isOpen={true} onClose={vi.fn()} />);
+    await screen.findByRole('tab', { name: /OAUTH ACCOUNTS/i });
+
+    fireEvent.click(
+      screen
+        .getByTestId('account-card-acc-claude-err')
+        .querySelector('button[aria-label="Review risk to enable account"]')!,
+    );
+
+    expect(await screen.findByTestId('provider-risk-modal')).toBeInTheDocument();
+  });
+
   it('permits deactivating an active OAuth route', async () => {
     let capturedBody: { enabled?: boolean } | null = null;
     let capturedRouteId: string | null = null;

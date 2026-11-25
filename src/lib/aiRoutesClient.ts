@@ -12,6 +12,7 @@ import type {
   OAuthPollResponse,
   OAuthStartRequest,
   OAuthStartResponse,
+  RiskAckResponse,
   RouteSettingsUpdate,
   RouteModelCatalogResponse,
   RoutesListResponse,
@@ -92,6 +93,14 @@ export const aiRoutesClient = {
       `/${encodeURIComponent(routeId)}/enabled`,
       { method: 'PATCH', body: { enabled } },
       'Failed to set route enabled status',
+    );
+  },
+
+  async acknowledgeRouteRisk(routeId: string): Promise<RiskAckResponse> {
+    return request<RiskAckResponse>(
+      `/${encodeURIComponent(routeId)}/acknowledge-risk`,
+      { method: 'POST', body: { accepted: true } },
+      'Failed to record risk acceptance',
     );
   },
 

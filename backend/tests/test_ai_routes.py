@@ -38,6 +38,7 @@ from app.services.provider_vault import (
     VaultState,
     get_provider_vault,
 )
+from app.services.provider_risk_gate import ACK_CONFIG_KEY, RISK_GATE_VERSION
 from app.services.proxy_supervisor import (
     ProxySupervisor,
     get_proxy_supervisor,
@@ -103,6 +104,21 @@ async def test_env(tmp_path: Path):
             is_admin=True,
         )
         session.add(admin)
+        session.add(
+            SystemConfig(
+                key=ACK_CONFIG_KEY,
+                value=json.dumps(
+                    {
+                        route_id: {
+                            "version": RISK_GATE_VERSION,
+                            "accepted_at": "2026-11-25T00:00:00+00:00",
+                            "accepted_by": "1",
+                        }
+                        for route_id in ("oauth:antigravity", "oauth:claude")
+                    }
+                ),
+            )
+        )
         await session.commit()
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -318,6 +334,162 @@ async def test_route_activation_and_validation(test_env):
         disabled_act = await client.post("/api/ai/routes/direct:openai/activate")
         assert disabled_act.status_code == 409
         assert "disabled and cannot be activated" in disabled_act.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_risky_route_actions_require_acknowledgement(test_env):
+    """Gemini and Claude stay blocked until the user accepts the risk per provider."""
+    async with test_env["session_factory"]() as session:
+        ack_row = (
+            await session.execute(
+                select(SystemConfig).where(SystemConfig.key == ACK_CONFIG_KEY)
+            )
+        ).scalar_one()
+        await session.delete(ack_row)
+        session.add(
+            AIProviderCredential(
+                id="acc-risk-claude",
+                route_id="oauth:claude",
+                kind="oauth",
+                vault_reference="vault:acc-risk-claude",
+                proxy_credential_name="acc-risk-claude",
+                masked_identity="risk***@example.com",
+                priority=1,
+                weight=1,
+                enabled=False,
+                status="disabled",
+            )
+        )
+        await session.commit()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=test_env["headers"]
+    ) as client:
+        # Disabling is always allowed.
+        off = await client.patch("/api/ai/routes/oauth:claude/enabled", json={"enabled": False})
+        assert off.status_code == 200
+
+        blocked_calls = [
+            await client.patch("/api/ai/routes/oauth:claude/enabled", json={"enabled": True}),
+            await client.post("/api/ai/routes/oauth:claude/activate"),
+            await client.post("/api/ai/routes/oauth/start", json={"provider": "claude"}),
+            await client.patch(
+                "/api/ai/routes/accounts/acc-risk-claude", json={"enabled": True}
+            ),
+            await client.post("/api/ai/routes/accounts/acc-risk-claude/reauth"),
+        ]
+        for resp in blocked_calls:
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == "risk_ack_required:oauth:claude"
+
+        # Acceptance must be explicit.
+        rejected = await client.post(
+            "/api/ai/routes/oauth:claude/acknowledge-risk",
+            json={"accepted": False},
+        )
+        assert rejected.status_code == 400
+
+        accepted = await client.post(
+            "/api/ai/routes/oauth:claude/acknowledge-risk",
+            json={"accepted": True},
+        )
+        assert accepted.status_code == 200
+        body = accepted.json()
+        assert body["route_id"] == "oauth:claude"
+        assert body["risk"]["acknowledged"] is True
+        assert body["accepted_at"]
+
+        # Per-provider: Gemini is still blocked.
+        gemini = await client.patch(
+            "/api/ai/routes/oauth:antigravity/enabled", json={"enabled": True}
+        )
+        assert gemini.status_code == 409
+        assert gemini.json()["detail"] == "risk_ack_required:oauth:antigravity"
+
+        on_again = await client.patch(
+            "/api/ai/routes/oauth:claude/enabled", json={"enabled": True}
+        )
+        assert on_again.status_code == 200
+
+        account_again = await client.patch(
+            "/api/ai/routes/accounts/acc-risk-claude", json={"enabled": True}
+        )
+        assert account_again.status_code == 200
+
+        activated = await client.post("/api/ai/routes/oauth:claude/activate")
+        assert activated.status_code == 200
+
+        listing = await client.get("/api/ai/routes")
+        assert listing.status_code == 200
+        risk_by_route = {r["id"]: r["risk"] for r in listing.json()["routes"]}
+        assert risk_by_route["oauth:claude"]["acknowledged"] is True
+        assert risk_by_route["oauth:antigravity"]["acknowledged"] is False
+        assert risk_by_route["oauth:codex"] is None
+
+
+@pytest.mark.asyncio
+async def test_system_config_cannot_bypass_risk_gate(test_env):
+    """Direct settings writes cannot select or pin a risky route without acceptance."""
+    async with test_env["session_factory"]() as session:
+        ack_row = (
+            await session.execute(
+                select(SystemConfig).where(SystemConfig.key == ACK_CONFIG_KEY)
+            )
+        ).scalar_one()
+        await session.delete(ack_row)
+        await session.commit()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=test_env["headers"]
+    ) as client:
+        blocked = {
+            "oauth:claude": "oauth:claude",
+            "claude": "oauth:claude",
+            "oauth:antigravity": "oauth:antigravity",
+            "gemini": "oauth:antigravity",
+        }
+        for value, route_id in blocked.items():
+            resp = await client.put(
+                "/api/system-config/ai.provider", json={"value": value}
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == f"risk_ack_required:{route_id}"
+
+        for key in ("ai.hunter_model", "ai.verifier_model"):
+            resp = await client.put(
+                f"/api/system-config/{key}",
+                json={"value": "blm:oauth:claude/claude-3-5-sonnet"},
+            )
+            assert resp.status_code == 409
+            assert resp.json()["detail"] == "risk_ack_required:oauth:claude"
+
+        safe_provider = await client.put(
+            "/api/system-config/ai.provider", json={"value": "direct:aistudio"}
+        )
+        assert safe_provider.status_code == 200
+        safe_model = await client.put(
+            "/api/system-config/ai.hunter_model",
+            json={"value": "blm:direct:aistudio/gemini-2.5-flash"},
+        )
+        assert safe_model.status_code == 200
+
+        accepted = await client.post(
+            "/api/ai/routes/oauth:claude/acknowledge-risk",
+            json={"accepted": True},
+        )
+        assert accepted.status_code == 200
+
+        allowed_provider = await client.put(
+            "/api/system-config/ai.provider", json={"value": "oauth:claude"}
+        )
+        assert allowed_provider.status_code == 200
+        allowed_model = await client.put(
+            "/api/system-config/ai.hunter_model",
+            json={"value": "blm:oauth:claude/claude-3-5-sonnet"},
+        )
+        assert allowed_model.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -2602,6 +2774,7 @@ async def test_list_routes_structural_invariants_and_shape(test_env, monkeypatch
             "keys",
             "config",
             "models",
+            "risk",
             "recovery_state",
         }
         for r in routes:
@@ -2611,6 +2784,13 @@ async def test_list_routes_structural_invariants_and_shape(test_env, monkeypatch
             assert "status" in r["health"]
             assert "proxy_status" in r["health"]
             assert r["health"]["status"] in ("active", "configured", "unconfigured")
+
+            if r["id"] in ("oauth:antigravity", "oauth:claude"):
+                assert r["risk"]["level"] == "high"
+                assert r["risk"]["acknowledged"] is True
+                assert r["risk"]["gate_version"] == RISK_GATE_VERSION
+            else:
+                assert r["risk"] is None
 
             if r["kind"] == "oauth":
                 assert "account_count" in r["health"]

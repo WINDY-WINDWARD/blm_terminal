@@ -13,6 +13,8 @@ from app.auth import get_admin_user, get_current_user
 from app.database import get_db
 from app.models.system_config import SystemConfig
 from app.models.user import User
+from app.services.provider_risk_gate import is_risk_acknowledged, is_risky_route
+from app.services.route_registry import parse_route_model_id, provider_to_route_id
 
 router = APIRouter(tags=["system-config"], dependencies=[Depends(get_current_user)])
 
@@ -328,6 +330,29 @@ async def get_system_config(
     return values
 
 
+async def _enforce_risky_config_write(db: AsyncSession, key: str, value: str) -> None:
+    """Block risky route selection and risky worker models until the user accepts."""
+    if key == "ai.provider":
+        route_id = provider_to_route_id(value)
+    elif key in ("ai.hunter_model", "ai.verifier_model"):
+        try:
+            route_id, _ = parse_route_model_id(value)
+        except ValueError:
+            return
+    else:
+        return
+
+    if not is_risky_route(route_id):
+        return
+    if await is_risk_acknowledged(db, route_id):
+        return
+
+    raise HTTPException(
+        status_code=409,
+        detail=f"risk_ack_required:{route_id}",
+    )
+
+
 @router.put("/system-config/{key}", dependencies=[Depends(get_admin_user)])
 async def update_system_config(
     key: str,
@@ -343,6 +368,9 @@ async def update_system_config(
         val_str = normalize_gemini_worker_model(val_str, default_tier="high")
     elif key == "ai.verifier_model" and val_str.startswith("gemini"):
         val_str = normalize_gemini_worker_model(val_str, default_tier="low")
+
+    await _enforce_risky_config_write(db, key, val_str)
+
     stmt = sqlite_insert(SystemConfig).values(
         key=key,
         value=val_str,

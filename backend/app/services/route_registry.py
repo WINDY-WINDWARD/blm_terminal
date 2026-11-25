@@ -38,7 +38,7 @@ OAUTH_PROVIDERS: tuple[str, ...] = (
 
 OAUTH_PROVIDER_LABELS: dict[str, str] = {
     "codex": "Codex",
-    "antigravity": "Antigravity",
+    "antigravity": "Gemini (Antigravity)",
     "claude": "Claude",
     "xai": "xAI",
     "kimi": "Kimi",
