@@ -19,6 +19,7 @@
 /backend/tests/_tmp_documents/
 /backend/.pytest_local/
 /backend/pytest-cache-files-*/
+/backend/cliproxy-core/
 
 # next.js
 /.next/

@@ -1,0 +1,31 @@
+# Tested exact pins for known-vulnerable transitive dependencies.
+#
+# Purpose: keep every environment (dev venv, CI, PyInstaller freeze) on versions
+# that clear the pip-audit findings recorded 2026-11-24.
+#
+# Use:
+#   pip install -e . -c constraints.txt          # resolve within these bounds
+#   pip install -r constraints.txt               # upgrade an existing venv
+#
+# Regenerate with:  python -m pip freeze | sort   (after a clean resolve)
+
+# mcp 2.x hard dependencies (were orphans from an earlier v2 attempt)
+httpx2==2.16.2
+httpcore2==2.16.2
+opentelemetry-api==1.45.2
+mcp==2.3.0
+
+# transitive via newspaper4k / bs4 / requests / tldextract / curl_cffi
+pillow==13.0.0
+soupsieve==4.1.3
+brotli==1.2.1
+certifi==2026.11.20
+urllib3==2.8.0
+filelock==4.3.1
+
+# direct
+cryptography==50.0.2
+pyjwt==2.15.1
+
+# tooling (build-time only, never bundled by PyInstaller)
+setuptools==84.2.1
