@@ -346,10 +346,50 @@ async def _resolve_provider_models(provider: str, api_key: str = "") -> list[dic
         stored_models = _filter_chat_models(list(stored_models))
         return [{"id": format_route_model_id(route_id, m), "label": m} for m in stored_models]
     elif route_id.startswith("direct:"):
-        from app.services.direct_proxy_routes import is_supported_direct_route
+        from app.services.direct_model_catalog import (
+            ProviderCatalogError,
+            ProviderCredentialError,
+            fetch_live_models,
+        )
+        from app.services.direct_proxy_routes import get_direct_route, is_supported_direct_route
+
         if not is_supported_direct_route(route_id):
             return []
+
+        spec = get_direct_route(route_id)
+        provider = spec.provider if spec is not None else route_id[len("direct:"):]
+
+        # The entered key wins. Otherwise fall back to the stored credential so
+        # the panel still works after a key is saved and the field is cleared.
+        key = (api_key or "").strip()
+        if not key:
+            try:
+                stored = await get_dynamic_ai_api_key(provider)
+                key = "" if not stored or stored == "none" else str(stored)
+            except Exception:
+                key = ""
+
+        try:
+            live = await fetch_live_models(provider, key)
+        except ProviderCredentialError as exc:
+            if key:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
+            # No credential to test, so keep the default catalog instead of
+            # reporting a missing key as a failure.
+            logger.warning("Live catalog for %s needs a key; using default catalog", provider)
+            live = []
+        except ProviderCatalogError as exc:
+            logger.warning("Live catalog for %s unavailable: %s", provider, exc)
+            live = []
+
+        if live:
+            return [
+                {"id": format_route_model_id(route_id, item["id"]), "label": item["label"]}
+                for item in live
+            ]
+
         from app.services.route_catalog import get_route_models
+
         models = await get_route_models(route_id)
         return [{"id": format_route_model_id(route_id, m), "label": m} for m in models]
 

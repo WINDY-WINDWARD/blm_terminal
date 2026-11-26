@@ -1,9 +1,10 @@
 """FastAPI router for editable system configuration values."""
 
+import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -14,7 +15,10 @@ from app.database import get_db
 from app.models.system_config import SystemConfig
 from app.models.user import User
 from app.services.provider_risk_gate import is_risk_acknowledged, is_risky_route
+from app.services.proxy_supervisor import get_proxy_supervisor
 from app.services.route_registry import parse_route_model_id, provider_to_route_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["system-config"], dependencies=[Depends(get_current_user)])
 
@@ -185,6 +189,22 @@ SYSTEM_CONFIG_SECRET_KEYS: set[str] = {
     "ai.codex_refresh_token",
 }
 
+# Direct provider API keys that become entries in the CLIProxyAPI config.yaml.
+# A change to any of these requires a config regeneration (proxy restart).
+DIRECT_AI_KEY_SLOTS = frozenset({
+    "ai.zen_api_key",
+    "ai.go_api_key",
+    "ai.aistudio_api_key",
+    "ai.groq_api_key",
+    "ai.nvidia_api_key",
+    "ai.anthropic_api_key",
+    "ai.openai_api_key",
+    "ai.openrouter_api_key",
+    "ai.deepseek_api_key",
+    "ai.xai_api_key",
+    "ai.together_api_key",
+})
+
 
 
 class SystemConfigUpdate(BaseModel):
@@ -353,10 +373,19 @@ async def _enforce_risky_config_write(db: AsyncSession, key: str, value: str) ->
     )
 
 
+async def _restart_proxy_after_key_change(key: str) -> None:
+    """Regenerate the sidecar config after a direct-provider key changes."""
+    try:
+        await get_proxy_supervisor().restart()
+    except Exception as exc:
+        logger.warning("Proxy restart after %s failed (%s)", key, type(exc).__name__)
+
+
 @router.put("/system-config/{key}", dependencies=[Depends(get_admin_user)])
 async def update_system_config(
     key: str,
     payload: SystemConfigUpdate,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Upsert a single system configuration value."""
@@ -381,6 +410,11 @@ async def update_system_config(
     )
     await db.execute(stmt)
     await db.commit()
+
+    # A direct-provider key write (including a clear) must regenerate the
+    # sidecar config so the new credentials and model list take effect now.
+    if key in DIRECT_AI_KEY_SLOTS:
+        background.add_task(_restart_proxy_after_key_change, key)
 
     if key in SYSTEM_CONFIG_SECRET_KEYS:
         return {"key": key, "configured": bool(val_str)}

@@ -18,6 +18,7 @@ unchanged; only the transport that serves them changes.
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -37,6 +38,10 @@ class DirectRouteSpec:
     base_url: str | None
     models: tuple[str, ...]
     unavailable_reason: str | None = None
+    # OpenCode Go refuses chat requests without an ``x-opencode-session``
+    # header (``MissingSessionID``). The sidecar never adds it, so it is
+    # declared here and written into the openai-compatibility entry.
+    requires_opencode_session: bool = False
 
     @property
     def supported(self) -> bool:
@@ -83,7 +88,91 @@ DIRECT_ROUTES: dict[str, DirectRouteSpec] = {
         display_name="OpenCode Zen",
         section="openai-compatibility",
         base_url="https://opencode.ai/zen/v1",
-        models=("minimax-m2.5",),
+        models=(
+            "big-pickle",
+            "mimo-v2.6-flash-free",
+            "deepseek-v4.1-flash-free",
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-haiku-4-5",
+            "claude-haiku-5-5",
+            "claude-opus-4-5",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-5",
+            "claude-opus-5-5",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+            "claude-sonnet-5-5",
+            "deepseek-v4.1-flash",
+            "deepseek-v4-pro",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-3.8-flash",
+            "gemini-4-argon",
+            "glm-5.3",
+            "glm-5.3-flash",
+            "gpt-5",
+            "gpt-5-codex",
+            "gpt-5-nano",
+            "gpt-5.1",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
+            "gpt-5.3-codex-spark",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
+            "gpt-5.4-pro",
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6.1-sol",
+            "gpt-6-luna",
+            "gpt-5.6-terra",
+            "grok-4.5",
+            "grok-4.6",
+            "grok-4.7",
+            "grok-build-0.1",
+            "kimi-k2.7-code",
+            "kimi-k3",
+            "minimax-m2.5",
+            "minimax-m2.7",
+            "minimax-m3",
+            "muse-spark-1.2",
+            "muse-spark-1.3",
+            "muse-wonder-1.0",
+            "mistral-large-4",
+            "qwen3.5-plus",
+            "qwen3.6-plus",
+            "qwen3.8-flash",
+            "qwen3.8-max",
+            "iceman-free",
+            "beam-free",
+            "flint-40b-free",
+            "nemotron-3.5-super-vl-free",
+            "nemotron-3.5-lightning-free",
+            "muse-ember-1.0",
+            "claude-fable-5-2",
+            "gemini-4-carbon",
+            "gemini-4-hydrogen",
+            "hy4-flash-free",
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "gemini-4-neon",
+            "kimi-k3.1-pro",
+            "seaglass-alpha-free",
+        ),
     ),
     "direct:go": DirectRouteSpec(
         route_id="direct:go",
@@ -91,7 +180,40 @@ DIRECT_ROUTES: dict[str, DirectRouteSpec] = {
         display_name="OpenCode Go",
         section="openai-compatibility",
         base_url="https://opencode.ai/zen/go/v1",
-        models=("minimax-m2.5",),
+        models=(
+            "deepseek-v4.1-flash",
+            "deepseek-v4-pro",
+            "glm-5.3",
+            "grok-4.7",
+            "muse-spark-1.2-contributor",
+            "muse-spark-1.3-contributor",
+            "glm-5.3-flash",
+            "gpt-5.6-luna",
+            "gpt-6-luna",
+            "claude-haiku-5-5",
+            "hy3",
+            "hy4-preview",
+            "kimi-k2.7-code",
+            "kimi-k3",
+            "mimo-v2.6-flash",
+            "mimo-v2.6-pro",
+            "minimax-m3",
+            "minimax-m3.1-flash",
+            "step-5-preview",
+            "beam-free",
+            "qwen3.8-max",
+            "qwen3.8-flash",
+            "qwen3.7-plus",
+            "kimi-k3.1-pro",
+            "iceman-contributor-free",
+            "gemini-4-argon",
+            "hy4",
+            "hy4-flash-free",
+            "qwen4-max",
+            "longcat-2.5",
+            "hungerg-free",
+        ),
+        requires_opencode_session=True,
     ),
     "direct:groq": DirectRouteSpec(
         route_id="direct:groq",
@@ -216,6 +338,44 @@ def is_supported_direct_route(route_id: str) -> bool:
     return bool(spec and spec.supported)
 
 
+_GO_SESSION_KEY = "ai.go_session_id"
+_GO_SESSION_FALLBACK = "blm-terminal-default-session"
+
+
+async def _get_go_session_id() -> str:
+    """Return a stable per-install session id for OpenCode Go.
+
+    The value is created once and then reused, so gateway session affinity and
+    prompt caching stay stable across proxy restarts.
+    """
+    try:
+        from sqlalchemy import select
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        from app.database import AsyncSessionLocal
+        from app.models.system_config import SystemConfig
+
+        async with AsyncSessionLocal() as db_session:
+            result = await db_session.execute(
+                select(SystemConfig.value).where(SystemConfig.key == _GO_SESSION_KEY)
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                return str(existing)
+
+            new_value = f"blm-{secrets.token_hex(12)}"
+            stmt = sqlite_insert(SystemConfig).values(
+                key=_GO_SESSION_KEY,
+                value=new_value,
+            )
+            await db_session.execute(stmt.on_conflict_do_nothing(index_elements=["key"]))
+            await db_session.commit()
+            return new_value
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Go session id unavailable (%s)", type(exc).__name__)
+        return _GO_SESSION_FALLBACK
+
+
 async def build_direct_proxy_entries(session: Any = None) -> list[dict[str, Any]]:
     """Build CLIProxyAPI config entries for every configured direct provider.
 
@@ -264,6 +424,9 @@ async def build_direct_proxy_entries(session: Any = None) -> list[dict[str, Any]
             entry["api-key"] = api_key
             if spec.base_url:
                 entry["base-url"] = spec.base_url
+
+        if spec.requires_opencode_session:
+            entry["headers"] = {"x-opencode-session": await _get_go_session_id()}
 
         entries.append(entry)
 
