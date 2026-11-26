@@ -397,6 +397,11 @@ export const moversCategoryAtom = atomWithStorage<string>('terminal.moversCatego
 /** Last model picked in the AI widget. Reused for new chats and after a restart. */
 export const aiChatModelAtom = atomWithStorage<string>('terminal.aiChatModel', '');
 
+/** Show the AI disclaimer overlays and banner inside the AI widgets. */
+export const showAiDisclaimerAtom = atomWithStorage<boolean>('terminal.showAiDisclaimer', true, undefined, {
+  getOnInit: true,
+});
+
 // ─── Local MCP Server ────────────────────────────────────────────────────────
 
 /** Fixed port opt-in for external MCP clients (Claude Code, Codex, Antigravity) */

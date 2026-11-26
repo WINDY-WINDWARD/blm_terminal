@@ -12,6 +12,12 @@ vi.mock('@/lib/marketWs', () => ({
   },
 }));
 
+const hydration = vi.hoisted(() => ({ value: true }));
+
+vi.mock('@/lib/useHydrated', () => ({
+  useHydrated: () => hydration.value,
+}));
+
 const picks = [{
   id: 1,
   symbol: 'SUNFLAG',
@@ -28,6 +34,7 @@ const picks = [{
 
 describe('AiPicksWidget', () => {
   beforeEach(() => {
+    hydration.value = true;
     server.use(
       http.get('/api/py/ai/picks', () => HttpResponse.json(picks)),
       http.get('/api/py/jobs/job.ai_picks_morning', () => HttpResponse.json({ status: 'idle' })),
@@ -63,5 +70,27 @@ describe('AiPicksWidget', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'ACTIVE' }));
 
     expect(screen.getByText('NO ACTIVE PICKS')).toBeInTheDocument();
+  });
+
+  it('hides the disclaimer and banner until the client has hydrated', async () => {
+    hydration.value = false;
+    render(<AiPicksWidget />);
+
+    expect(screen.getByText('LOADING AI PICKS...')).toBeInTheDocument();
+
+    await screen.findByTestId('pick-ticket-1');
+
+    expect(screen.queryByText(/Disclaimer/)).not.toBeInTheDocument();
+    expect(screen.queryByText('AI can make mistakes. Verify before taking action.')).not.toBeInTheDocument();
+    expect(screen.getByText('Entry')).toBeInTheDocument();
+  });
+
+  it('shows the disclaimer and banner once hydrated', async () => {
+    render(<AiPicksWidget />);
+
+    await screen.findByTestId('pick-ticket-1');
+
+    expect(screen.getByText(/Disclaimer/)).toBeInTheDocument();
+    expect(screen.getByText('AI can make mistakes. Verify before taking action.')).toBeInTheDocument();
   });
 });

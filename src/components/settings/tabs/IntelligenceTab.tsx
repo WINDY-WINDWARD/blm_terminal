@@ -6,7 +6,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import type { RouteModelCatalogResponse, RouteModelCatalogEntry } from '@/types/aiRoutes';
 import { RouteModelSelect } from '@/components/ai/RouteModelSelect';
 import { cn } from '@/lib/utils';
-import { mcpServerEnabledAtom, mcpServerPortAtom } from '@/store/terminalStore';
+import { mcpServerEnabledAtom, mcpServerPortAtom, showAiDisclaimerAtom } from '@/store/terminalStore';
 import { BentoCard } from './BentoCard';
 import { CliproxyCoreCard } from './CliproxyCoreCard';
 import type { BrowserProvision } from './types';
@@ -66,6 +66,7 @@ export function IntelligenceTab({
 }: IntelligenceTabProps) {
   const [mcpEnabled, setMcpEnabled] = useAtom(mcpServerEnabledAtom);
   const [mcpPort, setMcpPort] = useAtom(mcpServerPortAtom);
+  const [showAiDisclaimer, setShowAiDisclaimer] = useAtom(showAiDisclaimerAtom);
   const [portInput, setPortInput] = React.useState<string>(String(mcpPort));
   const [portError, setPortError] = React.useState<string | null>(null);
 
@@ -78,6 +79,13 @@ export function IntelligenceTab({
     setMcpEnabled(nextEnabled);
     if (typeof window !== 'undefined' && window.electronAPI?.setStoredItem) {
       window.electronAPI.setStoredItem('terminal.mcpServerEnabled', nextEnabled).catch(() => {});
+    }
+  };
+
+  const handleDisclaimerToggle = (nextEnabled: boolean) => {
+    setShowAiDisclaimer(nextEnabled);
+    if (typeof window !== 'undefined' && window.electronAPI?.setStoredItem) {
+      window.electronAPI.setStoredItem('terminal.showAiDisclaimer', nextEnabled).catch(() => {});
     }
   };
 
@@ -395,6 +403,49 @@ export function IntelligenceTab({
           <p className="text-[10px] text-white/60 leading-relaxed font-mono">
             Fixed IP:PORT required for external MCP clients (Claude Code, Codex, Antigravity). Requires app restart to take effect.
           </p>
+        </div>
+      </BentoCard>
+
+      {/* AI Disclaimer */}
+      <BentoCard
+        icon="⚠"
+        title="AI Disclaimer"
+        blurb="Show the AI risk disclaimer overlay in the AI widget and AI Picks, and the persistent AI Picks footer banner."
+        badge={
+          <span
+            className={cn(
+              'text-[10px] px-1.5 py-0.5 font-mono border',
+              showAiDisclaimer
+                ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
+                : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+            )}
+          >
+            {showAiDisclaimer ? 'SHOWN' : 'HIDDEN'}
+          </span>
+        }
+        className="col-span-1 md:col-span-2 lg:col-span-4"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showAiDisclaimer}
+              aria-label="Show AI disclaimer"
+              onClick={() => handleDisclaimerToggle(!showAiDisclaimer)}
+              className={cn(
+                'px-3 py-1 text-[11px] font-mono rounded border transition cursor-pointer',
+                showAiDisclaimer
+                  ? 'bg-blue-600 text-white border-blue-500 hover:bg-blue-500 font-semibold shadow-sm'
+                  : 'bg-zinc-800 text-zinc-300 border-zinc-600 hover:bg-zinc-700 hover:text-white'
+              )}
+            >
+              {showAiDisclaimer ? 'Enabled' : 'Disabled'}
+            </button>
+            <span className="text-[11px] font-mono text-zinc-300">
+              Show AI disclaimers in AI widgets
+            </span>
+          </div>
         </div>
       </BentoCard>
     </>
