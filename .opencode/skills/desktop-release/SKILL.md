@@ -44,6 +44,16 @@ description: Procedures for bumping, building, signing, verifying, and publishin
 5. **Environment & Network Clearance**:
    - Ensure local proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `GIT_HTTP_PROXY`, `GIT_HTTPS_PROXY`) are unset before running `gh` or `electron-builder` to avoid routing through dummy/discard ports.
 
+6. **Signing Authority**:
+   - The release agent runs the signing command in step 3 of the checklist. It passes the key path as an
+     argument and nothing else.
+   - The signing tool reads the key. The agent must never read, print, copy, move, export, or regenerate
+     key material, and must never write key or signature text into a commit, log, message, or artifact
+     other than the two generated files `ota-manifest.json` and `ota-manifest.sig`.
+   - Signing stays offline. Do not add the signing step to a script that `publish:binaries` runs.
+   - Always run `npm run verify:release` after signing. That gate checks the signature against
+     `OTA_PUBLIC_KEYS` in `electron/ota.js`, so a wrong key fails before publish.
+
 ## Standard Release Execution Checklist
 
 ```powershell
@@ -53,7 +63,8 @@ npm run release
 # 2. Build full desktop installer from source (sequential; never the fast path)
 npm run build:desktop
 
-# 3. Sign OTA manifest with the offline private key (operator step, never automated)
+# 3. Sign OTA manifest with the offline private key. The release agent runs this command and
+#    passes the key path only. Never read, print, or copy the key material.
 $pkg = Get-Content package.json | ConvertFrom-Json
 $ver = $pkg.version
 $exe = (Get-ChildItem dist-desktop -Filter "*$ver*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1).FullName
