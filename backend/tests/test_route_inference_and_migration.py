@@ -371,9 +371,9 @@ async def test_proxy_loop_suppresses_429_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_direct_provider_does_not_call_proxy(monkeypatch):
+async def test_direct_provider_uses_loopback_proxy(monkeypatch):
     mock_supervisor = MagicMock()
-    mock_supervisor.ensure_started = AsyncMock()
+    mock_supervisor.ensure_started = AsyncMock(return_value=("127.0.0.1", 8317, "client-key-abc"))
 
     captured_requests = []
 
@@ -397,7 +397,7 @@ async def test_direct_provider_does_not_call_proxy(monkeypatch):
 
     mock_client = MagicMock()
     mock_client.stream = lambda method, url, json=None, headers=None, **kwargs: (
-        captured_requests.append({"url": url, "headers": headers}) or MockDirectStream()
+        captured_requests.append({"url": url, "headers": headers, "json": json}) or MockDirectStream()
     )
 
     monkeypatch.setattr("app.services.llm_provider.get_proxy_supervisor", lambda: mock_supervisor)
@@ -424,10 +424,13 @@ async def test_direct_provider_does_not_call_proxy(monkeypatch):
     ):
         chunks.append(chunk)
 
-    mock_supervisor.ensure_started.assert_not_called()
+    mock_supervisor.ensure_started.assert_awaited_once()
     assert len(captured_requests) == 1
-    assert captured_requests[0]["url"] == "https://api.openai.com/v1/chat/completions"
-    assert captured_requests[0]["headers"]["Authorization"] == "Bearer sk-fake-openai"
+    assert captured_requests[0]["url"].startswith("http://127.0.0.1:8317")
+    assert captured_requests[0]["url"].endswith("/chat/completions")
+    assert captured_requests[0]["headers"]["Authorization"] == "Bearer client-key-abc"
+    # Prefix is blm-<sha256(route_id)[:16]>, from compute_oauth_proxy_prefix.
+    assert captured_requests[0]["json"]["model"] == "blm-56d7965a0cfb0ee5/gpt-4o-mini"
 
 
 @pytest.mark.asyncio

@@ -86,6 +86,34 @@ async def test_build_entries_maps_sections_and_omits_default_model_lists(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_go_entry_sends_opencode_session_header(monkeypatch):
+    async def fake_key(provider: str) -> str:
+        return "go-test" if provider == "go" else KEYS.get(provider, "")
+
+    monkeypatch.setattr(ai_config, "get_dynamic_ai_api_key", fake_key)
+    monkeypatch.setattr("app.services.direct_proxy_routes.get_disabled_direct_routes", AsyncMock(return_value=set()))
+
+    entries = await build_direct_proxy_entries()
+    by_name = {entry["name"]: entry for entry in entries}
+
+    go_entry = by_name["go"]
+    assert go_entry["base-url"] == "https://opencode.ai/zen/go/v1"
+    assert go_entry["headers"]["x-opencode-session"]
+    # Zen must not send the Go session header.
+    assert "headers" not in by_name["zen-paid"]
+
+    go_models = [model["name"] for model in go_entry["models"]]
+    zen_models = [model["name"] for model in by_name["zen-paid"]["models"]]
+    assert "deepseek-v4.1-flash" in go_models
+    assert "minimax-m3" in go_models
+    assert "minimax-m2.5" not in go_models
+    assert "big-pickle" in zen_models
+    # Image and embedding models must never reach the chat catalog.
+    assert "gemini-nano-banana-2.1" not in zen_models
+    assert "text-embedding-3-small" not in zen_models
+
+
+@pytest.mark.asyncio
 async def test_missing_key_route_is_skipped(monkeypatch):
     async def fake_key(provider: str) -> str:
         return "" if provider == "go" else KEYS.get(provider, "")

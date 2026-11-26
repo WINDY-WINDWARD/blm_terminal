@@ -87,8 +87,8 @@ DEFAULT_ROUTE_MODELS: dict[str, str] = {
     "direct:xai": "grok-2-latest",
     "direct:together": "meta-llama/Llama-3-70b-chat-hf",
     "direct:copilot": "gpt-4o",
-    "direct:zen-paid": "minimax-m2.5",
-    "direct:go": "minimax-m2.5",
+    "direct:zen-paid": "minimax-m3",
+    "direct:go": "deepseek-v4.1-flash",
 }
 
 

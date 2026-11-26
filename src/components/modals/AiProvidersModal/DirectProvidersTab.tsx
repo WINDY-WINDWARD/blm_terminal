@@ -136,7 +136,16 @@ export function DirectProvidersTab({ routes, activeRouteId }: DirectProvidersTab
       });
 
       if (!res.ok) {
-        throw new Error(`Failed to fetch models (HTTP ${res.status})`);
+        let detail = `HTTP ${res.status}`;
+        try {
+          const errBody = (await res.json()) as { detail?: string };
+          if (typeof errBody?.detail === 'string' && errBody.detail.trim()) {
+            detail = errBody.detail.trim();
+          }
+        } catch {
+          // Keep the status-only message when the body is not JSON.
+        }
+        throw new Error(`Failed to fetch models: ${detail}`);
       }
 
       const data = await res.json();
