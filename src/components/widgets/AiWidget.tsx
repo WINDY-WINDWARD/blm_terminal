@@ -7,6 +7,7 @@ import {
   activeExchangeAtom,
   activeSymbolAtom,
   aiChatModelAtom,
+  showAiDisclaimerAtom,
   showSettingsModalAtom,
   settingsModalTabAtom,
 } from '@/store/terminalStore';
@@ -34,6 +35,7 @@ import {
   type SessionSummary,
 } from '@/types/aiWidgetTypes';
 
+import { useHydrated } from '@/lib/useHydrated';
 import { useAiSessionPersistence } from '@/hooks/useAiSessionPersistence';
 import { useAiChatSession } from '@/hooks/useAiChatSession';
 import { useAiDocuments } from '@/hooks/useAiDocuments';
@@ -99,6 +101,8 @@ export function AiWidget() {
   const exchange = useAtomValue(activeExchangeAtom);
   const rememberedModel = useAtomValue(aiChatModelAtom);
   const setRememberedModel = useSetAtom(aiChatModelAtom);
+  const showAiDisclaimer = useAtomValue(showAiDisclaimerAtom);
+  const hydrated = useHydrated();
 
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -106,9 +110,10 @@ export function AiWidget() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!hydrated || !showAiDisclaimer) return;
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [hydrated, showAiDisclaimer]);
 
   const {
     catalogData,
@@ -463,7 +468,7 @@ Then confirm what you created in one sentence.`;
   return (
     <div className="h-full w-full flex overflow-hidden font-mono text-xs bg-[#09090b] text-[#f4f4f5] relative select-none">
       {/* Disclaimer Modal */}
-      {showDisclaimer && (
+      {hydrated && showAiDisclaimer && showDisclaimer && (
         <div
           className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
           data-testid="ai-disclaimer"

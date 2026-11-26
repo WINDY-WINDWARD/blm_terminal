@@ -4,8 +4,9 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { activeSymbolAtom, tickDataAtom, authAtom, layoutToastAtom } from '@/store/terminalStore';
+import { activeSymbolAtom, tickDataAtom, authAtom, layoutToastAtom, showAiDisclaimerAtom } from '@/store/terminalStore';
 import { marketWsService } from '@/lib/marketWs';
+import { useHydrated } from '@/lib/useHydrated';
 import { AiPickModal, type AIPick } from './AiPickModal';
 
 function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
@@ -89,6 +90,8 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
   const [, setActiveSymbol] = useAtom(activeSymbolAtom);
   const [tickData, setTickData] = useAtom(tickDataAtom);
   const auth = useAtomValue(authAtom);
+  const showAiDisclaimer = useAtomValue(showAiDisclaimerAtom);
+  const hydrated = useHydrated();
   const setLayoutToast = useSetAtom(layoutToastAtom);
   const [triggeringMode, setTriggeringMode] = useState<'hunter' | 'verifier' | null>(null);
 
@@ -198,9 +201,10 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
   };
 
   React.useEffect(() => {
+    if (!hydrated || !showAiDisclaimer) return;
     const timer = setTimeout(() => setShowDisclaimer(false), 4000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [hydrated, showAiDisclaimer]);
 
   const { data: picks, isLoading, error } = useQuery<AIPick[]>({
     queryKey: ['ai-picks'],
@@ -291,7 +295,7 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-terminal-bg font-mono text-xs text-white/80 relative">
-      {showDisclaimer && (
+      {hydrated && showAiDisclaimer && showDisclaimer && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="border border-terminal-amber/50 bg-black p-4 text-center text-terminal-amber animate-pulse max-w-sm shadow-xl">
             <div className="font-bold mb-2 uppercase text-sm">⚠️ Disclaimer</div>
@@ -520,9 +524,11 @@ export function AiPicksWidget({ panelId: _panelId }: { panelId?: string }) {
       </div>
 
       {/* Persistent Bottom Banner */}
-      <div className="shrink-0 bg-terminal-amber/10 border-t border-terminal-amber/30 p-1.5 text-center text-[9px] text-terminal-amber/80 font-bold tracking-wide uppercase">
-        AI can make mistakes. Verify before taking action.
-      </div>
+      {hydrated && showAiDisclaimer && (
+        <div className="shrink-0 bg-terminal-amber/10 border-t border-terminal-amber/30 p-1.5 text-center text-[9px] text-terminal-amber/80 font-bold tracking-wide uppercase">
+          AI can make mistakes. Verify before taking action.
+        </div>
+      )}
 
       {/* Modern Cyberpunk AI Modal */}
       {selectedPick && (
