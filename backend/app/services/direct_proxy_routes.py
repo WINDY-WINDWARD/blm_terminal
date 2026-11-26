@@ -338,6 +338,7 @@ def is_supported_direct_route(route_id: str) -> bool:
     return bool(spec and spec.supported)
 
 
+_OPENCODE_USER_AGENT = "BLM-Terminal/1.0"
 _GO_SESSION_KEY = "ai.go_session_id"
 _GO_SESSION_FALLBACK = "blm-terminal-default-session"
 
@@ -426,7 +427,13 @@ async def build_direct_proxy_entries(session: Any = None) -> list[dict[str, Any]
                 entry["base-url"] = spec.base_url
 
         if spec.requires_opencode_session:
-            entry["headers"] = {"x-opencode-session": await _get_go_session_id()}
+            entry["headers"] = {
+                "x-opencode-session": await _get_go_session_id(),
+                "User-Agent": _OPENCODE_USER_AGENT,
+            }
+        elif spec.base_url and spec.base_url.startswith("https://opencode.ai/"):
+            # Cloudflare rejects the sidecar's default agent with error 1010.
+            entry["headers"] = {"User-Agent": _OPENCODE_USER_AGENT}
 
         entries.append(entry)
 

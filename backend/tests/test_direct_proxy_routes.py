@@ -99,8 +99,11 @@ async def test_go_entry_sends_opencode_session_header(monkeypatch):
     go_entry = by_name["go"]
     assert go_entry["base-url"] == "https://opencode.ai/zen/go/v1"
     assert go_entry["headers"]["x-opencode-session"]
-    # Zen must not send the Go session header.
-    assert "headers" not in by_name["zen-paid"]
+    # Cloudflare answers error 1010 to the sidecar's default agent.
+    assert go_entry["headers"]["User-Agent"] == "BLM-Terminal/1.0"
+    # Zen must not send the Go session header, but it needs the same agent.
+    assert "x-opencode-session" not in by_name["zen-paid"]["headers"]
+    assert by_name["zen-paid"]["headers"]["User-Agent"] == "BLM-Terminal/1.0"
 
     go_models = [model["name"] for model in go_entry["models"]]
     zen_models = [model["name"] for model in by_name["zen-paid"]["models"]]
